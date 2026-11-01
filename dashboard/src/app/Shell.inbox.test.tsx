@@ -89,7 +89,7 @@ function shellAs(grants: string[]) {
 }
 
 test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
-  const { store, view, watched, asks } = shellAs(["tracker"]);
+  const { store, view, watched, asks } = shellAs(["worklet"]);
   await afterMicrotasks();
   expect(watched).toEqual(["ana"]);
   const before = asks.inbox;
@@ -113,10 +113,10 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
 
 // THE INBOX IS EVERY SIGNED-IN PERSON'S: it is composed from every native
 // domain's notices, each read under its own permission on the engine's side,
-// so a reader without Tracker is watched and asked their inbox all the same.
-// Mutation: gate the watch on Tracker again and the seat is not watched.
-test("a reader without Tracker is watched and asked their inbox", async () => {
-  const { watched, asks } = shellAs(["knowledge"]);
+// so a reader without Worklet is watched and asked their inbox all the same.
+// Mutation: gate the watch on Worklet again and the seat is not watched.
+test("a reader without Worklet is watched and asked their inbox", async () => {
+  const { watched, asks } = shellAs(["doclet"]);
   await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);

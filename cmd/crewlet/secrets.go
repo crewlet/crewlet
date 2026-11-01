@@ -6,12 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -50,17 +54,24 @@ import (
 // engine is running" an answer with a pid on it — and the command says which
 // one it used after every write.
 //
-// # Every command here needs the keyring, and the keyring is Tier A
+// # The keyring is Tier A, and a node named by -api holds its own
 //
 // The store holds only ciphertext. The key material lives in the bootstrap
 // config — on disk or in the environment, never in the database it opens —
 // which is why these commands read Tier A and not the company document.
+//
+// Through a node `-api` names, this command seals and opens nothing: the node
+// does both, under its own keyring. So a machine that is not a node, holding
+// no Tier A file, runs every subcommand there but `rekey`, which judges the
+// rows against the `secrets.active_key_id` that file names, and so needs it
+// ([secretsBootstrap]).
 
-const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
+const secretsUsage = `crewlet secrets: read and rotate the encrypted secret store
 
 Usage:
   crewlet secrets list                     What is set, and when it was last written
   crewlet secrets set NAME [-value V]      Store or rotate one secret (reads stdin without -value)
+  crewlet secrets set NAME NAME...         Store several as one write, read as NAME=value lines on stdin
   crewlet secrets get NAME -reveal         Print one secret to stdout (break-glass; logged)
   crewlet secrets unset NAME               Remove one secret
   crewlet secrets keygen [-key-id ID]      A fresh keyring key, with the config snippet to install it
@@ -76,8 +87,11 @@ The company's secrets live in the fleet's store, which every node reads. While
 this node's engine runs, these commands go through its authenticated /secrets
 surface; while it is stopped, they reach the store through this node's own
 broker, or the external one it dials. Through a node, export CREWLET_API_TOKEN
-to authenticate. It is the only source — the Tier A api.auth.tokens list is
+to authenticate. It is the only source: the Tier A api.auth.tokens list is
 what the node ACCEPTS, not a wallet this command helps itself from.
+
+Through -api, a machine with no Tier A file at -config runs every command
+but rekey, which reads the key it re-seals under from -config.
 `
 
 func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -106,7 +120,7 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		"the id the generated key is installed under (keygen only)")
 	dryRun := fs.Bool("dry-run", false,
 		"report what would be re-sealed without writing (rekey only)")
-	apiURL := fs.String("api", "",
+	apiURL := nodeAPIFlag(fs,
 		"a running node to go through; default is this node's engine at the "+
 			"api.host:port in -config when it runs, and the fleet's store "+
 			"itself when it is stopped")
@@ -127,42 +141,96 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	// The trailing form — `secrets get -config path TOKEN` — leaves the
 	// name here instead. Anything beyond one is an error rather than a
 	// silently ignored argument.
+	// SET TAKES SEVERAL, as one write: a rotation of every credential one
+	// model or integration reads lands as one activation, never as a
+	// company signing in with a mix of the old and the new values.
+	names := append(nonEmpty(name), fs.Args()...)
 	name, given := onePositional(fs, name)
-	if given > 1 {
+	if given > 1 && sub != "set" {
 		return fmt.Errorf("secrets %s takes one name, got %d", sub, given)
 	}
 	// THE ENGINE'S OWN KEYS ARE REFUSED BEFORE ANYTHING OPENS, whichever
 	// way this would reach the store: the node refuses them, and so does the
 	// store itself, so there is no route on which asking could do anything
 	// but fail later and less clearly.
-	if secrets.Reserved(name) {
-		return fmt.Errorf("%w: %s\n\nThe address index's key belongs to the "+
-			"identity estate. `crewlet secrets rekey` moves it with everything "+
-			"else and counts it", secrets.ErrReservedName, name)
+	for _, asked := range append(names, name) {
+		if secrets.Reserved(asked) {
+			return fmt.Errorf("%w: %s\n\nThe address index's key belongs to the "+
+				"identity estate. `crewlet secrets rekey` moves it with everything "+
+				"else and counts it", secrets.ErrReservedName, asked)
+		}
 	}
 
 	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, environ, *bootstrapPath, *apiURL)
+	// boot is the run's Tier A, read once the command line is known to be
+	// good ([secretsBootstrap]), which never leaves it nil for a rekey.
+	var boot *config.Bootstrap
+	commands := map[string]func(sv *secretTarget) error{
+		"list": func(sv *secretTarget) error { return listSecrets(ctx, sv, stdout) },
+		"set": func(sv *secretTarget) error {
+			if len(names) > 1 {
+				return setSecrets(ctx, sv, names, os.Stdin, stdout, stderr)
+			}
+			return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
+		},
+		"get":   func(sv *secretTarget) error { return getSecret(ctx, sv, name, stdout) },
+		"unset": func(sv *secretTarget) error { return unsetSecret(ctx, sv, name, stdout) },
+		"rekey": func(sv *secretTarget) error {
+			return rekeySecrets(ctx, sv, boot.Secrets.ActiveKeyID, *dryRun, stdout)
+		},
+	}
+	// EVERY USAGE ERROR BEFORE A ROUTE IS DECIDED. A route may refuse — a
+	// cluster member with its engine stopped is sent to a running one
+	// ([fleetStoreRemedy]), a running node whose API cannot be used is
+	// answered with the ways round it ([storeRun.unreachable]) — and a
+	// mistyped subcommand, a missing name or a `get` without -reveal
+	// answered with advice to start the engine or name a node sends an
+	// operator to fix what is not broken. And a route with the engine
+	// stopped starts this node's broker, which a command line that was
+	// never going to run has no business doing.
+	command, known := commands[sub]
+	if !known {
+		fmt.Fprintf(stderr, secretsUsage, defaultBootstrapPath)
+		return fmt.Errorf("unknown secrets command %q", sub)
+	}
+	if err := secretsCallError(sub, name, *reveal); err != nil {
+		return err
+	}
+	if len(names) > 1 && isFlagSet(fs, "value") {
+		return errors.New("secrets set -value stores one name; several names read " +
+			"their values from stdin, one NAME=value line each, so no value lands " +
+			"in shell history")
+	}
+
+	run := storeRun{command: "crewlet secrets " + sub, reveals: sub == "get", offline: true}
+	boot, err := secretsBootstrap(*bootstrapPath, *apiURL, run.command, sub == "rekey")
+	if err != nil {
+		return err
+	}
+	sv, closeStore, err := routeSecretStore(ctx, environ, boot, *bootstrapPath, *apiURL, run)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
+	return command(sv)
+}
 
-	switch sub {
-	case "list":
-		return listSecrets(ctx, sv, stdout)
-	case "set":
-		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
-	case "get":
-		return getSecret(ctx, sv, name, *reveal, stdout)
-	case "unset":
-		return unsetSecret(ctx, sv, name, stdout)
-	case "rekey":
-		return rekeySecrets(ctx, sv, *bootstrapPath, *dryRun, stdout)
-	default:
-		fmt.Fprintf(stderr, secretsUsage, defaultBootstrapPath)
-		return fmt.Errorf("unknown secrets command %q", sub)
+// secretsCallError is what is wrong with how a known subcommand was called —
+// a name it needs and was not given, a `get` without -reveal — or nil. Each is
+// an answer about the command line alone, so it is given before a store is
+// routed ([runSecrets]).
+func secretsCallError(sub, name string, reveal bool) error {
+	switch {
+	case name == "" && (sub == "set" || sub == "get" || sub == "unset"):
+		return fmt.Errorf("secrets %s needs a name", sub)
+	case sub == "get" && !reveal:
+		// REFUSED WITHOUT AN EXPLICIT FLAG: see [getSecret].
+		return fmt.Errorf(
+			"refusing to print %s: pass -reveal to read a secret back, and "+
+				"note the access is logged. `crewlet secrets list` shows "+
+				"whether it is set without revealing it", name)
 	}
+	return nil
 }
 
 // isFlagSet reports whether a flag was named on the command line.
@@ -200,10 +268,31 @@ type secretBackend interface {
 	// shell's user as the author of a row that named the API token instead.
 	// The source is offered the same way, and only a write made directly
 	// keeps it: the node stamps its route's own word, whatever the command.
+	//
+	// Through a node it also reports what the write did to the running
+	// company: the paths that read the name and the re-activation the node
+	// made (ADR-0070), which a write made directly does not make.
 	Set(ctx context.Context, name, value string, by secrets.Author,
-		source secrets.Source, now time.Time) (secrets.Author, error)
+		source secrets.Source, now time.Time) (storedSecret, error)
+
+	// SetMany stores several values as ONE write: through a node, `PUT
+	// /secrets`, which re-activates the revision that reads any of them
+	// once (or, with deferReload, re-activates nothing, for a writer whose
+	// last write re-activates for every value it sealed: a provisioning
+	// run); directly, each row in turn, since nothing is running to
+	// re-activate.
+	SetMany(ctx context.Context, values map[string]string, by secrets.Author,
+		source secrets.Source, now time.Time, deferReload bool) (storedSecret, error)
 	Get(ctx context.Context, name string) (string, error)
-	Unset(ctx context.Context, name string) (bool, error)
+
+	// Values reads the values held under the names asked for, and no
+	// other: a name nothing holds is absent from the answer. It is how a
+	// run reads the variables a command resolves ([companyStore]), and
+	// through a node it is a request per batch of names rather than one per
+	// name.
+	Values(ctx context.Context, names []string) (map[string]string, error)
+
+	Unset(ctx context.Context, name string) (removedSecret, error)
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
 	// EngineKeys counts what the keyring seals that no command names —
@@ -211,6 +300,25 @@ type secretBackend interface {
 	// personal values — per keyring key, which is what a rotation has to
 	// see moved before the old key can go.
 	EngineKeys(ctx context.Context) (engineHeld, error)
+}
+
+// storedSecret is what a write did: the author the row records, and (through
+// a running node) the paths of the active revision that read each name and
+// the re-activation the node made, nil where nothing reads any of them or the
+// store was written directly.
+type storedSecret struct {
+	Author secrets.Author
+	ReadBy map[string][]string
+	Reload *configapi.Reloaded
+}
+
+// removedSecret is what an unset did: whether the name was there, and
+// (through a running node) the re-activation the node made of the revision
+// that read it (ADR-0070), nil where nothing reads it or the store was reached
+// directly.
+type removedSecret struct {
+	Removed bool
+	Reload  *configapi.Reloaded
 }
 
 // rotation is what one rekey moved: the store's rows, and the identity
@@ -231,6 +339,9 @@ type rotation struct {
 type engineHeld struct {
 	Keys     secrets.EngineKeys
 	Identity *iamdomain.SealedCount
+	// Assistant is the Dashboard Assistant's sealed values, which a
+	// rotation waits out rather than moves; nil where the backend holds none.
+	Assistant *assistantdomain.SealedCount
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -250,10 +361,163 @@ type secretTarget struct {
 	// node they thought was up, finds out by watching a vendor accept or
 	// reject a credential.
 	where string
+
+	// node is the address a target reached through a running node goes
+	// through, for the line a run that reads through it prints; empty on the
+	// store reached directly.
+	node string
+
+	// locked is the node database's own refusal where the run was sent
+	// through the node because the engine holds that database — which a
+	// failed read through it names beside its own failure — and nil where
+	// -api named the node, or the store was reached directly.
+	locked error
 }
 
-// openSecretStore picks the way to the fleet's store this invocation can
-// actually take.
+// secretsBootstrap is the Tier A document a `crewlet secrets` run is routed
+// under ([routeSecretStore]): the file at bootstrapPath, or nil where there is
+// none and apiURL names the node to go through — a machine that is not a node,
+// which needs none. command names the run for a refusal, and needsKeyID is
+// whether it needs Tier A's `secrets.active_key_id`, which `rekey` does.
+//
+// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
+// document that loaded carries it, and the refusal an operator sees names
+// `secrets.keys` in the file's own terms. And a file that exists and does not
+// load fails the run, -api or not, as it fails every command that reads the
+// company ([companyBootstrap]): someone who configured a node and did not get
+// it must not have the run quietly go somewhere else.
+//
+// # Where no file is no answer
+//
+// With no -api the file is the only way to the store: it names this node's
+// database, whose lock says whether the engine runs; the address of the
+// engine's API; the broker the fleet's store is reached through while the
+// engine is stopped; and the keyring that store is sealed under. A command
+// reading the company resolves from the environment alone there
+// ([companyStore.route]); this one has nothing to fall back to, since the
+// store is its whole subject, so it is refused, naming both ways to a store —
+// or, for a rekey, naming only -config, since -api would not spare it the
+// file.
+//
+// A rekey needs the file through -api too: it judges the rows against the
+// active key id it expects, Tier A's `secrets.active_key_id`. Its -dry-run
+// lists, from the node's listing, what is sealed under any other key. Its
+// real pass also sends that id, and the node refuses a rotation onto a key it
+// does not seal with: that check is what keeps a rekey from reporting a
+// rotation the fleet did not make, and sending the node's own key in its place
+// would check nothing.
+func secretsBootstrap(bootstrapPath, apiURL, command string, needsKeyID bool) (*config.Bootstrap, error) {
+	if strings.TrimSpace(apiURL) == "" {
+		boot, err := loadBootstrapForStore(bootstrapPath)
+		if errors.Is(err, os.ErrNotExist) {
+			remedy := "Point -config at it, or pass -api URL naming a running node"
+			if needsKeyID {
+				remedy = "Point -config at it: a rekey needs the file even through " +
+					"-api, since it judges the rows against the secrets.active_key_id " +
+					"the file names"
+			}
+			return nil, fmt.Errorf("%s: %w\n\nThat file names this node, the way to "+
+				"the fleet's store from it, and the keyring that store is sealed "+
+				"under. %s", command, err, remedy)
+		}
+		return boot, err
+	}
+	boot, err := companyBootstrap(bootstrapPath)
+	if err != nil || boot != nil || !needsKeyID {
+		return boot, err
+	}
+	return nil, fmt.Errorf("%s: there is no Tier A file at %s, and a rekey reads from "+
+		"it the key it re-seals under (secrets.active_key_id): the rows are judged "+
+		"against that key, -dry-run's included, and the pass sends it for the node to "+
+		"check against the key it seals with. Point -config at a crewlet.yaml carrying "+
+		"the fleet's keyring; -api still names the node to go through", command, bootstrapPath)
+}
+
+// storeRun is one command's use of the company's secret store, which is what a
+// refusal to reach the store has to answer in that command's own terms.
+//
+// THE WAY PAST A REFUSAL DEPENDS ON WHAT THE RUN DOES WITH THE STORE, and one
+// sentence written for `crewlet secrets` sent every other caller somewhere
+// wrong: a provisioner was told it could take its node down to read a value;
+// it was offered "an access token", which the node's reveal refuses; and it
+// was told the value could come from the environment, which a routed read
+// never falls back to by design. That last one was wrong for `crewlet secrets`
+// too: the store outranks the environment in the engine's resolver, so an
+// exported value never replaces one the store holds — which a rotation's
+// always does.
+type storeRun struct {
+	// command is the command line that was run, which a refusal names.
+	command string
+
+	// reveals reports whether the run reads values back through a node —
+	// the values a command resolves, a seat credential a provisioning sink
+	// reads back, `crewlet secrets get -reveal`. That is the node's
+	// break-glass read, `secrets.reveal`: admin, a recent proof and a person
+	// present, which refuses a machine token from `crewlet iam token` on
+	// every arm — so the bearer such a run needs is one of the node's own
+	// Tier A tokens.
+	reveals bool
+
+	// offline reports whether stopping this node's engine is offered as a
+	// way round a running node whose API the run cannot use: with the
+	// engine stopped, the command reaches the fleet's store itself
+	// ([openFleetStore]). Offered to the `crewlet secrets` commands, whose
+	// whole subject is the store. NOT to a run that reads the company to act
+	// on a vendor or a login — a provisioner, `crewlet llm` — where a node
+	// taken down to read a value is an outage to save a token.
+	offline bool
+}
+
+// token is the bearer the run presents to the node, or the refusal naming the
+// one it needs.
+func (r storeRun) token(environ config.Source) (string, error) {
+	if !r.reveals {
+		return nodeAPIToken(environ, "/secrets")
+	}
+	if token := nodeTokenOrEmpty(environ); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("no token to reach this node's /secrets API, which %s "+
+		"reads the company's stored values through.%s", r.command, revealTakesATierAToken)
+}
+
+// unreachable is what the run is told to do where the engine holds this
+// node's database and its API cannot be used.
+//
+// A NODE THAT SERVES ADMIN, WHATEVER THE RUN DOES: every /secrets route — the
+// listing, a write, a reveal — is admin's, and a node whose api.auth.admin is
+// refuse clamps admin away from every token it is shown, so it serves none of
+// them. Which token the run needs there is the token's own refusal to say
+// ([storeRun.token]): a reveal's alone takes one of Tier A's.
+//
+// STOPPING THE ENGINE IS NAMED WITH ITS LIMIT: a member of a cluster started
+// alone cannot reach the quorum the store needs, so with its engine stopped
+// it is sent to a running member instead ([fleetStoreRemedy]).
+func (r storeRun) unreachable() string {
+	node := "pass -api URL naming a node of this company whose api.auth.admin is serve"
+	if r.offline {
+		return "Otherwise either fix that, " + node + ", or stop `crewlet run` on " +
+			"this node and re-run: with its engine stopped, the command reaches " +
+			"the fleet's store itself, unless the node is a member of a cluster, " +
+			"which is sent to a running member"
+	}
+	return "Otherwise fix that, or " + node
+}
+
+// revealTakesATierAToken is what a read through a node that was refused, or
+// has no token to send, tells the operator to change: reading a value is a
+// reveal, which the authority table gives admin with a person present, so a
+// machine token — which acts for its owner with nobody there — is refused it
+// whatever it carries, and the token that reads is one of Tier A's.
+const revealTakesATierAToken = "\n\nEach value is read with a reveal, which takes admin and " +
+	"a person present: " + apiTokenEnv + " must hold one of Tier A's api.auth " +
+	"tokens, since a machine token is refused a reveal whatever it carries"
+
+// routeSecretStore picks the way to the fleet's store a run can actually take:
+// the running node's API, or the store itself while this node's engine is
+// stopped. boot may be nil only where apiURL names the node: a machine that is
+// not a node, holding no Tier A file. run names the command and what it does
+// with the store, for a refusal an operator reads.
 //
 // # The running engine decides, and it decides unambiguously
 //
@@ -264,40 +528,44 @@ type secretTarget struct {
 //
 // The NODE DATABASE'S LOCK is what tells the two apart, and it is a fact
 // rather than a guess: the engine holds an OS advisory lock on its database
-// file for exactly as long as it is running, so [store.ErrLocked] means "the
-// engine is up" with a pid attached, and taking it means it is not — and
-// keeps it that way while this command works. Probing the API instead would
-// confuse "the node is stopped" with "the node is up but its HTTP port is
-// bound elsewhere", and those need opposite answers.
-func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
-	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
-	// document that loaded carries it, and the refusal an operator sees
-	// names `secrets.keys` in the file's own terms.
-	boot, err := loadBootstrapForStore(bootstrapPath)
-	if err != nil {
-		return nil, nil, err
-	}
+// file for as long as it is running — from the read its start decides on,
+// before its broker starts ([bootEngine]) — so [store.ErrLocked] means "the
+// engine is up, or coming up" with a pid attached, and a lock found free means
+// it is not. A node still starting answers the API route `503 starting` until
+// it serves, which is the truth: the run is made again once it does. Only a
+// start with -import-company, which reads no store first, holds the store
+// directory before the database, and a run in that stretch meets its broker
+// ([fleetStoreRemedy]).
+// The lock is only asked ([store.Probe]); what keeps an engine from starting
+// beneath a run that reached the store directly is the broker the run
+// started, which holds the store directory until the run lets it go
+// ([jetstream.StoreDirLock]). Probing the API instead would confuse "the node
+// is stopped" with "the node is up but its HTTP port is bound elsewhere", and
+// those need opposite answers.
+func routeSecretStore(ctx context.Context, environ config.Source, boot *config.Bootstrap,
+	bootstrapPath, apiURL string, run storeRun) (*secretTarget, func(), error) {
+
 	// AN EXPLICIT -api SKIPS THE PROBE ENTIRELY. Naming a node is an
-	// instruction to go through it, and it is also how this command works
-	// from a machine that is not the node at all — where nothing in the
-	// Tier A file is this machine's to open.
+	// instruction to go through it, and it is also how a run works from a
+	// machine that is not the node at all — where nothing in the Tier A file,
+	// if there is one, is this machine's to open.
 	if strings.TrimSpace(apiURL) != "" {
-		client, cerr := newSecretsClient(environ, boot, apiURL)
-		if cerr != nil {
-			return nil, nil, cerr
+		client, err := newSecretsClient(environ, boot, apiURL, run)
+		if err != nil {
+			return nil, nil, err
 		}
 		return &secretTarget{secretBackend: client, throughNode: true,
-			where: client.Describe()}, func() {}, nil
+			where: client.Describe(), node: client.base}, func() {}, nil
 	}
-	if err = refuseScratchStore(boot, "crewlet secrets",
-		"Name a running node that holds data with -api: its /secrets reaches "+
-			"the company's credential store, which every node reads."); err != nil {
+	if err := refuseScratchStore(boot, run.command,
+		"Pass -api URL naming a running node that holds data: its /secrets "+
+			"surface reads and writes the company's credential store, which "+
+			"every node reads."); err != nil {
 		return nil, nil, err
 	}
-
 	fs, closeFleet, err := openFleetStore(ctx, boot, bootstrapPath)
 	if err != nil {
-		target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, err)
+		target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, run, err)
 		if rerr != nil {
 			return nil, nil, rerr
 		}
@@ -322,26 +590,28 @@ func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, 
 // path, a driver that will not load — is a broken node, and answering one of
 // those by silently trying HTTP would replace an accurate message with a
 // connection refused.
-func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
+//
+// The way past a node the run cannot use is the run's own ([storeRun]).
+func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootstrapPath string,
+	run storeRun, err error) (*secretTarget, error) {
+
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
-	client, cerr := newSecretsClient(environ, boot, "")
+	client, cerr := newSecretsClient(environ, boot, "", run)
 	if cerr != nil {
 		// BOTH FACTS, because either alone is misleading. "The engine
 		// holds the database" without "and here is why I could not go
 		// through its API" reads as a refusal with no way forward, and
-		// the API's own complaint without the lock reads as though the
-		// local store were never an option.
+		// the API's own complaint without the lock reads as though nothing
+		// were holding the store.
 		return nil, fmt.Errorf("%w\n\n%s's database is held by the process "+
-			"named above. While that is its engine, this has to go through its "+
-			"API — and it cannot: %w%s Otherwise either stop `crewlet run` on "+
-			"this node and re-run, or supply the value through the process "+
-			"environment instead: the resolver falls back to it, so a rotation "+
-			"needs no downtime that way", err, bootstrapPath, cerr, heldByACommand)
+			"named above. While that is its engine, %s has to go through its "+
+			"API, and it cannot: %w%s\n\n%s", err, bootstrapPath, run.command,
+			cerr, heldByACommand, run.unreachable())
 	}
 	return &secretTarget{secretBackend: client, throughNode: true,
-		where: client.Describe()}, nil
+		where: client.Describe(), node: client.base, locked: err}, nil
 }
 
 // engineHoldsTheStore turns the store's lock refusal into a remediation.
@@ -366,10 +636,11 @@ func engineHoldsTheStore(err error, bootstrapPath, remedy string) error {
 
 // heldByACommand is what a refusal over the node database's lock says of the
 // holder it cannot tell from the engine: since a `crewlet` command holds that
-// lock for as long as it works on the node — the fleet's store reached with
-// the engine stopped, an offline import, a migration — the process named in
-// the lock's stamp may be one of those rather than `crewlet run`, and then the
-// way round is to wait for it rather than to go through the engine.
+// lock for as long as it works on the database itself — an offline import, a
+// migration — the process named in the lock's stamp may be one of those rather
+// than `crewlet run`, and then the way round is to wait for it rather than to
+// go through the engine. (A command reaching the fleet's store with the engine
+// stopped only asks the lock, and holds the store directory instead.)
 const heldByACommand = "\n\nIf the holder is another crewlet command rather " +
 	"than `crewlet run`, re-run once it has finished."
 
@@ -448,9 +719,6 @@ func total(byKey map[string]int) int {
 func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	valueGiven bool, stdout, stderr io.Writer,
 ) error {
-	if name == "" {
-		return errors.New("secrets set needs a name")
-	}
 	if !valueGiven {
 		// STDIN IS THE DEFAULT, not the fallback: a secret passed as an
 		// argument is in the shell history, in `ps` output, and in any
@@ -464,7 +732,7 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	}
 	// THIS COMMAND'S OWN WORD, and no flag offers another: written directly
 	// the row records `cli`, and a running node records its route's `api`.
-	recorded, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceCLI,
+	written, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceCLI,
 		time.Now().UTC())
 	if err != nil {
 		return err
@@ -473,36 +741,194 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	// reason it was read from stdin. The author is the one the ROW records,
 	// and the credential beside it where one made the write.
 	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value),
-		describeAuthor(recorded.Name, recorded.OperatorID))
+		describeAuthor(written.Author.Name, written.Author.OperatorID))
 	// SAID EVERY TIME, because which way it went is invisible afterwards and
 	// decides who reads it when: an operator who cannot tell finds out when a
 	// vendor rejects a credential a node has not picked up yet.
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
-	if sv.throughNode {
-		fmt.Fprintln(stdout, secretsFleetNote)
-	} else {
-		fmt.Fprintln(stdout, secretsStoppedNote)
-	}
+	fmt.Fprintln(stdout, sv.writtenNote(written))
 	return nil
 }
 
-// secretsFleetNote is what a write to the FLEET's store does not do yet.
+// setSecrets stores several values as one write ([secretBackend.SetMany]),
+// each read from in as a `NAME=value` line.
 //
-// The engine resolves a `${VAR}` through a snapshot of the store taken at each
-// configuration apply, so a value written to a running fleet is read at its
-// next apply and not before — and an operator who rotated a key and saw the
-// old one still in use would conclude the write failed. Re-activating the
-// current revision is the gesture, and on a running fleet it is the node's
-// reload.
-const secretsFleetNote = "The running fleet reads it at its next configuration " +
-	"apply; POST /config/reload to a node that is up re-activates the current " +
-	"revision now."
+// FROM STDIN, AS NAMED LINES, never as arguments and never in the order the
+// names were given: a value on argv lands in shell history, and a list read by
+// position swaps two credentials silently when the order is wrong. Every name
+// given has to arrive exactly once and nothing else may, so a file meant for
+// another rotation is refused rather than half-applied. A value that holds a
+// newline (a PEM key) is stored on its own, with `crewlet secrets set NAME`.
+func setSecrets(ctx context.Context, sv *secretTarget, names []string, in io.Reader,
+	stdout, stderr io.Writer) error {
+
+	fmt.Fprintf(stderr, "reading %s from stdin, one NAME=value line each...\n",
+		strings.Join(names, ", "))
+	values, err := namedValuesFrom(in, names)
+	if err != nil {
+		return err
+	}
+	written, err := sv.SetMany(ctx, values, hostAuthor(), secrets.SourceCLI, time.Now().UTC(), false)
+	if err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		fmt.Fprintf(stdout, "stored %s (%d bytes)\n", name, len(values[name]))
+	}
+	fmt.Fprintf(stdout, "written to %s\n", sv.where)
+	fmt.Fprintln(stdout, sv.writtenNote(written))
+	return nil
+}
+
+// namedValuesFrom reads one `NAME=value` line per name in names from r, and
+// refuses anything else: a name given twice or not at all, a line naming one
+// not asked for, a line with no `=`. Blank lines are skipped. Bounded as a
+// single value is ([readPipedValue]), by every name's value at its longest.
+func namedValuesFrom(r io.Reader, names []string) (map[string]string, error) {
+	asked := map[string]bool{}
+	for _, name := range names {
+		if asked[name] {
+			return nil, fmt.Errorf("secrets set names %s twice", name)
+		}
+		if err := secrets.CheckName(name); err != nil {
+			return nil, err
+		}
+		asked[name] = true
+	}
+	most := int64(len(names)) * (secrets.MaxValueBytes + 1<<10)
+	body, err := io.ReadAll(io.LimitReader(r, most+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > most {
+		return nil, fmt.Errorf("%w: more than %d bytes arrived for %d names, so the rest "+
+			"was not read", secrets.ErrValueTooLarge, most, len(names))
+	}
+	values := map[string]string{}
+	for line := range strings.Lines(string(body)) {
+		line = strings.TrimSuffix(line, "\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		switch {
+		case !ok:
+			return nil, errors.New("a line on stdin is not NAME=value; nothing was stored")
+		case !asked[name]:
+			return nil, fmt.Errorf("stdin carries %s, which the command line does not "+
+				"name; nothing was stored", name)
+		}
+		if _, twice := values[name]; twice {
+			return nil, fmt.Errorf("stdin carries %s twice; nothing was stored", name)
+		}
+		if err := secrets.CheckValue(value); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		values[name] = value
+	}
+	for _, name := range names {
+		if _, ok := values[name]; !ok {
+			return nil, fmt.Errorf("stdin carries no %s=value line; nothing was stored", name)
+		}
+	}
+	return values, nil
+}
+
+// writtenNote is who reads a value written this way, and when, said after
+// every write of a value a running engine reads: through a node, what the
+// node's re-activation did ([reloadNote]); on the store reached directly,
+// [secretsStoppedNote].
+//
+// ONE ANSWER FOR EVERY COMMAND THAT WRITES ONE, because each of them leaves
+// the same gap: `crewlet llm login -capture-token` and `-token-stdin`, and
+// `crewlet llm export -secret-store`, once said only where the value went, and
+// a running fleet kept signing in without the new token until something
+// applied the company.
+func (t *secretTarget) writtenNote(written storedSecret) string {
+	if t.throughNode {
+		return reloadNote(written.Reload)
+	}
+	return secretsStoppedNote
+}
+
+// removalNote is [secretTarget.writtenNote] for an unset: who stops resolving
+// the removed value, and when. Through a node, what the node's re-activation
+// did ([removalReloadNote]); on the store reached directly,
+// [secretsStoppedRemovalNote].
+func (t *secretTarget) removalNote(removed removedSecret) string {
+	if t.throughNode {
+		return removalReloadNote(removed.Reload)
+	}
+	return secretsStoppedRemovalNote
+}
+
+// secretsStoppedRemovalNote is [secretsStoppedNote] for an unset.
+const secretsStoppedRemovalNote = "This node's engine starts without it; a node " +
+	"already running on the same store stops resolving it at its next configuration " +
+	"apply, and POST /config/reload to it re-activates the current revision now."
+
+// secretsUnreadNote is a write through a node of a value nothing the running
+// company reads: nothing was re-activated, because nothing that runs changes.
+const secretsUnreadNote = "Nothing the running company reads names it, so nothing " +
+	"was re-activated; a revision that names it reads it when that revision applies."
+
+// reloadNote is what a node's re-activation after a write did, as an operator
+// reads it (ADR-0070): the revision and epoch the running fleet reads the value
+// at, or why it was not re-activated and the gesture that does it once that is
+// fixed. The value is sealed in every case.
+func reloadNote(reload *configapi.Reloaded) string {
+	switch {
+	case reload == nil:
+		return secretsUnreadNote
+	case reload.Deferred:
+		return "It is stored and not active yet: the running company reads it at the " +
+			"next re-activation."
+	case reload.Error == "":
+		return fmt.Sprintf("The running fleet reads it now: the node re-activated the "+
+			"company as revision %s, epoch %d.", reload.RevisionID, reload.Epoch)
+	default:
+		return fmt.Sprintf("It is stored and was NOT re-activated (%s): %s. POST "+
+			"/config/reload to a node re-activates the current revision once that is fixed.",
+			reload.Error, strings.TrimSuffix(reload.Detail, "."))
+	}
+}
+
+// secretsUnreadRemovalNote is [secretsUnreadNote] for an unset: nothing the
+// running company reads named the value, so nothing that runs changes, and a
+// revision that names it resolves it from the environment.
+const secretsUnreadRemovalNote = "Nothing the running company reads names it, so " +
+	"nothing was re-activated; a revision that names it reads it from the environment " +
+	"when that revision applies."
+
+// removalReloadNote is [reloadNote] for an unset, which re-activates the
+// revision that reads the name as a write does (ADR-0070): the revision and
+// epoch the running fleet stopped resolving the value at, or why it was not
+// re-activated, which leaves the running fleet resolving the removed value
+// until a re-activation succeeds. The row is gone in every case.
+func removalReloadNote(reload *configapi.Reloaded) string {
+	switch {
+	case reload == nil:
+		return secretsUnreadRemovalNote
+	case reload.Deferred:
+		return "It is removed, and the running company goes on resolving it until the " +
+			"next re-activation."
+	case reload.Error == "":
+		return fmt.Sprintf("The running fleet stopped resolving it: the node "+
+			"re-activated the company as revision %s, epoch %d.", reload.RevisionID,
+			reload.Epoch)
+	default:
+		return fmt.Sprintf("It is removed and was NOT re-activated (%s): %s. The "+
+			"running fleet goes on resolving it until a re-activation succeeds; POST "+
+			"/config/reload to a node re-activates the current revision once that is fixed.",
+			reload.Error, strings.TrimSuffix(reload.Detail, "."))
+	}
+}
 
 // secretsStoppedNote is who reads a value written while this node's engine was
 // stopped, and when.
 //
 // The store is the fleet's, so the value is there for every node at once —
-// but each reads it through its snapshot ([secretsFleetNote]): this node's
+// but each reads it through the snapshot it takes at an apply: this node's
 // engine when it starts, and a node already running on the same store (an
 // external broker's fleet) at its next apply. Said, because an operator who
 // rotated a key and saw a running peer go on using the old one would
@@ -511,29 +937,22 @@ const secretsStoppedNote = "This node's engine reads it when it starts; a node "
 	"already running on the same store reads it at its next configuration " +
 	"apply, and POST /config/reload to it re-activates the current revision now."
 
-// getSecret is the ONLY read-back, and it is break-glass.
+// getSecret is the ONLY command that prints a value, and it is break-glass.
 //
-// It refuses without an explicit flag because the overwhelmingly common need
-// is "is X set and when did it change", which the listing answers without
-// putting a credential into a terminal, a scrollback buffer and a
-// screen-share. The one HTTP route that returns a value is gated the same
-// way, by a ?reveal=true a crawl cannot reach by accident.
+// It is refused without an explicit flag — before any store is routed
+// ([secretsCallError]) — because the overwhelmingly common need is "is X set
+// and when did it change", which the listing answers without putting a
+// credential into a terminal, a scrollback buffer and a screen-share. The HTTP
+// route it reads through a node is gated the same way,
+// by a ?reveal=true a crawl cannot reach by accident; the node's other route
+// that returns values, POST /secrets/reveal, is a POST no crawl can make.
 //
 // The access is LOGGED BY NAME, here and — when this goes through a running
 // node — there too, against the operator its own guard authenticated. A
 // break-glass read that leaves no trace is indistinguishable from an
 // exfiltration, and the name is the whole of what can be logged: logging the
 // value would be the leak.
-func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, stdout io.Writer) error {
-	if name == "" {
-		return errors.New("secrets get needs a name")
-	}
-	if !reveal {
-		return fmt.Errorf(
-			"refusing to print %s: pass -reveal to read a secret back, and "+
-				"note the access is logged. `crewlet secrets list` shows "+
-				"whether it is set without revealing it", name)
-	}
+func getSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
 	value, err := sv.Get(ctx, name)
 	if err != nil {
 		return err
@@ -545,36 +964,38 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, 
 	return err
 }
 
+// unsetSecret removes a secret, and says which store it reached and who stops
+// resolving the value when: the two lines a write prints ([setSecret]),
+// because a removal is as invisible afterwards. The engine resolves a `${VAR}`
+// through the snapshot its last apply took, so a value removed from a running
+// fleet goes on being used until the next apply, and an unset that said only
+// "removed" read as one that failed.
 func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
-	if name == "" {
-		return errors.New("secrets unset needs a name")
-	}
-	gone, err := sv.Unset(ctx, name)
+	removed, err := sv.Unset(ctx, name)
 	if err != nil {
 		return err
 	}
-	if !gone {
-		fmt.Fprintf(stdout, "%s was not set\n", name)
+	if !removed.Removed {
+		fmt.Fprintf(stdout, "%s was not set in %s\n", name, sv.where)
 		return nil
 	}
 	fmt.Fprintf(stdout, "removed %s\n", name)
+	fmt.Fprintf(stdout, "written to %s\n", sv.where)
+	fmt.Fprintln(stdout, sv.removalNote(removed))
 	return nil
 }
 
-func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
+// rekeySecrets re-seals what sv holds under active, the run's Tier A
+// `secrets.active_key_id` ([secretsBootstrap]), or with dryRun reports what it
+// would re-seal.
+func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	dryRun bool, stdout io.Writer,
 ) error {
-	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
-	if err != nil {
-		return err
-	}
-	active := boot.Secrets.ActiveKeyID
 	if dryRun {
 		// LISTED FROM THE KEY ID COLUMN, which is denormalised out of the
 		// envelope for exactly this: reporting what a rekey would touch
 		// must not decrypt anything, or the dry run is a bigger exposure
 		// than the pass it is previewing.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		rows, err := sv.List(ctx)
 		if err != nil {
 			return err
@@ -608,7 +1029,7 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 					"(sealed under another key)\n", identityStale)
 			}
 		}
-		waitOutInvitations(stdout, held, active)
+		waitOut(stdout, held, active)
 		if stale == 0 && engineStale == 0 && identityStale == 0 {
 			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 			noIdentityHere(stdout, sv, held.Identity == nil)
@@ -654,15 +1075,24 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 	if err != nil {
 		return err
 	}
-	waitOutInvitations(stdout, held, active)
+	waitOut(stdout, held, active)
 	return nil
 }
 
-// waitOutInvitations says how many live invitations are still sealed under
-// another key — which no rekey moves, because only a re-issue could carry the
-// address again and its own claim refuses one while the invitation is open.
-// The old key must stay on the ring until each is redeemed or lapses.
-func waitOutInvitations(stdout io.Writer, held engineHeld, active string) {
+// waitOut says what is still sealed under another key that no rekey moves,
+// and so keeps the old key on the ring until it is gone: live invitations,
+// because only a re-issue could carry the address again and its own claim
+// refuses one while the invitation is open, and the Dashboard Assistant's
+// conversations, which leave only with their retention.
+func waitOut(stdout io.Writer, held engineHeld, active string) {
+	if held.Assistant != nil {
+		if n := held.Assistant.Outside(active); n > 0 {
+			fmt.Fprintf(stdout, "%d values in Ask Crewlet conversations are "+
+				"sealed under another key and are not re-sealed: keep that key on the "+
+				"ring until none is left (a conversation leaves once it is untouched "+
+				"for assistant.retention_days, or when its owner clears it)\n", n)
+		}
+	}
 	if held.Identity == nil {
 		return
 	}
@@ -729,7 +1159,7 @@ secrets:
 
   export %s=%s
 
-Key generation is always explicit — a silently generated key that nobody
+Key generation is always explicit: a silently generated key that nobody
 captured makes every encrypted row unrecoverable. Keep the id stable across
 restarts: it is stamped into every envelope this key seals, and only a
 rotation should introduce a new one.
@@ -802,12 +1232,42 @@ func currentOperator() string {
 // 401 that names neither the newline nor this command. Stripping MORE would
 // be wrong in the other direction — a secret may legitimately end in
 // whitespace, and silently altering it is a failure nobody can see.
+//
+// A VALUE LONGER THAN ANY STORE KEEPS is refused here, before the rest of it
+// is read: see [readPipedValue].
 func secretFromReader(r io.Reader) (string, error) {
-	body, err := io.ReadAll(r)
+	body, err := readPipedValue(r)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(string(body), "\n"), nil
+	value := strings.TrimSuffix(body, "\n")
+	if err := secrets.CheckValue(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// readPipedValue reads a value piped to a command to be stored, and refuses —
+// without reading the rest — one longer than [secrets.MaxValueBytes] and the
+// one trailing newline a pipe adds.
+//
+// BOUNDED, because what arrives on a pipe is whatever the operator pointed at
+// it: `crewlet secrets set X < backup.tar` would otherwise be read whole into
+// memory only for the store to refuse it, and a stream that never ends would
+// never be refused at all. Every store refuses such a value anyway
+// ([secrets.CheckValue]); this is where the command that read it stops.
+func readPipedValue(r io.Reader) (string, error) {
+	const most = secrets.MaxValueBytes + 1
+	body, err := io.ReadAll(io.LimitReader(r, most+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > most {
+		return "", fmt.Errorf("%w: more than %d bytes arrived, so the rest was "+
+			"not read; a value is at most %d (%d KiB)", secrets.ErrValueTooLarge,
+			most, secrets.MaxValueBytes, secrets.MaxValueBytes>>10)
+	}
+	return string(body), nil
 }
 
 // nonEmpty wraps a peeled positional as a slice, empty when there was none.

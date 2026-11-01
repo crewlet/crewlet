@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -198,6 +199,61 @@ func TestABackendThatStopsReadingEarlyIsRefused(t *testing.T) {
 	s := newStore(t, early{memobj.New()})
 	if o, err := s.Put(t.Context(), bytes.NewReader(make([]byte, 10)), 100, objstore.PutMeta{}); err == nil {
 		t.Fatalf("a put the backend stopped reading was answered %+v", o)
+	}
+}
+
+// refusing is a backend whose put reads the whole content and then fails as
+// it is told: a provider or a broker that did not take the bytes.
+type refusing struct {
+	objstore.Backend
+	err    error
+	cancel context.CancelFunc
+}
+
+func (b refusing) Put(_ context.Context, _ string, r io.Reader, _ objstore.PutMeta) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return b.err
+}
+
+// A PUT THE BACKEND DID NOT TAKE IS ONE READING, decided here once: every
+// failure no sentinel names is [objstore.ErrUnanswered], which every surface
+// storing a person's file answers as a store that will answer again, where
+// they told it two ways; a full store stays [objstore.ErrFull] and never
+// that; and a put whose caller's context ended carries the context's error
+// rather than blaming the store. Each keeps the backend's own error beneath it
+// for the log. Mutation: drop the classification and the first row fails;
+// mark a full store unanswered and the second does; mark a cancelled put
+// unanswered and the third does.
+func TestAPutTheBackendDidNotTakeIsUnanswered(t *testing.T) {
+	t.Parallel()
+	provider := errors.New("s3: PutObject: 503 SlowDown")
+	full := fmt.Errorf("natsobj: put files/x: %w", objstore.ErrFull)
+	cancelled, cancel := context.WithCancel(t.Context())
+	for _, c := range []struct {
+		name        string
+		ctx         context.Context
+		backend     refusing
+		is, isNot   error
+		keepsBehind error
+	}{
+		{"a provider that refused", t.Context(), refusing{memobj.New(), provider, nil},
+			objstore.ErrUnanswered, objstore.ErrFull, provider},
+		{"a full store", t.Context(), refusing{memobj.New(), full, nil},
+			objstore.ErrFull, objstore.ErrUnanswered, full},
+		{"a put whose caller went away", cancelled, refusing{memobj.New(), provider, cancel},
+			context.Canceled, objstore.ErrUnanswered, provider},
+	} {
+		_, err := newStore(t, c.backend).Put(c.ctx, bytes.NewReader(make([]byte, 10)), 100,
+			objstore.PutMeta{})
+		if !errors.Is(err, c.is) || errors.Is(err, c.isNot) || !errors.Is(err, c.keepsBehind) {
+			t.Errorf("%s answered %v, want %v and not %v, with the backend's error beneath",
+				c.name, err, c.is, c.isNot)
+		}
 	}
 }
 

@@ -26,43 +26,43 @@ import (
 // operation carries any more fails too, so the list is never a record of a
 // type that has since changed.
 var carriedByServer = map[string]string{
-	"tracker.Query.Units":              "the serving node attaches its own chart (opTasks)",
-	"tracker.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
-	"tracker.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
-	"tracker.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
-	"tracker.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
-	"tracker.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
-	"tracker.EveryViewQuery.Units":     "the serving node attaches its own chart (opEveryView)",
+	"worklet.Query.Units":              "the serving node attaches its own chart (opTasks)",
+	"worklet.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
+	"worklet.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
+	"worklet.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
+	"worklet.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
+	"worklet.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
+	"worklet.EveryViewQuery.Units":     "the serving node attaches its own chart (opEveryView)",
 
-	"tracker.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
+	"worklet.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
 
-	"tracker.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
-	"tracker.ViewQuery.Zone":      "carried beside the query by name, in viewsArgs",
-	"tracker.EveryViewQuery.Zone": "carried beside the query by name, in everyViewArgs",
+	"worklet.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
+	"worklet.ViewQuery.Zone":      "carried beside the query by name, in viewsArgs",
+	"worklet.EveryViewQuery.Zone": "carried beside the query by name, in everyViewArgs",
 
-	"tracker.Total.instant": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.instant": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.rank": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.rank": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.ranked": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.ranked": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.value": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.value": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
-	"tracker.Total.rankArgs": "decided when the total is compiled and spent by the scan; " +
+	"worklet.Total.rankArgs": "decided when the total is compiled and spent by the scan; " +
 		"an answer carries its result as At or Value",
 
-	"tracker.PlaceResult.Unplaced": "carried beside the result as a wire error, in placedTask",
+	"worklet.PlaceResult.Unplaced": "carried beside the result as a wire error, in placedTask",
 
-	"tracker.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
+	"worklet.Provenance.Written": "the asking turn's own set: a holder that runs the write " +
 		"answers what it committed to in reply.Written, and the router adds it there",
 
 	"usage.measured.encoded": "a usage page's rows as Fill measured them: the serving node " +
 		"writes them AS the page's Rows (usage.Page.AppendJSON), and the asker decodes Rows",
 
-	"pages.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
+	"doclet.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
 		"an answer carries its result as SavedBy and SavedAt",
 }
 
@@ -221,10 +221,11 @@ var floorless = map[string]string{
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the code host's
-// CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG or the artifacts
-// estate's and its datastore's, each named as its domain declares it. One
-// that waited on none would carry no floor at all, and one that named another
-// domain's would wait on an applier it does not depend on ([ready]).
+// CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
+// CREWLET_CHAT_LOG or the artifacts estate's and its datastore's, each named
+// as its domain declares it. One that waited on none would carry no floor at
+// all, and one that named another domain's would wait on an applier it does
+// not depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
@@ -234,6 +235,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		identityDomain:     "CREWLET_IAM_LOG",
 		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
+		chatDomain:         "CREWLET_CHAT_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -274,7 +276,7 @@ var seatCopyOps = map[string]string{
 // EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
 // router and the server ask before running it here: a domain's copy that is
 // wrong runs none of that domain's operations and every other domain's
-// (ADR-0049). An operation naming no domain — the search ops once did, since
+// (ADR-0072). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read. The one copy that
 // is no domain's is a git node's git half ([GitCopy]), which a git operation
@@ -325,7 +327,7 @@ var readsSeveral = map[string][]string{
 
 // AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
 // all of them: a node whose copy of any is out of service runs none of it
-// (ADR-0049), and the router's memory of where it stays is kept for that set
+// (ADR-0072), and the router's memory of where it stays is kept for that set
 // of copies rather than for one domain's.
 func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	t.Parallel()
@@ -403,6 +405,15 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			value: reply{Node: "data-a", Request: "r-1", Result: json.RawMessage(`{"TotalHint":7}`)},
 			want:  `{"node":"data-a","request":"r-1","result":{"TotalHint":7}}`,
 		},
+		// THE HALVES A COPY SERVES, as admission reads them off every data
+		// node it asks: a half renamed here is a half every peer reads as
+		// not served, and no seat of that company is admitted anywhere.
+		"admission's answer": {
+			value: reply{Node: "data-a", Request: "r-3",
+				Result: mustJSON(t, Served{Tracker: true, Pages: true, Chat: true})},
+			want: `{"node":"data-a","request":"r-3",` +
+				`"result":{"Tracker":true,"Pages":true,"Chat":true}}`,
+		},
 		"a copy out of service": {
 			value: reply{Node: "data-a", Request: "r-1", Unserved: unservedOutOfService, Detail: "wrong"},
 			want:  `{"node":"data-a","request":"r-1","unserved":"out_of_service","detail":"wrong"}`,
@@ -423,6 +434,16 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 	}
 }
 
+// mustJSON is v encoded, for an envelope whose result is a type's own value.
+func mustJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // envelopeInstant is the deadline the pinned envelopes carry.
 var envelopeInstant = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
@@ -438,7 +459,7 @@ var pingEnvelope = request{ID: "r-3", Op: opPing.spec.name, Args: json.RawMessag
 func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 	t.Parallel()
 	asker := &recordingAsker{answer: reply{Node: "data-a",
-		Result: json.RawMessage(`{"Tracker":true,"Pages":true}`)}}
+		Result: json.RawMessage(`{"Tracker":true,"Pages":true,"Chat":true}`)}}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
 		Git: &fakePlacement{}, Session: NewSession(), Timing: Production(),
@@ -447,9 +468,9 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tracker, pages, err := r.Serves(t.Context())
-	if err != nil || !tracker || !pages {
-		t.Fatalf("Serves = (%v, %v, %v), want both halves served", tracker, pages, err)
+	served, err := r.Serves(t.Context())
+	if err != nil || served != (Served{Tracker: true, Pages: true, Chat: true}) {
+		t.Fatalf("Serves = (%+v, %v), want every half the answer named served", served, err)
 	}
 	sent := asker.requests()
 	if len(sent) != 1 {

@@ -20,7 +20,7 @@ func TestAnAskCarriesTheTurnsItem(t *testing.T) {
 	svc := &asker{}
 	tool := registered(t, builtin.Deps{A2A: svc}, builtin.A2AAskTool)
 	turn := turnFor(t, "agent-ceo")
-	turn.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+	turn.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 	turn.WorkItemBasis = types.BasisTrigger
 	res := callFor(t, tool, turn, map[string]any{
 		"target": "agent-cto", "brief": "Is the build green?",

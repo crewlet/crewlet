@@ -63,9 +63,10 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	//
 	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
 	// which is the part nothing can stand in for — assembled by
-	// internal/eventfan from every node that ran part of the turn, since a
-	// turn resumed on another node after a restart has an opening on one and
-	// an ending on the other.
+	// internal/eventfan from every data node holding part of the turn, since
+	// a turn resumed on another node after a restart has an opening on one
+	// and an ending on the other, and a turn run on a node without `data` is
+	// held by the data node keeping its events in custody.
 	//
 	// ASKED, NOT INFERRED: each node counts what it holds when its read
 	// filled, because `len(records) == cap` is not "the read stopped early"
@@ -111,11 +112,12 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not
 		// answer may hold the part of the turn this page is missing.
 		"coverage": coverage,
-		// AND WHICH OF THEM RAN IT: the nodes whose own store held any of
-		// its events, since each node's store holds only what it
-		// published. Never null, so "ran nowhere this read could see" is
-		// an empty list rather than a missing key.
-		"nodes": nonNilStrings(detail.Nodes),
+		// AND WHERE IT RAN: the nodes that PUBLISHED its events, read off
+		// the rows — never the nodes that answered, since a data node
+		// keeps the events of a node without `data` in custody and holds
+		// turns it never ran. Never null, so "ran nowhere this read could
+		// see" is an empty list rather than a missing key.
+		"nodes": nonNil(detail.Nodes),
 	}, nil
 }
 
@@ -215,9 +217,9 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
+		at, err := cursorTime(p)
 		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
+			return nil, err
 		}
 		before = &store.Cursor{Time: at, ID: id}
 	}
@@ -395,7 +397,7 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 //
 // EVERYBODY MAY ASK, and only a holder of the knowledge base is searched for
 // (ADR-0033): the search reads pages and nothing else — a hit is a page — so a
-// caller without the knowledge base has no half of it they may see. The
+// caller without Doclet has no half of it they may see. The
 // tracker's holder is answered `available: false` with [KnowledgeNoAccess]
 // and the search never runs, so the screen they ask from can say that their
 // access leaves the pages out rather than that the company wrote nothing
@@ -417,8 +419,11 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// change whoever sent it, and BEFORE ANYTHING IS READ.
 	pagesShown := shows(ctx, authz.KindPage)
 	if !pagesShown && !shows(ctx, authz.KindTask) {
-		return nil, &Refusal{What: "knowledge", Reason: authz.ReasonNoGrant,
-			Grants: slices.Clone(iam.Apps)}
+		// THE APPS OF THE TWO KINDS JUST ASKED ABOUT, and never "every
+		// app": the refusal names what would admit, and an app this
+		// question reads nothing of would not.
+		return nil, NewRefusal("knowledge", authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{authz.AppFor(authz.KindTask), authz.AppFor(authz.KindPage)}})
 	}
 	organization := s.organization()
 	out := map[string]any{
@@ -439,7 +444,7 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	if !pagesShown {
 		return unavailable(KnowledgeNoAccess, "your access does not include "+
-			"Knowledge, so no page was searched — an admin can give it to you")
+			"Doclet, so no page was searched. An admin can give it to you")
 	}
 	if organization == nil {
 		return unavailable(KnowledgeNoCompany, "no company configuration is active")
@@ -512,8 +517,8 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 }
 
 // searchTextRefusal is the `bad_params` refusal of a phrase past
-// [knowledge.MaxQueryBytes], the bound both ranked searches share on every
-// surface, or nil.
+// [knowledge.MaxQueryBytes], the bound every ranked search shares on every
+// surface — `knowledge`, `work_search` and `chat_search` — or nil.
 //
 // REFUSED, NOT CUT, and refused HERE rather than left to the search: the
 // fan-out refuses it too, but the knowledge search is best effort and would
@@ -527,7 +532,7 @@ func searchTextRefusal(text string) error {
 		return nil
 	}
 	return refuseAs(knowledge.ErrQueryTooLong, "q is %d bytes, and a search takes at most "+
-		"%d — search on a few keywords or a phrase, not a pasted passage",
+		"%d. Search on a few keywords or a phrase, not a pasted passage",
 		tooLong.Bytes, knowledge.MaxQueryBytes)
 }
 
@@ -600,8 +605,8 @@ const (
 	// optional interface rather than added to [knowledge.Searcher].
 	KnowledgeBuilding KnowledgeReason = "building"
 
-	// KnowledgeNoAccess — the caller holds the tracker and not the
-	// knowledge base, so no page was searched for them (ADR-0033).
+	// KnowledgeNoAccess means the caller holds Worklet and not Doclet, so no
+	// page was searched for them (ADR-0033).
 	//
 	// ITS OWN STATE, NOT AN EMPTY RESULT AND NOT A REFUSAL: an empty
 	// result says the company wrote nothing that matches, which nobody

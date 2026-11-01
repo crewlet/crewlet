@@ -10,17 +10,17 @@ import (
 
 // AN ITEM'S IDENTITY NAMES ITS TRACKER, because the bare id does not.
 //
-// A native task id and a Jira issue id are drawn from different spaces, and
+// A Worklet task id and a Jira issue id are drawn from different spaces, and
 // nothing stops the same string turning up in both. Everything that decides
 // whether two turns were on one item compares the ref, so a ref that dropped
 // the backend would merge two different items' spend into one row.
 func TestAWorkItemRefIsBackendQualified(t *testing.T) {
 	t.Parallel()
-	native := WorkItem{Backend: WorkNative, ID: "10042", Key: "ENG-1", Project: "ENG"}
+	native := WorkItem{Backend: WorkWorklet, ID: "10042", Key: "ENG-1", Project: "ENG"}
 	jira := WorkItem{Backend: WorkJira, ID: "10042", Key: "OPS-9", Project: "OPS"}
 
 	if got := native.Ref(); got != "native:10042" {
-		t.Errorf("the native item's ref is %q, want native:10042", got)
+		t.Errorf("the Worklet item's ref is %q, want native:10042", got)
 	}
 	if native.Ref() == jira.Ref() {
 		t.Errorf("two items on different trackers sharing an id have one ref, %q", native.Ref())
@@ -45,7 +45,7 @@ func TestAWorkItemRefIsBackendQualified(t *testing.T) {
 // source instead of dropping the turn.
 func TestAnUnknownWorkBackendIsAValueNotAPanic(t *testing.T) {
 	t.Parallel()
-	for _, known := range []WorkBackend{WorkNative, WorkJira, WorkGitHub, WorkGitLab} {
+	for _, known := range []WorkBackend{WorkWorklet, WorkJira, WorkGitHub, WorkGitLab} {
 		if !known.Valid() {
 			t.Errorf("%q is not valid", known)
 		}

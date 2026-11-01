@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -29,18 +31,82 @@ import (
 // dashboard doing a fetch a second pays one preflight per six hundred.
 const CORSMaxAge = 10 * time.Minute
 
-// corsMethods and corsHeaders are what a permitted origin may send.
+// corsMethods and corsHeaders are what a permitted origin may send, and
+// corsExposed what its script may read of an answer.
 //
 // A CLOSED SET rather than an echo of what the browser asked for. Reflecting
 // `Access-Control-Request-Headers` is the common shortcut and it turns the
 // allow-list into the only control left — every header a page can invent is
 // then permitted, including ones a future route might read.
+//
+// AND EXACTLY THE HEADERS THE ROUTES READ AND SET, held so by a gate
+// (TestTheCORSListsAreTheHeadersTheRoutesReadAndSet) that walks this API's
+// source for every request header a handler reads and every response header
+// one sets, and refuses one that is on neither these lists nor its own
+// reasoned list of what a page is not offered. A header left out is not
+// stripped: the browser refuses the WHOLE request at the preflight, or hides
+// the header from the page's script, so a route that reads one a permitted
+// origin cannot send is a route that origin can never use, and nothing on
+// the engine's side ever sees it fail.
+//
+// THE OPERATION KEY ([opkey.Header]), because a permitted origin is permitted
+// to write: `POST /operator/act/{tool}` refuses a request without one, and the
+// human write surface (`/worklet`, `/doclet/pages`) and `/iam` read it to make a retry
+// the same write rather than a second one. THE PRECONDITIONS, `If-Match` and
+// `If-None-Match`: `/config` and its entities, a work item, a project file and
+// `/setup`'s disconnect are written against the version they were read at,
+// and `GET /config` revalidates on its tag. `X-Summary`, the revision summary
+// a `/config` write must carry. THE REQUEST ID ([httpjson.RequestIDHeader]),
+// which a write to the configuration, the secrets or a model is answered with
+// and a refused one is logged under: a caller that sends its own finds the
+// refusal in the log by it. And THE TWO LINK SECRETS
+// (`X-Crewlet-Invite-Secret`, `X-Crewlet-Reset-Secret`, declared in
+// internal/api/authapi, which imports this package): a link's view takes its
+// secret in a header so that it is never in a URL, and a page on a permitted
+// origin may already redeem one — the cross-site rule admits the sign-in
+// writes — so withholding the view's header would only stop it reading what
+// it is redeeming.
+//
+// THE READER IS NOT ([ReaderHeader]), and stays same-origin only: only the
+// dashboard sends it, and the dashboard is served by this process,
+// same-origin, where no preflight is asked. A page on another origin has no
+// tab of the dashboard's to name the reader of, and offering it would hand
+// that page the one header whose whole job is to say which person a tab of
+// the dashboard was opened for.
+//
+// THE EXPOSED HEADERS are the ones a client reads to tell whose answer it
+// holds and to form its next request: the engine's mark
+// ([httpjson.EngineHeader]), without which every answer reads as something in
+// front of the engine and a write's outcome as unknown, the `ETag` it writes
+// back as `If-Match`, the `Retry-After` that says when to ask again, the
+// `Accept-Patch` a refused patch names the format it takes in, the `Allow` an
+// `OPTIONS` or a `405` lists the methods in, the `Content-Disposition` that
+// names a downloaded project file, the `Location` a started verification of a
+// git node's copy is read back at, and the request id a refused write is found
+// in the log by. A CORS-safelisted header (`Content-Type`, `Content-Length`,
+// `Cache-Control`) is readable without being listed.
+//
+// THE METHODS ARE EXACTLY THE ONES THE ROUTES SERVE, held so by
+// TestTheCORSMethodsAreTheMethodsTheRoutesServe over every route pattern the
+// API's source registers — `OPTIONS` among them, because `OPTIONS /config`
+// answers the `Allow` and `Accept-Patch` that corsExposed offers, and only
+// GET, HEAD and POST are sent without asking: a script's `OPTIONS` is
+// preflighted like a `PATCH`, and a preflight that did not name it refused the
+// request outright.
 var (
 	corsMethods = []string{
 		http.MethodGet, http.MethodHead, http.MethodPost,
-		http.MethodPut, http.MethodPatch, http.MethodDelete,
+		http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions,
 	}
-	corsHeaders = []string{"Authorization", "Content-Type"}
+	corsHeaders = []string{
+		"Authorization", "Content-Type", opkey.Header,
+		"If-Match", "If-None-Match", "X-Summary", httpjson.RequestIDHeader,
+		"X-Crewlet-Invite-Secret", "X-Crewlet-Reset-Secret",
+	}
+	corsExposed = []string{
+		httpjson.EngineHeader, "ETag", "Retry-After", "Accept-Patch", "Allow",
+		"Content-Disposition", "Location", httpjson.RequestIDHeader,
+	}
 )
 
 // CORS is the set of browser origins this API answers cross-origin.
@@ -129,6 +195,11 @@ func (c *CORS) Middleware(next http.Handler) http.Handler {
 					strings.Join(corsHeaders, ", "))
 				w.Header().Set("Access-Control-Max-Age",
 					strconv.Itoa(int(CORSMaxAge.Seconds())))
+			} else {
+				// ON THE ANSWER ITSELF, never the preflight: the actual
+				// response is the one a browser reads the exposure from.
+				w.Header().Set("Access-Control-Expose-Headers",
+					strings.Join(corsExposed, ", "))
 			}
 		}
 		if preflight {

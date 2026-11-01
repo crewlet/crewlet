@@ -7,13 +7,15 @@
 // never both, the box record's two halves moving together: each is a
 // conditional write, not
 // code around one, so a suite that ran only against a fake would assert the
-// author's intent and nothing about the store. The one implementation is
+// author's intent and nothing about the store. So are a person's notes on a
+// run's record (notes.go): filed, taken, pinned and bounded by the same writes. The one implementation is
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
 package sandboxtest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,7 +55,14 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"WorkItemSurvivesParkAndResume", testWorkItemSurvivesParkAndResume},
 		{"AParkedRunRecordsWhoItsAudienceIs", testAParkedRunRecordsWhoItsAudienceIs},
 		{"ARequesterSurvivesTheLaunchThatRecordsIt", testARequesterSurvivesTheLaunchThatRecordsIt},
+		{"AColleaguesAskSurvivesEveryWriteOfItsTurn", testAColleaguesAskSurvivesEveryWriteOfItsTurn},
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
+		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
+		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
+		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
+		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
+		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -76,7 +85,12 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnEndingIsDecidedOnce", testAnEndingIsDecidedOnce},
 		{"ADecidedRunTakesNoOtherWrite", testADecidedRunTakesNoOtherWrite},
 		{"AnEndingSaysWhetherItHandsAnAnswerBack", testAnEndingSaysWhetherItHandsAnAnswerBack},
+		{"AStopIsRecordedWithTheDecisionThatMakesIt", testAStopIsRecordedWithTheDecisionThatMakesIt},
+		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
+		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
+		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
+		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
 		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
@@ -101,7 +115,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
 		{"ALaunchStampsTheLeaseThatLaunchedIt", testALaunchStampsTheLeaseThatLaunchedIt},
 		{"ReleasingABoxClearsBothHalves", testReleasingABoxClearsBothHalves},
-		{"TheConversationRoundTrips", testTheConversationRoundTrips},
+		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"ARunParkedOnATopLevelDMIsAnsweredInItsThread", testARunParkedOnATopLevelDMIsAnsweredInItsThread},
@@ -111,6 +125,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ListingsAreStable", testListingsAreStable},
 		{"TheFirstReplyRecordedIsTheAnswer", testTheFirstReplyRecordedIsTheAnswer},
 		{"AnAnswerIsRecordedWithItsRoute", testAnAnswerIsRecordedWithItsRoute},
+		{"AnAnswerIsRecordedOnlySealed", testAnAnswerIsRecordedOnlySealed},
 		{"AnAnswerIsRecordedOnlyOnTheQuestionThatAsked", testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked},
 		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
 		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
@@ -138,6 +153,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ExpiringAPauseClearsTheBoxInTheSameWrite", testExpiringAPauseClearsTheBoxInTheSameWrite},
 		{"BridgeCallsAreAppendedInOrder", testBridgeCallsAreAppendedInOrder},
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
+		{"ManyBridgedWritersAllLand", testManyBridgedWritersAllLand},
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
 		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
 		{"ABridgedRunsSpendIsTheNewestTotal", testABridgedRunsSpendIsTheNewestTotal},
@@ -148,7 +164,10 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"BeginLaunchUnionsCodeHolds", testBeginLaunchUnionsCodeHolds},
 		{"AddCodeHoldsAddsToALiveRowOnly", testAddCodeHoldsAddsToALiveRowOnly},
 		{"RaiseCodeFloorRaisesTheCurrentLaunchOnly", testRaiseCodeFloorRaisesTheCurrentLaunchOnly},
+		{"ACheckoutIsGrantedToTheRunningJobOnly", testACheckoutIsGrantedToTheRunningJobOnly},
 	}
+	cases = append(cases, noteCases...)
+	cases = append(cases, askCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -164,8 +183,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
-		{"TheRowIsTheSizeOfItsFactsWhateverItsJobKeeps", testTheRowIsTheSizeOfItsFactsWhateverItsJobKeeps},
 	}
+	raw = append(raw, noteRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -246,14 +265,13 @@ func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) st
 	return launch
 }
 
-// suspendedState is a stand-in for the serialized Execute conversation. The
+// suspendedState is a stand-in for a parked turn's serialized state. The
 // nineteen-digit argument is the value a lossy store gets wrong: it is past
 // 2^53, so any decode of it into a float64 on the way through comes back as a
 // different number.
-const suspendedState = `{"messages":[{"Role":"assistant","ToolCalls":[{"ID":"call_1",` +
-	`"Name":"run_sandbox","Arguments":{"row":1234567890123456789}}]}],` +
-	`"pending_tool_call_id":"call_1","pending_tool_name":"run_sandbox",` +
-	`"active_tool_names":["run_sandbox","activate_tool"],"iteration":2}`
+const suspendedState = `{"version":4,"iteration_history":[{"Calls":[{"Name":"tracker_update",` +
+	`"Args":{"row":1234567890123456789}}]}],` +
+	`"active_tool_names":["tracker_update","activate_tool"],"iteration":2}`
 
 // suspension is the write that parks [suspendedState].
 func suspension() sandbox.Suspension {
@@ -331,71 +349,262 @@ func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Pendin
 }
 
 func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.PendingStore) {
-	// A second run_sandbox call in one turn presents the same turn id, and
-	// the box on that row is the paused checkout it is about to reattach
-	// to. A launch that erased it would re-clone the work instead.
-	mustLaunched(t, s, run("t1"))
+	// A second launch in one turn presents the same turn id, and
+	// the box on that row is the paused checkout it may reattach to. A
+	// launch that erased it would re-clone the work instead — and one that
+	// did not tell the launch which box it was would leave the launch no
+	// way to reclaim it when the next job runs elsewhere.
+	//
+	// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a process
+	// tree on the host of the node that launched the job it was made for, so
+	// the relaunch may continue in it only there — and until this launch
+	// attaches a box of its own, the row's box is still that one, reclaimed by
+	// that host. What was the previous JOB's and not its box's — its command,
+	// its session — is not the relaunch's: a reader that found it would read
+	// the finished job back as this one.
+	first := run("t1")
+	first.Placement, first.LaunchNode = "direct", "node-a"
+	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
+		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", CodingAgent: "claude-code"},
+		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	mustBeginLaunch(t, s, run("t1"))
+	next := run("t1")
+	next.LaunchNode = "node-b"
+	opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
 
-	if got := mustGet(t, s, "t1"); got.SandboxID != "box-9" {
-		t.Errorf("a second launch erased the attached box: %+v", got)
+	got := mustGet(t, s, "t1")
+	if got.SandboxID != "box-9" || got.Placement != "direct" || got.LaunchNode != "node-a" {
+		t.Errorf("a second launch erased the attached box, its cell or its host: box %q in %q on %q",
+			got.SandboxID, got.Placement, got.LaunchNode)
+	}
+	if got.CommandID != "" || got.SessionID != "" {
+		t.Errorf("the relaunch's row still names the previous job: command %q, session %q",
+			got.CommandID, got.SessionID)
+	}
+	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
+		CodingAgent: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
+	if opened.Prior != want {
+		t.Errorf("the relaunch was handed %+v as the box it found, want %+v", opened.Prior, want)
+	}
+	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
+	if err := s.AttachSandbox(t.Context(), "t1",
+		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", CodingAgent: "claude-code"},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("attach the relaunch's box: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.SandboxID != "box-10" || got.LaunchNode != "node-b" {
+		t.Errorf("the relaunch's box %q is named on %q, want box-10 on node-b", got.SandboxID, got.LaunchNode)
+	}
+}
+
+// A RELAUNCH'S BOX MOVES THE ROW TO ITS CELL. The next job can land in
+// another cell than the last — a fallback onto a member with a run_in of its
+// own — and every reader reaches the box through the row's cell, so the box,
+// its cell and its CLI move as one write: a row that took the new box and kept
+// the old cell sent every poll, collection and reclaim of it to a backend that
+// never made it.
+func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-cells")
+	first.Placement = "direct"
+	mustLaunched(t, s, first)
+	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
+		SandboxID: "box-1", Placement: "direct", CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	next := run("t-cells")
+	next.Placement, next.CodingAgent = "e2b", "opencode"
+	mustBeginLaunch(t, s, next)
+	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
+		SandboxID: "box-2", Placement: "e2b", CodingAgent: "opencode",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	got := mustGet(t, s, "t-cells")
+	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.CodingAgent != "opencode" {
+		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in e2b on opencode",
+			got.SandboxID, got.Placement, got.CodingAgent)
+	}
+}
+
+// EVERY LAUNCH RECORDS THE NODE THAT LAUNCHED IT — the relaunch's, not the
+// first job's: a relaunch may land on another node, and a local box is on the
+// host of the node that started it, never on the one that started the job
+// before it.
+func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-node")
+	first.LaunchNode = "node-a"
+	mustLaunched(t, s, first)
+	if got := mustGet(t, s, "t-node"); got.LaunchNode != "node-a" {
+		t.Fatalf("the launch recorded node %q, want node-a", got.LaunchNode)
+	}
+	next := run("t-node")
+	next.LaunchNode = "node-b"
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-node"); got.LaunchNode != "node-b" {
+		t.Errorf("the relaunch left node %q, want its own node-b", got.LaunchNode)
+	}
+}
+
+// A LOSS IS RECORDED ONLY ON THE JOB IT WAS JUDGED ON: running, the same
+// launch, and — for a box on one node's host — that node. A verdict that landed
+// on a relaunch, or on a run whose completion is already being collected, would
+// have a round started again that nothing found lost. Recorded once, it stands
+// at its first instant and cause, and a relaunch clears it.
+func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-lost")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: "node-a", At: at}
+
+	for _, refused := range []struct {
+		name, launch, node string
+	}{
+		{"another job", "not-" + launch, "node-a"},
+		{"another node", launch, "node-b"},
+		{"no job", "", "node-a"},
+	} {
+		loss := lost
+		loss.Node = refused.node
+		marked, err := s.MarkLost(ctx, "t-lost", refused.launch, loss)
+		if err != nil || marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
+	}
+
+	marked, err := s.MarkLost(ctx, "t-lost", launch, lost)
+	if err != nil || !marked {
+		t.Fatalf("the verdict on the job it was judged on: marked=%v err=%v", marked, err)
+	}
+	if got := mustGet(t, s, "t-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossEngineRestarted || got.Lost.Node != "node-a" {
+		t.Fatalf("the row records the verdict %+v, want %+v", got.Lost, lost)
+	}
+	// It STANDS: asked again, the row still carries the first, at its first
+	// instant and with its own cause.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkLost(ctx, "t-lost", launch, again); err != nil || !marked {
+		t.Errorf("a second verdict on the same job: marked=%v err=%v; want the verdict standing", marked, err)
+	}
+	if got := mustGet(t, s, "t-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossEngineRestarted {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
+	}
+
+	// A RELAUNCH is a job nothing has judged.
+	next := run("t-lost")
+	next.LaunchNode = "node-b"
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-lost"); got.Lost != nil {
+		t.Errorf("the relaunch kept the previous job's verdict: %+v", *got.Lost)
+	}
+
+	// A BOX EVERY NODE REACHES is judged by no node in particular.
+	remote := run("t-remote")
+	remote.LaunchNode = "node-a"
+	remoteLaunch := mustLaunched(t, s, remote)
+	if marked, err := s.MarkLost(ctx, "t-remote", remoteLaunch,
+		sandbox.JobLoss{Cause: sandbox.LossBoxGone, At: at}); err != nil || !marked {
+		t.Errorf("a verdict on a box no node holds: marked=%v err=%v; want recorded", marked, err)
+	}
+
+	// A JOB NO LONGER RUNNING — its completion claimed — takes none.
+	claimedRun := run("t-claimed")
+	claimedRun.LaunchNode = "node-a"
+	claimedLaunch := mustLaunched(t, s, claimedRun)
+	mustClaim(t, s, "t-claimed")
+	if marked, err := s.MarkLost(ctx, "t-claimed", claimedLaunch, lost); err != nil || marked {
+		t.Errorf("a verdict on a claimed job: marked=%v err=%v; want refused", marked, err)
+	}
+	// Nor does a run with no record.
+	if marked, err := s.MarkLost(ctx, "t-none", "l", lost); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
+// A ROUND COUNTS ITS LOST JOBS ACROSS THE RELAUNCHES THAT CARRY IT ON — each
+// one counted by the relaunch that follows it — and a new round starts from
+// none. The count is what stops a run that keeps taking its host down from
+// being started again for ever; one that a relaunch forgot would never stop it,
+// and one that outlived its round would end the next round early.
+func testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	lose := func(launch string) {
+		t.Helper()
+		loss := sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: "node-a", At: base}
+		if marked, err := s.MarkLost(ctx, "t-round", launch, loss); err != nil || !marked {
+			t.Fatalf("mark lost: marked=%v err=%v", marked, err)
+		}
+	}
+	carryOn := func() string {
+		t.Helper()
+		next := run("t-round")
+		next.LaunchNode = "node-a"
+		next.Continues = true
+		return mustLaunched(t, s, next)
+	}
+
+	first := run("t-round")
+	first.LaunchNode = "node-a"
+	lose(mustLaunched(t, s, first))
+	second := carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 1 {
+		t.Fatalf("after one lost job carried on, the round counts %d losses, want 1", got.RoundLosses)
+	}
+	lose(second)
+	carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 2 {
+		t.Fatalf("after two lost jobs carried on, the round counts %d losses, want 2", got.RoundLosses)
+	}
+	// A JOB OF THE ROUND THAT WAS NOT LOST — one that asked and is carried
+	// on with its answer — adds nothing.
+	carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 2 {
+		t.Errorf("a carried-on job that was not lost moved the count to %d, want 2", got.RoundLosses)
+	}
+	// A NEW ROUND has lost nothing.
+	fresh := run("t-round")
+	fresh.LaunchNode = "node-a"
+	mustLaunched(t, s, fresh)
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 0 {
+		t.Errorf("a new round starts at %d losses, want 0", got.RoundLosses)
 	}
 }
 
 func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingStore) {
-	// THE RELAUNCH RESET. The previous call's suspended conversation is not
-	// this job's, and leaving it in place is worse than absent: a
-	// completion claimed before the new suspension lands would splice this
-	// run's findings into the loop the LAST call suspended, which has
-	// already moved on. The status is what says so — back to launching, so
-	// the poll leaves it alone until the new conversation is written — and
-	// the conversation kept beside the row is the job's: the new launch
-	// names none, and the replaced one's is removed.
-	//
-	// Mutation: drop the replaced job's values after a reset, and the first
-	// call's conversation is still kept.
-	first := mustLaunched(t, s, run("t1"))
-	second := mustBeginLaunch(t, s, run("t1"))
+	// THE RELAUNCH RESET. The previous job's parked turn state is not this
+	// job's, and leaving it in place is worse than absent: a completion
+	// claimed before the new suspension lands would resume the turn from the
+	// park the LAST job left, which has already moved on. The status is what
+	// says so — back to launching, so the poll leaves it alone until the new
+	// park is written.
+	mustLaunched(t, s, run("t1"))
+	mustBeginLaunch(t, s, run("t1"))
 
 	got := mustGet(t, s, "t1")
 	if got.Status != sandbox.StatusLaunching {
 		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusLaunching)
 	}
-	for _, launch := range []string{second, first} {
-		if state, kept := mustConversation(t, s, "t1", launch); kept {
-			t.Errorf("the relaunch left launch %s a suspension: %s", launch, state)
-		}
+	if len(got.ExecuteState) != 0 {
+		t.Errorf("the first call's suspension survived the relaunch: %+v", got.ExecuteState)
 	}
-}
-
-// mustConversation is the conversation launch's job keeps beside turnID's run.
-func mustConversation(t *testing.T, s sandbox.PendingStore, turnID, launch string) (string, bool) {
-	t.Helper()
-	state, kept, err := s.Conversation(t.Context(), turnID, launch)
-	if err != nil {
-		t.Fatalf("Conversation(%s, %s): %v", turnID, launch, err)
-	}
-	return string(state), kept
-}
-
-// mustBridgeLog is the bridged tool log launch's job keeps beside turnID's run.
-func mustBridgeLog(t *testing.T, s sandbox.PendingStore, turnID, launch string) []sandbox.BridgeCall {
-	t.Helper()
-	calls, err := s.BridgeLog(t.Context(), turnID, launch)
-	if err != nil {
-		t.Fatalf("BridgeLog(%s, %s): %v", turnID, launch, err)
-	}
-	return calls
 }
 
 // A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
 // empty.
 //
-// The bridged log is the whole record an agent-mode resume rebuilds its phase
+// The bridged log is the whole record a run's resume rebuilds its phase
 // from. A reviewer's self_iterate launches another executor run under the same
 // turn id, and the first round's log left in place is not merely stale: a
 // round that in fact submitted nothing would report the PREVIOUS round's
@@ -411,20 +620,18 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
-	if calls := mustBridgeLog(t, s, first.TurnID, launch); len(calls) != 1 {
-		t.Fatalf("the first round recorded %d calls, want 1", len(calls))
+	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
 	}
 
-	next := mustBeginLaunch(t, s, run("t-relaunch-bridge"))
+	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
 	got := mustGet(t, s, first.TurnID)
-	if calls := mustBridgeLog(t, s, first.TurnID, next); len(calls) != 0 {
-		t.Errorf("the second round inherited %d calls from the first: %+v", len(calls), calls)
+	if len(got.BridgeCalls) != 0 {
+		t.Errorf("the second round inherited %d calls from the first: %+v",
+			len(got.BridgeCalls), got.BridgeCalls)
 	}
-	if got.Launch.BridgedCalls != 0 {
-		t.Errorf("the call count survived the relaunch: %d", got.Launch.BridgedCalls)
-	}
-	if calls := mustBridgeLog(t, s, first.TurnID, launch); len(calls) != 0 {
-		t.Errorf("the first round's log outlived the relaunch beside the row: %+v", calls)
+	if got.BridgeCallsElided != 0 {
+		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
 	}
 }
 
@@ -438,7 +645,7 @@ func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 
 // A LAUNCH ANSWERS THE JOB IT OPENED, on the first launch and on a relaunch
 // alike: its name and the instant it began, exactly as the row records them.
-// The answer is what an agent-mode run's bridge session is bound to before its
+// The answer is what a run's bridge session is bound to before its
 // box exists, so an answer that differed from the row — a stale name, or the
 // previous job's — would file every call the box makes under a job that is not
 // its own.
@@ -478,6 +685,11 @@ func testALaunchARowsNewerLeaseOutranksIsRefused(t *testing.T, s sandbox.Pending
 	if err == nil {
 		t.Fatalf("a launch under a lease a newer one outranks was opened as job %q", opened.LaunchID)
 	}
+	// THE REFUSAL SAYS THE SEAT MOVED, the one fact a launch's caller acts on:
+	// this node no longer holds the seat, so nothing it starts is anybody's.
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("a launch under an outgrown lease = %v, want ErrSeatNotHeld", err)
+	}
 	if got := mustGet(t, s, "t-outranked"); got.LaunchID != first || got.Status != sandbox.StatusRunning {
 		t.Errorf("the refused launch moved the row: job %q status %q, want %q %q",
 			got.LaunchID, got.Status, first, sandbox.StatusRunning)
@@ -508,11 +720,10 @@ func testALaunchingRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
-	// The conversation, then the flip: the run becomes pollable only once
-	// there is something to resume into. The other order would leave a
-	// running row with nothing to resume into, which is the state the poll
-	// fires on.
-	launch := mustBeginLaunch(t, s, run("t1"))
+	// One write, both facts: the conversation lands and the run becomes
+	// pollable at the same instant. Two writes would leave a running row
+	// with nothing to resume into, which is the state the poll fires on.
+	mustBeginLaunch(t, s, run("t1"))
 	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
 	if err != nil || !suspended {
 		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
@@ -522,8 +733,8 @@ func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
 	if got.Status != sandbox.StatusRunning {
 		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusRunning)
 	}
-	if _, kept := mustConversation(t, s, "t1", launch); !kept {
-		t.Error("the run opened to the poll with no conversation kept for its job")
+	if len(got.ExecuteState) == 0 {
+		t.Error("the run opened to the poll with no conversation on it")
 	}
 	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1"), sandbox.Fence{}); err != nil || !won {
 		t.Errorf("a suspended run was not claimable: won=%v err=%v", won, err)
@@ -575,8 +786,8 @@ func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStor
 }
 
 func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
-	// THE AT-MOST-ONCE GATE. Two nodes both splicing a result into one
-	// suspended loop produce two turns from one job — which the seat sees
+	// THE AT-MOST-ONCE GATE. Two nodes both resuming one parked turn from
+	// one job's result produce two turns from one job — which the seat sees
 	// as its own work arriving twice.
 	mustLaunched(t, s, run("t1"))
 	tail := completionOf(t, s, "t1")
@@ -620,7 +831,7 @@ func testAClaimReportsWhereItCameFrom(t *testing.T, s sandbox.PendingStore) {
 	// does not mean "was parked".
 	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(t.Context(), "t1",
-		sandbox.Clarification{Question: "which branch?", Audience: "requester", AskedAt: time.Now().UTC()}); err != nil {
+		sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	got, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1"), sandbox.Fence{})
@@ -655,12 +866,7 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 // answer matching a question it once asked.
 func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	launch := mustLaunched(t, s, run("t1"))
-	if recorded, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeAppend{
-		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"},
-	}); err != nil || !recorded {
-		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
-	}
+	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 	// Read before the record goes: a claim names the launch it is for, and
 	// after the delete there is nothing left to read one from.
@@ -693,19 +899,6 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail, sandbox.Fence{}); err != nil || won {
 		t.Errorf("a finished run was claimed: won=%v err=%v", won, err)
 	}
-	// AND WHAT ITS JOB KEPT BESIDE THE RECORD: nothing reads a job's
-	// conversation or tool log but through a record that names the job, so
-	// once the record is gone they are nobody's, and a bucket no clock ages
-	// would keep them for ever.
-	//
-	// Mutation: keep the job's values when Finish deletes the record, and
-	// both are still there.
-	if state, kept := mustConversation(t, s, "t1", launch); kept {
-		t.Errorf("the finished run's conversation outlived its record: %s", state)
-	}
-	if calls := mustBridgeLog(t, s, "t1", launch); len(calls) != 0 {
-		t.Errorf("the finished run's tool log outlived its record: %+v", calls)
-	}
 	// Two parties reaching the end of one run is ordinary, not an error.
 	if _, again, err := end(ctx, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active)); err != nil || again {
 		t.Errorf("a second Finish = %v, %v; want false and no error", again, err)
@@ -730,7 +923,7 @@ func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingS
 		"MarkBoxPaused": func() error { return s.MarkBoxPaused(ctx, "t1", base) },
 		"ReleaseBox":    func() error { return s.ReleaseBox(ctx, "t1") },
 		"MarkAwaiting": func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		},
 		"MarkSuspended": func() error {
 			_, err := s.MarkSuspended(ctx, "t1", suspension())
@@ -923,8 +1116,7 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			_, ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, nil, sandbox.Fence{})
 			return ok, err
 		},
-		"ExpirePause":   func() (bool, error) { return s.ExpirePause(ctx, "t1") },
-		"MarkSuspended": func() (bool, error) { return s.MarkSuspended(ctx, "t1", suspension()) },
+		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {
@@ -938,9 +1130,17 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 		},
 		"AttachSandbox": func() error { return s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-2"}, sandbox.Fence{}) },
 		"MarkAwaiting": func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		},
 		"SetStatus": func() error { return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{}) },
+		// ALOUD, because the park is the second half of a launch the
+		// ending was decided under — a person stopped the seat between the
+		// two — and its turn reports itself stopped rather than as a
+		// suspension that failed.
+		"MarkSuspended": func() error {
+			_, err := s.MarkSuspended(ctx, "t1", suspension())
+			return err
+		},
 	}
 	for name, write := range refusedAloud {
 		if err := write(); !errors.Is(err, sandbox.ErrRunEnding) {
@@ -960,6 +1160,203 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"},
 	}); err != nil || !ok {
 		t.Errorf("a bridged call recorded on a decided run = %v, %v, want it taken", ok, err)
+	}
+}
+
+// A STOP IS RECORDED IN THE WRITE THAT DECIDES IT, so whichever attempt finishes
+// the ending — the node that stopped the run, or the seat's next holder after a
+// crash — announces it as a stop and says who made it. One decision per run: a
+// second decider's stop does not replace the first's author.
+func testAStopIsRecordedWithTheDecisionThatMakesIt(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	stop := sandbox.RunStop{By: "founder", ByKind: "human", OperatorID: "pat:founder-token", Reason: "wrong repo"}
+	decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	})
+	if err != nil || !ok || decided.Ending == nil {
+		t.Fatalf("DecideEnding = %+v, %v, %v", decided.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Stop == nil || *got.Stop != stop {
+		t.Fatalf("the decided row carries stop %+v, want %+v", got.Stop, stop)
+	}
+	other := sandbox.RunStop{By: "somebody-else"}
+	again, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Stop: &other,
+	})
+	if err != nil || !ok || again.Ending.ID != decided.Ending.ID {
+		t.Fatalf("a second decision = %+v, %v, %v, want the first handed back", again.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Stop == nil || got.Stop.By != stop.By {
+		t.Fatalf("a second decider replaced who stopped the run: %+v", got.Stop)
+	}
+	// AND NO OTHER ENDING CARRIES ONE.
+	mustLaunched(t, s, run("t2"))
+	if got := decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active)); got.Stop != nil {
+		t.Fatalf("an ending that is not a stop recorded %+v as its author", got.Stop)
+	}
+}
+
+// WHAT A STOP READ OF ITS RUN IS RECORDED ONCE, AS A STEP OF ITS ENDING, with the
+// charge and the publish it made — so an attempt after a crash neither reads
+// the box again nor charges it twice — and only on the stop it names.
+func testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	stop := sandbox.RunStop{By: "founder"}
+	decided, decidedOK, decideErr := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	})
+	if decideErr != nil || !decidedOK {
+		t.Fatalf("DecideEnding = %v, %v", decidedOK, decideErr)
+	}
+	collection := sandbox.StopCollection{
+		Ending: decided.Ending.ID, InputTokens: 9000, OutputTokens: 1000,
+		CacheReadTokens: 4000, CacheWriteTokens: 500, Condensed: sandbox.AuxTokens{Input: 30, Output: 7},
+		Charged: true, CompanyCharged: true, Published: true,
+	}
+	if _, won, err := s.CollectStop(ctx, "t1", sandbox.StopCollection{Ending: "another-ending"}); err != nil || won {
+		t.Fatalf("a collection naming another ending = %v, %v, want refused", won, err)
+	}
+	written, ok, err := s.CollectStop(ctx, "t1", collection)
+	if err != nil || !ok {
+		t.Fatalf("CollectStop = %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Stop == nil || !got.Stop.Collected || got.Stop.InputTokens != 9000 || got.Stop.OutputTokens != 1000 ||
+		got.Stop.CacheReadTokens != 4000 || got.Stop.CacheWriteTokens != 500 ||
+		got.Stop.Condensed != collection.Condensed || got.Stop.By != "founder" {
+		t.Fatalf("the stop reads %+v, want the collection recorded beside who made it", got.Stop)
+	}
+	if !got.Charged || !got.CompanyCharged || !got.Launch.Published {
+		t.Fatalf("charged=%v company=%v published=%v, want all three recorded with the collection",
+			got.Charged, got.CompanyCharged, got.Launch.Published)
+	}
+	if written.Stop == nil || !written.Stop.Collected {
+		t.Fatalf("CollectStop handed back %+v, want the row as written", written.Stop)
+	}
+	if _, ok, err := s.CollectStop(ctx, "t1", collection); err != nil || ok {
+		t.Fatalf("a second collection of one stop = %v, %v, want refused", ok, err)
+	}
+	// NOT A STOP, NOT DECIDED: nothing to collect.
+	mustLaunched(t, s, run("t2"))
+	plain := decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active))
+	if _, ok, err := s.CollectStop(ctx, "t2", sandbox.StopCollection{Ending: plain.Ending.ID}); err != nil || ok {
+		t.Fatalf("a collection on an ending that is not a stop = %v, %v, want refused", ok, err)
+	}
+	mustLaunched(t, s, run("t3"))
+	if _, ok, err := s.CollectStop(ctx, "t3", sandbox.StopCollection{}); err != nil || ok {
+		t.Fatalf("a collection on a live run = %v, %v, want refused", ok, err)
+	}
+}
+
+// A STOP OF A JOB A COLLECTION ALREADY READ IS REFUSED, IN THE DECIDING WRITE.
+// A claim whose collection read the box and whose resume then gave it back —
+// held by the seat's budget, or for a retry — puts the row back in running, a
+// status a stop ends; but the job is over and its spend is its turn's resume's
+// to charge, so a stop decided on it charged the work item a second time under
+// a segment of its own. The store refuses it whatever the license says, because
+// the stop's listing cannot see a claim that came and went before its decision;
+// an ending that is not a stop still ends it, a release that did not read the
+// box leaves the job stoppable, and a relaunch's job starts stoppable again.
+func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	stopIt := func(turnID, launch string) (sandbox.PendingRun, bool, error) {
+		stop := sandbox.RunStop{By: "founder"}
+		return s.DecideEnding(ctx, turnID, sandbox.Decision{
+			License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+		})
+	}
+
+	launch := mustLaunched(t, s, run("t1"))
+	release := releaseOf(mustClaim(t, s, "t1"))
+	release.Collected = true
+	if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+		t.Fatalf("release t1 collected = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || !got.Launch.Collected {
+		t.Fatalf("the collected job's row reads status %q collected=%v, want running and collected",
+			got.Status, got.Launch.Collected)
+	}
+	if decided, ok, err := stopIt("t1", launch); err != nil || ok || decided.Ending != nil {
+		t.Fatalf("a stop of a collected job = %+v, %v, %v, want refused", decided.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Ending != nil || got.Stop != nil {
+		t.Fatalf("the refused stop left ending %+v and stop %+v on the row", got.Ending, got.Stop)
+	}
+	// AN ENDING THAT IS NOT A STOP STILL ENDS IT: the refusal is the stop's.
+	if got := decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active)); got.Stop != nil {
+		t.Fatalf("the ordinary ending of a collected job recorded a stop: %+v", got.Stop)
+	}
+
+	// A RELEASE THAT DID NOT READ THE BOX LEAVES THE JOB OUT, and stoppable.
+	launch2 := mustLaunched(t, s, run("t2"))
+	failed := releaseOf(mustClaim(t, s, "t2"))
+	failed.CollectFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t2", failed); err != nil || !released {
+		t.Fatalf("release t2 failed collection = %v, %v", released, err)
+	}
+	if decided, ok, err := stopIt("t2", launch2); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job no collection read = %+v, %v, %v, want it decided", decided.Stop, ok, err)
+	}
+
+	// A RELAUNCH'S JOB IS OUT AGAIN: the record is the job's, not the row's.
+	mustLaunched(t, s, run("t3"))
+	collected := releaseOf(mustClaim(t, s, "t3"))
+	collected.Collected = true
+	if released, err := s.ReleaseClaim(ctx, "t3", collected); err != nil || !released {
+		t.Fatalf("release t3 collected = %v, %v", released, err)
+	}
+	relaunch := mustLaunched(t, s, run("t3"))
+	if got := mustGet(t, s, "t3"); got.Launch.Collected {
+		t.Fatal("a relaunch's job inherited the collection of the job before it")
+	}
+	if decided, ok, err := stopIt("t3", relaunch); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of the relaunched job = %+v, %v, %v, want it decided", decided.Stop, ok, err)
+	}
+}
+
+// A JOB KEEPS THE INSTANT IT WAS FIRST COLLECTED. A later collection of the
+// same job — its resume held by the seat's budget for hours, say — reads the
+// same ending, and a reset its CLI named as a time of day is read against the
+// first collection's instant: read against the later one, a 4:30pm already past
+// was the next day's, and the entry sat out for nothing. So a release that read
+// the box records the instant once, a later one leaves it, a release that did
+// not read the box records none, and a relaunch's job starts without one.
+func testAJobKeepsTheInstantItWasFirstCollected(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	release := releaseOf(mustClaim(t, s, "t1"))
+	release.Collected, release.CollectedAt = true, base
+	if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+		t.Fatalf("release t1 collected = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.Equal(base) {
+		t.Fatalf("the first collection's instant reads %v, want %v", got.Launch.CollectedAt, base)
+	}
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.Collected, again.CollectedAt = true, base.Add(3*time.Hour)
+	if released, err := s.ReleaseClaim(ctx, "t1", again); err != nil || !released {
+		t.Fatalf("release t1 collected again = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.Equal(base) {
+		t.Fatalf("a later collection moved the job's first instant to %v, want %v",
+			got.Launch.CollectedAt, base)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	failed := releaseOf(mustClaim(t, s, "t2"))
+	failed.CollectFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t2", failed); err != nil || !released {
+		t.Fatalf("release t2 failed collection = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release that read no box recorded a collection at %v", got.Launch.CollectedAt)
+	}
+
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.IsZero() {
+		t.Fatal("a relaunch's job inherited the collection instant of the job before it")
 	}
 }
 
@@ -1086,7 +1483,7 @@ func testACompletionDoesNotClaimAParkedRun(t *testing.T, s sandbox.PendingStore)
 	// it. A completion that finds it there is a duplicate of the one that
 	// parked it.
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()}); err != nil {
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1"), sandbox.Fence{}); err != nil || won {
@@ -1127,6 +1524,86 @@ func mustRelease(t *testing.T, s sandbox.PendingStore, claimed sandbox.PendingRu
 	}
 }
 
+// A HELD RELEASE HOLDS THE RESUME UNTIL ITS CONDITION LIFTS: the release that
+// hands back a claim its seat's conditions refused writes the hold, a lift for
+// another condition leaves it, a lift for its own clears it — and the next
+// release clears whatever an earlier one held, so no hold outlasts the attempt
+// it held back.
+func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	until := time.Date(2026, time.September, 24, 0, 0, 0, 0, time.UTC)
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.HeldFor != "budget" || !got.HeldUntil.Equal(until) {
+		t.Fatalf("row = %s held for %q until %v, want running and held for budget until %v",
+			got.Status, got.HeldFor, got.HeldUntil, until)
+	}
+	if !got.Held(until.Add(-time.Second)) || got.Held(until) {
+		t.Error("the row is not held exactly until its refusal lifts")
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "pause"); err != nil || lifted {
+		t.Fatalf("a lift for another condition: lifted=%v err=%v", lifted, err)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift for its own condition: lifted=%v err=%v", lifted, err)
+	}
+	if got := mustGet(t, s, "t1"); got.HeldFor != "" || !got.HeldUntil.IsZero() {
+		t.Fatalf("the lifted row is still held for %q until %v", got.HeldFor, got.HeldUntil)
+	}
+	// PAST ITS INSTANT, so the next claim takes the run: a hold that still
+	// stands refuses every claim (testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts).
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: time.Now().UTC().Add(-time.Minute)}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); got.HeldFor != "" {
+		t.Fatalf("an ordinary release kept the earlier hold for %q", got.HeldFor)
+	}
+}
+
+// A HELD RUN IS NO CLAIM'S UNTIL ITS HOLD LIFTS. The claim is the resume, and
+// the hold says the resume waits. The waiter announces nothing for a held run,
+// but an announcement made before the hold was written can still be on its way,
+// queued behind the very resume that held the run: claimed, it collected the
+// job again, waking the box the hold keeps asleep, and ran its review into the
+// same refusal. Refused while the hold stands, the run is claimed once the hold
+// is lifted, or once its instant has passed.
+func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: time.Now().UTC().Add(time.Hour)}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	row := mustGet(t, s, "t1")
+	fence := sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1"), fence); err != nil || won {
+		t.Fatalf("a claim of a held run: won=%v err=%v, want it refused while the hold stands", won, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || got.HeldFor != "budget" {
+		t.Fatalf("the refused claim moved the run to %s held for %q, want it running and held",
+			got.Status, got.HeldFor)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("lift: lifted=%v err=%v", lifted, err)
+	}
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+
+	// AND ONCE ITS INSTANT HAS PASSED, though nothing lifted it.
+	expired := releaseOf(mustClaim(t, s, "t1"))
+	expired.Hold = &sandbox.Refusal{Condition: "budget", Until: time.Now().UTC().Add(-time.Minute)}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", expired); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	mustClaim(t, s, "t1")
+}
+
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
 	// The retry a failed resume opens has to find the run exactly where the
 	// signal it is retrying can take it: a completion's job running, an
@@ -1139,7 +1616,8 @@ func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.Pending
 	mustClaim(t, s, "t1")
 
 	mustLaunched(t, s, run("t2"))
-	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()}); err != nil {
+	Ask(t, s, "t2", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	answered, won, err := s.ClaimForResume(t.Context(), "t2", answerTo(t, s, "t2"), sandbox.Fence{})
@@ -1153,7 +1631,7 @@ func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.Pending
 }
 
 func testAReleaseOfAnotherLaunchIsRefused(t *testing.T, s sandbox.PendingStore) {
-	// The resumed executor called run_sandbox again, so the row holds a new
+	// The resumed turn relaunched its executor, so the row holds a new
 	// launch with the claimed job's conversation cleared. Handed back, that
 	// launch would read as a running job with nothing to resume into, and
 	// its completion would collect whatever the box still held.
@@ -1435,7 +1913,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 			return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{})
 		}},
 		{"park on a question", func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		}},
 		{"expire the pause", func() error {
 			_, err := s.ExpirePause(ctx, "t1")
@@ -1473,10 +1951,11 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
 	mustLaunched(t, s, run("t1"))
+	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToRequester,
+		Branch: "wip/swe/t1"})
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which base branch?", Audience: "requester",
-		Branch: "wip/swe/t1", SessionID: "sess-1",
-		AskedAt: time.Now().UTC(),
+		SessionID: "sess-1",
+		AskedAt:   time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
@@ -1494,14 +1973,14 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 func testAQuestionIsParkedWithItsAnchor(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"}); err == nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{}); err == nil {
 		t.Fatal("a park with no instant the question was asked at was accepted")
 	}
 	if got := mustGet(t, s, "t1"); got.Status == sandbox.StatusAwaiting || got.Question != "" {
 		t.Fatalf("run %q asking %q, want the refused park to have written nothing", got.Status, got.Question)
 	}
 	asked := time.Now().UTC().Truncate(time.Microsecond)
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?", AskedAt: asked}); err != nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAwaiting || !got.AskedAt.Equal(asked) {
@@ -1592,8 +2071,8 @@ func testARefusedRelaunchIsAnError(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("ClaimOwnership: %v", err)
 	}
 	before := mustGet(t, s, "t1")
-	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-a:1", Epoch: 3}); err == nil {
-		t.Fatal("a relaunch under a lease the run's outranks answered as if it landed")
+	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-a:1", Epoch: 3}); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a relaunch under a lease the run's outranks = %v, want ErrSeatNotHeld", err)
 	}
 	if got := mustGet(t, s, "t1"); got.LaunchID != before.LaunchID || got.Status != sandbox.StatusRunning {
 		t.Fatalf("the refused relaunch moved the run: %q under %q", got.Status, got.LaunchID)
@@ -1601,6 +2080,39 @@ func testARefusedRelaunchIsAnError(t *testing.T, s sandbox.PendingStore) {
 	decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active))
 	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{Owner: "node-b:1", Epoch: 5}); !errors.Is(err, sandbox.ErrRunEnding) {
 		t.Fatalf("a relaunch of a run whose ending is decided = %v, want ErrRunEnding", err)
+	}
+}
+
+// A NEWER LEASE'S ENDING IS STILL A SEAT NOT HELD to the launch it outranks.
+//
+// The seat's next holder recovers a run it finds claimed by fencing it to its
+// own lease before it ends it, so the old holder's relaunch of it, its resumed
+// turn's, almost always meets an ending as well as the newer lease. Answered
+// [sandbox.ErrRunEnding], the launch was told its own turn was closing the
+// run, when what happened is that the seat moved. A launch under the lease
+// that decided the ending is still told the ending.
+func testANewerLeasesEndingIsStillASeatNotHeld(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	old := sandbox.Fence{Owner: "node-a:1", Epoch: 3}
+	if _, err := s.BeginLaunch(ctx, run("t1"), old); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if ok, err := s.ClaimOwnership(ctx, "t1", "node-b:1", 7); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+	newer := sandbox.Fence{Owner: "node-b:1", Epoch: 7}
+	decide(t, s, "t1", everyJob(newer, sandbox.Active))
+	if _, err := s.BeginLaunch(ctx, run("t1"), old); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("a relaunch under the outgrown lease = %v, want ErrSeatNotHeld", err)
+	}
+	if err := s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, old); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Errorf("an attach under the outgrown lease = %v, want ErrSeatNotHeld", err)
+	}
+	if err := s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-1"}, newer); !errors.Is(err, sandbox.ErrRunEnding) {
+		t.Errorf("an attach under the lease that decided the ending = %v, want ErrRunEnding", err)
+	}
+	if got := mustGet(t, s, "t1"); got.SandboxID != "" {
+		t.Errorf("a refused attach recorded box %q", got.SandboxID)
 	}
 }
 
@@ -1622,8 +2134,8 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	// a job in that box, which must abandon the box rather than run a job
 	// the row does not name.
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "ghost"}, stale); err == nil {
-		t.Fatal("a stale fence's attach answered as if it landed")
+		sandbox.BoxRef{SandboxID: "ghost"}, stale); !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a stale fence's attach = %v, want ErrSeatNotHeld", err)
 	}
 	if got := mustGet(t, s, "t1"); got.SandboxID != "" {
 		t.Errorf("a stale fence attached a box: %q", got.SandboxID)
@@ -1744,21 +2256,18 @@ func testASeatsRunsAreFoundByItsID(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-func testTheConversationRoundTrips(t *testing.T, s sandbox.PendingStore) {
+func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	// THE SUSPENDED CONVERSATION. Everything the tool loop needs to re-enter
 	// where it stopped; a lossy round trip here resumes into a conversation
 	// that is not the one that was suspended.
 	//
-	// BYTE FOR BYTE: the store keeps the conversation and never reads it,
+	// BYTE FOR BYTE: the store carries the conversation and never reads it,
 	// so anything it gives back other than what it was given — a number
 	// re-read as a float64, a key re-sorted — is the store editing a turn.
-	launch := mustLaunched(t, s, run("t1"))
-	if got, kept := mustConversation(t, s, "t1", launch); !kept || got != suspendedState {
-		t.Errorf("conversation = (%s, %v)\nwant exactly %s", got, kept, suspendedState)
-	}
-	// AND ONLY THE JOB'S: a launch the run never held names none.
-	if got, kept := mustConversation(t, s, "t1", "another-launch"); kept {
-		t.Errorf("a launch the run never held has a conversation: %s", got)
+	mustLaunched(t, s, run("t1"))
+	got := mustGet(t, s, "t1")
+	if string(got.ExecuteState) != suspendedState {
+		t.Errorf("execute state = %s\nwant exactly %s", got.ExecuteState, suspendedState)
 	}
 }
 
@@ -1794,8 +2303,9 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, first)
 	mustLaunched(t, s, second)
 	for _, id := range []string{"t1", "t2"} {
+		Ask(t, s, id, sandbox.Ask{Question: "?" + id, To: sandbox.AskToRequester})
 		if err := s.MarkAwaiting(t.Context(), id,
-			sandbox.Clarification{Question: "?" + id, AskedAt: time.Now().UTC()}); err != nil {
+			sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
@@ -1932,7 +2442,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	// answer to its question.
 	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(t.Context(), "t1",
-		sandbox.Clarification{Question: "?", AskedAt: time.Now().UTC()}); err != nil {
+		sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if _, ok, _ := findAwaiting(t.Context(), s, "swe",
@@ -2093,7 +2603,7 @@ func testAnAnswerWaitingOnItsResumeStillExpiresTheBox(t *testing.T, s sandbox.Pe
 		t.Fatalf("ExpirePause = %v, %v: the box of an answer waiting on its resume was never reclaimed", won, err)
 	}
 	got := mustGet(t, s, "t1")
-	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || !bytes.Equal(got.Answer.Sealed, sealOf("use main")) {
 		t.Fatalf("run = %q answer %+v, want the answer still recorded and owed", got.Status, got.Answer)
 	}
 	if got.SandboxID != "" || got.CommandID != "" || !got.PausedAt.IsZero() {
@@ -2129,7 +2639,8 @@ func testAClaimedAnswerIsNotExpired(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// park moves a seeded run to awaiting_clarification with a box attached.
+// park has a seeded run ask a question and moves it to awaiting_clarification
+// with a box attached.
 func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
@@ -2138,13 +2649,12 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		// The branch is what the answer re-seeds from once the box is
-		// reclaimed, so a parked run without one is not a realistic
-		// starting point for anything the reaper does.
-		Question: "which branch?", Audience: "requester", Branch: "wip/" + turnID,
-		AskedAt: time.Now().UTC(),
-	}); err != nil {
+	// The branch is what the answer re-seeds from once the box is
+	// reclaimed, so a parked run without one is not a realistic starting
+	// point for anything the reaper does.
+	Ask(t, s, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester,
+		Branch: "wip/" + turnID})
+	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 }
@@ -2184,9 +2694,9 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 
 // --- the bridged run's durable tool log ------------------------------------
 
-// A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. A native tool loop keeps
-// them on a surface in memory and the turn writes them when it ends; a bridged
-// run's are made by a process outside the engine and can outlive the node. A
+// A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. An engine phase's calls sit
+// on a surface in memory and the turn writes them when it ends; a run's are
+// made by its coding CLI, outside the engine, and can outlive the node. A
 // reviewer of a resumed run with no log judges a turn that reads as having
 // acted on nothing.
 func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
@@ -2204,29 +2714,24 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 
-	calls := mustBridgeLog(t, s, r.TurnID, launch)
-	if len(calls) != 3 {
-		t.Fatalf("%d calls recorded: %+v", len(calls), calls)
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != 3 {
+		t.Fatalf("%d calls recorded: %+v", len(got.BridgeCalls), got.BridgeCalls)
 	}
 	want := []string{"read_page", "post_message", "read_page"}
 	for i, name := range want {
-		if calls[i].Name != name {
-			t.Errorf("call %d = %q, want %q", i, calls[i].Name, name)
+		if got.BridgeCalls[i].Name != name {
+			t.Errorf("call %d = %q, want %q", i, got.BridgeCalls[i].Name, name)
 		}
 	}
 	// The ARGUMENTS and the OUTCOME ride along, because a log of bare
 	// names does not tell a reviewer whether the turn delivered anything.
-	if calls[0].Args != `{"id":1}` || calls[0].Output != "read_page ok" {
-		t.Errorf("the call does not carry what it did: %+v", calls[0])
+	if got.BridgeCalls[0].Args != `{"id":1}` || got.BridgeCalls[0].Output != "read_page ok" {
+		t.Errorf("the call does not carry what it did: %+v", got.BridgeCalls[0])
 	}
 	// STAMPED, so a reader can see the shape of a run that stalled.
-	if calls[0].At.IsZero() {
+	if got.BridgeCalls[0].At.IsZero() {
 		t.Error("the call has no timestamp")
-	}
-	// AND COUNTED ON THE ROW, which is how a reader of the row knows the
-	// job has a log to read at all.
-	if got := mustGet(t, s, r.TurnID).Launch.BridgedCalls; got != 3 {
-		t.Errorf("the row counts %d bridged calls, want 3", got)
 	}
 }
 
@@ -2248,8 +2753,88 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	if err != nil || !recorded {
 		t.Fatalf("a log append was refused by ownership: %v, %v", recorded, err)
 	}
-	if calls := mustBridgeLog(t, s, r.TurnID, launch); len(calls) != 1 {
-		t.Errorf("%d calls recorded", len(calls))
+	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
+		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	}
+}
+
+// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. A coding run's tool
+// calls reach its row from as many as twenty subagents at once — Claude Code's
+// default — and the seat's own lease and status writes race them. Each append
+// is a decision the store takes again on a lost race, so none of them is
+// dropped, none overwrites another, and none is answered "the record kept
+// changing": the sixteen attempts this store once counted could answer exactly
+// that of a healthy, busy row.
+//
+// Mutation: have the store give up on a write after its first lost race, and
+// appends fail here.
+func testManyBridgedWritersAllLand(t *testing.T, s sandbox.PendingStore) {
+	const writers, each = 20, 3
+	ctx := t.Context()
+	r := run("t-bridge-storm")
+	launch := mustLaunched(t, s, r)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers*each+2)
+	for w := range writers {
+		wg.Go(func() {
+			for n := range each {
+				name := fmt.Sprintf("agent-%02d-call-%d", w, n)
+				recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+					Launch: launch, Call: sandbox.BridgeCall{Name: name}})
+				switch {
+				case err != nil:
+					errs <- fmt.Errorf("append %s: %w", name, err)
+				case !recorded:
+					errs <- fmt.Errorf("append %s was not recorded", name)
+				}
+			}
+		})
+	}
+	// The seat's own writes, racing the appends: a lease moving onto the
+	// run, and the status a recovery writes back.
+	wg.Go(func() {
+		for epoch := int64(1); epoch <= each; epoch++ {
+			switch ok, err := s.ClaimOwnership(ctx, r.TurnID, "node-b", epoch); {
+			case err != nil:
+				errs <- fmt.Errorf("ClaimOwnership at epoch %d: %w", epoch, err)
+			case !ok:
+				errs <- fmt.Errorf("ClaimOwnership at epoch %d was refused", epoch)
+			}
+		}
+	})
+	wg.Go(func() {
+		for range each {
+			if err := s.SetStatus(ctx, r.TurnID, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+				errs <- fmt.Errorf("SetStatus: %w", err)
+			}
+		}
+	})
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("a write racing the bridged calls failed: %v", err)
+	}
+
+	got := mustGet(t, s, r.TurnID)
+	var names []string
+	for _, call := range got.BridgeCalls {
+		names = append(names, call.Name)
+	}
+	slices.Sort(names)
+	var want []string
+	for w := range writers {
+		for n := range each {
+			want = append(want, fmt.Sprintf("agent-%02d-call-%d", w, n))
+		}
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("the row holds %d calls after %d concurrent appends, want every one exactly once: %v",
+			len(names), len(want), names)
+	}
+	if got.Owner != "node-b" || got.OwnerEpoch != each {
+		t.Errorf("owner = %q at epoch %d, want node-b at %d: a lease write was lost among the appends",
+			got.Owner, got.OwnerEpoch, each)
 	}
 }
 
@@ -2283,22 +2868,21 @@ func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStor
 		}
 	}
 
-	calls := mustBridgeLog(t, s, r.TurnID, launch)
-	if len(calls) != sandbox.MaxBridgeCalls {
-		t.Fatalf("%d calls kept, want %d", len(calls), sandbox.MaxBridgeCalls)
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
+		t.Fatalf("%d calls kept, want %d", len(got.BridgeCalls), sandbox.MaxBridgeCalls)
 	}
-	if first := calls[0].Name; first != "call-000" {
+	if first := got.BridgeCalls[0].Name; first != "call-000" {
 		t.Errorf("the first call was dropped: %q — a log cut to its tail loses how the run began", first)
 	}
-	last := calls[len(calls)-1].Name
+	last := got.BridgeCalls[len(got.BridgeCalls)-1].Name
 	if want := fmt.Sprintf("call-%03d", total-1); last != want {
 		t.Errorf("the last call = %q, want %q", last, want)
 	}
-	// AND THE GAP IS REPORTED, off the row: a log that silently skips is a
-	// log that lies about what the run did.
-	if got := mustGet(t, s, r.TurnID).Launch; got.BridgedCalls != total || got.BridgedCallsElided() != 10 {
-		t.Errorf("the row counts %d calls, %d elided; want %d, 10", got.BridgedCalls,
-			got.BridgedCallsElided(), total)
+	// AND THE GAP IS REPORTED: a log that silently skips is a log that
+	// lies about what the run did.
+	if got.BridgeCallsElided != 10 {
+		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
 	}
 }
 
@@ -2383,15 +2967,9 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 				t.Error("a call from a job that is over was recorded on the next one")
 			}
 			got := mustGet(t, s, r.TurnID)
-			if calls := mustBridgeLog(t, s, r.TurnID, second); len(calls) != 0 ||
-				got.Launch.BridgedCalls != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
-				t.Fatalf("the next job took a call from the last one: calls %+v (%d counted), spend %+v",
-					calls, got.Launch.BridgedCalls, got.Launch.Bridged)
-			}
-			// AND THE LATE CALL LEAVES NOTHING BESIDE THE ROW: the job it
-			// names is over, so a log of it would name nothing.
-			if calls := mustBridgeLog(t, s, r.TurnID, first); len(calls) != 0 {
-				t.Errorf("the finished job kept a log beside the row: %+v", calls)
+			if len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+				t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
+					got.BridgeCalls, got.Launch.Bridged)
 			}
 		})
 	}
@@ -2403,17 +2981,16 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 // a caller's mistake and lands nowhere rather than somewhere.
 func testABridgedCallNamingNoJobIsNotRecorded(t *testing.T, s sandbox.PendingStore) {
 	r := run("t-bridge-unnamed")
-	launch := mustLaunched(t, s, r)
+	mustLaunched(t, s, r)
 	recorded, err := s.AppendBridgeCall(t.Context(), r.TurnID, sandbox.BridgeAppend{
 		Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1)})
 	if err != nil {
 		t.Fatalf("an unnamed append was an error: %v", err)
 	}
 	got := mustGet(t, s, r.TurnID)
-	calls := mustBridgeLog(t, s, r.TurnID, launch)
-	if recorded || len(calls) != 0 || got.Launch.BridgedCalls != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+	if recorded || len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("an append naming no job was recorded (%v): calls %+v, spend %+v",
-			recorded, calls, got.Launch.Bridged)
+			recorded, got.BridgeCalls, got.Launch.Bridged)
 	}
 }
 
@@ -2444,10 +3021,9 @@ func testABridgedCallAfterItsJobsClaimStaysOnItsJob(t *testing.T, s sandbox.Pend
 		t.Errorf("the claim read %+v, want what the job held when it was claimed: %+v", got, bridged(1))
 	}
 	got := mustGet(t, s, r.TurnID)
-	calls := mustBridgeLog(t, s, r.TurnID, launch)
-	if len(calls) != 2 || got.Launch.BridgedCalls != 2 || got.Launch.Bridged != bridged(2) {
-		t.Fatalf("the job's record after the late call: calls %d (%d counted), spend %+v; want 2 and %+v",
-			len(calls), got.Launch.BridgedCalls, got.Launch.Bridged, bridged(2))
+	if len(got.BridgeCalls) != 2 || got.Launch.Bridged != bridged(2) {
+		t.Fatalf("the job's record after the late call: calls %d, spend %+v; want 2 and %+v",
+			len(got.BridgeCalls), got.Launch.Bridged, bridged(2))
 	}
 }
 
@@ -2461,7 +3037,7 @@ func testAParkedJobsCondensationIsKeptForItsAnswer(t *testing.T, s sandbox.Pendi
 	mustLaunched(t, s, r)
 	cost := sandbox.AuxTokens{Input: 900, Output: 60, CacheRead: 300}
 	if err := s.MarkAwaiting(ctx, r.TurnID, sandbox.Clarification{
-		Question: "which branch?", AskedAt: base, InputTokens: 5000, OutputTokens: 400, Condensed: cost,
+		AskedAt: base, InputTokens: 5000, OutputTokens: 400, Condensed: cost,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -2475,7 +3051,7 @@ func testAParkedJobsCondensationIsKeptForItsAnswer(t *testing.T, s sandbox.Pendi
 }
 
 // item is the work item a launching turn was charged to.
-var item = types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+var item = types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
 
 func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 	// THE RESUMED TURN READS ITS ITEM OFF THE ROW, because nothing else can
@@ -2489,7 +3065,6 @@ func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, r)
 	claimed := mustClaim(t, s, "t1")
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
@@ -2508,17 +3083,17 @@ func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore) {
-	// THE PARK WRITES WHOM THE QUESTION IS PUT TO, in the same write as the
-	// question — the label alone ("manager") answered nobody's "what is
-	// waiting on me" — and a new job opened on the row takes it away with
-	// the question, because a question that is gone waits on nobody.
+	// THE PARK WRITES WHOM THE QUESTION IS PUT TO, beside the label the ask
+	// recorded: the label alone ("manager") answered nobody's "what is
+	// waiting on me". A new job opened on the row takes both away with the
+	// question, because a question that is gone waits on nobody.
 	mustBeginLaunch(t, s, run("t1"))
 	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
 		t.Fatalf("suspend: %v %v", ok, err)
 	}
+	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToManager})
 	mustClaim(t, s, "t1")
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which base branch?", Audience: "manager",
 		Answerers: sandbox.Audience{Handles: []string{"founder", "cto"}, Fallback: true},
 		AskedAt:   time.Now().UTC(),
 	}); err != nil {
@@ -2534,10 +3109,10 @@ func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore)
 
 	mustBeginLaunch(t, s, run("t1"))
 	again := mustGet(t, s, "t1")
-	if len(again.AudienceHandles) != 0 || again.AudienceFallback {
-		t.Errorf("a new job kept the last question's audience %v (fallback %v) — "+
+	if again.Audience != "" || len(again.AudienceHandles) != 0 || again.AudienceFallback {
+		t.Errorf("a new job kept the last question's audience %q %v (fallback %v): "+
 			"the run would read as waiting on people nobody is asking",
-			again.AudienceHandles, again.AudienceFallback)
+			again.Audience, again.AudienceHandles, again.AudienceFallback)
 	}
 }
 
@@ -2555,12 +3130,45 @@ func testARequesterSurvivesTheLaunchThatRecordsIt(t *testing.T, s sandbox.Pendin
 	if claimed.Requester != "ada" {
 		t.Fatalf("the claim read requester %q, want ada", claimed.Requester)
 	}
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q", AskedAt: time.Now().UTC()}); err != nil {
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Requester != "ada" {
 		t.Errorf("the park left requester %q, want ada", got.Requester)
 	}
+}
+
+func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.PendingStore) {
+	// THE ASK THE TURN ANSWERS is written by the turn's first launch and read
+	// by the frame that ends the turn — a resume, or a stop's close — so
+	// every write between the two hands it on, a relaunch's reset included:
+	// a reviewer's send-back is the same turn answering the same ask, and
+	// the relaunch's own row states none.
+	want := sandbox.ColleagueAsk{
+		ChannelID: "a2a-1", Question: "which branch?", Chain: []string{"ceo"},
+		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	}
+	r := run("t1")
+	asked := want
+	r.ColleagueAsk = &asked
+	mustLaunched(t, s, r)
+	check := func(step string, got sandbox.PendingRun) {
+		t.Helper()
+		if got.ColleagueAsk == nil || got.ColleagueAsk.ChannelID != want.ChannelID ||
+			got.ColleagueAsk.Question != want.Question || len(got.ColleagueAsk.Chain) != 1 ||
+			got.ColleagueAsk.Chain[0] != "ceo" || got.ColleagueAsk.TraceID != want.TraceID ||
+			got.ColleagueAsk.SpanID != want.SpanID || got.ColleagueAsk.ParentSpanID != want.ParentSpanID {
+			t.Fatalf("%s left ask %+v, want %+v", step, got.ColleagueAsk, want)
+		}
+	}
+	check("the launch", mustGet(t, s, "t1"))
+	check("the claim", mustClaim(t, s, "t1"))
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	check("the park", mustGet(t, s, "t1"))
+	mustBeginLaunch(t, s, run("t1"))
+	check("a relaunch", mustGet(t, s, "t1"))
 }
 
 // audienceQuorum is a key no build has declared: the stand-in for whatever a
@@ -2634,7 +3242,6 @@ func testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem(
 	// resolution the newer build parked with; what it must not drop is the
 	// key it has never heard of, and the item.
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question:  "q",
 		Answerers: sandbox.Audience{Handles: []string{"ada", "grace"}, Fallback: true},
 		AskedAt:   time.Now().UTC(),
 	}); err != nil {
@@ -2693,10 +3300,17 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// answerOf is a recorded answer made of one delivery.
+// answerOf is a recorded answer made of one delivery, carrying text's stand-in
+// seal ([sealOf]).
 func answerOf(id, text string) sandbox.RecordedAnswer {
-	return sandbox.RecordedAnswer{Text: text, Via: types.AnswerViaChat, EventIDs: []string{id}, RecordedAt: base}
+	return sandbox.RecordedAnswer{Sealed: sealOf(text), Via: types.AnswerViaChat, EventIDs: []string{id},
+		RecordedAt: base}
 }
+
+// sealOf stands in for the seal a coordinator puts on an answer: the store keeps
+// a seal as the bytes it was handed and opens nothing, so any bytes that name
+// the text tell one recorded answer from another here.
+func sealOf(text string) []byte { return []byte("sealed: " + text) }
 
 // copyOf is the hand-back a decline of delivery id owes the seat: one copy,
 // under id + "-copy".
@@ -2778,15 +3392,34 @@ func testAnAnswerIsRecordedWithItsRoute(t *testing.T, s sandbox.PendingStore) {
 	}
 	byTurn := answerOf("r1", "use main")
 	byTurn.Via = types.AnswerViaOperator
-	byTurn.By, byTurn.ByKind, byTurn.OperatorID = "founder", "human", "pat:founder-token"
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, byTurn, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("an answer by turn = %v, %v", ok, err)
 	}
 	got := mustGet(t, s, "t1").Answer
-	if got == nil || got.Via != types.AnswerViaOperator || got.By != "founder" ||
-		got.ByKind != "human" || got.OperatorID != "pat:founder-token" {
-		t.Fatalf("recorded %+v, want the answer by turn with its author, their kind and the "+
-			"credential it came through", got)
+	if got == nil || got.Via != types.AnswerViaOperator || !bytes.Equal(got.Sealed, sealOf("use main")) {
+		t.Fatalf("recorded %+v, want the answer by turn with its seal, kept as it was handed", got)
+	}
+}
+
+// AN ANSWER IS RECORDED SEALED, and one that carries no seal is refused: its
+// words live on the row only inside the seal ([sandbox.RecordedAnswer.Sealed]),
+// so a record without one would be an answer no reader could resume with.
+func testAnAnswerIsRecordedOnlySealed(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	unsealed := answerOf("r1", "use main")
+	unsealed.Sealed = nil
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, unsealed, sandbox.Fence{}); err == nil || ok {
+		t.Fatalf("an answer carrying no seal = %v, %v, want refused", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Answer != nil || got.Status != sandbox.StatusAwaiting {
+		t.Fatalf("after a refused record the run is %q with answer %+v, want it still waiting "+
+			"with none", got.Status, got.Answer)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("the sealed answer = %v, %v, want it recorded", ok, err)
 	}
 }
 
@@ -2806,7 +3439,7 @@ func testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked(t *testing.T, s sandbox.Pe
 	if _, ok, err := s.RecordAnswer(ctx, "gone", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || ok {
 		t.Fatalf("an answer to a missing run = %v, %v, want false and no error", ok, err)
 	}
-	if _, _, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{Text: "x"}, sandbox.Fence{}); err == nil {
+	if _, _, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{Sealed: sealOf("x")}, sandbox.Fence{}); err == nil {
 		t.Fatal("an answer naming no delivery was recorded")
 	}
 	// A RESEED IS STILL WAITING: the box was reaped, the question was not.
@@ -2845,7 +3478,7 @@ func testAnAnswerIsResumedFromItsRecord(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("ReleaseClaim = %v, %v", released, err)
 	}
 	got := mustGet(t, s, "t1")
-	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || !bytes.Equal(got.Answer.Sealed, sealOf("use main")) {
 		t.Fatalf("run = %q with answer %+v, want the answer still owed", got.Status, got.Answer)
 	}
 }
@@ -2916,7 +3549,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		copies = append(copies, copyOf(id))
 	}
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{
-		Text: "a long batch", Via: types.AnswerViaChat, EventIDs: batch, RecordedAt: base}, sandbox.Fence{}); err != nil || !ok {
+		Sealed: sealOf("a long batch"), Via: types.AnswerViaChat, EventIDs: batch, RecordedAt: base}, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer of a batch = %v, %v", ok, err)
 	}
 	if _, ok, err := s.DeclineAnswer(ctx, "t1", launch, batch, copies, sandbox.Fence{}); err != nil || !ok {
@@ -3449,7 +4082,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		t.Fatalf("run %q owned by %q at %d, want it answered again under the reviving lease",
 			got.Status, got.Owner, got.OwnerEpoch)
 	}
-	if a := got.Answer; a == nil || a.Text != "use main" || a.Taken() || a.LostClaims != 1 ||
+	if a := got.Answer; a == nil || !bytes.Equal(a.Sealed, sealOf("use main")) || a.Taken() || a.LostClaims != 1 ||
 		a.FirstLostAt.IsZero() {
 		t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted", a)
 	}
@@ -3693,7 +4326,7 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
 	asked := base.Add(time.Hour)
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "?", AskedAt: asked}); err != nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); !got.AskedAt.Equal(asked) {
@@ -3719,8 +4352,8 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 // A RELAUNCH UNIONS THE TURN'S CODE HOLDS, never replaces them. What a turn has
 // named the code host's expiry must not take — its scratch repositories — is
 // on its row once the turn has parked, and a relaunch is the same turn: an
-// earlier job's repository, or one the turn named before the second
-// run_sandbox call, is still something it may come back to. Every other
+// earlier job's repository, or one the turn named before a later launch of
+// it, is still something it may come back to. Every other
 // launch-scoped field a reset clears; this one only grows, each key once in
 // the order first taken, and a union past the bound is refused with nothing
 // written.
@@ -3912,20 +4545,15 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 
 	// A KEY A NEWER BUILD WROTE beside the grants, put on the stored row as
 	// that build would have: every write below must hand it back.
-	record, found, err := runs.SandboxRun(ctx, "t1")
-	if err != nil || !found {
-		t.Fatalf("read the raw row: found=%v err=%v", found, err)
-	}
-	fields := map[string]json.RawMessage{}
-	if err = json.Unmarshal(record.Value, &fields); err != nil {
-		t.Fatal(err)
-	}
-	fields[futureGrant] = json.RawMessage(`{"web":["src/**"]}`)
-	body, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := runs.UpdateSandboxRun(ctx, "t1", body, record.Version); err != nil || !ok {
+	if _, ok, err := runs.MutateSandboxRun(ctx, "t1", func(current coord.Record) (coord.SandboxRunChange, error) {
+		fields := map[string]json.RawMessage{}
+		if err := json.Unmarshal(current.Value, &fields); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		fields[futureGrant] = json.RawMessage(`{"web":["src/**"]}`)
+		body, err := json.Marshal(fields)
+		return coord.SandboxRunChange{Put: body}, err
+	}); err != nil || !ok {
 		t.Fatalf("write the newer build's key: ok=%v err=%v", ok, err)
 	}
 	kept := func(step string) {
@@ -3980,62 +4608,6 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 			"want none", got.Repos, got.CodeFloor, got.CodeLaunch, got.CodeCeiling)
 	}
 	kept("the relaunch with no repositories")
-}
-
-// THE ROW IS THE SIZE OF ITS FACTS, WHATEVER ITS JOB KEEPS.
-//
-// Every flip of a run is a compare-and-set of its row whole, every listing of
-// runs reads every row whole, and every git request a coding box makes reads
-// its run's row before anything else, every ref answer past the box's floor
-// writing it back. With the job's suspended conversation and its bridged tool
-// log on the row, each of those moved the whole conversation — every message
-// and tool answer of the turn — for want of a status or a floor. So a job's
-// two large values are kept beside the row: here a conversation of a quarter
-// of a mebibyte and calls of 8 KiB of output each leave the row a few
-// kilobytes, while the store still answers both whole for the job.
-//
-// Mutation: write the conversation onto the row again, or the calls, and the
-// row carries their bytes.
-func testTheRowIsTheSizeOfItsFactsWhateverItsJobKeeps(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
-	ctx := t.Context()
-	const marker = "kept-beside-the-row"
-	conversation := `{"messages":[{"role":"tool","content":"` + marker +
-		strings.Repeat("x", 256<<10) + `"}]}`
-	launch := mustBeginLaunch(t, s, run("t-row-size"))
-	if suspended, err := s.MarkSuspended(ctx, "t-row-size", sandbox.Suspension{
-		State: json.RawMessage(conversation), Iteration: 1,
-	}); err != nil || !suspended {
-		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
-	}
-	output := marker + strings.Repeat("y", 8<<10)
-	for range 3 {
-		if recorded, err := s.AppendBridgeCall(ctx, "t-row-size", sandbox.BridgeAppend{
-			Launch: launch, Call: sandbox.BridgeCall{Name: "read_page", Output: output},
-		}); err != nil || !recorded {
-			t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
-		}
-	}
-	record, found, err := runs.SandboxRun(ctx, "t-row-size")
-	if err != nil || !found {
-		t.Fatalf("read the raw row: found=%v err=%v", found, err)
-	}
-	// A FEW KILOBYTES: the fixture's brief, conversation values and ids,
-	// against the 280 KiB its job keeps beside it.
-	const rowBound = 4 << 10
-	if len(record.Value) > rowBound || strings.Contains(string(record.Value), marker) {
-		t.Fatalf("the row is %d bytes and carries its job's values: %.200s…", len(record.Value), record.Value)
-	}
-	if got, kept := mustConversation(t, s, "t-row-size", launch); !kept || got != conversation {
-		t.Errorf("the job's conversation came back as %d bytes (kept %v), want the %d written",
-			len(got), kept, len(conversation))
-	}
-	if calls := mustBridgeLog(t, s, "t-row-size", launch); len(calls) != 3 || calls[2].Output != output {
-		t.Errorf("the job's log holds %d calls, want the 3 recorded whole", len(calls))
-	}
-	if got := mustGet(t, s, "t-row-size"); got.Status != sandbox.StatusRunning || got.Launch.BridgedCalls != 3 {
-		t.Errorf("the row reads %q with %d bridged calls counted, want running and 3",
-			got.Status, got.Launch.BridgedCalls)
-	}
 }
 
 // higherFloor is a raise to want, judged as the code host's caller judges one:
@@ -4131,5 +4703,112 @@ func testRaiseCodeFloorRaisesTheCurrentLaunchOnly(t *testing.T, s sandbox.Pendin
 	}
 	if got := mustGet(t, s, "t1").CodeFloor; got != "code@1:201" {
 		t.Fatalf("a run whose ending is decided has floor %q, want code@1:201", got)
+	}
+}
+
+// grantOf is a checkout of repo as the engine hands it to the store: read at
+// floor, raised over the row's floor only where it is higher, bounded by
+// ceiling.
+func grantOf(repo sandbox.RunRepo, floor, ceiling string) sandbox.RepoGrant {
+	return sandbox.RepoGrant{Repo: repo, Floor: floor, Raise: higherFloor(floor), Ceiling: ceiling}
+}
+
+// A RUN IS GRANTED ITS REPOSITORIES ONE CHECKOUT AT A TIME (ADR-0086), and
+// only while the row holds the job that asked: a launch opens the row with
+// none, the first checkout sets the launch floor once, a later one raises the
+// code floor and never lowers it, a repository asked again on its branch and
+// access is answered as held with nothing written, one asked on another
+// branch, access or requester is a conflict, and a row that holds another
+// job, or none, or an ending, takes nothing.
+func testACheckoutIsGrantedToTheRunningJobOnly(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	web, api := runRepo("web", webID), runRepo("api", apiID)
+	if _, outcome, err := s.GrantRepo(ctx, "nobody", "launch-1", grantOf(web, "code@1:5", "")); err != nil ||
+		outcome != sandbox.GrantNotRunning {
+		t.Fatalf("a checkout on no row = %q, %v, want not_running and no error", outcome, err)
+	}
+	first := mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); len(got.Repos) != 0 || got.CodeFloor != "" || got.CodeLaunch != "" {
+		t.Fatalf("a launch opened the row with %+v at floor %q, launch floor %q; want no grant before a "+
+			"checkout", got.Repos, got.CodeFloor, got.CodeLaunch)
+	}
+	if _, _, err := s.GrantRepo(ctx, "t1", first, sandbox.RepoGrant{Repo: web}); err == nil {
+		t.Fatal("a checkout read at no position was taken")
+	}
+	if _, outcome, err := s.GrantRepo(ctx, "t1", "launch-other", grantOf(web, "code@1:5", "")); err != nil ||
+		outcome != sandbox.GrantNotRunning {
+		t.Fatalf("a checkout for another job = %q, %v, want not_running", outcome, err)
+	}
+
+	granted, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(web, "code@1:10", ""))
+	if err != nil || outcome != sandbox.GrantAdded || granted.RepoID != webID {
+		t.Fatalf("the first checkout = %+v, %q, %v, want web added", granted, outcome, err)
+	}
+	got := mustGet(t, s, "t1")
+	if len(got.Repos) != 1 || got.CodeFloor != "code@1:10" || got.CodeLaunch != "code@1:10" {
+		t.Fatalf("after the first checkout the row holds %+v at floor %q, launch floor %q; want web at "+
+			"code@1:10 for both", got.Repos, got.CodeFloor, got.CodeLaunch)
+	}
+
+	// THE SAME REPOSITORY ON ITS BRANCH AND ACCESS IS HELD: nothing written.
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(web, "code@1:30", "")); err != nil ||
+		outcome != sandbox.GrantHeld {
+		t.Fatalf("web checked out again = %q, %v, want held", outcome, err)
+	}
+	if got := mustGet(t, s, "t1").CodeFloor; got != "code@1:10" {
+		t.Fatalf("a held checkout moved the floor to %q, want code@1:10", got)
+	}
+	// ON ANOTHER BRANCH, OR WITH ANOTHER ACCESS, IT CONFLICTS.
+	other := web
+	other.Branch = "seats/swe/other"
+	if held, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(other, "code@1:30", "")); err != nil ||
+		outcome != sandbox.GrantConflict || held.Branch != web.Branch {
+		t.Fatalf("web on another branch = %+v, %q, %v, want a conflict answering the branch held", held,
+			outcome, err)
+	}
+	read := web
+	read.Access = sandbox.RepoRead
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(read, "code@1:30", "")); err != nil ||
+		outcome != sandbox.GrantConflict {
+		t.Fatalf("web to read = %q, %v, want a conflict", outcome, err)
+	}
+	// FOR ANOTHER REQUESTER, IT CONFLICTS: one run works for one.
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(api, "code@1:30", "ceo")); err != nil ||
+		outcome != sandbox.GrantConflict {
+		t.Fatalf("api for another requester = %q, %v, want a conflict", outcome, err)
+	}
+
+	// A LATER CHECKOUT RAISES THE CODE FLOOR, never the launch floor; a
+	// lower one leaves the floor where it is.
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(api, "code@1:30", "")); err != nil ||
+		outcome != sandbox.GrantAdded {
+		t.Fatalf("api checked out = %q, %v, want added", outcome, err)
+	}
+	got = mustGet(t, s, "t1")
+	if len(got.Repos) != 2 || got.CodeFloor != "code@1:30" || got.CodeLaunch != "code@1:10" {
+		t.Fatalf("after two checkouts the row holds %d repositories at floor %q, launch floor %q; want 2 at "+
+			"code@1:30, launched at code@1:10", len(got.Repos), got.CodeFloor, got.CodeLaunch)
+	}
+
+	// THE ROW HOLDS AT MOST MaxRunRepos.
+	for k := len(got.Repos); k < sandbox.MaxRunRepos; k++ {
+		more := runRepo(fmt.Sprintf("repo-%d", k), fmt.Sprintf("0190d8f0-0000-7000-8000-0000000001%02d", k))
+		if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(more, "code@1:31", "")); err != nil ||
+			outcome != sandbox.GrantAdded {
+			t.Fatalf("checkout %d = %q, %v, want added", k, outcome, err)
+		}
+	}
+	past := runRepo("one-too-many", "0190d8f0-0000-7000-8000-000000000199")
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(past, "code@1:31", "")); err != nil ||
+		outcome != sandbox.GrantFull {
+		t.Fatalf("a checkout past %d = %q, %v, want full", sandbox.MaxRunRepos, outcome, err)
+	}
+
+	// A RUN WHOSE ENDING IS DECIDED takes no checkout, and says so without an
+	// error.
+	decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active))
+	if _, outcome, err := s.GrantRepo(ctx, "t1", first, grantOf(past, "code@1:40", "")); err != nil ||
+		outcome != sandbox.GrantNotRunning {
+		t.Fatalf("a checkout on a run whose ending is decided = %q, %v, want not_running", outcome, err)
 	}
 }

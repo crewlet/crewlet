@@ -28,7 +28,7 @@
 // cmd/go chains a barrier action between consecutive runs, so run i starts
 // only once run i-1 has — and go list's order is alphabetical. Measured on CI
 // before this existed: internal/search (472s), internal/store (203s) and
-// internal/tracker (412s) started at +752s, +802s and +823s of a 1235s step,
+// internal/worklet (412s) started at +752s, +802s and +823s of a 1235s step,
 // and the step ended on those three with the rest of the runner idle.
 //
 // Which packages are in the half is go list plus the marker, exactly as without

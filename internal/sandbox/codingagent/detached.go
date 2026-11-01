@@ -3,7 +3,6 @@ package codingagent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -11,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -143,8 +141,10 @@ type CLI interface {
 
 	// Command builds the headless invocation. The brief and the system text
 	// are already final — the report instruction is appended to the system
-	// text by the base — and a CLI given system text puts it on the channel
-	// that adds to its own system prompt, never in the prompt it runs.
+	// text by the base — but for the instruction about notes, which a CLI
+	// that reads them adds where a note can reach its run ([noteReader]); and
+	// a CLI given system text puts it on the channel that adds to its own
+	// system prompt, never in the prompt it runs.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
 	// Output is where the CLI's stdout lands and how its result is read
@@ -168,6 +168,22 @@ type CLI interface {
 	// ([Paths.System]) when there is any, and nothing when there is none.
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 }
+
+// resumer is a CLI that continues a session an earlier run reported.
+type resumer interface{ Resumes() bool }
+
+// noteReader is a CLI that takes a person's notes to its run's turn between its
+// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
+// and tells its model so: NoteInstruction is the standing instruction about
+// notes its runs are given ([ClaudeCodeSteerInstruction],
+// [OpenCodeSteerInstruction]) — the CLI's own, because where a note appears in
+// what the model reads is the CLI's to decide, and the CLI adds it to its run's
+// system text itself ([withNoteInstruction]), on the run its notes can reach.
+//
+// OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
+// way — hooks, a plugin — and one not taught yet must not be claimed to: the
+// instruction, and the warning that a run never asked for any, both follow it.
+type noteReader interface{ NoteInstruction() string }
 
 // Output is how the wrapper connects a CLI's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
@@ -198,6 +214,14 @@ type Output struct {
 	// brief on stdin arrived byte for byte. Unset, the CLI's stdin is
 	// /dev/null, so a headless agent can never block waiting for input.
 	BriefOnStdin bool
+
+	// Unset is every variable the wrapper removes from the CLI's environment
+	// before it starts: one that, from wherever it came — the seat's
+	// role.sandbox.env, the image, a profile the login shell sources —
+	// switches off something the run depends on. Removed IN the wrapper,
+	// after the login shell has sourced its profile, because that is the
+	// one place every source has already been read.
+	Unset []string
 }
 
 // Runner drives one CLI through the detached lifecycle.
@@ -245,7 +269,23 @@ func New(cli CLI) *Runner {
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
 
-// Install prepares the box: the artefact directory and the ask shim.
+// ReadsNotes reports whether this runner's CLI takes a person's notes between
+// its steps — see [noteReader]. The coordinator asks it before it says a run
+// that succeeded never asked for its notes (internal/sandbox).
+func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
+
+// noteInstruction is the standing instruction about notes this runner's CLI
+// gives its runs, or "" for a CLI that takes none — see [noteReader].
+func (r *Runner) noteInstruction() string {
+	if reader, ok := r.cli.(noteReader); ok {
+		return reader.NoteInstruction()
+	}
+	return ""
+}
+
+// Install prepares the box: the artefact directory every file of a run's is
+// written under ([Paths.WorkDir]), and the box's own bin directory first on
+// the run's PATH ([Paths.BinDir]).
 //
 // The CLI itself is NOT installed here — it ships in the image, which is what
 // makes a coding box a template rather than a per-run build. Environment
@@ -257,42 +297,54 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: preparing %s: %w", paths.BinDir(), err)
 	}
-	if err := box.WriteFile(ctx, paths.AskShim(), []byte(AskShim(paths.Ask()))); err != nil {
-		return fmt.Errorf("codingagent: installing the ask shim: %w", err)
-	}
-	if _, err := box.Exec(ctx, "chmod +x "+sandbox.ShellQuote(paths.AskShim()), sandbox.ExecOptions{}); err != nil {
-		return fmt.Errorf("codingagent: making the ask shim executable: %w", err)
-	}
 	return nil
 }
 
 // ClearArtifacts removes the previous run's markers before a reuse run.
 //
-// A reused box still carries the prior run's done marker, result, findings and
-// ask file. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. Its brief and system text go
-// too: a run's instructions are its own, and a file this run writes is then
-// always created fresh, at the mode a backend creates a file with. THE
-// CHECKOUT IS LEFT INTACT — that disk state is the continued context, and it is
-// the whole reason to reuse a box.
+// A reused box still carries the prior run's done marker, result and
+// findings. Without clearing them the completion poll fires immediately on the
+// stale marker and Collect reads the old result. Its brief, system text,
+// settings and configuration go too: a run's instructions are its own — a
+// previous job's hooks name a bridge session that job's end closed. (Whatever
+// mode a previous run left on one, the file this run writes has the box's
+// own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
+// OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
+// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
+// one file per value, so one with fewer values than the last would otherwise
+// keep the last one's beside its own, and a run wired to no notes would
+// otherwise leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT
+// — that disk state is the continued context, and it is the whole reason to
+// reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System()}
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
+		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
 	if out.Stdout != p.Result() {
-		targets = append(targets, out.Stdout)
+		files = append(files, out.Stdout)
 	}
-	quoted := make([]string, len(targets))
-	for i, path := range targets {
-		quoted[i] = sandbox.ShellQuote(path)
-	}
-	if _, err := box.Exec(ctx, "rm -f "+strings.Join(quoted, " "), sandbox.ExecOptions{}); err != nil {
+	// The two directories alone are removed recursively; every other target
+	// is a file, removed as it always was. Two statements rather than one
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()})
+	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
 	}
 	return nil
+}
+
+// shellQuoteAll is paths quoted for sh, one word each, space-separated.
+func shellQuoteAll(paths []string) string {
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = sandbox.ShellQuote(path)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // Start launches the coding agent detached and returns its handle.
@@ -306,6 +358,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 // file, which ends: a headless agent must never block waiting for input, and
 // one that does would hang forever with no timer to stop it.
 func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
+	if c, ok := r.cli.(resumer); req.Resume != "" && (!ok || !c.Resumes()) {
+		return sandbox.RunHandle{}, fmt.Errorf("codingagent: %s cannot continue an earlier "+
+			"session, and this run asks it to", r.cli.Name())
+	}
 	paths := PathsFor(box)
 	// The artefacts are cleared unconditionally rather than only on a reuse
 	// path: the runner cannot tell a fresh box from a reused one, and
@@ -314,8 +370,23 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
-	// system text from.
+	// system text from — all but the instruction about notes, which a CLI
+	// that reads them adds itself, where a note can reach its run
+	// ([noteReader]).
 	req.System = finalSystem(req.System, paths, req.ReportedRepos)
+	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
+	// URLs, the tool bridge's included, are written in the engine host's
+	// network, and a loopback one reaches nothing from inside a container
+	// ([sandbox.EngineAddress]). Here, because every run reaches its CLI's
+	// config through this one call, whichever caller launched it.
+	req.MCPServers = sandbox.EngineServers(box, req.MCPServers)
+	// The run's notes route too: it is the same bridge under a path of its
+	// own, and a CLI that polls it by URL rather than through its MCP server
+	// (OpenCode's plugin, [OpenCode.WriteConfig]) dials it from inside the
+	// box as well. A copy, since req is this call's own.
+	if req.Steer.Set() {
+		req.Steer.URL = sandbox.EngineAddress(box, req.Steer.URL)
+	}
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -326,7 +397,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			return sandbox.RunHandle{}, fmt.Errorf("codingagent: writing the brief: %w", err)
 		}
 	}
-	inner := withShimPath(r.cli.Command(req, paths, configPath), paths)
+	inner := withBoxBin(r.cli.Command(req, paths, configPath), paths)
 	script := wrapperScript(inner, out, paths)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
@@ -335,8 +406,8 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// finds no CLI at all in exactly the images operators build.
 	//
 	// It also means the box's PATH inside the wrapper is the PROFILE's, not
-	// the environment the engine handed the process — which is why the shim
-	// directory is prepended INSIDE the script (see withShimPath) rather
+	// the environment the engine handed the process, which is why the box's
+	// bin directory is prepended INSIDE the script ([withBoxBin]) rather
 	// than exported around it: an assignment made outside would be replaced
 	// by the profile before the agent ever ran.
 	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
@@ -361,6 +432,11 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 		stdin = sandbox.ShellQuote(paths.Brief())
 	}
 	var b strings.Builder
+	// A STATEMENT OF ITS OWN, before the CLI's: an assignment prefix on the
+	// command could only add to its environment, never remove from it.
+	if len(out.Unset) > 0 {
+		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
 		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
@@ -379,41 +455,64 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
 // builds the request. On the system side, because it is not part of the task:
-// it is how every run ends, whatever it was asked.
+// it is how every run works, whatever it was asked.
 func finalSystem(system string, paths Paths, native []string) string {
-	findings := strings.TrimSpace(FindingsInstruction(paths.Findings(), native))
-	if system = strings.TrimSpace(system); system == "" {
-		return findings
+	parts := make([]string, 0, 2)
+	if system = strings.TrimSpace(system); system != "" {
+		parts = append(parts, system)
 	}
-	return system + "\n\n" + findings
+	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings(), native)))
+	return strings.Join(parts, "\n\n")
 }
 
-// withShimPath prepends the box's shim directory to PATH for one command.
+// withNoteInstruction is a run's final system text with its CLI's instruction
+// about notes after it ([noteReader]) — what a CLI that reads notes hands a run
+// wired to them, as the last of its standing instructions.
 //
-// The shim lives under the box's own home rather than a system directory (see
-// [Paths.BinDir]), so the system text's `crewlet-ask "..."` instruction only
-// resolves if that directory is on the agent's PATH.
-func withShimPath(cmd string, paths Paths) string {
+// THE CLI'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose CLI
+// takes none, a run wired to none, or a run started without what reads them, it
+// would describe a channel that never opens. Which of those a run is can be
+// known only where it starts — a Claude Code run's box decides from its CLI's
+// release ([claudeNotesGate]) — so the runner, which composes everything else,
+// leaves this to the CLI.
+func withNoteInstruction(system, instruction string) string {
+	if system == "" {
+		return instruction
+	}
+	return system + "\n\n" + instruction
+}
+
+// withBoxBin prepends the box's own bin directory ([Paths.BinDir]) to PATH for
+// one command, so an executable a setup step installed there resolves ahead of
+// the image's.
+func withBoxBin(cmd string, paths Paths) string {
 	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
-// Poll reports whether the detached job has finished.
+// Poll reports what is known of the detached job ([sandbox.JobState]).
 //
 // TWO SIGNALS, because a finished or dead job must not be able to wedge the
 // run — and there is no run-time TTL to fall back on, since the waiter keeps
 // the box alive for exactly as long as the job needs:
 //
 //  1. THE DONE MARKER. The wrapper returned, cleanly or not, and wrote its
-//     exit code.
-//  2. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
-//     whole process group died abnormally, before the tail echo ran. Without
-//     this the run hangs forever; with it, Collect surfaces the partial result
-//     and the failure. The box answers it ([sandbox.Sandbox.JobRunning]),
-//     because only the backend knows whether its handle is a pid in the box's
-//     own namespace or a host pid the kernel may since have handed to a
-//     stranger. The wrapper is the right process to ask about: while the
-//     coding agent runs the wrapper is alive, and once it exits it has
-//     already written the done marker, which is checked first.
+//     exit code: the job ENDED.
+//  2. THE BOX'S ACCOUNT OF THE JOB ([sandbox.Sandbox.Job]). The wrapper is
+//     gone yet no marker was written: the whole process group died
+//     abnormally, before the tail echo ran. Without this the run hangs
+//     forever. The box answers it, because only the backend knows whether its
+//     handle is a pid in the box's own namespace or a host pid the kernel may
+//     since have handed to a stranger — and whether the job went while an
+//     engine watched it, so that what it left is its result, which Collect
+//     surfaces with the failure (ENDED), or went with the engine that last saw
+//     it running, so that what it left is not (LOST). The wrapper is the right
+//     process to ask about: while the coding agent runs the wrapper is alive,
+//     and once it exits it has already written the done marker, which is
+//     checked first.
+//
+// THE MARKER IS READ AGAIN before a job is answered lost: a wrapper that wrote
+// it and exited between the first read and the box's answer finished, and is
+// collected like any job that did.
 //
 // There was a third — a terminal event read off the end of the stream, for an
 // agent that finished its work and did not exit, which was OpenCode 1.x. No
@@ -423,30 +522,36 @@ func withShimPath(cmd string, paths Paths) string {
 // A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
 // it: a read the box refused made a dead job poll as still running for good,
 // with its keepalive refreshed every tick and its seat busy until a person
-// stopped it. The read's error is still reported — beside a "not done" — once
+// stopped it. The read's error is still reported — beside a "running" — once
 // the probe has had its say.
 //
-// A still-alive wrapper reports NOT DONE, whether it is working or hung: a
+// A still-alive wrapper reports RUNNING, whether it is working or hung: a
 // genuinely hung-but-alive process is indistinguishable from a working one
 // without a timer, and imposing one is exactly what this design refuses.
-func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (bool, error) {
+func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.JobState, error) {
 	paths := PathsFor(box)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
 	if readErr == nil && len(marker) > 0 {
-		return true, nil
+		return sandbox.JobEnded, nil
 	}
-	if handle.CommandID != "" {
-		alive, err := box.JobRunning(ctx, handle.CommandID)
+	if handle.CommandID == "" {
+		return sandbox.JobRunning, readErr
+	}
+	state, err := box.Job(ctx, handle.CommandID)
+	if err != nil || !state.Over() {
 		// An unreadable liveness probe is not proof of death, and declaring
 		// the run over on one would collect a partial result from a job
 		// that is still working. The next tick asks again.
-		if err == nil && !alive {
-			log.WarnContext(ctx, "coding_agent_process_gone",
-				"agent", r.cli.Name(), "pid", handle.CommandID)
-			return true, nil
+		return sandbox.JobRunning, readErr
+	}
+	if state == sandbox.JobLost {
+		if again, err := box.ReadFile(ctx, paths.Done()); err == nil && len(again) > 0 {
+			return sandbox.JobEnded, nil
 		}
 	}
-	return false, readErr
+	log.WarnContext(ctx, "coding_agent_process_gone",
+		"agent", r.cli.Name(), "pid", handle.CommandID, "job", string(state))
+	return state, nil
 }
 
 // Collect reads the finished job's result out of the box.
@@ -620,13 +725,6 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		said = append(said, result.Error)
 	}
 
-	result, refusal, err = r.overlayAsk(ctx, box, result)
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	if refusal != "" {
-		refused = append(refused, refusal)
-	}
 	if len(refused) > 0 {
 		// A PIECE THAT COULD NOT BE READ IS A RUN THAT DID NOT FULLY REPORT,
 		// so it does not read as a success whatever else it said — and the
@@ -834,74 +932,4 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, l
 	}
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
 		"so it was not read", what, path, size, humanSize(int64(limit)))
-}
-
-// overlayAsk surfaces a question the shim recorded, if there is one, and a
-// refusal where the question file was too large to read whole.
-func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result sandbox.Result) (sandbox.Result, string, error) {
-	blob, refusal, err := readWhole(ctx, box, PathsFor(box).Ask(), "the question the coding agent recorded")
-	if err != nil || refusal != "" {
-		// A question nobody can read whole is not one to park on: the run
-		// is not waiting for an answer to something nobody was shown.
-		return result, refusal, err
-	}
-	blob = strings.TrimSpace(blob)
-	if blob == "" {
-		return result, "", nil
-	}
-	var ask struct {
-		Question string `json:"question"`
-		To       string `json:"to"`
-		Branch   string `json:"branch"`
-	}
-	if err := json.Unmarshal([]byte(blob), &ask); err != nil {
-		// A malformed signal is not a reason to lose the result the run
-		// did produce; the run reads as finished rather than as parked.
-		log.WarnContext(ctx, "coding_agent_ask_unreadable", "agent", r.cli.Name(), "error", err.Error())
-		return result, "", nil
-	}
-	if ask.Question == "" {
-		return result, "", nil
-	}
-	result.NeedsInput = true
-	result.Question = redact.Secrets(ask.Question)
-	result.AskTo = ask.To
-	if result.AskTo == "" {
-		result.AskTo = "requester"
-	}
-	// The branch as the ask recorded it ([askedBranch]), redacted like the
-	// question: it is a word from inside the box. Whether it is a branch at
-	// all, and short enough to be a ref, is the coordinator's to decide for
-	// every runner alike ([gitref.ValidBranch], [gitref.MaxBranchBytes]).
-	result.WIPBranch = redact.Secrets(strings.TrimSpace(askedBranch(blob, ask.Branch)))
-	return result, "", nil
-}
-
-// askedBranch is the branch an ask file records, as its bytes were written.
-// decoded is what encoding/json read for it, which is those bytes wherever
-// the file is UTF-8.
-//
-// THE DECODE RENAMES A BRANCH THAT IS NOT. encoding/json replaces each byte
-// that is not UTF-8 with U+FFFD, so a branch the agent gave as wip/\xff — a
-// name git takes, which the shim records byte for byte — decodes with U+FFFD
-// in place of its last byte: a valid name of another branch, one nobody
-// pushed, which the coordinator would keep and tell the re-seed to check out.
-// Its grammar refuses a branch that is not UTF-8 for exactly that reason
-// ([gitref.ValidBranch]), so such a branch is handed on as the file holds it,
-// undecoded between its quotes, and the coordinator drops it and says so, as
-// it does every branch a run records that no ref can be.
-func askedBranch(blob, decoded string) string {
-	if utf8.ValidString(blob) {
-		return decoded
-	}
-	var raw struct {
-		Branch json.RawMessage `json:"branch"`
-	}
-	// The blob decoded once already with the branch a string, so it decodes
-	// again, and a branch that is not UTF-8 is a string literal: its bytes
-	// lie between its quotes.
-	if json.Unmarshal([]byte(blob), &raw) != nil || utf8.Valid(raw.Branch) || len(raw.Branch) < 2 {
-		return decoded
-	}
-	return string(raw.Branch[1 : len(raw.Branch)-1])
 }

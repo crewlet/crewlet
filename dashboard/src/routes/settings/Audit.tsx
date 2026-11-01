@@ -3,13 +3,13 @@
  *
  * # Why it is one screen and not six
  *
- * Every write in this product is attributed — the tracker records the actor
- * and their kind on every commit, the knowledge base does the same, a config
+ * Every write in this product is attributed: Worklet records the actor and
+ * their kind on every commit, Doclet does the same, a config
  * revision names who created it, a credential row names who last stored it,
  * and the identity estate keeps its own trail of who enrolled, signed in and
  * changed whom. Five subsystems, five honest records, and until now five places
  * to look: a question as ordinary as "what did we change last Tuesday" meant
- * reading the tracker's feed, the wiki's feed, the config history, the
+ * reading Worklet's feed, Doclet's feed, the config history, the
  * credential table and the directory's trail, each in its own chrome, each
  * ordered differently.
  *
@@ -31,8 +31,9 @@
  * somebody is looking for.
  *
  * The kinds are held apart and LABELLED rather than filtered down to one,
- * because "the engine did this" is as much an answer as "a person did": a bulk
- * edit nobody asked for is the thing an operator opens an audit to find.
+ * because "the engine did this" is as much an answer as "a person did": a
+ * duty's repair nobody asked for is the thing an operator opens an audit to
+ * find.
  *
  * # And THROUGH WHICH CREDENTIAL
  *
@@ -57,8 +58,10 @@
  * Four subsystems keep a record of the CHANGE a write made. None keeps one of
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
- * nothing anywhere. The runtime audit is that record (`operator_acted` and
- * `backup_requested`, each with the envelope source `operator`), and it is read
+ * nothing anywhere. The runtime audit is that record (`operator_acted`,
+ * `backup_requested`, `model_acted`, and the Dashboard Assistant's `assistant_turn_completed`
+ * and `assistant_conversation_read`, each with the envelope source
+ * `operator`), and it is read
  * here as `Runtime`: every call, whatever became of it, under the author and
  * kind the engine recorded (`actor`, and the `actor_kind` and `operator_id`
  * tags) and the node that served it. The arguments are never in it — they are
@@ -114,6 +117,7 @@ import {
   TableEntityCell,
   TableTextCell,
   toCsv,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -124,9 +128,9 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
@@ -136,7 +140,7 @@ import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
-import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import type {
   ArtifactTrailEntry,
@@ -172,7 +176,7 @@ const AUDIT_OFFER: Offer = {
  * nothing else — and a loop that chased cursors until the window was covered
  * would make the cost of opening this screen a property of how busy the
  * company has been, with no bound a reader could see. 200 is the tracker
- * feed's own maximum page (`tracker.MaxActivityRows`); the runtime audit and
+ * feed's own maximum page (`worklet.MaxActivityRows`); the runtime audit and
  * the identity trail are asked for the same so the three windowed sources
  * reach equally far back, and the others are sized to it: the footer says what
  * was loaded, and a window wider than the page reaches is reported rather than
@@ -194,8 +198,8 @@ const POLL_MS = 60_000;
  *  call a person made, the identity estate's own trail, and every artifact's
  *  history. */
 const SOURCES = [
-  "work",
-  "knowledge",
+  "worklet",
+  "doclet",
   "config",
   "credentials",
   "runtime",
@@ -205,8 +209,8 @@ const SOURCES = [
 type Source = (typeof SOURCES)[number];
 
 const SOURCE_LABEL: Record<Source, string> = {
-  work: "Work",
-  knowledge: "Knowledge",
+  worklet: "Worklet",
+  doclet: "Doclet",
   config: "Configuration",
   credentials: "Credentials",
   runtime: "Runtime",
@@ -244,6 +248,30 @@ const RUNTIME_ROW: Record<
     subject: row.tags?.dir ?? "",
     path: ["settings", "backups"],
     noSubject: "No directory recorded",
+  }),
+  // A MODEL GESTURE NAMES ITS ENTRY AND WHAT WAS DONE TO IT (a check, a
+  // retry, a credential, a sign-in), and the secret NAMES a credential call
+  // touched are in its summary; a value never is.
+  model_acted: (row) => ({
+    kind: row.tags?.action ? `model ${row.tags.action.replaceAll("_", " ")}` : "model",
+    subject: row.tags?.provider_key ?? "",
+    path: ["settings", "models"],
+    noSubject: "No model recorded",
+  }),
+  // A COMPLIANCE READ NAMES THE CONVERSATION IT OPENED: the reader is the
+  // row's actor and the reason is its summary, and what was read stays sealed.
+  assistant_conversation_read: (row) => ({
+    kind: "conversation read",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
+  }),
+  // AN ASSISTANT TURN NAMES THE CONVERSATION IT BELONGS TO AND NOTHING IT
+  // READ: the steps' arguments and answers are the company's content and the
+  // question is the person's own, so neither is in the audit.
+  assistant_turn_completed: (row) => ({
+    kind: "Ask Crewlet turn",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
   }),
 };
 
@@ -343,9 +371,9 @@ export interface AuditEntry {
 }
 
 /**
- * WHAT A TRACKER COMMIT WAS ABOUT, as a person would name it.
+ * WHAT A WORKLET COMMIT WAS ABOUT, as a person would name it.
  *
- * A FEED OF UUIDS IS A FEED NOBODY READS, which is the tracker's own rule
+ * A FEED OF UUIDS IS A FEED NOBODY READS, which is Worklet's own rule
  * about its own history — and this screen broke it the moment it showed
  * anything but a task. A task carries a key and a project and a person carry
  * their own names, so those three read fine; a SAVED VIEW is addressed by
@@ -371,11 +399,11 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
   }
   switch (kind) {
     case "view":
-      return { subject: `view ${short(id)}`, path: ["work", "views", id] };
+      return { subject: `view ${short(id)}`, path: ["worklet", "views", id] };
     case "person":
       return { subject: id, path: ["company", "org", "seats", id] };
     case "project":
-      return { subject: id, path: ["work", id] };
+      return { subject: id, path: ["worklet", id] };
     case "file": {
       // A FILE'S ID IS ITS ADDRESS'S TOKEN, never its path — the path is in
       // the change's own fields, whichever side of it is not empty — and
@@ -384,7 +412,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       const path = record.fields?.path?.to || record.fields?.path?.from;
       return {
         subject: path ? `${project}/${path}` : `file in ${project}`,
-        path: ["work", project],
+        path: ["worklet", project],
       };
     }
     default:
@@ -610,7 +638,7 @@ export function Audit() {
   const seatOf = useSeatOf();
   // THE WINDOW MOVES ONCE A POLL, NOT ONCE A SECOND. Every windowed source is
   // keyed on the edges it is asked with, and anchored on the one-second clock
-  // those edges were a new question every tick: the tracker's feed and the
+  // those edges were a new question every tick: Worklet's feed and the
   // fleet-wide event read were asked once a second where the poll says once a
   // minute, and an answer slower than a second — the event read waits up to
   // two for a node that does not answer — was dropped for the next tick's, so
@@ -645,7 +673,7 @@ export function Audit() {
     { pollMs: POLL_MS },
   );
   const config = useQuery("config_audit", { limit: PAGE.config }, { pollMs: POLL_MS });
-  // THE RUNTIME AUDIT, windowed by the engine like the tracker's feed: the
+  // THE RUNTIME AUDIT, windowed by the engine like Worklet's feed: the
   // event log narrowed to the source every runtime audit event carries.
   const runtime = useQuery(
     "events",
@@ -659,7 +687,7 @@ export function Audit() {
   const identity = useIdentityTrail(windowParam(range.window), since);
   // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
   // The section opens on Admin, and the sources answer to different access —
-  // the tracker's history to Tracker, the wiki's to Knowledge, the
+  // Worklet's history to Worklet, Doclet's to Doclet, the
   // configuration's revisions to Admin — so a source withheld from a reader
   // the engine has narrowed (a node that refuses admin keeps every app) is an
   // ordinary answer. The banner replaces the whole grid, so one refused source hid
@@ -668,8 +696,8 @@ export function Audit() {
   // the first read that failed for any other reason, its code and refusal
   // shown together.
   const reads = [
-    { read: work, gesture: "Reading the tracker's history" },
-    { read: knowledge, gesture: "Reading the knowledge base's history" },
+    { read: work, gesture: "Reading Worklet's history" },
+    { read: knowledge, gesture: "Reading Doclet's history" },
     { read: config, gesture: "Reading the configuration's revisions" },
     { read: runtime, gesture: "Reading the runtime audit" },
     { read: artifacts, gesture: "Reading every artifact's history" },
@@ -696,7 +724,7 @@ export function Audit() {
       out.push({
         id: `work:${record.id}`,
         at: record.at,
-        source: "work",
+        source: "worklet",
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
@@ -712,7 +740,7 @@ export function Audit() {
       out.push({
         id: `page:${change.id}`,
         at: change.at,
-        source: "knowledge",
+        source: "doclet",
         kind: change.kind,
         actor: change.actor ?? "",
         actorKind: change.actor_kind ?? "",
@@ -720,7 +748,7 @@ export function Audit() {
         subject: change.title || change.page_id,
         // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
         // record it ever existed.
-        path: change.title ? ["knowledge", "pages", change.page_id] : undefined,
+        path: change.title ? ["doclet", "pages", change.page_id] : undefined,
         titled: Boolean(change.title),
         detail: plainText(change.excerpt ?? ""),
       });
@@ -865,7 +893,7 @@ export function Audit() {
     // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
     // so a full one whose oldest row is still after the window's start is a
     // busy week reaching further back than a page — the same test.
-    oldest(list(workData?.records), PAGE.work, "Work");
+    oldest(list(workData?.records), PAGE.work, "Worklet");
     oldest(
       list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
       PAGE.identity,
@@ -876,7 +904,7 @@ export function Audit() {
       PAGE.runtime,
       "Runtime",
     );
-    oldest(list(knowledgeData?.changes), PAGE.pages, "Knowledge");
+    oldest(list(knowledgeData?.changes), PAGE.pages, "Doclet");
     oldest(
       list(configData).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
@@ -891,6 +919,7 @@ export function Audit() {
     () => [
       {
         key: "at",
+        align: "right",
         header: "When",
         shrink: true,
         sortValue: (row) => row.at,
@@ -1022,19 +1051,19 @@ export function Audit() {
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
   // authority, with the grants its refusal named, and the two REST reads.
   //
-  // EACH SENTENCE ONCE. A refusal naming no grant says "Sign in to see this."
-  // whichever source it refused, so a signed-out reader refused every source
-  // was told the same sentence five times — and the notice keys its lines by
-  // the sentence, so React drew five lines under one key.
+  // EACH SENTENCE ONCE. A refusal naming no grant says no access
+  // (`authorityWords`) whichever source it refused, so a reader refused every
+  // source was told the same sentence five times — and the notice keys its
+  // lines by the sentence, so React drew five lines under one key.
   const withheld = [
     ...new Set(
       [
         ...reads
           .filter(({ read }) => read.error === "unauthorized")
           .map(({ read, gesture }) =>
-            needsWords(
+            authorityWords(
               gesture,
-              read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : [],
+              read.refusal && !isLogRefusal(read.refusal) ? read.refusal : null,
             ),
           ),
         secrets.withheld,
@@ -1048,7 +1077,7 @@ export function Audit() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {/* THROUGH THE ONE DOWNLOAD PATH. This had its own, which revoked the
             file's URL in the same task as the click that queued it — racing
             the read the download is about to make — and said nothing either
@@ -1161,8 +1190,8 @@ export function Audit() {
  *
  * BEST EFFORT, like every other credential read on a screen that is not about
  * credentials: a reader without the grant for `/secrets` still has an audit of
- * everything else, and a failed read here must not take the tracker's and the
- * wiki's rows down with it. But best effort is not SILENT: its failure is the
+ * everything else, and a failed read here must not take Worklet's and
+ * Doclet's rows down with it. But best effort is not SILENT: its failure is the
  * `withheld` sentence the notice carries.
  */
 function useSecrets(): { rows: SecretRow[] | null; withheld: string } {
@@ -1243,7 +1272,7 @@ const IDENTITY_WITHHELD: Withheld = {
 function withheldSentence(source: Withheld, read: RestResult<unknown>): string {
   if (read.error === null) return "";
   if (read.error.unauthorized) {
-    return needsWords(source.gesture, read.error instanceof RestError ? read.error.grants : []);
+    return authorityWords(source.gesture, read.error instanceof RestError ? read.error : null);
   }
   return read.data === null
     ? `${source.subject} could not be read, so none of ${source.rows} are listed here.`

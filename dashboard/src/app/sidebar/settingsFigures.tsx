@@ -18,9 +18,10 @@
  *
  *  - **Nodes** — the nodes holding a presence lease, off the health push the
  *    frame already holds. The fleet answer adds the one thing health cannot
- *    say, because health is about THIS node: how many nodes are behind the
- *    epoch the fleet activated — the Nodes screen's own "Behind on config"
- *    count — drawn as a warning mark and said in the row's name.
+ *    say, because health is about THIS node: how many nodes do not run the
+ *    revision the fleet activated — the Nodes screen's own "Behind on config"
+ *    count, by its one rule (`configStanding`) — drawn as a warning mark and
+ *    said in the row's name.
  *  - **Configuration** — the epoch this node applied, in words.
  *  - **Backups & retention**: how many alarms stand, the count the engine
  *    panel shows and the section's own list leads with, drawn only when one
@@ -37,6 +38,7 @@ import { StatusDot } from "@crewlethq/ui";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { offRevision } from "~/lib/configStanding.ts";
 import { sectionOpen, workspaceRow } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
@@ -75,12 +77,11 @@ export function settingsFigures({
   const figures: Record<string, SectionFigure> = {};
 
   if (health?.nodes !== undefined) {
-    // THE NODES SCREEN'S OWN "Behind on config" TILE, to the node: an applied
-    // epoch older than the one the activation pointer names. A refused apply
-    // leaves the node on its older epoch, so it is counted here too.
-    const behind = fleet
-      ? fleet.nodes.filter((n) => (n.config_epoch ?? 0) < fleet.target_epoch).length
-      : 0;
+    // THE NODES SCREEN'S OWN "Behind on config" TILE, to the node: one that
+    // does not run the activated revision (`configStanding`). A refused apply
+    // reports the TARGET's epoch while the node runs the one before, so an
+    // epoch comparison left it out; it is counted here.
+    const behind = fleet ? fleet.nodes.filter((n) => offRevision(fleet, n)).length : 0;
     // ONE NODE IS "1 node live", as Backups' row below says its one domain:
     // the figure is read into the row's name.
     const live = health.nodes === 1 ? "node live" : "nodes live";

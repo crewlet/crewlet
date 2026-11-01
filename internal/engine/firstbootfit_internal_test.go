@@ -14,16 +14,18 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // yearFivePeak is the reference company's fifth-year corpus, 8.46 GB, which a
@@ -122,14 +124,15 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	t.Parallel()
 	unset := config.Stream{}
 	floored := config.Stream{CodeLogMaxBytes: config.CodeLogMaxBytesFloor}
-	trackerLog, vectors, codeLog := tracker.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
-	quarters := []string{pages.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
+	trackerLog, vectors, codeLog := worklet.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
+	quarters := []string{doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name()}
 	// THE ORDER THE DEPLOYMENT GUIDE ADDS THE ASKS UP IN, which must name
 	// every log the register sizes: a log registered beside them is an ask
 	// the sum leaves out.
-	order := []string{trackerLog, vectors, pages.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
-		artifactdata.Domain{}.Name(), codeLog, usage.Domain{}.Name(), iamdomain.Domain{}.Name()}
+	order := []string{trackerLog, vectors, doclet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
+		artifactdata.Domain{}.Name(), codeLog, usage.Domain{}.Name(), iamdomain.Domain{}.Name(),
+		assistantdomain.Domain{}.Name(), chatlet.Domain{}.Name()}
 	var registered []string
 	for _, domain := range registeredDomains() {
 		registered = append(registered, domain.Name())
@@ -162,7 +165,6 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	left := func(ceiling int64) float64 { return 1 - peak/float64(ceiling) }
 
 	everyAsk := leastFree(t, scaled(unset, ""), false)
-	everyAskWithout := leastFree(t, scaled(unset, codeLog), false)
 	alarmLine := leastFree(t, holds(unset, "", alarmed), true)
 	alarmLineWithout := leastFree(t, holds(unset, codeLog, alarmed), true)
 	alarmLineFloored := leastFree(t, holds(floored, "", alarmed), true)
@@ -192,6 +194,22 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		to = free
 	}
 
+	// WHERE IT STOPS GROWING: above the band the mutation log is made a
+	// little shorter still, until the code log's ask reaches its clamp; past
+	// that it holds, and from where the mutation log's own ask nears ITS
+	// clamp the code log costs it less and less, until nothing is scaled.
+	var rises int64
+	for free := to; free <= 700*gib; free += gib {
+		if shorter(free+gib) < shorter(free)-1e-6 {
+			rises = free
+			break
+		}
+	}
+	if rises == 0 {
+		t.Fatalf("the mutation log is made shorter by the code log on every volume above %d GiB free, "+
+			"and the guide says it stops", to/gib)
+	}
+
 	// THE WORDS, each held to the range it is true over.
 	for _, w := range []struct {
 		words    string
@@ -199,8 +217,9 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		low, top float64
 	}{
 		{"the code log makes the mutation log about a fifth shorter", shorter(100 * gib), 0.175, 0.225},
-		{"a little more below that range", shorter(from-gib) - shorter(from), 1e-4, 0.05},
-		{"and less above it", shorter(to) - shorter(to+gib), 1e-4, 0.05},
+		{"a little less below that", shorter(from) - shorter(from-gib), 1e-7, 0.05},
+		{"and a little more above it", shorter(to+gib) - shorter(to), 1e-7, 0.05},
+		{"up to about 19 %", shorter(rises), 0.185, 0.195},
 		{"a 64 GiB volume's vector changelog is less than the corpus",
 			float64(fit(unset, 64*gib, "")[vectors].Bytes) / peak, 0, 1},
 	} {
@@ -216,7 +235,12 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	percentLeft := func(stream config.Stream, free int64, without string) int {
 		return int(math.Round(100 * left(fit(stream, free, without)[vectors].Bytes)))
 	}
-	about := func(gibs float64) int64 { return int64(math.Round(gibs)) }
+	// EVERY LINE AS THE LEAST WHOLE GiB FREE PAST IT, as
+	// TestThePagesStateTheVolumeArithmeticTheEngineSizesBy states the same
+	// thresholds on the same pages: rounded, a crossing at 96.4 GiB would
+	// print 96 here and 97 there, in one paragraph.
+	about := func(gibs float64) int64 { return int64(math.Ceil(gibs)) }
+	everyAskFrom := about(everyAsk)
 	// THE ASKS AT THE CLAMP, a volume past every log's largest derived ask.
 	clamped := firstBootAsks(t, unset, 1<<50, "")
 	var sum int64
@@ -232,13 +256,14 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 
 	for file, wants := range map[string][]string{
 		"docs/guides/replication.md": {
-			fmt.Sprintf("below about %d GiB free its ask is room the others give up", about(everyAsk)),
+			fmt.Sprintf("below about %d GiB free its ask is room the others give up", everyAskFrom),
 			codeAsks,
 			fmt.Sprintf("with less than about %d GiB free the %s asks are more than the logs' share "+
-				"of it", about(everyAsk), numberWord(t, len(order))),
+				"of it", everyAskFrom, numberWord(t, len(order))),
 			fmt.Sprintf("its quarter of the broker's limit, about %.0f %% of the free space", share),
 			fmt.Sprintf("about a fifth (%s %%) shorter on any first boot between about %d and %d GiB "+
-				"free, a little more below that and less above it", band, from/gib, to/gib),
+				"free, a little less below that and a little more above it, up to about 19 %% (%.1f %%) "+
+				"until about %d GiB free", band, from/gib, to/gib, 100*shorter(rises), rises/gib),
 			fmt.Sprintf("The changelog is created at %s GiB on 100 GiB free, where it would be %s GiB "+
 				"without the code log: that re-embedding then leaves %d %% of it free, where "+
 				"without the code log it leaves about %d %%.", at(unset, 100*gib, "", vectors),
@@ -256,23 +281,21 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		"docs/guides/deployment.md": {
 			fmt.Sprintf("its quarter of it, about %.0f %% of the free space on a first boot — which is "+
 				"every volume with less than about %d GiB free (with the mutation log at its %s GiB "+
-				"clamp the %s ask for about %d GiB: %s)", share, about(everyAsk),
+				"clamp the %s ask for %s GiB: %s)", share, everyAskFrom,
 				gibText(clamped[trackerLog].Bytes), numberWord(t, len(order)),
-				about(float64(sum)/float64(gib)), strings.Join(addends, " + ")),
+				gibText(sum), strings.Join(addends, " + ")),
 			fmt.Sprintf("Below about %d GiB free it comes out of the other logs' share: at 100 GiB "+
 				"free the mutation log and the vector changelog are created at %s GiB each rather "+
 				"than %s, at 256 GiB at %s rather than %s — windows about a fifth shorter",
-				about(everyAsk), at(unset, 100*gib, "", trackerLog),
+				everyAskFrom, at(unset, 100*gib, "", trackerLog),
 				at(unset, 100*gib, codeLog, trackerLog), at(unset, 256*gib, "", trackerLog),
 				at(unset, 256*gib, codeLog, trackerLog)),
 		},
 		"docs/guides/retention.md": {
-			fmt.Sprintf("about %d %% of the %s GiB clamp, which a volume of about %d GiB free or more "+
-				"gets; about %d %% of the %s GiB a 200 GiB volume gets; about %d %% of the %s GiB a "+
-				"128 GiB volume gets; about %d %% of the %s GiB a 100 GiB volume gets; and on a "+
-				"64 GiB volume, whose %s GiB is less than the corpus, it does not fit at all",
-				int(math.Round(100*left(clamped[vectors].Bytes))), gibText(clamped[vectors].Bytes),
-				about(everyAsk), percentLeft(unset, 200*gib, ""), at(unset, 200*gib, "", vectors),
+			fmt.Sprintf("leaves about %d %% of the %s GiB a 200 GiB volume creates it with, about %d %% of "+
+				"the %s GiB a 128 GiB volume does and about %d %% of the %s GiB a 100 GiB volume does; and a "+
+				"64 GiB volume creates the log at %s GiB, too small to hold that re-embedding at all",
+				percentLeft(unset, 200*gib, ""), at(unset, 200*gib, "", vectors),
 				percentLeft(unset, 128*gib, ""), at(unset, 128*gib, "", vectors),
 				percentLeft(unset, 100*gib, ""), at(unset, 100*gib, "", vectors),
 				at(unset, 64*gib, "", vectors)),
@@ -285,7 +308,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 		},
 		"internal/config/bootstrap.go": {
 			fmt.Sprintf("below about %d GiB free it comes out of the other logs' share (at 100 GiB "+
-				"the mutation log is created at %s GiB rather than %s;", about(everyAsk),
+				"the mutation log is created at %s GiB rather than %s;", everyAskFrom,
 				at(unset, 100*gib, "", trackerLog), at(unset, 100*gib, codeLog, trackerLog)),
 		},
 		"internal/engine/statelogceilings.go": {
@@ -307,7 +330,7 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	for _, row := range rows {
 		var want string
 		if row.andUp {
-			want = fmt.Sprintf("| %d GiB and up | %s GiB | %s GiB | %s GiB |", about(everyAsk),
+			want = fmt.Sprintf("| %d GiB and up | %s GiB | %s GiB | %s GiB |", everyAskFrom,
 				gibText(clamped[trackerLog].Bytes), gibText(clamped[quarters[0]].Bytes),
 				gibText(clamped[codeLog].Bytes))
 		} else {
@@ -339,10 +362,18 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	if len(rows) == 0 || !rows[len(rows)-1].andUp {
 		t.Errorf("replication.md's table ends on no row of the volumes on which nothing is scaled")
 	}
-	if about(everyAskWithout) != to/gib {
-		t.Errorf("the mutation log stops being a fifth shorter at %d GiB free, and without the code "+
-			"log nothing is scaled from about %d GiB: the band the guide prints ends where the "+
-			"logs without the code log stop being scaled", to/gib, about(everyAskWithout))
+	// THE BAND ENDS WHERE THE CHAT LOG'S ASK STOPS GROWING: below its 8 GiB
+	// the chat log asks a sixteenth of the free space, in proportion with
+	// every derived ask, so the code log costs the mutation log one fraction
+	// of it; from where its ask holds, the others take the room it no longer
+	// asks for, and the fraction grows.
+	chatFull := leastFree(t, func(free int64) bool {
+		return firstBootAsks(t, unset, free, "")[chatlet.Domain{}.Name()].Bytes >= int64(chatlet.ChatLogMaxBytes)
+	}, true)
+	if end := float64(to) / float64(gib); end < chatFull || end > chatFull+8 {
+		t.Errorf("the mutation log stops being %s %% shorter at %d GiB free, and the chat log's ask stops "+
+			"growing at about %.0f GiB: the band the guide prints ends where the chat log's ask holds",
+			band, to/gib, chatFull)
 	}
 }
 
@@ -384,8 +415,8 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	t.Parallel()
 	unset := config.Stream{}
-	trackerLog, codeLog := tracker.Domain{}.Name(), code.Domain{}.Name()
-	about := func(gibs float64) int64 { return int64(math.Round(gibs)) }
+	trackerLog, codeLog := worklet.Domain{}.Name(), code.Domain{}.Name()
+	about := func(gibs float64) int64 { return int64(math.Ceil(gibs)) }
 	// CREATED: the code log and the mutation log a first boot on free
 	// creates, the code log set at set.
 	created := func(set, free int64) (codeBytes, mutation int64) {
@@ -450,10 +481,14 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	pageCap := gibValue(t, printedCap[1])
 
 	// ONE SHARE, UNDER THE CAP: the rule the pages print is the half on every
-	// volume the table prints, to a thousandth.
+	// volume the table prints, to a two-hundredth. Not to a thousandth: the
+	// share moves by a fifth of a percent between 50 and 600 GiB free (52.35
+	// to 52.46 %), because the chat log's ask stops growing at 128 GiB free
+	// while the mutation log's goes on, and the operator's rounding UP to the
+	// printed whole percent covers it, which the check below holds.
 	for _, row := range fitTable(t) {
 		rule := min(int64(float64(table(row.free))*share/100), limit)
-		if exact := half(row.free); math.Abs(float64(rule-exact)) > float64(exact)/1000 {
+		if exact := half(row.free); math.Abs(float64(rule-exact)) > float64(exact)/200 {
 			t.Errorf("on %d GiB free the half is %d bytes, and %.2f %% of the table's figure, under "+
 				"the %d-byte cap, is %d: the pages print one share, which is no longer the half there",
 				row.free/gib, exact, share, limit, rule)
@@ -629,17 +664,6 @@ func gibValue(t *testing.T, text string) int64 {
 		gibs += n
 	}
 	return int64(gibs * float64(gib))
-}
-
-// numberWord is n as the pages write a count of logs.
-func numberWord(t *testing.T, n int) string {
-	t.Helper()
-	words := []string{"", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-		"ten", "eleven", "twelve"}
-	if n < 1 || n >= len(words) {
-		t.Fatalf("the pages count %d logs, which this test has no word for", n)
-	}
-	return words[n]
 }
 
 // prose is a file of this tree as a reader reads its words: a comment's

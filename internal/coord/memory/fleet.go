@@ -43,18 +43,17 @@ type Fleet struct {
 	budgets      map[string]coord.Tally
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
+	chatReads    map[string]coord.ChatReadState
 	fires        map[string]time.Time
 	custody      map[string]string
 	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
-	mailboxes    map[uuid.UUID]coord.MailboxRecord
 
-	// runParts are the parts beside each run's record, by turn and then by
-	// name — kept apart from runs, as the KV keeps them under keys a listing
-	// of records never reads.
-	runParts map[string]map[string]runPart
+	// seatAccess is the seat access ledger, by integration then handle.
+	seatAccess map[string]map[string][]byte
+	mailboxes  map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -80,16 +79,26 @@ type Fleet struct {
 	maintAcks   map[string]coord.MaintenanceAck
 	maintRev    uint64
 
-	// pauseWatchers are the open seat-pause watches, each told of every
-	// change under the lock that made it.
-	pauseWatchers map[*pauseWatcher]struct{}
+	// pauseWatchers are the open seat-pause watches, runWatchers the open
+	// watches of each sandbox run by its turn id, and chatReadWatchers the
+	// open watches of the chat read state, each told of every change under
+	// the lock that made it.
+	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}
+	runWatchers      map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	chatReadWatchers map[*watcher[coord.ChatReadUpdate]]struct{}
+
+	// retries and signIns are the two classes keyed by a model entry, each
+	// with its own open watches.
+	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
+	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs and mailbox records alike. Store-wide rather than per record, as
-	// a KV revision is, so a record deleted and created again never hands
-	// back a version an older incarnation of it already used: a caller still
-	// holding that version must lose, not win against a record it never
-	// read. A per-record counter restarting at 1 was exactly that bug.
+	// runs, mailbox records and chat read records alike. Store-wide rather
+	// than per record, as a KV revision is, so a record deleted and created
+	// again never hands back a version an older incarnation of it already
+	// used: a caller still holding that version must lose, not win against a
+	// record it never read. A per-record counter restarting at 1 was exactly
+	// that bug.
 	version uint64
 
 	epoch   int64
@@ -126,16 +135,19 @@ func NewFleet() *Fleet {
 		budgets:      map[string]coord.Tally{},
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
+		chatReads:    map[string]coord.ChatReadState{},
 		fires:        map[string]time.Time{},
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
-		runParts:     map[string]map[string]runPart{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
+		seatAccess:   map[string]map[string][]byte{},
 		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
 		pauses:       map[uuid.UUID]coord.SeatPause{},
 		uploads:      map[string]versioned{},
+		retries:      newRetryRecords(),
+		signIns:      newSignInRecords(),
 	}
 }
 
@@ -149,6 +161,13 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 		// here with one has already decided; answering false is the only
 		// reading of it that is not an invitation to divide by zero.
 		return false, nil
+	}
+	if window > coord.MaxRateWindow {
+		// The KV backend's bucket keeps no wider window, so the twin
+		// refuses one too: a caller that passed here and failed there
+		// would be found in production.
+		return false, fmt.Errorf("coord/memory: rate window %v is wider than "+
+			"coord.MaxRateWindow (%v)", window, coord.MaxRateWindow)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -265,16 +284,30 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	// exactly what the KV buys with a sequence: the twin has to REFUSE the
 	// same writes, not merely be safe by construction, or a suite that
 	// passes against it proves nothing about the real store.
-	// An unset pointer is NOT a race — see the KV's own note and
-	// [coord.ActivationRequest.Expect].
+	// An unset pointer IS a race for an expectation, since what the write
+	// was built on is gone — see [coord.ActivationRequest.Expect].
 	if req.Expect != "" && req.ExpectAbsent {
 		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
 			"expect a revision and no revision at once")
 	}
-	if req.Expect != "" && f.set && f.target.RevisionID != req.Expect {
+	if req.ExpectEpoch != 0 && req.Expect == "" {
+		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
+			"expect an epoch without the revision it names")
+	}
+	if req.Expect != "" && !f.set {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected %s, the fleet has no activation",
+			coord.ErrActivationRaced, req.Expect)
+	}
+	if req.Expect != "" && f.target.RevisionID != req.Expect {
 		return coord.Activation{}, fmt.Errorf(
 			"%w: expected %s, the fleet is on %s",
 			coord.ErrActivationRaced, req.Expect, f.target.RevisionID)
+	}
+	if req.ExpectEpoch != 0 && f.target.Epoch != req.ExpectEpoch {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected %s at epoch %d, the fleet re-activated it at epoch %d",
+			coord.ErrActivationRaced, req.Expect, req.ExpectEpoch, f.target.Epoch)
 	}
 	// CREATE-ONLY, and the comparison an expectation cannot make: this
 	// write was built on nothing, so any pointer at all is a race with it.
@@ -297,7 +330,7 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
 		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
-		Origin: req.Origin,
+		Origin: req.Origin, Restored: req.Restore,
 	}
 	if !f.target.Origin.CreatedAt.IsZero() {
 		f.target.Origin.CreatedAt = f.target.Origin.CreatedAt.UTC()
@@ -685,6 +718,10 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 // ClaimCustody records node as the keeper of batch unless one is recorded,
 // answering the keeper. The bucket's age is not modelled, for the completion
 // ledger's reason.
+//
+// It never answers [coord.ErrCustodyUndecidable]: this store holds nothing a
+// claim did not write, and a claim names its node or is refused, so every
+// keeper it holds is one a later claim can be told.
 func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
 	if batch == "" || node == "" {
 		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
@@ -735,179 +772,6 @@ func (f *Fleet) RecordRebase(_ context.Context, seed string, at time.Time, versi
 	f.version++
 	f.rebases[seed] = rebaseEntry{at: at.UTC(), version: f.version}
 	return true, nil
-}
-
-// ---- the detached sandbox runs ----------------------------------------- //
-
-// SandboxRun reads one run's record.
-func (f *Fleet) SandboxRun(_ context.Context, turnID string) (coord.Record, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	record, ok := f.runs[turnID]
-	if !ok {
-		return coord.Record{}, false, nil
-	}
-	return copyRecord(record), true, nil
-}
-
-// SandboxRuns returns every record, by turn id.
-func (f *Fleet) SandboxRuns(context.Context) ([]coord.Record, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]coord.Record, 0, len(f.runs))
-	for _, key := range slices.Sorted(maps.Keys(f.runs)) {
-		out = append(out, copyRecord(f.runs[key]))
-	}
-	return out, nil
-}
-
-// CreateSandboxRun writes a new record, ignoring a turn id that already
-// exists.
-func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte) (bool, error) {
-	if turnID == "" {
-		return false, errors.New("coord/memory: a sandbox run needs a turn id")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, exists := f.runs[turnID]; exists {
-		return false, nil
-	}
-	// Versions start at 1 so a zero version is always a lost race, which
-	// is what a caller that forgot to read one deserves.
-	f.version++
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
-	return true, nil
-}
-
-// UpdateSandboxRun writes at a version, reporting whether that version held.
-func (f *Fleet) UpdateSandboxRun(_ context.Context, turnID string, value []byte, version uint64) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	record, ok := f.runs[turnID]
-	if !ok || record.Version != version {
-		return false, nil
-	}
-	f.version++
-	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: f.version}
-	return true, nil
-}
-
-// DeleteSandboxRun removes a record at a version.
-func (f *Fleet) DeleteSandboxRun(_ context.Context, turnID string, version uint64) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	record, ok := f.runs[turnID]
-	if !ok || record.Version != version {
-		return false, nil
-	}
-	delete(f.runs, turnID)
-	return true, nil
-}
-
-// runPart is one part beside a run's record, with the instant it was written,
-// which the sweep compares its cutoff with as the KV compares a message's.
-type runPart struct {
-	record coord.Record
-	at     time.Time
-}
-
-// SandboxRunPart reads the part named part beside turnID's run.
-func (f *Fleet) SandboxRunPart(_ context.Context, turnID, part string) (coord.Record, bool, error) {
-	if err := partNamed(turnID, part); err != nil {
-		return coord.Record{}, false, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.runParts[turnID][part]
-	if !ok {
-		return coord.Record{}, false, nil
-	}
-	return copyRecord(p.record), true, nil
-}
-
-// PutSandboxRunPart writes a part at a version: 0 only where none is stored.
-func (f *Fleet) PutSandboxRunPart(_ context.Context, turnID, part string, value []byte, version uint64) (bool, error) {
-	if err := partNamed(turnID, part); err != nil {
-		return false, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	existing, ok := f.runParts[turnID][part]
-	switch {
-	case version == 0 && ok:
-		return false, nil
-	case version != 0 && (!ok || existing.record.Version != version):
-		return false, nil
-	}
-	if f.runParts[turnID] == nil {
-		f.runParts[turnID] = map[string]runPart{}
-	}
-	// FROM THE STORE-WIDE COUNTER, for the records' reason: a part removed
-	// and written again never hands back a version an older one used.
-	f.version++
-	f.runParts[turnID][part] = runPart{
-		record: coord.Record{Key: part, Value: slices.Clone(value), Version: f.version},
-		at:     time.Now(),
-	}
-	return true, nil
-}
-
-// DeleteSandboxRunPart removes a part whatever version it holds.
-func (f *Fleet) DeleteSandboxRunPart(_ context.Context, turnID, part string) error {
-	if err := partNamed(turnID, part); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.runParts[turnID], part)
-	if len(f.runParts[turnID]) == 0 {
-		delete(f.runParts, turnID)
-	}
-	return nil
-}
-
-// SweepSandboxRunParts removes every part written before cutoff whose run has
-// no record. Under one lock, so the KV's ordering — the parts found, then each
-// run's record read — holds here by construction.
-func (f *Fleet) SweepSandboxRunParts(_ context.Context, cutoff time.Time) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var swept int64
-	for turnID, parts := range f.runParts {
-		if _, live := f.runs[turnID]; live {
-			continue
-		}
-		for name, p := range parts {
-			if p.at.Before(cutoff) {
-				delete(parts, name)
-				swept++
-			}
-		}
-		if len(parts) == 0 {
-			delete(f.runParts, turnID)
-		}
-	}
-	return swept, nil
-}
-
-// partNamed refuses a part with no turn or no name: neither names anything,
-// and the KV could not even spell its key.
-func partNamed(turnID, part string) error {
-	if turnID == "" || part == "" {
-		return fmt.Errorf("coord/memory: a sandbox run's part needs its turn id and a name (got %q, %q)",
-			turnID, part)
-	}
-	return nil
-}
-
-// copyRecord hands back a value whose bytes the caller cannot write through.
-//
-// A map of slices shares its backing arrays, so without this a caller that
-// decoded a record, mutated the buffer and lost the CAS would have rewritten
-// the store's own copy anyway — a write that never happened, visible.
-func copyRecord(r coord.Record) coord.Record {
-	r.Value = slices.Clone(r.Value)
-	return r
 }
 
 // ---- the sealed credentials -------------------------------------------- //
@@ -1076,15 +940,25 @@ func followKey(backend, handle, channel, thread string) string {
 	return coord.DocumentKey("follow", backend, handle, channel, thread)
 }
 
-// Follow records or refreshes a seat's follow on a thread.
-func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) error {
+// Follow records or refreshes a seat's follow on a thread, writing the reason
+// choose answers for the record it replaces.
+//
+// ONE MUTEX ACROSS THE READ, THE CHOICE AND THE WRITE, which is the property
+// the KV backend reaches by binding its write to the revision it read: no
+// other follow can land between what choose was shown and what is written.
+func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread string, at time.Time,
+	choose func(held string, following bool) string) (string, error) {
+
 	if backend == "" || handle == "" || thread == "" {
-		return errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+		return "", errors.New("coord/memory: a follow needs a backend, a handle and a thread")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.follows[followKey(backend, handle, channel, thread)] = followEntry{reason: reason, at: at.UTC()}
-	return nil
+	key := followKey(backend, handle, channel, thread)
+	held, following := f.follows[key]
+	reason := choose(held.reason, following)
+	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
+	return reason, nil
 }
 
 // Following reports why a seat follows a thread, and whether it does.
@@ -1101,19 +975,154 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 	return entry.reason, true, nil
 }
 
-// Unfollow drops a follow, reporting whether one was there.
-func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, nil
+// ---- the per-person chat read state ------------------------------------ //
+
+// ChatRead reports one person's read state, the zero state meaning nobody has
+// opened chat as that person yet.
+func (f *Fleet) ChatRead(_ context.Context, handle string) (coord.ChatReadState, error) {
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: read a person's chat state needs a handle")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := followKey(backend, handle, channel, thread)
-	if _, ok := f.follows[key]; !ok {
+	return cloneChatRead(f.chatReads[handle]), nil
+}
+
+// AdvanceChatRead merges a flush into one person's record.
+//
+// NO RETRY LOOP HERE and that is not a simplification: the real backend's
+// rounds exist to lose a compare-and-set against another PROCESS, and this
+// twin holds the whole fleet under one mutex. The MERGE is the shared half —
+// [coord.MergeChatRead] — so the twin and the backend cannot disagree about
+// what a flush does, which is the only part a conformance suite can check.
+func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: advance a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	merged, err := coord.MergeChatRead(f.chatReads[handle], delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	// THE STORE-WIDE COUNTER, as every versioned write here draws from: a
+	// record forgotten and written again lands past every state the old
+	// one reported, which is what a screen ordering two states relies on.
+	f.version++
+	merged.Revision = f.version
+	f.chatReads[handle] = merged
+	f.notifyChatReadLocked(handle, &merged)
+	return cloneChatRead(merged), nil
+}
+
+// SetChatReadAbsence stamps or clears a record's seat's absence from the
+// company, reporting whether the seat has a record; one without is left
+// without. The rule is [coord.ChatReadState.WithAbsence], shared with the
+// real backend.
+func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: stamp a person's chat absence needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok {
 		return false, nil
 	}
-	delete(f.follows, key)
+	if next, changed := stored.WithAbsence(since); changed {
+		f.version++
+		next.Revision = f.version
+		f.chatReads[handle] = next
+		f.notifyChatReadLocked(handle, &next)
+	}
 	return true, nil
+}
+
+// ForgetChatRead removes a person's record if it has been stamped absent at or
+// before absentBy, reporting whether it did.
+func (f *Fleet) ForgetChatRead(_ context.Context, handle string, absentBy time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: forget a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok || !stored.AbsentBy(absentBy) {
+		return false, nil
+	}
+	delete(f.chatReads, handle)
+	f.notifyChatReadLocked(handle, nil)
+	return true, nil
+}
+
+// ChatReaders lists every seat holding read state, in handle order, each with
+// its absence stamp.
+func (f *Fleet) ChatReaders(_ context.Context) ([]coord.ChatReader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	readers := make([]coord.ChatReader, 0, len(f.chatReads))
+	for handle, stored := range f.chatReads {
+		readers = append(readers, coord.ChatReader{Handle: handle, AbsentSince: stored.AbsentSince})
+	}
+	slices.SortFunc(readers, func(a, b coord.ChatReader) int { return cmp.Compare(a.Handle, b.Handle) })
+	return readers, nil
+}
+
+// WatchChatReads streams every seat's read state, the marker, then every
+// change, under the twin's one-lock ordering (watch.go). The KV backend's
+// WatchChatReads certifies its first answer instead.
+func (f *Fleet) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	answer := make([]coord.ChatReadUpdate, 0, len(f.chatReads)+1)
+	for _, handle := range slices.Sorted(maps.Keys(f.chatReads)) {
+		state := cloneChatRead(f.chatReads[handle])
+		answer = append(answer, coord.ChatReadUpdate{Handle: handle, State: &state})
+	}
+	w := newWatcher(append(answer, coord.ChatReadUpdate{Current: true})...)
+	if f.chatReadWatchers == nil {
+		f.chatReadWatchers = map[*watcher[coord.ChatReadUpdate]]struct{}{}
+	}
+	f.chatReadWatchers[w] = struct{}{}
+	return w.serve(ctx, func() {
+		f.mu.Lock()
+		delete(f.chatReadWatchers, w)
+		f.mu.Unlock()
+	}), nil
+}
+
+// notifyChatReadLocked tells every watcher that a seat's record now holds
+// state, or nil when it was forgotten. Each watcher gets its own copy, maps
+// and slices included, so one consumer that keeps the state cannot see
+// another's edits — or the twin's next write.
+func (f *Fleet) notifyChatReadLocked(handle string, state *coord.ChatReadState) {
+	for w := range f.chatReadWatchers {
+		u := coord.ChatReadUpdate{Handle: handle}
+		if state != nil {
+			copied := cloneChatRead(*state)
+			u.State = &copied
+		}
+		w.push(u)
+	}
+}
+
+// cloneChatRead copies the maps and slices a caller could otherwise mutate
+// under the twin's own lock.
+//
+// The real backend hands back a decoded record that shares nothing with its
+// store; a twin that handed out its live map would let one caller's edit reach
+// another's read, and the suite would be proving a property only the twin has.
+func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
+	out := state
+	if state.Cursors != nil {
+		out.Cursors = maps.Clone(state.Cursors)
+	}
+	out.Muted = slices.Clone(state.Muted)
+	return out
 }
 
 // SweepMarkers removes nothing, because the twin keeps no markers: a delete

@@ -67,7 +67,7 @@ func TestWrittenEventsAreTheRowsAppendWrites(t *testing.T) {
 			t.Errorf("WriteEvents left %s as\n%v\nwhere Append leaves\n%v", table, got, want)
 		}
 	}
-	unsettled, err := written.Events().UnsettledCustody(ctx, time.Now().Add(time.Hour), 10)
+	unsettled, err := written.Events().UnsettledCustody(ctx, time.Now().Add(time.Hour), store.UnsettledBatch{}, 10)
 	if err != nil {
 		t.Fatalf("read the unsettled batches: %v", err)
 	}

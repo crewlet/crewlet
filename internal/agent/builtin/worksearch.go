@@ -8,8 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Finding a work item by what it SAYS.
@@ -33,7 +34,7 @@ import (
 // # And why it is not `search_knowledge`
 //
 // That seam is backend-neutral with Confluence behind it, and Confluence has
-// no work items. See tracker/search.go.
+// no work items. See worklet/search.go.
 
 // WorkSearcher ranks work items by text, declared by the consumer.
 //
@@ -41,7 +42,7 @@ import (
 // not been wired — and the tool is then OMITTED rather than refusing at the
 // call, on [Register]'s own rule.
 type WorkSearcher interface {
-	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
+	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
 
 // ---- search_work_items --------------------------------------------------- //
@@ -50,13 +51,13 @@ type searchWorkItems struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*searchWorkItems)(nil)
 
-func (t *searchWorkItems) Name() string { return tracker.SearchWorkItemsTool }
+func (t *searchWorkItems) Name() string { return worklet.SearchWorkItemsTool }
 
 func (t *searchWorkItems) Description() string {
 	return "Find work items by what they SAY — ranked over every item's title " +
 		"and description, not a substring match. Use this when you remember " +
 		"what a piece of work was about but not which item it is: \"the " +
-		"retry backoff on the payment client\". list_work_items is the other " +
+		"retry backoff on the payment client\". " + ListWorkItemsTool + " is the other " +
 		"half — it filters a board by assignee, status, project and the rest, " +
 		"and its `text` only matches a key or a title."
 }
@@ -74,7 +75,7 @@ func (t *searchWorkItems) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many to return, 1..%d (default %d).",
-					tracker.MaxSearchLimit, tracker.SearchLimit),
+					worklet.MaxSearchLimit, worklet.SearchLimit),
 			},
 			"mode": map[string]any{
 				"type": "string",
@@ -98,25 +99,26 @@ func (t *searchWorkItems) Call(ctx context.Context, args map[string]any) (tools.
 func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.SearchWorkItemsTool), nil
+		return notInATurn(worklet.SearchWorkItemsTool), nil
 	}
 	if t.deps.Search == nil {
-		return unconfigured(tracker.SearchWorkItemsTool), nil
+		return unconfigured(worklet.SearchWorkItemsTool), nil
 	}
 	text := strings.TrimSpace(argString(args, "text"))
 	if text == "" {
-		return failed("search_work_items needs `text` — what the work is " +
+		return failed(SearchWorkItemsTool + " needs `text` — what the work is " +
 			"about, in plain words."), nil
 	}
 	if knowledge.CheckQuery(text) != nil {
-		// REFUSED, NOT CUT, at the bound both ranked searches share
+		// REFUSED, NOT CUT, at the bound every ranked search shares
 		// ([knowledge.MaxQueryBytes]). The search behind this refuses it
 		// too, but as an error the model would read as the tracker
 		// failing; this says what to send instead.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return failed(fmt.Sprintf("search_work_items' `text` is %d bytes and takes at "+
+		return failed(fmt.Sprintf(SearchWorkItemsTool+"' `text` is %d bytes and takes at "+
 			"most %d — say what the work is about in a phrase, not the task or a "+
 			"pasted thread.", len(text), knowledge.MaxQueryBytes)), nil
 	}
@@ -127,26 +129,27 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// to the default would answer a different question from the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf("search_work_items: %v.", err)), nil
+		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchWorkItemsTool,
+			argString(args, "mode"))), nil
 	}
-	answer, err := t.deps.Search.Search(ctx, tracker.SearchQuery{
+	answer, err := t.deps.Search.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: argInt(args, "limit", 0), Mode: mode,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrIndexBuilding):
+	case errors.Is(err, worklet.ErrIndexBuilding):
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
 		// on by filing a duplicate, and the honest answer while a node
 		// is still building its index is that it cannot say yet.
-		return refused(tools.RefusalUnavailable, "This node is still building "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "This node is still building "+
 			"its search index, so it cannot answer that yet — it says nothing "+
 			"about whether the work exists. Try again shortly, or narrow it "+
-			"with list_work_items."), nil
+			"with "+ListWorkItemsTool+"."), nil
 	case err != nil:
-		return readFailure(ctx, tracker.SearchWorkItemsTool, err), nil
+		return readFailure(ctx, worklet.SearchWorkItemsTool, err), nil
 	}
 	hits := answer.Hits
 	if hits == nil {
-		hits = []tracker.Ranked{}
+		hits = []worklet.Ranked{}
 	}
 	out := map[string]any{"query": text, "matches": hits, "count": len(hits),
 		"mode": string(answer.ServedMode)}
@@ -166,7 +169,23 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"work — some of the fleet did not answer in time — so an item " +
 			"not listed here may still exist"
 	}
-	return jsonAnswer(out, "Ask for fewer with `limit`.")
+	// EACH SNIPPET IS FENCED as the description it was cut from, exactly as
+	// get_work_item fences the item it opens (ADR-0040), and every other
+	// string — a title above all — neutralised: a ranked answer is a list of
+	// what other people wrote, read straight into the seat's context. The
+	// index keeps the opening of a description and not who wrote it, and
+	// only company principals write here, so it is a colleague's text with
+	// nobody named ([provenance.TrustForPartial]).
+	read := newForeignRead(turn, actor.Handle)
+	for i, hit := range hits {
+		read.fence(fieldPath{}.key("matches").index(i).key("snippet"),
+			provenance.SourceWorkDescription, nil, true, hit.Snippet)
+	}
+	// AND EVERY TITLE IS A NAME nobody is recorded as writing.
+	if len(hits) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, worklet.SearchWorkItemsTool, out, "Ask for fewer with `limit`.")
 }
 
 // workDegradedNote is what a work search that ranked other than it was asked to

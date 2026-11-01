@@ -99,14 +99,17 @@ func (d SeatPauseDeps) wired() bool {
 //
 // `applied` means the pause is the fleet's record: every node holding or later
 // acquiring the seat holds its mail, its schedules are skipped, and — with
-// `stop_running` — the turn it is on ends at its next round, every git node
-// refuses its detached coding runs' box pushes (internal/code/host's box
-// admission) and their bridge sessions refuse their calls of every tool not
-// proven read-only (internal/api/mcpbridge), both through the engine's
-// stoppedBy. The node holding
-// the seat carries that out from its own watched copy, typically within a
-// second; nothing here waits for it, because the record IS the pause and a
-// node that has not heard yet holds its mail the moment it does.
+// `stop_running` — its running work ends: the turn it is on at its next round,
+// and a coding run it has out at once, its box reclaimed, what it had spent
+// charged and its turn closed as stopped. A run parked on a person's question
+// stays parked behind the pause, and until the seat is resumed every git node
+// refuses its coding runs' box pushes (internal/code/host's box admission)
+// and their bridge sessions refuse their calls of every tool not proven
+// read-only (internal/api/mcpbridge), both through the engine's stoppedBy.
+// The node holding the seat carries that out from its own watched copy,
+// typically within a second; nothing here waits for it, because the record IS
+// the pause and a node that has not heard yet holds its mail — and ends the
+// seat's running run — the moment it does.
 //
 // # Whose decision it is
 //
@@ -133,10 +136,11 @@ func (t *pauseSeat) Description() string {
 	return "Pause an agent seat: it starts no new turn until somebody resumes it, its " +
 		"incoming work waits on its inbox in order, and its scheduled runs are skipped. " +
 		"The turn it is on finishes first unless `stop_running` is true, which ends that " +
-		"turn at its next round instead and refuses every change its detached coding runs " +
-		"make — their boxes' pushes and their calls of its tools that write — until it is " +
-		"resumed. Pausing a paused seat changes nothing, except to add " +
-		"`stop_running`. Resume it with resume_seat."
+		"turn at its next round and any coding run the seat has out at once — its box " +
+		"reclaimed — instead, and refuses every change its coding runs make — their " +
+		"boxes' pushes and their calls of its tools that write — until it is resumed. " +
+		"Pausing a paused seat changes nothing, except to add `stop_running`. Resume it " +
+		"with " + ResumeSeatTool + "."
 }
 
 func (t *pauseSeat) Parameters() map[string]any {
@@ -154,10 +158,12 @@ func (t *pauseSeat) Parameters() map[string]any {
 			},
 			"stop_running": map[string]any{
 				"type": "boolean",
-				"description": "End the turn the seat is on at its next round, rather " +
-					"than letting it finish, and refuse every change its detached coding " +
-					"runs make — a push from their boxes, a call of the seat's tools that " +
-					"writes — until the seat is resumed. The stopped turn is not run again.",
+				"description": "End the seat's running work rather than letting it " +
+					"finish: the turn it is on at its next round, and any coding run it " +
+					"has out at once, its box reclaimed; and refuse every change its " +
+					"coding runs make — a push from their boxes, a call of the seat's " +
+					"tools that writes — until the seat is resumed. What was stopped is " +
+					"not run again.",
 			},
 		},
 		"required": []any{"handle"},
@@ -187,7 +193,7 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for range pauseAttempts {
 		current, paused, err := t.deps.Pauses.SeatPause(ctx, seat.id)
 		if err != nil {
-			return nodeFailure(ctx, PauseSeatTool, err, fmt.Sprintf("pause_seat could not "+
+			return nodeFailure(ctx, PauseSeatTool, err, fmt.Sprintf(PauseSeatTool+" could not "+
 				"read whether %s is paused", seat.Handle()), "Nothing was changed."), nil
 		}
 		switch {
@@ -226,9 +232,8 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return pauseAnswer(seat, current, false)
 		}
 	}
-	return refused(tools.RefusalConflict, fmt.Sprintf("pause_seat lost %d races in a row for "+
-		"%s to other changes to its pause. Read the seat again before retrying.",
-		pauseAttempts, seat.Handle())), nil
+	// A LOST RACE, in the words every surface tells it in.
+	return refused(tools.RefusalConflict, statelog.LostRace), nil
 }
 
 // resumeSeat lifts a seat's pause: it takes work again, the mail that waited
@@ -280,7 +285,7 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for range pauseAttempts {
 		current, paused, err := t.deps.Pauses.SeatPause(ctx, seat.id)
 		if err != nil {
-			return nodeFailure(ctx, ResumeSeatTool, err, fmt.Sprintf("resume_seat could not "+
+			return nodeFailure(ctx, ResumeSeatTool, err, fmt.Sprintf(ResumeSeatTool+" could not "+
 				"read whether %s is paused", seat.Handle()), "Nothing was changed."), nil
 		}
 		if !paused {
@@ -308,9 +313,8 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"paused": false, "changed": true,
 		})
 	}
-	return refused(tools.RefusalConflict, fmt.Sprintf("resume_seat lost %d races in a row for "+
-		"%s to other changes to its pause. Read the seat again before retrying.",
-		pauseAttempts, seat.Handle())), nil
+	// A LOST RACE, in the words every surface tells it in.
+	return refused(tools.RefusalConflict, statelog.LostRace), nil
 }
 
 // pauseTarget is the agent seat a pause or a resume is about: its chart role
@@ -334,7 +338,7 @@ func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authori
 	turn *turnctx.Turn, tool string, args map[string]any) (Actor, pauseTarget, *tools.Result) {
 
 	if !deps.wired() {
-		return Actor{}, pauseTarget{}, refusalOf(refused(tools.RefusalUnavailable,
+		return Actor{}, pauseTarget{}, refusalOf(refusedBy(tools.RefusalUnavailable, waitless(),
 			tool+" is unavailable: this surface was built without the pause record."))
 	}
 	actor, err := deps.Actor(ctx, turn)

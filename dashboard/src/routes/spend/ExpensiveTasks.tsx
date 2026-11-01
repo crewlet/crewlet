@@ -15,11 +15,11 @@
  * verdict of this screen's about which task is a problem: the facts are the
  * engine's, and the reader judges.
  *
- * ABSENT ON A COMPANY WHOSE TRACKER IS NOT THE ENGINE'S: `work_items` is then
+ * ABSENT ON A COMPANY WHOSE TRACKER IS NOT WORKLET: `work_items` is then
  * not served (`unknown_query`) and there is no task spend to rank.
  *
- * AND THE OVERVIEW'S CARD IS NOT ASKED OF A READER WITHOUT TRACKER. The
- * overview is everybody's, a task is the tracker's, and a question the engine
+ * AND THE OVERVIEW'S CARD IS NOT ASKED OF A READER WITHOUT WORKLET. The
+ * overview is everybody's, a task is Worklet's, and a question the engine
  * would refuse drew its refusal — a "Sign in" callout to somebody already
  * signed in — on every visit; the card says what would open it instead, as the
  * median tile beside it does. The list at `#/settings/spend/tasks` is its own section,
@@ -27,12 +27,20 @@
  */
 
 import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyState,
+  Skeleton,
+  TableKeyCell,
+  TableNumberCell,
+  peekRowActivation,
+  TimeRangePicker,
+} from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -41,8 +49,8 @@ import { isRange, useTimeRange } from "~/lib/range.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { WORKLET, accessNames } from "~/lib/access.ts";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
 import {
@@ -57,7 +65,7 @@ import { itemAddress } from "~/lib/work.ts";
 /** How many the overview's card lists — the design's three. */
 export const TOP_TASKS = 3;
 
-/** How many the list asks for: the tracker's page ceiling for one answer. */
+/** How many the list asks for: Worklet's page ceiling for one answer. */
 export const TASK_ROWS = 50;
 
 /** A task's peek, at its address ([itemAddress]). */
@@ -86,18 +94,18 @@ export function ExpensiveTasksCard({
   const answer = useQuery(
     "work_items",
     ready ? expensiveTasksParams(since!, until!, TOP_TASKS) : undefined,
-    { enabled: ready && viewer.tracker },
+    { enabled: ready && viewer.worklet },
   );
   if (answer.error === "unknown_query") return null;
-  if (!viewer.loading && !viewer.tracker) {
-    // NO "ALL" LINK: the list is the tracker's too, so it would lead to the
+  if (!viewer.loading && !viewer.worklet) {
+    // NO "ALL" LINK: the list is Worklet's too, so it would lead to the
     // same lock this card already says.
     return (
       <Card className="spend-card" padding="none">
         <Card.Header icon={<SquareKanbanGlyph size="sm" />}>
           <Card.Title>Most expensive tasks</Card.Title>
         </Card.Header>
-        <p className="spend-card-body spend-caption">{`Needs ${accessNames([TRACKER])} access`}</p>
+        <p className="spend-card-body spend-caption">{`Needs ${accessNames([WORKLET])} access`}</p>
       </Card>
     );
   }
@@ -201,7 +209,7 @@ export function ExpensiveTasks() {
     return (
       <>
         <PageActions>
-          <TimeRangePicker range={range} ariaLabel="Window" />
+          <TimeRangePicker {...rangePickerProps(range, "Window")} />
         </PageActions>
         <QueryState
           error={refused}
@@ -215,7 +223,7 @@ export function ExpensiveTasks() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
         <Card.Header
@@ -245,7 +253,7 @@ export function ExpensiveTasks() {
             phoneRows="compact"
             flush
             rowHref={(r) => peekHref(itemRef(r))}
-            onRowActivate={peekRow<WorkSummary>((r) => open(itemRef(r)))}
+            onRowActivate={peekRowActivation<WorkSummary>((r) => open(itemRef(r)))}
             empty={{
               title: "No task last changed in this window has spent tokens",
               hint: "Tasks appear once agents spend tokens on them.",

@@ -45,7 +45,7 @@ const ORG = withDerived({
   name: "Acme",
   roles: [{ name: "CTO", handle: "cto" }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "native", knowledge: "native", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
 }) as unknown as OrgProjection;
 
 /** The reader: offered the open. */

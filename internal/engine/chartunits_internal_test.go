@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A UNIT'S LEAD IS NAMED BY THE SEAT'S OWN HANDLE, in the document and in
@@ -47,8 +47,8 @@ func TestALeadWithAnExplicitHandleResolves(t *testing.T) {
 	}
 	// A HUMAN LEAD IS SAID TO BE ONE: the kind decides whether a surface
 	// offers to ask them through the engine or to page a person.
-	if lead.Kind != tracker.AuthorHuman {
-		t.Errorf("lead.Kind = %q, want %q", lead.Kind, tracker.AuthorHuman)
+	if lead.Kind != worklet.AuthorHuman {
+		t.Errorf("lead.Kind = %q, want %q", lead.Kind, worklet.AuthorHuman)
 	}
 	// THE CONTROL, stated rather than implied: the seat is not reachable by
 	// the slug of its name, so a resolver taking that path answers nobody.
@@ -233,7 +233,7 @@ func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	filed := map[string]tracker.ChartProject{}
+	filed := map[string]worklet.ChartProject{}
 	for _, project := range chartProjects(o) {
 		filed[project.Key] = project
 	}

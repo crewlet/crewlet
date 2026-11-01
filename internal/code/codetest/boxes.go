@@ -128,7 +128,7 @@ func (r *FixtureRuns) End(ref host.BoxRunRef) {
 	r.edit(ref, func(run *host.BoxRun) { run.Live, run.Status = false, "resumed" })
 }
 
-// Relaunch launches ref's turn again — a second run_sandbox call of the same
+// Relaunch launches ref's turn again — a second launch of the same
 // turn — under a fresh launch id, which every token of the first job no
 // longer matches.
 func (r *FixtureRuns) Relaunch(ref host.BoxRunRef) host.BoxRunRef {

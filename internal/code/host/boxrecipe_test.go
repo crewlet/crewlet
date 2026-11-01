@@ -34,7 +34,7 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 // version check, the coding clone and the check's single-commit checkout —
 // run as a box runs them, `sh -c` in the box's working directory, under git
 // (the box's git: the pin, or the client floor's 2.40.4) with EXACTLY the
-// environment the engine gives a box (sandbox.BoxGit, ADR-0063): its run's
+// environment the engine gives a box (sandbox.BoxGit, ADR-0086): its run's
 // credential on /box/git/, answered by the engine's credential helper, the
 // code host's base as CREWLET_GIT_URL, the seat's commit identity, and the
 // commit hook's values — over a git environment of the box's own whose
@@ -121,7 +121,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		Name: codetest.RepoName, Access: code.AccessWrite, Branch: "refs/heads/" + branch},
 		host.BoxGrant{RepoID: loneRows.Repo.ID, Name: lone, Access: code.AccessWrite, Branch: loneOwn})
 	trailers, err := sandbox.TrailerEnv(codetest.FixtureAlice, run.LaunchID,
-		&types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"})
+		&types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"})
 	if err != nil {
 		t.Fatal(err)
 	}

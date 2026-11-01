@@ -930,7 +930,7 @@ func (c *cluster) Advertise(t testing.TB, node string, budget int64) {
 
 // SplitMaintainers has every member of nodes take itself for repoID's
 // maintainer until the case ends (codetest.Cluster): a presence view split
-// between them, which no lease or epoch arbitrates (ADR-0059).
+// between them, which no lease or epoch arbitrates (ADR-0082).
 func (c *cluster) SplitMaintainers(t testing.TB, repoID string, nodes ...string) {
 	t.Helper()
 	c.mu.Lock()

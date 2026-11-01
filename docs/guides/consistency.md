@@ -1,6 +1,6 @@
 # Read Consistency
 
-Every node of a Crewlet fleet holds its own copy of the company's work. The
+Every data node of a Crewlet fleet holds its own copy of the company's work. The
 copies are built by applying one ordered log, so they converge — but at any
 instant they are at different points along it. This page is about the one
 question that follows: **how fresh does this particular answer have to be?**
@@ -44,9 +44,10 @@ the ask is unreachable. Inside the engine the level is real and used: a write
 waits for its own last write to be applied before it opens the snapshot it
 decides from.
 
-That wait is **per log, not per object**. A node that has just published a bulk
-update waits for it to apply locally before its next write on that log — any
-subject — and may be refused `behind`, naming its own record. That is what
+That wait is **per log, not per object**. A node that has just published a
+burst — a cross-project move re-keying a subtree, one record per task — waits
+for it to apply locally before its next write on that log — any subject — and
+may be refused `behind`, naming its own record. That is what
 read-your-writes means on the write path: the alternative is a write that
 cannot see the write before it. It costs nothing when the node is caught up,
 which is every ordinary write.
@@ -69,7 +70,7 @@ happened to omit the key:
 | Surface | Default | May the caller choose? |
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
-| The operator MCP, about tracker content | `linearizable` | No |
+| The operator MCP, about the company's own content — the tracker, the knowledge base and chat | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 | A person's git client, for every answer that names a ref — the refs a clone, a fetch or a push is shown, a protocol v2 `ls-refs` | `linearizable` | No |
@@ -301,15 +302,17 @@ nothing to commit against.
 
 ## Which logs can be read at `linearizable`
 
-Six of the eight state logs grant it; the vectors and the usage log do not.
+Eight of the ten state logs grant it; the vectors and the usage log do not.
 
 | Log | `linearizable` | Why |
 |---|---|---|
 | The tracker (`CREWLET_TRACKER_LOG`) | Yes | It encodes the barrier as one of its own records. |
 | The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
-| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
+| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise — and no surface reads it that way: every identity answer is a node's own rows with their lag beside them, so its declared read rate is zero (below). |
 | The artifacts log (`CREWLET_ARTIFACTS_LOG`) | Yes | Likewise: an artifact's head, versions, shares and history are read at a position, and a seat tool reads them at `linearizable`. |
 | The artifact datastore (`CREWLET_ARTIFACT_DATA_LOG`) | Yes | Likewise: a store's rows, history and state digest are read at a position, and every datastore read question takes the same freshness parameters as the other estate reads, so a caller that must see every write acknowledged before it asks at `linearizable`. |
+| Ask Crewlet's log (`CREWLET_ASSISTANT_LOG`) | Yes | Likewise. No surface in this release asks for it, since a person reads their own conversation through the node their own writes waited on and an approval is arbitrated at the broker; the barrier is what the gate reserve on this identity-claiming log is proved against. Its declared read rate is zero (below). |
+| Chat (`CREWLET_CHAT_LOG`) | Yes | Likewise. A barrier is a record of its own on the log, apart from every room, so it contends with no message and no room's state. |
 | The code host (`CREWLET_CODE_LOG`) | Yes | Likewise: every answer a person's git is given that names a ref is read at `linearizable`, and the REST reads under `/code/` take the level as the other estate reads do (see [Which surface reads at which level](#which-surface-reads-at-which-level)). |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
 | The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
@@ -320,10 +323,42 @@ encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
 neither or both. It used to be a switch, where a log that grants no
 `linearizable` read and a log whose author forgot it looked the same.
 
+An entry with a barrier also states **how often it is read that way**: the
+linearizable reads a day each agent seat puts on its log — 125 on the
+tracker's, the knowledge base's, the artifacts log's and the artifact
+datastore's, 120 on chat's, none on the identity estate's or
+Ask Crewlet's — and a boot refuses a barrier stated without it. That figure is
+the log's census, which [`census_drift`](../reference/alarms.md) holds it to,
+and a term in the log's ceiling; see [Retention § The storage
+forecast](retention.md#the-storage-forecast).
+
 ## The fourteen refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
+
+A person is told each code, and each write reason below, in a sentence of its
+own — what happened and what to do, asking them to try again in a moment
+exactly where the answer carries a `Retry-After` — in an API answer's
+`detail`, which the dashboard's screens draw as it stands. A write through the
+operator's act route, or through the human write surface's tools and tool-less
+verbs, is the exception: it answers at ADR-0060's floor, with no `detail`, so
+the `unavailable` code's own sentence stands alone beside the `Retry-After`.
+The sentence names
+the node by what it is doing (the node handling a change, the node answering a
+question), because the node that refused may be a data node the one you asked
+routed to; that node's log names it (`estate_peer_refused`). A refusal of
+another node's copy of your write, which the node that refused finishes itself
+once the log's duplicate window lets go of the operation, asks you to try again
+in a few minutes, and carries that window as its `Retry-After`.
+
+The refusal's own detail, which the tables below describe (the broker's words,
+the record's size, the setting to change), names positions and settings for
+whoever runs the node, so it goes to the answering node's log rather than to an
+answer's `detail`. The gate and retention tooling an operator drives —
+`crewlet retention` and the dashboard's evict and readmit dialog — still shows
+it, and the configuration screens say in words of their own that a change may
+or may not have landed when the engine answers a write with a `5xx`.
 
 | Code | What happened | What to do |
 |---|---|---|
@@ -332,7 +367,7 @@ rather than downgraded. Each code names a different thing to do.
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
 | `no_quorum` | The barrier did not commit in time: the broker answered and a majority did not agree within the barrier's own five seconds — or, on a read another node asked for, within what that node's attempt left, less a second for the answer to reach it. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all — the barrier a linearizable read appends, or this node's own reading of its log's ends (not re-read for three seconds) or its eviction row. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
-| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on every log that claims identity (the tracker's, the knowledge base's, the identity estate's, the artifacts', their datastores' and the code host's) the gate reserve below the broker's, [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
+| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on every log that claims identity (the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's, chat's and the code host's) the gate reserve below the broker's, [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `broker_refused` | The broker refused to store the barrier for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. | Act on the broker's words; the next barrier is refused the same way. Not `no_quorum` — the broker answered — and, like `log_full`, it costs the levels that append and no others. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
@@ -378,15 +413,17 @@ Every refusal is about **one domain's copy**. A node whose tracker copy refuses
 pages, and the estate's router sends a seat's call on the tracker to a data
 node whose copy of the tracker is in service, while the node's other logs keep
 answering here
-([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
+([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
 see [how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 
 ### A write's refusals
 
 A **write** refused by the log names a reason from the same vocabulary, and a
 reason spelled like one of the codes above agrees with it about waiting — the
-two describe one state of one node. Every surface that writes to a state log —
-`/work`, `/pages`, `/iam` and `/auth` — answers every one of them
+two describe one state of one node. Every surface that writes to a state log
+(`/worklet`, `/doclet/pages`, `/chatlet`, `/artifacts` with its datastore's
+`/artifacts/{id}/data`, `/artifact-folders`, `/brand`, `/operator/act`, `/iam`,
+`/auth` and `/assistant`) answers every one of them
 `503`, with a `Retry-After` only for the four that clear on their own; the
 other thirteen carry none, because the same write is refused the same however
 often it is sent here.
@@ -403,7 +440,7 @@ often it is sent here.
 | `abandoned` | The record was written in a generation a reanchor abandoned — one only a node the fleet has since evicted held — so it produces rows nowhere. | Nothing to retry: the rows it was decided from are on no disk the fleet still has. Make the change again as a new operation. |
 | `overtaken` | The record was written after a restored reanchor, by a node the move had overtaken before it learned of it, from rows the reanchor did not keep. | The same: make the change again, under a fresh operation id, on a node on the new generation. |
 | `log_full` | The log is at the byte ceiling its ordinary appends are held to, and refuses appends rather than dropping records. On a log that keeps a [gate reserve](retention.md#the-gate-reserve) that is the reserve below the broker's own. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. |
-| `record_too_large` | The record is larger than its log takes in one message, whatever room the log has. Three limits reach it, and the detail names the record's size and which one refused it: the log's own declared largest record — 8 MiB less 4 KiB on the tracker's, the knowledge base's, the vector changelog's, the usage log's and the code log's (the largest an 8 MiB message carries once the record is signed), 2 MiB on the artifacts', 1 MiB and 64 KiB on their datastores', 128 KiB on the identity estate's — which this node refuses before anything is sent and the broker enforces as the stream's `max_msg_size`, for a peer on another build; the NATS server's `max_payload`; or the file store's per-record limit. | Splitting the change into smaller writes answers all three. Otherwise it depends on the limit: raise `max_payload` to 8 MiB on every server of an external NATS cluster, and on the account the engine signs in to where that states a limit of its own — a node refuses to start against a server that holds it to less, so the one that refused is a server it has reconnected to since: a cluster member configured apart from the others, or a server restarted with a smaller limit (the embedded broker's is 8 MiB, and nothing changes it). A limit lowered by a live reload is never this refusal, because the client is not told of it: the server closes the connection over the record, and the node [stops itself](deployment.md#an-external-nats-server). Nothing raises a log's declared largest record, which its gate reserve is sized by, or the file store's limit. No ceiling or trim changes any of them. |
+| `record_too_large` | The record is larger than its log takes in one message, whatever room the log has. Three limits reach it, and the detail names the record's size and which one refused it: the log's own declared largest record — 8 MiB less 4 KiB on the tracker's, the knowledge base's, the vector changelog's, the usage log's and the code log's (the largest an 8 MiB message carries once the record is signed), 128 KiB on the identity estate's, 2 MiB on the artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on Ask Crewlet's and 512 KiB on chat's — which this node refuses before anything is sent and the broker enforces as the stream's `max_msg_size`, for a peer on another build; the NATS server's `max_payload`; or the file store's per-record limit. | Splitting the change into smaller writes answers all three. Otherwise it depends on the limit: raise `max_payload` to 8 MiB on every server of an external NATS cluster, and on the account the engine signs in to where that states a limit of its own — a node refuses to start against a server that holds it to less, so the one that refused is a server it has reconnected to since: a cluster member configured apart from the others, or a server restarted with a smaller limit (the embedded broker's is 8 MiB, and nothing changes it). A limit lowered by a live reload is not told to the client: the server closes the connection over the record, and the node [stops itself](deployment.md#an-external-nats-server), unless the client reconnected without reading why, in which case it reads the lowered limit on the reconnect and the refusals that follow are this one. Nothing raises a log's declared largest record, which its gate reserve is sized by, or the file store's limit. No ceiling or trim changes any of them. |
 | `broker_refused` | The broker refused to store the record for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. Two answers the broker names are deliberately **not** this: a record under the write's own operation id still being committed, and a store that closed under a record raft had committed. Each says the record may yet land, so the write answers `unknown` with its operation id instead. | Act on the broker's words; asking again changes nothing. |
 | `skew` | The broker answered a last sequence below an expectation this node formed, which a healthy stream never does. | A store or stream was restored out of step; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). |
 | `op_reused` | The write's operation id already names a record on another object: an operation id names one write, and the caller sent it with a different one. Nothing was written. | Send the write under a fresh operation id. |
@@ -485,8 +522,8 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change to the engine's own tracker or knowledge base sees
-that change. That is guaranteed by the *wake* carrying the record's own
+An agent woken by a change to Worklet, Doclet or Chatlet
+sees that change. That is guaranteed by the *wake* carrying the record's own
 position — `trigger_position`, where on its log the change was committed (see
 [the event system](../concepts/event-system.md)) — and not by the level the
 turn's tools then read at:
@@ -494,9 +531,10 @@ turn's tools then read at:
 1. Before the turn's first read, the node hands that position to its
    **read-your-writes floors**: one table per node, the same one every write
    the node makes raises.
-2. Every tracker or knowledge-base read the turn makes carries the floor on its
-   own domain's log to whichever node answers it — a tracker read the tracker
-   log's, a page read the knowledge base's — this node's own copy included.
+2. Every tracker, knowledge-base or chat read the turn makes carries the floor
+   on its own domain's log to whichever node answers it — a tracker read the
+   tracker log's, a page read the knowledge base's, a room, a thread or a
+   mention list a chat read's — this node's own copy included.
 3. That holder waits up to two seconds to have applied it, or answers `behind`
    and the next holder is asked. A holder asked by another node waits only as
    long as that node's attempt leaves it, less a second for the answer's trip
@@ -506,13 +544,18 @@ turn's tools then read at:
 The floor travels with the request rather than being waited for before the
 turn opens, because the node running the turn may hold no data at all and have
 no applier of its own to wait on. A floor on one domain's log never holds up a
-read of the other: a tracker read does not depend on the knowledge base's rows.
+read of another: a tracker read does not depend on the knowledge base's rows,
+nor a room on the tracker's.
 
 **What the floor does not reach.** The ranked searches — `search_knowledge`,
 `search_work_items` and the turn-start knowledge block — read an index each
 node builds behind its own rows, so no log position describes them and they
 carry no floor: a seat woken by a page created a moment ago may not find it by
-search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+search yet, and finds it by listing or by its id. `search_messages` is half of
+each: which rooms it may rank over is a chat read and carries the floor on the
+chat log, while the index it ranks them with is the node's own and carries
+none, so a seat woken by a message may not find that message by search yet and
+finds it by reading the room. A vendor's wake — a Slack
 message, a Jira issue — carries no position at all, because what changed is in
 another company's system.
 

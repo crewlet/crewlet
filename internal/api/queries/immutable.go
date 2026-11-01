@@ -47,7 +47,7 @@ import "encoding/json"
 //
 // SO AN ANSWER IS IMMUTABLE ONLY WHERE IT IS THE SAME FOR EVERY CALLER WHO MAY
 // ASK IT — as a repository's content is: every person reads every repository
-// (ADR-0058). The cache key does not say who asked, and the emptying is the
+// (ADR-0081). The cache key does not say who asked, and the emptying is the
 // browser's to do: it honours `Clear-Site-Data` only in a secure context
 // (https, or a loopback address) and only from a release that implements the
 // directive. Where it does not, a kept answer outlives the session that asked

@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -182,4 +183,45 @@ func TestAServerRequiresTheFixtureTokenUnlessStartedAnonymous(t *testing.T) {
 		t.Error("a server started Anonymous announces auth_required")
 	}
 	nc.Close()
+}
+
+// A SERVER WHOSE STREAMS RESERVE ITS ACCOUNT'S WHOLE LIMIT STILL RESTARTS
+// LIMITED.
+//
+// A restarted server recovers its streams before its account's limit is stated
+// again, and nats-server weighs the limit on top of what they reserve. So a
+// cap that admitted the limit on a fresh server refused it once the suite had
+// spent it, and the restart failed on the harness rather than on the case.
+// Then the account reads back the same limit, as a node would read it.
+//
+// Mutation: lower the server's cap to twice the limit and the restart is
+// refused; leave the restarted server unlimited and the account reads -1.
+func TestAServerSpentToItsLimitRestartsLimited(t *testing.T) {
+	t.Parallel()
+	srv := externaltest.Start(t, 0)
+	nc, err := nats.Connect(srv.URL(), nats.Token(externaltest.Token))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	if _, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
+		Name: "SPENT", Subjects: []string{"spent.>"}, Storage: jetstream.FileStorage,
+		MaxBytes: brokertest.StoreMaxBytes,
+	}); err != nil {
+		t.Fatalf("reserve the account's whole limit: %v", err)
+	}
+
+	srv.Restart(0, nc)
+	info, err := js.AccountInfo(t.Context())
+	if err != nil {
+		t.Fatalf("account info after the restart: %v", err)
+	}
+	if got := info.Limits.MaxStore; got != brokertest.StoreMaxBytes {
+		t.Errorf("after a restart the account's file-store limit reads %d, want %d",
+			got, brokertest.StoreMaxBytes)
+	}
 }

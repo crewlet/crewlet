@@ -14,7 +14,7 @@
 // listed here fails the build, and so does a listed table the schema does not
 // have, or one whose key column no index leads with.
 //
-// # Required, retired and derived (ADR-0051)
+// # Required, retired and derived (ADR-0074)
 //
 // Every declaration states its STANDING ([objstore.Standing]), and the gate
 // below refuses one that states none of the three, and holds each entry's to
@@ -83,7 +83,7 @@
 // in a domain the engine reads no estate of fails the build rather than the
 // boot.
 //
-// # The log half (ADR-0052)
+// # The log half (ADR-0075)
 //
 // A backup reads more than rows: a restore brings its store copy back and
 // replays the declaring domain's log from the copy's position — and a newer
@@ -99,19 +99,20 @@ package references
 
 import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // All is every replicated table whose rows keep objects alive, whatever its
 // standing: a project's files, the pack bundles the company's repositories'
 // pushes stored and, for a grace, the ones a record retired, the parts of each
 // repository's published multi-pack-index layers, the logs its failed checks
-// kept, an artifact's version files and assets, and the files of the company's
-// adopted brand.
+// kept, an artifact's version files and assets, the files of the company's
+// adopted brand, and the files a person's assistant conversations keep.
 var All = []objstore.ReferenceTable{
-	tracker.FileObjectReferences,
+	worklet.FileObjectReferences,
 	code.PackReferences,
 	code.RetiredPackReferences,
 	code.LayerReferences,
@@ -119,6 +120,7 @@ var All = []objstore.ReferenceTable{
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,
+	assistantdomain.FileObjectReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

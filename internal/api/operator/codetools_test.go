@@ -161,7 +161,10 @@ func TestTheCodeWritesAreServedAndActable(t *testing.T) {
 			}
 			return halves, true
 		},
-		Org: company, Audit: &auditLog{},
+		// A chart that leads nobody, as every surface whose Acts is read
+		// has: Acts decides answer_run by the run's lead, which NoChart
+		// cannot answer.
+		Org: company, Audit: &auditLog{}, Authorize: builtin.Decide(leadsNobody{}),
 	})
 	for _, name := range builtin.CodeWrites() {
 		if slices.Contains(s.Tools(), name) {

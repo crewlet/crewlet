@@ -3,6 +3,8 @@ package artifactsapi_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -118,7 +122,10 @@ func TestAPublishNamesTheVersionItWasBasedOn(t *testing.T) {
 }
 
 // A PUBLISH BASED ON A MOVED HEAD CARRIES WHAT A MERGE NEEDS: 412
-// version_moved, the live head and its manifest, and the live entry's text.
+// version_moved, the live head and its manifest, and the live entry's text —
+// and a detail that names the artifact as the screen does, never by its id
+// (artifactsdomain.Sentence): it read "artifact 0192f… is at version 2".
+// Mutation: answer the moved head's Error as the detail and this goes red.
 // The head names its folder only where the publisher sees it: sam is told
 // nothing of jane's private Drafts the page is filed in.
 func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
@@ -131,6 +138,11 @@ func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 	w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
 	if w.Code != http.StatusPreconditionFailed || errorOf(t, w) != "version_moved" {
 		t.Fatalf("a publish on a moved head: %d %s", w.Code, w.Body)
+	}
+	if detail, _ := fields(t, w)["detail"].(string); !strings.HasPrefix(detail,
+		"This artifact is at version 2") || strings.Contains(detail, page.String()) {
+		t.Errorf("a publish on a moved head is told %q, want the artifact named "+
+			"as the screen names it", detail)
 	}
 	var body struct {
 		Head struct {
@@ -626,7 +638,7 @@ func TestAShareNamesOnlyAnAudienceTheCompanyHolds(t *testing.T) {
 		{`{"kind":"seat","id":"maya.ortiz"}`, "is not a seat handle"},
 		{`{"kind":"seat","id":"ghost"}`, `the company has no seat "ghost"`},
 		{`{"kind":"unit","id":"NOPE"}`, `the company has no unit "NOPE"`},
-		{`{"kind":"link","id":"x"}`, "not one this build shares with"},
+		{`{"kind":"link","id":"x"}`, `"link" isn't someone you can share with. Use `},
 	} {
 		grant := `{"audience":` + c.audience + `,"role":"viewer"}`
 		w := g.do(person("jane"), "PUT", at(page, "/shares"), grant, keyed()...)
@@ -800,6 +812,44 @@ func TestTheTransferLegIsDecidedAgainOnTheUploadsOwnVerb(t *testing.T) {
 	}
 }
 
+// A TRANSFER WHOSE BODY STOPPED IS TOLD IN A PERSON'S WORDS ([paced.Unread]):
+// the detail was the read's own failure as Go spells it ("the body could not
+// be read: unexpected EOF"), which goes to the log. Mutation: answer
+// err.Error() again and this goes red.
+func TestATransferWhoseBodyStoppedIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	g.pipeline.upload = artifactupload.Upload{ID: "u-1", Artifact: page}
+	g.pipeline.err = fmt.Errorf("%w: %w", paced.ErrBody, io.ErrUnexpectedEOF)
+	w := g.do(person("sam"), "PUT", artifactupload.TransferPath("u-1", "a.css"), "b{}")
+	if w.Code != http.StatusBadRequest || fields(t, w)["error"] !=
+		string(httpjson.CodeUnreadableBody) || fields(t, w)["detail"] != paced.Unread {
+		t.Errorf("a transfer whose body stopped answered %d %s, want 400 "+
+			"unreadable_body saying %q", w.Code, w.Body, paced.Unread)
+	}
+}
+
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): the
+// detail was encoding/json's own sentence (`json: unknown field "bogus"`,
+// "invalid character … looking for beginning of value"). Mutation: answer
+// err.Error() again and both rows go red.
+func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	for _, tc := range []struct{ body, says string }{
+		{`{"kind":"html","title":"Plan","bogus":1}`,
+			`In the body, "bogus" isn't a field this takes.`},
+		{`{"kind":`, "The body isn't valid JSON: it ends too soon."},
+	} {
+		w := g.do(person("dana"), "POST", "/artifacts", tc.body, keyed()...)
+		if w.Code != http.StatusBadRequest || fields(t, w)["error"] !=
+			string(httpjson.CodeInvalidBody) || fields(t, w)["detail"] != tc.says {
+			t.Errorf("%s answered %d %s, want 400 invalid_body saying %q", tc.body,
+				w.Code, w.Body, tc.says)
+		}
+	}
+}
+
 // A CREATE IS OWNED BY ITS CREATOR and asks the artifacts app: a person without
 // it is refused naming the app, and a person with it creates an artifact they
 // own, with the shares and the work item they named.
@@ -855,7 +905,7 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		status int
 		code   string
 	}{
-		{&artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2, Key: "artifacts.limits.company_bytes"}, 413, "quota_exceeded"},
+		{&artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2, Key: "artifacts.limits.company_bytes"}, 409, "quota_exceeded"},
 		{&artifactsdomain.CarriedObjectGone{Paths: []string{"a.css"}}, 409, "carried_object_gone"},
 		{&artifactupload.UploadMismatch{Path: "a.css"}, 422, "upload_mismatch"},
 		{fullStore("a.css"), 507, "store_full"},
@@ -872,6 +922,8 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 		{artifactsdomain.ErrUploadStale, 409, "upload_expired"},
 		{artifactupload.ErrUploadConsumed, 409, "upload_consumed"},
 		{artifactsdomain.ErrLabelTaken, 409, "label_taken"},
+		{artifactsdomain.ErrLabelsFull, 409, "labels_full"},
+		{artifactsdomain.ErrExists, 409, "exists"},
 		{artifactsdomain.ErrTrashed, 409, "artifact_trashed"},
 		{artifactsdomain.ErrPurging, 409, "artifact_purging"},
 		{artifactsdomain.ErrAboveOwnRole, 403, "forbidden"},

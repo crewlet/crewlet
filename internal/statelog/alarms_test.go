@@ -67,7 +67,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"no backup at all": {
 			statelog.KindBackupAge,
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
-			"no verified backup has been recorded",
+			"no verified backup of this log has been recorded",
 		},
 		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
 		// stands on (AlarmDomain.Term), and the sentence says how long and
@@ -141,8 +141,9 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"maintenance nobody finished": {
 			statelog.KindMaintenanceOpen,
-			statelog.Reading{MaintenanceOpenFor: 2 * time.Hour, MaintenancePhase: "observe"},
-			"observe",
+			statelog.Reading{MaintenanceOpenFor: 2 * time.Hour,
+				MaintenanceStream: "CREWLET_TRACKER_LOG", MaintenancePhase: "observe"},
+			"window on CREWLET_TRACKER_LOG has been open for 2h in phase \"observe\"",
 		},
 		"a volume with no room for a second copy": {
 			statelog.KindVolumeLow,
@@ -183,6 +184,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindCensusDrift,
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
 			"5000 linearizable reads a day against the 1000 this log was sized for",
+		},
+		"a barrier on a log whose domain declares no read": {
+			// A DECLARED ZERO IS A CENSUS, and its first barrier is a
+			// reader nobody counted in the log's ceiling.
+			statelog.KindCensusDrift,
+			statelog.Reading{LinearizableReads: 1},
+			"1 linearizable reads a day against the 0 this log was sized for",
 		},
 		"files the object store lost, damaged or will not answer for": {
 			statelog.KindObjectsMissing,
@@ -285,6 +293,60 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			// not own or a threshold a zero value crosses.
 			if len(got) != 1 {
 				t.Errorf("one condition raised %v", kindsOf(got))
+			}
+		})
+	}
+}
+
+// A WINDOW THE ALARM HOLDS FROM AN EARLIER READ SAYS SO.
+//
+// A capacity window this node can't read now is judged on what it last read
+// there, as old as it was then, so a coordination blip neither clears the
+// alarm nor raises one. The figure is then the last read's, and the detail has
+// to say so, with when that read was where that is known, and that the window
+// can't be finished or abandoned through this node until it reads again: an
+// operator who reads "open for 2h" and finds it closed would otherwise read the
+// alarm as wrong.
+//
+// Mutation: drop the clause and the held reading reads as a fresh one.
+func TestTheMaintenanceAlarmSaysWhenItsFigureIsAnEarlierRead(t *testing.T) {
+	t.Parallel()
+	base := statelog.Reading{MaintenanceOpenFor: 2 * time.Hour,
+		MaintenanceStream: "CREWLET_TRACKER_LOG", MaintenancePhase: "sealing"}
+	for name, tc := range map[string]struct {
+		unreadable bool
+		readAgo    time.Duration
+		says       []string
+	}{
+		"read now": {false, 0, nil},
+		"held, read 3m ago": {true, 3 * time.Minute, []string{"had been open for 2h",
+			"when this node last read it, 3m ago",
+			"can't be finished or abandoned through this node until it can"}},
+		"held, read at no known time": {true, 0, []string{"when this node last read it. ",
+			"can't read the window now"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := base
+			r.MaintenanceUnreadable, r.MaintenanceReadAgo = tc.unreadable, tc.readAgo
+			var detail string
+			for _, a := range statelog.Evaluate(r) {
+				if a.Kind == statelog.KindMaintenanceOpen {
+					detail = a.Detail
+				}
+			}
+			if detail == "" {
+				t.Fatal("a window open two hours raised nothing")
+			}
+			if tc.says == nil {
+				if strings.Contains(detail, "last read") {
+					t.Errorf("a window read now says %q", detail)
+				}
+				return
+			}
+			for _, says := range tc.says {
+				if !strings.Contains(detail, says) {
+					t.Errorf("the alarm says %q, want it to say %q", detail, says)
+				}
 			}
 		})
 	}
@@ -865,7 +927,9 @@ func TestTheFloorAlarmNamesOnlyTheLogsPastTheBound(t *testing.T) {
 				continue
 			}
 			for _, d := range a.Domains {
-				got[d.Domain] = d.Detail
+				for _, log := range d.Domains {
+					got[log] = d.Detail
+				}
 			}
 		}
 		if len(got) != len(c.names) {
@@ -950,8 +1014,8 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		t.Fatalf("a company with no backup raised %v — the trim will not "+
 			"advance until one exists", kindsOf(got))
 	}
-	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h"; alarm.Detail != want {
+	if want := "no verified backup of this log has been recorded, and the " +
+		"policy asks for one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
@@ -1041,10 +1105,53 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	}
 }
 
+// AN ENTRY NAMING SEVERAL LOGS IS A LINE PAIR PER LOG.
+//
+// The report carries a measurement taken alike on several logs once, naming
+// them ([statelog.AlarmDomain.Domains]) — a young fleet's missing backup, on
+// every log. That is how it is carried, and nothing about which log lines are
+// written: each log it names raises its own `alarm_raised`, and one leaving it
+// while the rest stand writes its own `alarm_cleared`.
+//
+// Mutation: read only an entry's first log as its instance and this fails.
+func TestAnEntryNamingSeveralLogsIsALinePairPerLog(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+	var logs bytes.Buffer
+	statelog.LogTrackerTo(tracker, slog.New(slog.NewJSONHandler(&logs, nil)))
+	domainsOf := func(event string) []string {
+		var out []string
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == event {
+				domain, _ := line["domain"].(string)
+				out = append(out, domain)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	const missing = "no verified backup of this log has been recorded"
+	uncovered := func(domains ...string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindBackupAge, Detail: missing,
+			Domains: []statelog.AlarmDomain{{Domains: domains, Detail: missing}}}
+	}
+	tracker.Observe(t.Context(), []statelog.Alarm{uncovered("tracker", "pages", "usage")})
+	if got := domainsOf("alarm_raised"); !slices.Equal(got, []string{"pages", "tracker", "usage"}) {
+		t.Fatalf("one entry naming three logs raised lines for %v, want one per log", got)
+	}
+	clock = clock.Add(time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{uncovered("tracker", "usage")})
+	if got := domainsOf("alarm_cleared"); !slices.Equal(got, []string{"pages"}) {
+		t.Errorf("the pages log leaving the entry cleared %v, want the pages log alone", got)
+	}
+}
+
 // ONE KIND ON TWO LOGS IS ONE ALARM AND TWO PAIRS OF LOG LINES: each log is
 // logged when it comes to stand under the kind and when it leaves it.
 //
-// Six conditions are evaluated once per log, and the report lists every log a
+// Seven conditions are evaluated once per log, and the report lists every log a
 // kind stands on under its one alarm, so one `trim_blocked` can stand on the
 // tracker's log and the knowledge base's. Keyed on the kind alone, the tracker
 // folded the second log into the first: it raised no line of its own, the
@@ -1052,13 +1159,11 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 // `alarm_cleared` that finally came carried the knowledge base's detail against
 // the tracker's start. The gauge stays one series per kind, up while either is.
 //
-// AND A NODE-WIDE KIND IS ONE PAIR OF LINES whatever logs it lists: the logs
-// `backup_age` holds are one problem with one remedy, so a log joining its list
-// writes nothing.
+// AND A NODE-WIDE KIND IS ONE PAIR OF LINES naming no log, beside them.
 //
-// Mutation: key the instances on the kind alone, form one per listed log for a
-// node-wide kind, or report a kind's age from whichever of its logs the map
-// hands back last rather than the longest, and this fails.
+// Mutation: key the instances on the kind alone, or report a kind's age from
+// whichever of its logs the map hands back last rather than the longest, and
+// this fails.
 func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()
@@ -1080,7 +1185,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 		return out
 	}
 	held := func(domain string) statelog.AlarmDomain {
-		return statelog.AlarmDomain{Domain: domain,
+		return statelog.AlarmDomain{Domains: []string{domain},
 			Detail: "the " + domain + " log's trim has not advanced"}
 	}
 	blocked := func(logs ...string) statelog.Alarm {
@@ -1092,40 +1197,45 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 		return a
 	}
 	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
-	noBackup := statelog.Alarm{Kind: statelog.KindBackupAge,
-		Detail: "no verified backup has been recorded"}
+	uncovered := statelog.Alarm{Kind: statelog.KindBackupAge,
+		Domains: []statelog.AlarmDomain{{Domains: []string{"usage"},
+			Detail: "no verified backup of this log has been recorded"}}}
+	uncovered.Detail = uncovered.Domains[0].Detail
 
 	// The tracker's log first, alone.
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, noBackup, blocked("tracker")})
-	if raised := lines("alarm_raised"); len(raised) != 3 {
-		t.Fatalf("raising two node alarms and one log's trim_blocked wrote %d "+
-			"line(s), want three: %v", len(raised), raised)
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("tracker")})
+	if raised := lines("alarm_raised"); len(raised) != 2 {
+		t.Fatalf("raising a node alarm and one log's trim_blocked wrote %d "+
+			"line(s), want two: %v", len(raised), raised)
 	}
 
 	// THE KNOWLEDGE BASE'S LOG JOINS a kind that is already up: its own line.
-	// And a log joining backup_age's list is no line at all.
+	// And another per-log kind raised on a third log: its own line too.
 	clock = clock.Add(5 * time.Minute)
-	withHeld := noBackup
-	withHeld.Domains = []statelog.AlarmDomain{held("usage")}
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("tracker", "pages")})
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, uncovered, blocked("tracker", "pages")})
 	raised := lines("alarm_raised")
 	if len(raised) != 4 {
-		t.Fatalf("a second log joining trim_blocked, and a log listed under "+
-			"backup_age, wrote %d raise line(s) in all, want four: %v", len(raised), raised)
+		t.Fatalf("a second log joining trim_blocked, and backup_age raised on a "+
+			"third, wrote %d raise line(s) in all, want four: %v", len(raised), raised)
 	}
 	domains := map[string]bool{}
 	for _, line := range raised {
-		if line["alarm"] != string(statelog.KindTrimBlocked) {
-			// A NODE'S ALARM NAMES NO LOG, even one that lists logs.
+		switch line["alarm"] {
+		case string(statelog.KindApplyLag):
+			// A NODE'S ALARM NAMES NO LOG.
 			if _, named := line["domain"]; named {
 				t.Errorf("a node-wide alarm's line names a log: %v", line)
 			}
-			continue
-		}
-		domain, _ := line["domain"].(string)
-		domains[domain] = true
-		if line["detail"] != held(domain).Detail {
-			t.Errorf("the %s log's line carries another's detail: %v", domain, line)
+		case string(statelog.KindBackupAge):
+			if line["domain"] != "usage" || line["detail"] != uncovered.Detail {
+				t.Errorf("backup_age's line reads %v; want the usage log's own", line)
+			}
+		default:
+			domain, _ := line["domain"].(string)
+			domains[domain] = true
+			if line["detail"] != held(domain).Detail {
+				t.Errorf("the %s log's line carries another's detail: %v", domain, line)
+			}
 		}
 	}
 	if !domains["tracker"] || !domains["pages"] {
@@ -1144,7 +1254,7 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	// THE TRACKER'S LOG LEAVES while the knowledge base's stands: its own line,
 	// its own age, its own detail, and the kind is still up.
 	clock = clock.Add(20 * time.Minute)
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("pages")})
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, uncovered, blocked("pages")})
 	cleared := lines("alarm_cleared")
 	if len(cleared) != 1 || cleared[0]["domain"] != "tracker" ||
 		cleared[0]["for"] != "25m" || cleared[0]["detail"] != held("tracker").Detail {
@@ -1188,10 +1298,10 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 // list would render a node that has not looked as a node with nothing wrong.
 //
 // AND A KIND ON TWO LOGS STANDS ONCE: the count is how many problems an
-// operator has to look at, and one cause standing on four logs counted as four
-// read as four problems on the health card while the gauge said one. It has
-// stood since its OLDEST log's instance was raised, and a log leaving it moves
-// that to the oldest log still standing.
+// operator has to look at, and one cause standing on several logs counted once
+// per log read as that many problems on the health card while the gauge said
+// one. It has stood since its OLDEST log's instance was raised, and a log
+// leaving it moves that to the oldest log still standing.
 //
 // Mutation: return the table's order rather than the age order, report
 // (nil, true) before an evaluation, count a kind once per log, or date a kind
@@ -1213,7 +1323,7 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 	blocked := func(logs ...string) statelog.Alarm {
 		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced"}
 		for _, domain := range logs {
-			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: domain,
+			a.Domains = append(a.Domains, statelog.AlarmDomain{Domains: []string{domain},
 				Detail: "the trim has not advanced"})
 		}
 		return a
@@ -1281,12 +1391,10 @@ func TestAFiringAlarmIsMarkedSinceItWasRaised(t *testing.T) {
 	}
 	wal := statelog.Alarm{Kind: statelog.KindWALLarge, Detail: "the write-ahead log is 2.0 GiB"}
 	blocked := func(logs ...string) statelog.Alarm {
-		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced"}
-		for _, domain := range logs {
-			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: domain,
-				Detail: "the trim has not advanced"})
-		}
-		return a
+		// ONE ENTRY NAMING EVERY LOG, as a report carries logs it measured
+		// in the same words.
+		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced",
+			Domains: []statelog.AlarmDomain{{Domains: logs, Detail: "the trim has not advanced"}}}
 	}
 	marked := func(when string, want []coord.AlarmMark) {
 		t.Helper()
@@ -1417,26 +1525,38 @@ func TestTheTableIsEvaluatedOnThePositionHeartbeat(t *testing.T) {
 // sizing was derived from, so that is what its log is expected to take. A
 // company twice the size doing the same work per seat takes twice it, which
 // the fixed figure read as drift. A company with no agent seat is still one
-// seat's worth, since its operators read too and an expectation of zero is an
-// alarm that cannot fire. The engine's own periodic reads are added to it,
-// since each of them is a barrier on every log it reads: without them a
-// one-seat company on one data node reading exactly its census put 293
+// seat's worth, since its operators read too and an expectation of zero on a
+// log they read fires on the first read. The engine's own periodic reads are
+// added to it, since each of them is a barrier on every log it reads: without
+// them a one-seat company on one data node reading exactly its census put 293
 // barriers a day on a log expected to take 125.
+//
+// AND THE RATE IS THE DOMAIN'S DECLARATION ([statelog.ReadModel]): a log no
+// read takes a barrier on declares none, and is expected to take none
+// however many seats the company has — plus the engine's own reads, which are
+// the engine's and not the seats'.
 func TestALogsCensusIsPerSeat(t *testing.T) {
 	t.Parallel()
+	read := statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}
 	for _, tc := range []struct {
 		name   string
 		census statelog.Census
 		want   int
 	}{
-		{"the reference company", statelog.Census{Seats: 100}, 12_500},
-		{"twice the company", statelog.Census{Seats: 200}, 25_000},
-		{"no agent seat", statelog.Census{}, 125},
+		{"the reference company", statelog.Census{Reads: read, Seats: 100}, 12_500},
+		{"twice the company", statelog.Census{Reads: read, Seats: 200}, 25_000},
+		{"no agent seat", statelog.Census{Reads: read}, 125},
 		{"one seat beside one data node's passes",
-			statelog.Census{Seats: 1, Background: 168}, 293},
+			statelog.Census{Reads: read, Seats: 1, Background: 168}, 293},
 		{"a small company beside the engine's own reads",
-			statelog.Census{Seats: 3, Background: 504}, 879},
-		{"a negative background adds nothing", statelog.Census{Seats: 1, Background: -5}, 125},
+			statelog.Census{Reads: read, Seats: 3, Background: 504}, 879},
+		{"a negative background adds nothing",
+			statelog.Census{Reads: read, Seats: 1, Background: -5}, 125},
+		{"a domain no read takes a barrier on", statelog.Census{Seats: 300}, 0},
+		{"a domain no seat reads, beside the engine's own reads",
+			statelog.Census{Seats: 300, Background: 25}, 25},
+		{"a negative rate reads as none",
+			statelog.Census{Reads: statelog.ReadModel{PerSeatDay: -3}, Seats: 10}, 0},
 	} {
 		if got := tc.census.Expected(); got != tc.want {
 			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)

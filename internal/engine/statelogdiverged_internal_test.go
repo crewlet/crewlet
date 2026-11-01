@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // divergedBroker is a broker restored from a copy older than node A's rows and
@@ -59,7 +60,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	d := divergedBroker{a: testBootstrap(t)}
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
-	d.a.Stream.StoreDir = filepath.Join(base, "stream")
+	brokertest.StoreIn(&d.a.Stream, filepath.Join(base, "stream"))
 	SeedStore(t, &d.a)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -72,25 +73,25 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	e, back := bootNode(t, &d.a, cfg)
 	waitUntil(t, 20*time.Second, "node A to admit seats", hydrated(t, e))
 	at := time.Now().UTC()
-	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+	mustApply(t, "the project", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-project",
-			tracker.ProjectSubject("ENG"), "", tracker.Project{
-				V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+			worklet.ProjectSubject("ENG"), "", worklet.Project{
+				V: worklet.DocumentVersion, Key: "ENG", Name: "Engineering",
 				CreatedAt: at, UpdatedAt: at,
-			}, tracker.ChangeProjectCreated, nil)
+			}, worklet.ChangeProjectCreated, nil)
 	})
-	mustApply(t, "the task", func() (tracker.WriteResult, error) {
-		return e.native.Load().writer.CreateTask(t.Context(), "op-create", tracker.Task{
-			V: tracker.DocumentVersion, ID: "t-1", Project: "ENG", Type: "task",
-			Title: "copied", Status: tracker.StatusTodo,
-			StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
+	mustApply(t, "the task", func() (worklet.WriteResult, error) {
+		return e.native.Load().writer.CreateTask(t.Context(), "op-create", worklet.Task{
+			V: worklet.DocumentVersion, ID: "t-1", Project: "ENG", Type: "task",
+			Title: "copied", Status: worklet.StatusTodo,
+			StatusGroup: worklet.GroupNotStarted, Priority: worklet.PriorityNormal,
 			CreatedAt: at, UpdatedAt: at,
 		}, nil)
 	})
-	mustApply(t, "the first edit", func() (tracker.WriteResult, error) {
+	mustApply(t, "the first edit", func() (worklet.WriteResult, error) {
 		title := "in the copy"
 		return e.native.Load().writer.UpdateTask(t.Context(), "op-edit-1", "t-1", "ENG",
-			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+			worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	})
 	e.Stop(context.Background())
 	back.Close(context.Background())
@@ -110,15 +111,15 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	e2, back2 := bootNode(t, &d.a, cfg)
 	waitUntil(t, 20*time.Second, "node A to admit seats again", hydrated(t, e2))
 	for i := range 3 {
-		mustApply(t, "an edit after the copy", func() (tracker.WriteResult, error) {
-			title, done := fmt.Sprintf("after the copy %d", i), tracker.StatusDone
+		mustApply(t, "an edit after the copy", func() (worklet.WriteResult, error) {
+			title, done := fmt.Sprintf("after the copy %d", i), worklet.StatusDone
 			return e2.native.Load().writer.UpdateTask(t.Context(), fmt.Sprintf("op-edit-2-%d", i),
-				"t-1", "ENG", tracker.NoIfMatch,
-				tracker.TaskPatch{Title: &title, Status: &done}, tracker.ChangeStatus, nil)
+				"t-1", "ENG", worklet.NoIfMatch,
+				worklet.TaskPatch{Title: &title, Status: &done}, worklet.ChangeStatus, nil)
 		})
 	}
 	d.before = taskState(t, e2, "t-1")
-	d.checkpoint = readCursorRow(t, e2, tracker.Domain{}.Name())
+	d.checkpoint = readCursorRow(t, e2, worklet.Domain{}.Name())
 	e2.Stop(context.Background())
 	back2.Close(context.Background())
 
@@ -223,7 +224,7 @@ func (d *divergedBroker) writePast(t *testing.T) {
 	t.Helper()
 	eb, backB := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := eb.core.Load().log.Domain(worklet.Domain{}.Name())
 	for {
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {
@@ -234,11 +235,11 @@ func (d *divergedBroker) writePast(t *testing.T) {
 			break
 		}
 		d.written++
-		mustApply(t, "B's write after the restore", func() (tracker.WriteResult, error) {
+		mustApply(t, "B's write after the restore", func() (worklet.WriteResult, error) {
 			title := fmt.Sprintf("written after the restore %d", d.written)
 			return eb.native.Load().writer.UpdateTask(t.Context(),
-				fmt.Sprintf("op-b-%d", d.written), "t-1", "ENG", tracker.NoIfMatch,
-				tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+				fmt.Sprintf("op-b-%d", d.written), "t-1", "ENG", worklet.NoIfMatch,
+				worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 		})
 	}
 	waitUntil(t, 10*time.Second, "node B to apply its own writes", func() bool {
@@ -253,7 +254,7 @@ func (d *divergedBroker) writePast(t *testing.T) {
 		if row.NodeID != d.b.Node.ID {
 			continue
 		}
-		if pos := row.Domains[tracker.Domain{}.Name()]; pos.Seq < d.end || pos.CheckpointStoredAt.IsZero() {
+		if pos := row.Domains[worklet.Domain{}.Name()]; pos.Seq < d.end || pos.CheckpointStoredAt.IsZero() {
 			t.Fatalf("node B published %+v, want its position at the log's end %d "+
 				"naming the record it stands on", pos, d.end)
 		}
@@ -277,7 +278,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	d := stageDivergedBroker(t)
 
 	e, _ := bootNode(t, &d.a, d.cfg)
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("at boot the tracker's identity is %v, want the divergence — the "+
 			"log's record at the checkpoint is B's", err)
@@ -297,7 +298,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	// A WRITE REFUSES, naming the finding.
 	title := "refused"
 	_, err := e.native.Load().writer.UpdateTask(t.Context(), "op-refused", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	var refused *statelog.Unavailable
 	if !errors.As(err, &refused) || refused.Reason != statelog.ReasonWrongStream ||
 		!errors.Is(err, statelog.ErrLogDiverged) {
@@ -316,7 +317,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 			"refusing wrong_stream", health.LogDiverged, health.Refusal(time.Now()))
 	}
 	for _, row := range e.core.Load().log.Status(t.Context()) {
-		if row.Name == (tracker.Domain{}).Name() && (row.Ready ||
+		if row.Name == (worklet.Domain{}).Name() && (row.Ready ||
 			!errors.Is(running.runner.StreamIdentity(), statelog.ErrLogDiverged)) {
 			t.Fatalf("the replication status reads %+v for the diverged tracker", row)
 		}
@@ -331,7 +332,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	published := false
 	for _, row := range rows {
 		if row.NodeID == d.a.Node.ID {
-			published = row.Domains[tracker.Domain{}.Name()].LogDiverged
+			published = row.Domains[worklet.Domain{}.Name()].LogDiverged
 		}
 	}
 	if !published {
@@ -339,7 +340,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	}
 
 	// AND THE REANCHOR IT NEEDS IS THE RESTORED ONE, from where the log ends.
-	view, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
+	view, err := e.ReanchorStatus(t.Context(), worklet.Domain{}.Stream().Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
@@ -366,7 +367,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 
 	// A MEETS THE DIVERGENCE AT BOOT, and records it.
 	e, back := bootNode(t, &d.a, d.cfg)
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("at boot the tracker's identity is %v, want the divergence", err)
 	}
@@ -377,7 +378,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	// broker both share.
 	eb, backB := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	logB := eb.core.Load().log.Domain(tracker.Domain{}.Name()).log
+	logB := eb.core.Load().log.Domain(worklet.Domain{}.Name()).log
 	if err := logB.Purge(t.Context(), d.checkpoint.at.Seq+1); err != nil {
 		t.Fatalf("purge the log past A's checkpoint: %v", err)
 	}
@@ -392,7 +393,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	// A AGAIN: the log holds nothing at its checkpoint to compare, and it
 	// still refuses.
 	e2, _ := bootNode(t, &d.a, d.cfg)
-	running2 := e2.core.Load().log.Domain(tracker.Domain{}.Name())
+	running2 := e2.core.Load().log.Domain(worklet.Domain{}.Name())
 	if err := running2.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("after the restart the tracker's identity is %v, want the recorded "+
 			"divergence — the rows are still the ones the log does not continue", err)
@@ -406,7 +407,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	}
 	title := "refused"
 	_, err = e2.native.Load().writer.UpdateTask(t.Context(), "op-refused-2", "t-1", "ENG",
-		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	if !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("a write on the restarted node returned %v, want the divergence", err)
 	}
@@ -416,7 +417,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 		t.Fatalf("read the register: %v", err)
 	}
 	for _, row := range rows {
-		if row.NodeID == d.a.Node.ID && !row.Domains[tracker.Domain{}.Name()].LogDiverged {
+		if row.NodeID == d.a.Node.ID && !row.Domains[worklet.Domain{}.Name()].LogDiverged {
 			t.Fatal("node A's own row no longer says the log diverged from its rows — " +
 				"every peer's truncation fence lifts on it")
 		}

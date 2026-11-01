@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHANGE'S MERGEABILITY, RECORDED: whether one revision of a live change
@@ -92,8 +93,8 @@ import (
 //
 // # Its tables
 //
-// code_mergeability, one row a change (replicated 0077, created again by 0078
-// with the readiness it stores and by 0089 with the checks position it was
+// code_mergeability, one row a change (replicated 0100, created again by 0101
+// with the readiness it stores and by 0112 with the checks position it was
 // judged at), written by the applier
 // (apply_mergeability.go) from the records on the change's own subject and
 // removed only with the change by its repository's purge. Its conflicted
@@ -351,7 +352,7 @@ func (m *Mergeability) validFields() error {
 	}
 	switch {
 	case !m.State.Valid():
-		return badField("mergeability.state", "%q is not one of %v", m.State, MergeStates())
+		return badField("mergeability.state", "%q is not one of %s", m.State, words.Or(MergeStates()))
 	case m.State != MergeConflict && (len(m.Conflicts) > 0 || m.ConflictsOmitted != 0):
 		return badField("mergeability.conflicts", "a %s merge leaves no path conflicted", m.State)
 	case m.ConflictsOmitted < 0:

@@ -1,12 +1,15 @@
 package topics_test
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// everyLogPrefix is every state log's subject prefix.
+// everyLogPrefix is every state log's subject prefix, held to the package's own
+// constants by [TestEveryLogPrefixIsEveryStateLog].
 func everyLogPrefix() []string {
 	return []string{
 		topics.TrackerLogPrefix,
@@ -17,6 +20,64 @@ func everyLogPrefix() []string {
 		topics.CodeLogPrefix,
 		topics.ArtifactsLogPrefix,
 		topics.ArtifactDataLogPrefix,
+		topics.AssistantLogPrefix,
+		topics.ChatLogPrefix,
+	}
+}
+
+// THE LIST OF LOGS IS THE PACKAGE'S OWN, DERIVED RATHER THAN REMEMBERED.
+//
+// Every case that refuses one log's records on another reads its neighbours
+// off [everyLogPrefix], so each is only as complete as that list — and a list
+// nobody checks is how a new log reaches the broker with its neighbours' parsers
+// never asked about it. A state log is the one shape of constants here a stream
+// is created from: a <name>Stream, a <name>Prefix, and a <name>Wildcard that is
+// exactly that prefix and ".>". Read from the source, an eleventh log is on the
+// list the day its constants are, or this fails naming it.
+func TestEveryLogPrefixIsEveryStateLog(t *testing.T) {
+	t.Parallel()
+	values := constStrings(t, ".")
+	declared := map[string]bool{}
+	for name, wildcard := range values {
+		base, ok := strings.CutSuffix(name, "Wildcard")
+		if !ok {
+			continue
+		}
+		prefix, hasPrefix := values[base+"Prefix"]
+		_, hasStream := values[base+"Stream"]
+		if hasPrefix && hasStream && wildcard == prefix+".>" {
+			declared[prefix] = true
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("derived no state log from the package's constants, so the " +
+			"comparison below would hold the list to nothing")
+	}
+	listed := map[string]bool{}
+	for _, prefix := range everyLogPrefix() {
+		listed[prefix] = true
+	}
+	var missing, extra []string
+	for prefix := range declared {
+		if !listed[prefix] {
+			missing = append(missing, prefix)
+		}
+	}
+	for prefix := range listed {
+		if !declared[prefix] {
+			extra = append(extra, prefix)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	for _, prefix := range missing {
+		t.Errorf("the log under %q is declared in this package and is not on "+
+			"everyLogPrefix, so no other log's parser is asked to refuse its "+
+			"records", prefix)
+	}
+	for _, prefix := range extra {
+		t.Errorf("everyLogPrefix lists %q, which no Stream/Prefix/Wildcard "+
+			"triple here declares", prefix)
 	}
 }
 
@@ -98,6 +159,14 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.ArtifactDataLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the datastore log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.AssistantLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.AssistantLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the assistant log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
+		if got, want := topics.ChatLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.ChatLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the chat log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 	}
 }
 
@@ -170,6 +239,10 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_ARTIFACTS_LOG", "crewlet.artifacts.log"},
 		{"artifactdata", topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,
 			topics.ArtifactDataLogWildcard, "CREWLET_ARTIFACT_DATA_LOG", "crewlet.artifactdata.log"},
+		{"assistant", topics.AssistantLogStream, topics.AssistantLogPrefix,
+			topics.AssistantLogWildcard, "CREWLET_ASSISTANT_LOG", "crewlet.assistant.log"},
+		{"chat", topics.ChatLogStream, topics.ChatLogPrefix, topics.ChatLogWildcard,
+			"CREWLET_CHAT_LOG", "crewlet.chat.log"},
 	} {
 		if tc.stream != tc.wantStream || tc.prefix != tc.wantPrefix ||
 			tc.wildcard != tc.wantPrefix+".>" {

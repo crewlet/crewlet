@@ -39,7 +39,7 @@ import (
 // maintenance run (Maintained). Format 1 spelled the multi-pack-index's and
 // the commit-graph's facts as one struct of their own fields, so every kind
 // of derived file a later part declares would have been one more field
-// beside them: the shape ADR-0056 replaces. A boot restores both halves of
+// beside them: the shape ADR-0079 replaces. A boot restores both halves of
 // what an incarnation holds — the packs' bytes and each derived file's — and
 // what the maintainer needs to judge it due, without measuring a file.
 
@@ -99,7 +99,7 @@ type state struct {
 	// its declaration's name: a declaration with none on disk has no entry.
 	// One entry a declaration rather than one field a fact, so a kind a
 	// later part declares is an entry here, never a field beside the
-	// others (ADR-0056).
+	// others (ADR-0079).
 	Derived map[DerivedName]derivedState `json:"derived,omitempty"`
 	// Maintained is the repository's last maintenance run: the duty cycle's
 	// clock (MidxMinInterval, MidxDutyCycle). The REPOSITORY'S, never one

@@ -101,12 +101,10 @@ type limit struct {
 var limits = []limit{
 	{key: "turn_engine.max_iterations", group: LimitTurn, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.MaxIterations) }},
-	{key: "turn_engine.max_tool_rounds", group: LimitTurn, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(c.TurnEngine.MaxToolRounds) }},
 	{key: "turn_engine.onboarding_max_tool_rounds", group: LimitTurn, unit: LimitCount,
 		zeroIsOff: true,
 		read: func(c *config.Company) float64 {
-			return float64(c.TurnEngine.OnboardingMaxToolRounds)
+			return float64(c.TurnEngine.OnboardingRounds())
 		}},
 	{key: "turn_engine.delegation_depth_limit", group: LimitTurn, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.DelegationDepthLimit) }},

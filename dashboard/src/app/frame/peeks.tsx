@@ -42,8 +42,8 @@ import { lazyScreen } from "../lazyScreen.ts";
 // is fetched with it: a peek imported here statically would pull every
 // workspace back into the entry chunk through the frame. `PeekHost` draws
 // the body inside a suspense and an error boundary of its own.
-const ItemPeek = lazyScreen("work", (m) => m.ItemPeek);
-const ProjectPeek = lazyScreen("work", (m) => m.ProjectPeek);
+const ItemPeek = lazyScreen("worklet", (m) => m.ItemPeek);
+const ProjectPeek = lazyScreen("worklet", (m) => m.ProjectPeek);
 const SeatPeek = lazyScreen("agents", (m) => m.SeatPeek);
 const UnitPeek = lazyScreen("agents", (m) => m.UnitPeek);
 const SchedulePeek = lazyScreen("agents", (m) => m.SchedulePeek);
@@ -57,8 +57,8 @@ const IntegrationPeek = lazyScreen("settings", (m) => m.IntegrationPeek);
 const CredentialPeek = lazyScreen("settings", (m) => m.CredentialPeek);
 const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
 const PersonPeek = lazyScreen("settings", (m) => m.PersonPeek);
-const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
-const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
+const PagePeek = lazyScreen("doclet", (m) => m.PagePeek);
+const ContainerPeek = lazyScreen("doclet", (m) => m.ContainerPeek);
 const ChangePeek = lazyScreen("code", (m) => m.ChangePeek);
 
 /**

@@ -22,11 +22,8 @@
 
 // RELATIVE, like every contract import outside the app: this module is also
 // built into the runtime alone, where the `~` alias does not exist.
-import {
-  ARTIFACT_CAPABILITIES,
-  ARTIFACT_ROLES,
-  PRESENCE_ACTIVITIES,
-} from "../contract/artifacts.ts";
+import { ARTIFACT_CAPABILITIES, ARTIFACT_ROLES } from "../contract/artifacts.ts";
+import { PRESENCE_ACTIVITIES } from "../contract/presence.ts";
 
 /** The bridge's message names on the port, beside the handshake's. */
 export const BRIDGE_MESSAGE = {

@@ -19,10 +19,10 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useBackends, type OrgServices } from "~/lib/services.ts";
-import { asSentence, plural } from "~/lib/format.ts";
+import { SERVICE_NAMES, chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
+import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, IntegrationTool, ReconcileFinding } from "~/contract/integrations.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import {
@@ -47,6 +47,7 @@ import {
   type TileAction,
 } from "./catalogue.tsx";
 import { useRecheck } from "~/routes/settings/recheck.ts";
+import { workspaceRow, type Workspace } from "~/app/nav.ts";
 import { splitFields } from "../SetupForm.tsx";
 
 /**
@@ -131,13 +132,6 @@ export const BUCKET_WORDS: Record<Bucket, { label: string; tone: Tone }> = {
 /** One agent on one tool, as a person reads it. */
 export type SeatStatus = "ready" | "pending" | "action" | "missing";
 
-export const SEAT_WORDS: Record<SeatStatus, { label: string; tone: Tone }> = {
-  ready: { label: "Ready", tone: "success" },
-  pending: { label: "Setting up", tone: "info" },
-  action: { label: "Needs you", tone: "warning" },
-  missing: { label: "No account", tone: "neutral" },
-};
-
 export interface SeatRow {
   handle: string;
   name: string;
@@ -145,11 +139,6 @@ export interface SeatRow {
   status: SeatStatus;
   /** Who this agent is at the tool, or what is missing, in the engine's words. */
   detail: string;
-  /**
-   * How much the agent may do there, where the tool grades it: the engine's
-   * own words, and its tier id where the engine has a scale for it.
-   */
-  tier?: { id?: string | undefined; label: string; hint?: string | undefined };
   /** The engine's step for an app the agent needs a person to make. */
   seat?: SetupSeatState;
   /** The surface key the agent's step is taken on (what the app route is keyed on). */
@@ -166,6 +155,8 @@ export type Owner = "you" | "crewlet" | "vendor";
 /** One thing wrong with a tool, and the one control that answers it. */
 export interface Issue {
   key: string;
+  /** The engine's finding kind, where the issue is one of the loop's findings. */
+  kind?: string;
   tone: "danger" | "warning";
   /** What is wrong, as a sentence. */
   problem: string;
@@ -178,7 +169,33 @@ export interface Issue {
   external?: { label: string; href: string };
   /** What it is about, as the engine names each: an agent's handle, an address, a project. */
   subjects: string[];
+  /** The agents among [subjects] the chart has, each by its name. */
+  agents: IssueAgent[];
   surface: string;
+  /**
+   * An agent's own wait or refusal, which its row on the Agents tab draws
+   * with the step's own control; the app's page leaves it there, and the
+   * home lists it as something waiting on you.
+   */
+  seat?: boolean;
+}
+
+/** An agent an issue is about, as the chart names it. */
+export interface IssueAgent {
+  handle: string;
+  name: string;
+  kind: "agent" | "human";
+}
+
+/** A seat on the chart, by its handle: its name and kind, or nothing for a handle it does not have. */
+export type SeatOf = (handle: string) => Omit<IssueAgent, "handle"> | undefined;
+
+/** The agents the chart has among what an issue is about. */
+function agentsOf(subjects: readonly string[], seatOf: SeatOf): IssueAgent[] {
+  return subjects.flatMap((handle) => {
+    const seat = seatOf(handle);
+    return seat ? [{ handle, ...seat }] : [];
+  });
 }
 
 export interface Tool {
@@ -203,21 +220,32 @@ export interface Tool {
   asks: SetupRequirement[];
 }
 
+/** An app that can do a built-in service's work instead, by its directory line's key. */
+export type ReplacingApp = "jira" | "confluence" | "slack" | "mattermost";
+
 export interface BuiltInService {
-  key: "works" | "knowledge" | "chat";
+  key: "worklet" | "doclet" | "chat";
   name: string;
+  /**
+   * Who makes it, where the directory names a product beside its maker (Jira
+   * beside Atlassian): Crewlet, for Worklet, Doclet and Chatlet.
+   */
+  vendor?: string;
   /** Whether the engine has said what the company runs: false on a node running no company. */
   known: boolean;
-  /** In use here, run elsewhere, or not shipped yet. */
+  /** In use here, or run elsewhere (or not at all). */
   on: boolean;
-  soon: boolean;
   /**
    * What the service is, whether or not the company uses it: what runs in
    * its place is said once, by the page beneath the header.
    */
   sentence: string;
-  /** The product that does this service's work instead, where the company runs one. */
-  replacedBy?: { key: "jira" | "confluence"; name: string };
+  /**
+   * What does this service's work instead, where the company runs something:
+   * the apps it runs in its place (Jira, Confluence, the chat vendors it talks
+   * on), each by its line's key, and their names as one phrase.
+   */
+  replacedBy?: { keys: ReplacingApp[]; name: string };
   open?: { label: string; path: string[] };
 }
 
@@ -234,7 +262,8 @@ export interface Model {
   base: string | null;
   /** True when the setup listing was refused: a reader with no Admin. */
   guarded: boolean;
-  needs: string[];
+  /** The refusal, when [guarded] — said through `lib/refusal.ts`'s `authorityWords`. */
+  refused: RestError | null;
   managed: string | null;
   admin: boolean;
   trafficKnown: boolean;
@@ -289,6 +318,7 @@ const KIND_WORDS: Record<string, string> = {
   identity_failed: "An agent's account could not be made",
   grant_pending: "A permission is waiting on approval",
   grant_short: "An agent has less access than it needs",
+  credential_shared: "Agents share one key",
 };
 
 /**
@@ -300,12 +330,18 @@ const KIND_WORDS: Record<string, string> = {
  * a seat's handle there, and also a config path or a phrase ("agents without
  * an app"), so the agents an issue names are its `subjects` where it lists
  * them and its subject where that is a seat on the chart.
+ *
+ * A FIX IS OFFERED ONLY WHERE ONE CONTROL HERE ANSWERS THE KIND: a key to
+ * replace or add. A wait on a person has its control on the agent's own row
+ * (the engine marks it `seat`), and one at the vendor its link; "Create app"
+ * was offered for every GitHub wait, a permission to accept included, and
+ * opened the settings form.
  */
 function issuesOf(
   entry: Entry,
   present: ReturnType<typeof presentSurfaces>,
   state: EntryState,
-  isSeat: (handle: string) => boolean,
+  seatOf: SeatOf,
 ): Issue[] {
   const out: Issue[] = [];
   for (const p of present) {
@@ -313,19 +349,14 @@ function issuesOf(
     for (const f of p.row.reconcile?.findings ?? []) {
       if (advisory(f)) continue;
       const owner = ownerOf(f.actor ?? p.row.reconcile?.actor);
+      const subjects = f.subjects ?? (f.subject && seatOf(f.subject) ? [f.subject] : []);
       let fix: Issue["fix"];
       if (ROTATE_FINDINGS.has(f.kind)) fix = { label: "Replace key", intent: "rotate" };
       else if (f.kind === "credential_missing" && !f.subject)
         fix = { label: "Add the key", intent: "continue" };
-      else if (f.kind === "approval_required" && entry.key === "github")
-        fix = {
-          label: (f.subjects?.length ?? 1) > 1 ? "Create apps" : "Create app",
-          intent: "agents",
-        };
-      else if ((f.kind === "approval_required" || f.kind === "identity_missing") && owner === "you")
-        fix = { label: "Open setup", intent: "agents" };
       out.push({
         key: `${p.surface.key}:${f.kind}:${f.subject ?? ""}`,
+        kind: f.kind,
         tone: f.phase === "unconfigured" || f.kind === "credential_rejected" ? "danger" : "warning",
         problem: asSentence(
           f.detail ||
@@ -340,9 +371,13 @@ function issuesOf(
             : undefined),
         owner,
         fix,
-        external: f.action_url ? { label: `Open ${entry.name}`, href: f.action_url } : undefined,
-        subjects: f.subjects ?? (f.subject && isSeat(f.subject) ? [f.subject] : []),
+        // THE BUTTON SAYS THE FIX: the address is where the person the
+        // finding names goes to make it, so it is the fix, at the vendor.
+        external: f.action_url ? { label: `Fix on ${entry.name}`, href: f.action_url } : undefined,
+        subjects,
+        agents: agentsOf(subjects, seatOf),
         surface: p.surface.name,
+        ...(f.seat ? { seat: true } : {}),
       });
     }
   }
@@ -355,6 +390,7 @@ function issuesOf(
       owner: "you",
       fix: { label: "Finish setup", intent: "continue" },
       subjects: [],
+      agents: [],
       surface: entry.name,
     });
   }
@@ -373,8 +409,14 @@ function surfaceIssues(entry: Entry, p: ReturnType<typeof presentSurfaces>[numbe
   const kinds = new Set((row.reconcile?.findings ?? []).map((f) => f.kind));
   const ingress = [...kinds].some((k) => k.startsWith("ingress_"));
   const out: Issue[] = [];
-  const add = (kind: string, issue: Omit<Issue, "key" | "subjects" | "surface">) =>
-    out.push({ key: `${surface.key}:${kind}`, subjects: [], surface: surface.name, ...issue });
+  const add = (kind: string, issue: Omit<Issue, "key" | "subjects" | "agents" | "surface">) =>
+    out.push({
+      key: `${surface.key}:${kind}`,
+      subjects: [],
+      agents: [],
+      surface: surface.name,
+      ...issue,
+    });
   if (row.secret_usable === false && !kinds.has("credential_missing")) {
     add("secret", {
       tone: "danger",
@@ -442,9 +484,6 @@ function seatRowsOf(
       detail: finding?.detail
         ? asSentence(finding.detail)
         : seat.detail || (status === "ready" ? "Set up" : "Nothing set up for this agent yet"),
-      tier: seat.tier_label
-        ? { id: seat.tier, label: seat.tier_label, hint: seat.tier_hint }
-        : undefined,
       seat,
       toolKey: roster?.key,
       finding,
@@ -452,13 +491,18 @@ function seatRowsOf(
   });
 }
 
-/** The built-in services, from the engine's projection alone (everybody's). */
+/**
+ * The built-in services, from the engine's projection (everybody's), with the
+ * chat vendors named by the `viewer` answer, which tells them to a reader
+ * holding Chatlet.
+ */
 export function useBuiltIns(): BuiltInService[] {
   const backends = useBackends();
-  return useMemo(() => builtIns(backends), [backends]);
+  const vendors = useViewer().chatVendors;
+  return useMemo(() => builtIns(backends, vendors), [backends, vendors]);
 }
 
-/** A node running no company has nothing to say about either service. */
+/** A node running no company has nothing to say about any service. */
 const NO_COMPANY = "This node runs no company yet.";
 
 /**
@@ -466,42 +510,65 @@ const NO_COMPANY = "This node runs no company yet.";
  * has said (a node running no company), each says so rather than guessing
  * either way.
  */
-export function builtIns(backends: OrgServices | null): BuiltInService[] {
+export function builtIns(
+  backends: OrgServices | null,
+  chatVendors: readonly string[] = [],
+): BuiltInService[] {
   const tracker = backends?.tracker;
   const knowledge = backends?.knowledge;
+  const chat = backends?.chat;
+  // THE LINES A VENDOR CHAT IS LISTED ON: the ones the directory has. A vendor
+  // nobody named is still a vendor's chat, said in words, with no line to open.
+  const vendorLines = chatVendors.filter(
+    (v): v is "slack" | "mattermost" => v === "slack" || v === "mattermost",
+  );
   return [
     {
-      key: "works",
-      name: "Crewlet Works",
+      key: "worklet",
+      name: SERVICE_NAMES.tracker,
+      vendor: "Crewlet",
       known: tracker !== undefined,
-      on: tracker === "native",
-      soon: false,
+      on: tracker === "worklet",
       sentence: tracker === undefined ? NO_COMPANY : "Projects, tasks, your inbox and My work.",
-      ...(tracker === "jira" ? { replacedBy: { key: "jira", name: "Jira" } as const } : {}),
-      ...(tracker === "native" ? { open: { label: "Open Work", path: ["work"] } } : {}),
+      ...(tracker === "jira" ? { replacedBy: { keys: ["jira"], name: "Jira" } } : {}),
+      ...(tracker === "worklet" ? { open: openService("worklet", "Open Worklet") } : {}),
     },
     {
-      key: "knowledge",
-      name: "Crewlet Knowledge",
+      key: "doclet",
+      name: SERVICE_NAMES.knowledge,
+      vendor: "Crewlet",
       known: knowledge !== undefined,
-      on: knowledge === "native",
-      soon: false,
+      on: knowledge === "doclet",
       sentence:
         knowledge === undefined ? NO_COMPANY : "Spaces and pages, agent skills and diaries.",
       ...(knowledge === "confluence"
-        ? { replacedBy: { key: "confluence", name: "Confluence" } as const }
+        ? { replacedBy: { keys: ["confluence"], name: "Confluence" } }
         : {}),
-      ...(knowledge === "native" ? { open: { label: "Open Knowledge", path: ["knowledge"] } } : {}),
+      ...(knowledge === "doclet" ? { open: openService("doclet", "Open Doclet") } : {}),
     },
     {
       key: "chat",
-      name: "Crewlet Chat",
-      known: true,
-      on: false,
-      soon: true,
-      sentence: "Talk with your agents in Crewlet itself.",
+      name: "Chatlet",
+      vendor: "Crewlet",
+      known: chat !== undefined,
+      on: chat === "chatlet",
+      sentence:
+        chat === undefined ? NO_COMPANY : "Rooms, threads and direct messages with your agents.",
+      ...(chat === "vendor"
+        ? { replacedBy: { keys: vendorLines, name: chatVendorName(chatVendors) } }
+        : {}),
+      ...(chat === "chatlet" ? { open: openService("chatlet", "Open Chatlet") } : {}),
     },
   ];
+}
+
+/**
+ * The way into a service built into Crewlet: its workspace's own landing, as
+ * the sidebar's row opens it (`app/nav.ts`), so Open Chatlet lands on Activity
+ * as the row does.
+ */
+function openService(key: Workspace, label: string): { label: string; path: string[] } {
+  return { label, path: workspaceRow(key)?.path ?? [key] };
 }
 
 /** What a tool's derivation reads: the two answers, and the chart. */
@@ -515,8 +582,8 @@ export interface ToolInputs {
   /** The setup listing was refused. */
   guarded: boolean;
   trafficKnown: boolean;
-  /** Whether a handle is a seat on the chart. */
-  isSeat: (handle: string) => boolean;
+  /** A handle's seat on the chart, or nothing for one it does not have. */
+  seatOf: SeatOf;
   avatarOf: (handle: string) => AgentAvatar | null;
 }
 
@@ -529,7 +596,7 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const state = entryState(entry, what.rows, what.rollups);
   const credentials = credentialFindings(present);
   const action = actionFor(state, setupTools, configured, credentials, what.guarded);
-  const issues = configured ? issuesOf(entry, present, state, what.isSeat) : [];
+  const issues = configured ? issuesOf(entry, present, state, what.seatOf) : [];
   const roster = rosterOf(setupTools);
   const findings = seatFindingsOf(present.flatMap((p) => p.row.reconcile?.findings ?? []));
   const asks = sections
@@ -563,6 +630,13 @@ export function useIntegrations(): Model {
     (handle: string) => index.byHandle.get(handle)?.avatar ?? null,
     [index],
   );
+  const seatOf = useCallback<SeatOf>(
+    (handle) => {
+      const seat = index.byHandle.get(handle);
+      return seat ? { name: seat.name, kind: seat.kind } : undefined;
+    },
+    [index],
+  );
   const [settling, setSettling] = useState(false);
   const { data, loading, error, refusal, refetch } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -592,11 +666,11 @@ export function useIntegrations(): Model {
           setup: setup.byKey,
           guarded: setup.guarded,
           trafficKnown,
-          isSeat: (h) => index.byHandle.has(h),
+          seatOf,
           avatarOf,
         }),
       ),
-    [rows, data, setup.byKey, setup.guarded, trafficKnown, avatarOf, index],
+    [rows, data, setup.byKey, setup.guarded, trafficKnown, avatarOf, seatOf],
   );
   const byKey = useMemo(() => new Map(tools.map((t) => [t.entry.key, t])), [tools]);
 
@@ -608,7 +682,8 @@ export function useIntegrations(): Model {
         .filter((s) => setup.byKey.get(s.key)?.can_provision)
         .map((s) => s.key);
       try {
-        for (const kind of kinds) await rest.post(`/setup/integrations/${kind}/check`, {});
+        for (const kind of kinds)
+          await rest.post(`/setup/integrations/${pathSegment(kind)}/check`, {});
         watch();
         return "";
       } catch (err) {
@@ -648,7 +723,7 @@ export function useIntegrations(): Model {
     rows,
     base: setup.base?.value ?? null,
     guarded: setup.guarded,
-    needs: setup.needs,
+    refused: setup.refused,
     managed,
     admin: viewer.admin,
     trafficKnown,
@@ -658,24 +733,6 @@ export function useIntegrations(): Model {
     dropFor,
     watch,
   };
-}
-
-/**
- * The line a working tool's overview says: "Working.", then what it counts,
- * as one sentence of its own.
- */
-export function workingLine(tool: Pick<Tool, "seats" | "delivered">): string {
-  const parts: string[] = [];
-  const ready = tool.seats.filter((s) => s.status === "ready").length;
-  if (tool.seats.length > 0) parts.push(`${ready} of ${plural(tool.seats.length, "agent")} ready`);
-  if (tool.delivered !== null)
-    parts.push(
-      tool.delivered === 0
-        ? "nothing delivered yet"
-        : plural(tool.delivered, "delivery", "deliveries"),
-    );
-  if (parts.length === 0) return "Working.";
-  return `Working. ${asSentence(parts.join(", "))}`;
 }
 
 /** The tool a route segment names: its own key, or any surface it covers. */

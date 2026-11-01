@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A GESTURE NO TOOL MAKES NAMES ITS ITEM AS EVERY TOOL'S RECEIPT DOES.
@@ -30,15 +30,15 @@ func TestAGestureNoToolMakesNamesADuplicateByItsID(t *testing.T) {
 	dup := r.reader.tasks["t-1"]
 	dup.Task.ID, dup.KeyCollision = "t-3", true
 	r.reader.tasks["t-3"] = dup
-	r.reader.addComment("t-3", tracker.Comment{ID: "c-1", Task: "t-3",
-		Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+	r.reader.addComment("t-3", worklet.Comment{ID: "c-1", Task: "t-3",
+		Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 	for name, call := range map[string]struct {
 		method, path string
 		body         map[string]any
 	}{
-		"a rank move": {http.MethodPost, "/work/items/t-3/rank",
+		"a rank move": {http.MethodPost, "/worklet/items/t-3/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}},
-		"a comment edit": {http.MethodPatch, "/work/items/t-3/comments/c-1",
+		"a comment edit": {http.MethodPatch, "/worklet/items/t-3/comments/c-1",
 			map[string]any{"body": "second"}},
 	} {
 		got := r.do(as(colleague("ana")), call.method, call.path, call.body)
@@ -52,7 +52,7 @@ func TestAGestureNoToolMakesNamesADuplicateByItsID(t *testing.T) {
 				name, got.body["item"], got.body["key"], got.body["key_collision"])
 		}
 	}
-	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/worklet/items/ENG-1/rank",
 		map[string]any{"after": "ENG-2", "if_match": 3}); got.body["item"] != "ENG-1" ||
 		got.body["key_collision"] != nil {
 		t.Errorf("the claimant's rank move answered item %v, key_collision %v — "+

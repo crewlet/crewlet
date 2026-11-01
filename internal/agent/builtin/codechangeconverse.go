@@ -14,6 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CONVERSATION WRITES: what is said about a change — an ask for review,
@@ -356,8 +358,8 @@ func sideArg(tool, field string, raw string) (code.Side, *tools.Result) {
 		return code.SideNew, nil
 	}
 	if !side.Valid() {
-		r := failed(fmt.Sprintf("%s: %s is %v — new (the revision's head) or old (its base) — not %q.", tool, field,
-			code.Sides(), clip(string(side))))
+		r := failed(fmt.Sprintf("%s: %s is %s (old is the revision's base and new its head), not %q.", tool, field,
+			words.Or(code.Sides()), clip(string(side))))
 		return "", &r
 	}
 	return side, nil
@@ -581,10 +583,10 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 	review := code.Review{Verdict: code.Verdict(strings.TrimSpace(argString(args, "verdict"))),
 		Summary: argString(args, "summary"), Carries: argStrings(args, "carries")}
 	if !review.Verdict.Valid() {
-		r := failed(fmt.Sprintf("%s needs `verdict`: one of %v.", tool, code.Verdicts()))
+		r := failed(fmt.Sprintf("%s needs `verdict`: one of %s.", tool, words.Or(code.Verdicts())))
 		return code.Review{}, nil, &r
 	}
-	raw, _ := args["findings"].([]any)
+	raw, _ := argval.List(args["findings"])
 	if len(raw) > code.MaxFindingsPerReview {
 		r := failed(fmt.Sprintf("%s: %d findings, past the %d one review raises: split them into two reviews of "+
 			"the same revision, which supersede nothing of each other.", tool, len(raw), code.MaxFindingsPerReview))
@@ -592,7 +594,7 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 	}
 	var places []anchorAt
 	for i, entry := range raw {
-		m, ok := entry.(map[string]any)
+		m, ok := argval.Object(entry)
 		if !ok {
 			r := failed(fmt.Sprintf("%s: findings[%d] is not an object of `path`, `line_start`, `severity`, "+
 				"`category` and `title`.", tool, i))
@@ -611,8 +613,10 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 		if f.LineEnd == 0 {
 			f.LineEnd = f.LineStart
 		}
+		// A NULL `suggestion` IS NONE, as argval.Object reads every member
+		// that is null; a list or an object is no lines.
 		if s, present := m["suggestion"]; present {
-			text, ok := s.(string)
+			text, ok := argval.String(s)
 			if !ok {
 				r := failed(fmt.Sprintf("%s: %s.suggestion is the lines to put in place of the finding's, as text.",
 					tool, at))
@@ -629,10 +633,10 @@ func reviewArgs(tool string, args map[string]any) (code.Review, []anchorAt, *too
 				"the first.", tool, at, f.LineStart, f.LineEnd))
 			return code.Review{}, nil, &r
 		case !f.Severity.Valid():
-			r := failed(fmt.Sprintf("%s: %s.severity is one of %v.", tool, at, code.Severities()))
+			r := failed(fmt.Sprintf("%s: %s.severity is one of %s.", tool, at, words.Or(code.Severities())))
 			return code.Review{}, nil, &r
 		case !f.Category.Valid():
-			r := failed(fmt.Sprintf("%s: %s.category is one of %v.", tool, at, code.Categories()))
+			r := failed(fmt.Sprintf("%s: %s.category is one of %s.", tool, at, words.Or(code.Categories())))
 			return code.Review{}, nil, &r
 		}
 		review.Findings = append(review.Findings, f)
@@ -700,7 +704,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	}
 	body := argString(args, "body")
 	thread, finding := strings.TrimSpace(argString(args, "thread")), strings.TrimSpace(argString(args, "finding"))
-	resolve, resolving := args["resolve"].(bool)
+	resolve, resolving := argval.Bool(args["resolve"])
 	var anchor *anchorArg
 	if raw, ok := args["anchor"]; ok && raw != nil {
 		anchor = &anchorArg{}

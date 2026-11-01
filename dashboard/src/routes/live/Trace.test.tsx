@@ -1,7 +1,7 @@
 /**
  * Where one trace sends a reader next, and what it says it is missing.
  *
- * A trace is every event sharing one id, assembled from every node's own store
+ * A trace is every event sharing one id, assembled from every data node's store
  * at read time — so its page answers two questions beyond the spans it draws:
  * where the same events are in the log, and whether a node's share of the
  * chain is absent.
@@ -68,7 +68,7 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
 // screen draws the lock itself, and asks nothing. Mutation: drop the screen's
 // own lock and the trace is asked for a reader the engine refuses.
 test("a reader without Admin is shown the lock, and the trace is never asked", async () => {
-  const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["tracker"] });
+  const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["worklet"] });
   expect(await screen.findByText("You need Admin access")).toBeDefined();
   expect(asked).not.toContain("trace");
 });

@@ -239,7 +239,7 @@ func TestTheBarrierDeclaresTheEmptyTableSet(t *testing.T) {
 
 // TestATrimmedRecordIntersectsNothing, for the barrier's reason: it writes no
 // row of this domain's anywhere — the framework removes this log's anchors in
-// its transaction (ADR-0050) — so a scope that named a bucket would make every
+// its transaction (ADR-0073) — so a scope that named a bucket would make every
 // read and write about those people wait behind a record that changed none of
 // their rows, and the root would hold every sign-in in the company behind it.
 // Resolved from the KIND, so whatever a peer stated reads back the same.

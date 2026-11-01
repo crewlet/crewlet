@@ -87,7 +87,7 @@
 // The per-key derivation is that rule's too beyond tokens: [DeriveKey] and
 // [KeyTag] also yield an embedded fleet's broker credentials — each route's
 // password, each leaf link's and operator's nkey — under domains of their own
-// (internal/queue/jetstream, ADR-0064), so one rotation runbook moves the
+// (internal/queue/jetstream, ADR-0087), so one rotation runbook moves the
 // tokens, the sessions and the broker together, with no step for any one of
 // them.
 package runtoken

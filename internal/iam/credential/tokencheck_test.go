@@ -19,13 +19,13 @@ func liveRow(token credential.Token, verifier string) credential.TokenRow {
 	return credential.TokenRow{
 		Applied: token.Position + 10, Found: true, IsToken: true,
 		Verifier: verifier, ExpiresAt: checkAt.Add(24 * time.Hour),
-		Grants:     []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		Grants:     []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		Epoch:      2,
 		Generation: 1, FleetGeneration: 1,
 		Owner: credential.TokenOwner{
 			Found: true, ID: "0192f00d-0000-7000-8000-00000000000a",
 			Kind: iam.KindPerson, Stage: iam.StageActive, Login: "jane.doe",
-			Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+			Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 			Epoch:  2,
 		},
 	}
@@ -143,15 +143,15 @@ func TestATokenCarriesWhatItsMintAndItsOwnerShare(t *testing.T) {
 	}{
 		{"minted admin, owner an administrator", []iam.Grant{iam.GrantAdmin},
 			[]iam.Grant{iam.GrantAdmin}, iam.AllGrants},
-		{"minted admin, owner keeps tracker", []iam.Grant{iam.GrantAdmin},
-			[]iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{"minted admin, owner keeps worklet", []iam.Grant{iam.GrantAdmin},
+			[]iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantWorklet}},
 		{"minted an app, owner holds it through admin",
-			[]iam.Grant{iam.GrantKnowledge}, []iam.Grant{iam.GrantAdmin},
-			[]iam.Grant{iam.GrantKnowledge}},
+			[]iam.Grant{iam.GrantDoclet}, []iam.Grant{iam.GrantAdmin},
+			[]iam.Grant{iam.GrantDoclet}},
 		{"minted an unknown name", []iam.Grant{"swarm"},
 			[]iam.Grant{iam.GrantAdmin, "swarm"}, []iam.Grant{}},
-		{"owner lost the app", []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
-			[]iam.Grant{iam.GrantKnowledge}, []iam.Grant{iam.GrantKnowledge}},
+		{"owner lost the app", []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+			[]iam.Grant{iam.GrantDoclet}, []iam.Grant{iam.GrantDoclet}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

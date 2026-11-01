@@ -235,14 +235,14 @@ GOFILES = $(GO) run ./internal/sourcetree/gofiles
 
 COMPOSE ?= docker compose
 
-# Passed through to the vendor bootstrap scripts, which provision the seats of
-# the company config named here and skip that step when it is empty:
-#   make mattermost-up COMPANY=examples/nimbus.company.yaml
+# Passed through to the GitLab bootstrap script, which reconciles the company
+# config named here and skips that step when it is empty:
+#   make gitlab-up COMPANY=examples/nimbus.company.yaml
 COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc \
@@ -268,9 +268,31 @@ crewlet: ## build the engine binary into ./crewlet
 install: ## go install the engine onto your PATH
 	$(GO) install ./cmd/crewlet
 
-fmt: ## rewrite everything gofmt would change
+# -s, AND THAT IS NOT THE SAME FLAG `fmt-check` OMITS.
+#
+# This repository gates formatting TWICE, at two different standards, and only
+# one of them is `gofmt -l` over $(GOFILES): ci.yml's build+vet job runs that,
+# which `fmt-check` mirrors exactly and must keep mirroring, while the
+# golangci-lint job enables the `gofmt` FORMATTER, whose `simplify` setting is
+# on by default. So a redundant composite-literal type passes `gofmt -l`,
+# passes `make fmt-check`, and fails the lint job.
+#
+# A FIXER IS NOT A GATE, which is what makes this safe: nothing in ci.yml runs
+# `make fmt`, so reaching FURTHER than the check it is paired with creates no
+# divergence — it only closes the hole where the documented remedy could not
+# repair what a gate reported. `make fmt && make check` failing on formatting
+# is the one outcome a contributor cannot act on.
+#
+# It still does not reach everything the lint job's formatters do: `goimports`
+# is enabled there too, with `local-prefixes`, and no gofmt flag groups
+# imports. `golangci-lint fmt` applies both — named here rather than run here,
+# because `fmt` is the target you reach for when the linter is the thing you
+# have not installed. Hand it the same captured list: on its own it skips a
+# dot-directory by NAME, so it steps over `.claude/worktrees/` but walks into a
+# nested checkout anywhere else.
+fmt: ## rewrite everything gofmt -s would change (see `golangci-lint fmt` for imports)
 	@files="$$($(GOFILES))" || exit 1; \
-	$(GOFMT) -w $$files
+	$(GOFMT) -s -w $$files
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy
@@ -431,8 +453,26 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # A bare `.NOTPARALLEL:` fixes it and costs too much: it is GLOBAL, so every
 # other parallel invocation of this file loses its concurrency to settle a
 # collision between two targets. Prerequisites on .NOTPARALLEL would scope it,
-# but that is GNU Make 4.4 and this repository pins no version (4.3 here).
-# Two lines in the recipe are portable, and they say the thing plainly.
+# but that is GNU Make 4.4 and this repository pins no version (4.3 here). A
+# recipe is portable, and it says the thing plainly.
+#
+# AND THE STATUS ACCUMULATES, which is the half two recipe LINES could not do.
+# Make stops a target at its first nonzero line, so a red parallel half meant
+# `make test-solo` never ran -- internal/e2e and every cluster-forming package
+# silently unexercised, while the output named one failing test and read as the
+# whole story. The verdict was right (check failed either way) and the coverage
+# was not, which is the worst pairing: whoever fixes the named test and pushes
+# has never run the fleet. Measured: one working-indicator race in
+# internal/api/stream ended a `check` with the solo partition untouched.
+#
+# `test-norace` said the gates could not hit this, "`check` invokes the two as
+# sub-makes, each of which must succeed". That confused each must SUCCEED with
+# both must RUN. They are one line now, sequenced by `;` rather than by being
+# separate lines, so the isolation above is unchanged and both halves report --
+# the same shape `test-cross` and `test-norace` already use, and the same thing
+# ci.yml gets for free by running `test (race)` and `end-to-end gates` as
+# separate jobs. A local gate that reports less than CI on a red run is the
+# Makefile lying in the direction nobody notices.
 #
 # It also fails faster: formatting, vet, lint and the build are all ahead of
 # the two test halves, which are by far the longest part of this gate, rather
@@ -444,12 +484,14 @@ test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (
 # with `ensure stream CREWLET_NOTIFICATIONS: context deadline exceeded`, and
 # passed alone.
 check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
-	@$(MAKE) test
-	@$(MAKE) test-solo
-	@echo
-	@echo "All local gates passed. One thing this did NOT cover, because it"
-	@echo "needs a service CI starts for itself:"
-	@echo "  - the release pipeline  ->  make snapshot"
+	@status=0; \
+	$(MAKE) test || status=1; \
+	$(MAKE) test-solo || status=1; \
+	[ $$status -eq 0 ] || exit $$status; \
+	echo; \
+	echo "All local gates passed. One thing this did NOT cover, because it"; \
+	echo "needs a service CI starts for itself:"; \
+	echo "  - the release pipeline  ->  make snapshot"
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	@files="$$($(GOFILES))" || exit 1; \
@@ -570,13 +612,16 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	fi
 	golangci-lint run
 
-# No require-node: the ONLY consumer of `node` in the Go suite is
-# internal/e2e's dashboard replay (golden_test.go), which is a solo package and
-# therefore not in this half. The prerequisite was here anyway, which made this
-# target stricter than the CI job it mirrors — ci.yml's `test (race)` installs
-# no node and passes — and a Makefile stricter than CI is the same lie as one
-# looser than it, just in the direction nobody notices.
-test: git ## the suite, minus the packages that run alone (ci: test (race))
+# require-node, because this half runs a package that drives `node`:
+# internal/sandbox/codingagent's probe of the OpenCode notes plugin
+# (opencode_steer_test.go), which runs the plugin the engine embeds under node
+# against a stand-in of the bridge's notes route and a real bridge's. Without
+# node that case fails where CI is set and skips elsewhere — a skip
+# internal/skipgate declares nowhere, so this target would fail on it after the
+# whole run — and the prerequisite says so before anything runs. ci.yml's
+# `test (race)` installs node for the same reason. (internal/e2e's dashboard
+# replay is node's other consumer, in the solo half below.)
+test: require-node git ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
 	$(GIT_ENV) $(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
@@ -638,10 +683,13 @@ test-solo: require-node git ## the packages that need a runner to themselves (ci
 # below: as two separate recipe lines make stops at the first nonzero one, so a
 # failure in the parallel partition meant the solo partition — internal/e2e and
 # every cluster-forming package — was never run at all by a target documented
-# as the full suite. The gates cannot hit this (`check` invokes the two as
-# sub-makes, each of which must succeed), which is exactly why it went
-# unnoticed here: the escape hatch is the one place a partial run reports as a
-# whole one.
+# as the full suite. The gate HAD IT TOO, and the parenthetical that used to
+# stand here -- that `check` invokes the two as sub-makes, each of which must
+# succeed -- is why nobody looked: it confused each must SUCCEED with both must
+# RUN. Make stops a target at its first nonzero recipe line, so a red parallel
+# half ended `check` with the solo partition never run, under a verdict that
+# was correct and an output that named one test. Both accumulate now; see the
+# comment on `check`.
 #
 # The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
 # the solo half, compiled without it.
@@ -688,12 +736,15 @@ require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay needs it)
+require-node: ## fail unless node is on PATH (the e2e client replay and the OpenCode plugin probe need it)
 	@command -v node >/dev/null 2>&1 || { \
-	  echo "node is not on PATH, and internal/e2e's client replay needs it."; \
-	  echo "  It runs the dashboard's own protocol module over the frames a"; \
-	  echo "  real engine produced, and SKIPS without node — so the run would"; \
-	  echo "  go green having checked neither half of the wire protocol."; \
+	  echo "node is not on PATH, and two of the suite's gates need it."; \
+	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
+	  echo "  module over the frames a real engine produced, and"; \
+	  echo "  internal/sandbox/codingagent runs the OpenCode notes plugin the"; \
+	  echo "  engine embeds. Each SKIPS without node, a skip internal/skipgate"; \
+	  echo "  declares nowhere: test and test-solo would fail on it only after"; \
+	  echo "  the whole suite, and test-norace would pass having checked neither."; \
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2
@@ -831,7 +882,7 @@ bench: git ## measure the object store, the state log's write path, a stream lea
 
 mattermost-up: ## start Mattermost and bootstrap it (profile: mattermost)
 	$(COMPOSE) --profile mattermost up -d
-	COMPANY=$(COMPANY) scripts/mattermost-dev-bootstrap.sh
+	scripts/mattermost-dev-bootstrap.sh
 
 mattermost-down: ## stop the Mattermost stack
 	$(COMPOSE) --profile mattermost down
@@ -897,6 +948,23 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheGateAnswerMatchesItsGoldenFile
 
+# The Dashboard Assistant's golden streams and answers (every testdata file
+# under internal/assistant and internal/api/assistantapi) are written by the
+# engine's own encoder through internal/assistant/assistanttest.Golden and
+# never hand-edited; the dashboard's suites replay the SAME files through
+# their own decoder, so a change on either side fails until the other follows
+# it. Every test that compares one has "Fixture" in its name, which is what
+# this target runs. The one file written the other way, page actions'
+# arguments as the dashboard's builders declare them
+# (internal/assistant/wire/testdata/action_args.json), is written by the
+# dashboard's own suite and read by the engine's decoder. Read the diff before
+# committing it.
+assistant-fixtures: require-node ## regenerate the Dashboard Assistant's golden streams and page action arguments
+	CREWLET_REGENERATE_ASSISTANT_FIXTURES=1 $(GO) test ./internal/assistant/... \
+	  ./internal/api/assistantapi/... -count=1 -run Fixture
+	cd dashboard && CREWLET_REGENERATE_ASSISTANT_FIXTURES=1 npx vitest run \
+	  src/app/assistant/actionArgs.test.ts
+
 # internal/api/testdata/objects_answer.json is the object store's rendering —
 # the `objects` block GET /fleet answers (the collector's last collection and
 # audit) in each of its states — written by the renderer /fleet answers
@@ -912,6 +980,18 @@ objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the
 broker-answer: ## regenerate internal/api/testdata/fleet_broker_answer.json from the engine's broker view
 	CREWLET_REGENERATE_BROKER_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheBrokerAnswerFixtureIsTheEnginesOwn
+
+# internal/api/testdata/retention_alarms.json is the retention report's alarms
+# in each state the backup alarm takes — no backup on a young fleet, none on a
+# fleet whose trims it holds, one beside a trim another term holds, one log's
+# copy gone stale — evaluated by the report /query/retention answers with, over
+# every log this build registers. The retention, backups and engine-panel
+# suites load the SAME file, for `gate-answer`'s reason: the backup alarm went
+# per log while those suites went on drawing the node-wide one they had typed.
+# Read the diff before committing it.
+retention-alarms: ## regenerate internal/api/testdata/retention_alarms.json from the retention report
+	CREWLET_REGENERATE_RETENTION_ALARMS=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheRetentionAlarmsMatchTheirGoldenFile
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

@@ -31,6 +31,7 @@ import type {
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { settled } from "~/test/settle.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -147,7 +148,7 @@ const DOCUMENT: CompanyDocument = {
               handle: "swe",
               email: "swe@example.com",
               workers: ["test-writer", "reviewer-lite"],
-              sandbox: { enabled: true, run_in: "e2b", coding_agent: "claude-code" },
+              sandbox: { setup: [{ name: "deps" }], max_turns: 40 },
               placement: { labels: { pool: "build" } },
               token_budget: { week: 3_000_000 },
               // What an engine whose redaction took any value CONTAINING `${`
@@ -165,7 +166,7 @@ const DOCUMENT: CompanyDocument = {
 
 const OPERATOR = {
   login: "ops",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -176,6 +177,7 @@ const EVERY_ACT = [
   "pause_seat",
   "resume_seat",
   "answer_run",
+  "open_dm",
 ];
 
 /** An answer, or how to answer from the question's own parameters. */
@@ -191,7 +193,7 @@ const DEFAULTS: Record<string, unknown> = {
   // card reads the card whole; a case about a lock names the reader it means.
   viewer: {
     login: "token:ops",
-    grants: ["admin", "tracker", "knowledge"],
+    grants: ["admin", "worklet", "doclet"],
     handle: "",
     owner: "",
     acts: [],
@@ -254,7 +256,7 @@ beforeEach(() => {
         const path = new URL(String(url), "http://engine.test").pathname;
         return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
           status: path === "/iam/seats" ? 200 : 404,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
         });
       }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
@@ -262,7 +264,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -400,12 +402,15 @@ const WORKING: Partial<AgentRow> = {
         duration_ms: 85_000,
       },
     ],
-    running_call: {
-      round: 7,
-      name: "sandbox.run",
-      arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
-      started_at: "2026-09-21T09:51:31Z",
-    },
+    running_calls: [
+      {
+        id: "call-7",
+        round: 7,
+        name: "sandbox.run",
+        arguments: '{"cmd":"go test ./provisioner/... -run Timeout"}',
+        started_at: "2026-09-21T09:51:31Z",
+      },
+    ],
   } as AgentRow["live_call"],
 };
 
@@ -442,7 +447,7 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
   expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
 });
 
-test("an agent's profile has six tabs, and Work counts the engine's total rather than a page", async () => {
+test("an agent's profile has seven tabs, and Work counts the engine's total rather than a page", async () => {
   mount("#/company/org/seats/swe", {
     answers: {
       work_items: {
@@ -463,13 +468,14 @@ test("an agent's profile has six tabs, and Work counts the engine's total rather
     "Turns",
     "Memory",
     "Schedules",
+    "Access",
     "Settings",
   ]);
   const work = screen.getAllByRole("tab").find((t) => t.textContent?.startsWith("Work"));
   await waitFor(() => expect(work?.textContent).toBe("Work7"));
   // AND THE OVERVIEW'S CARD OFFERS ALL SEVEN, from the same answer.
   expect(screen.getByRole("link", { name: "All 7" }).getAttribute("href")).toBe(
-    "#/work/tasks?assignee=swe",
+    "#/worklet/tasks?assignee=swe",
   );
 });
 
@@ -523,7 +529,7 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
     answers: {
       viewer: { ...OPERATOR, acts: EVERY_ACT },
       work_search: { hits, available: true, mode: "hybrid" },
-      // THE TASK ASKED FOR, by the id a native task is asked by, answered as
+      // THE TASK ASKED FOR, by the id a Worklet task is asked by, answered as
       // the engine answers it: its id and key both.
       work_item: (p: Record<string, unknown>) => {
         const hit = hits.find((h) => h.id === p.id || h.key === p.id)!;
@@ -779,6 +785,42 @@ test("a pause is said in the stopped state's own tone", async () => {
   expect(notice.className).toContain("crewlet-callout--danger");
 });
 
+// ONE BANNER PER CAUSE, IN PLAIN WORDS. A provider stop and the failed turn
+// that came with it were two banners, the first headed by the machine code
+// ("server: llm chain exhausted ..."). The raw message is one press away.
+test("a fault stop is one banner in plain words, the engine's message behind a disclosure", async () => {
+  mount("#/company/org/seats/swe", {
+    agents: [
+      {
+        id: "swe",
+        agent_id: "swe",
+        role: "SWE",
+        handle: "swe",
+        activity: "stopped",
+        stopped_reason: "provider",
+        last_error: {
+          kind: "server",
+          detail: "llm chain exhausted after 1 providers (default)",
+          phase: "execute",
+          turn_id: "t1",
+          at: "2026-09-21T09:00:00Z",
+          event_id: "e1",
+        },
+      },
+    ],
+  });
+  await settle();
+  const callouts = document.querySelectorAll(".prof-notices .crewlet-callout");
+  expect(callouts).toHaveLength(1);
+  const text = callouts[0]!.textContent ?? "";
+  expect(text).toContain("This seat is stopped: its models are at their usage limit.");
+  expect(text).toContain("Its model provider ran but gave no usable answer.");
+  expect(text).not.toContain("server:");
+  expect(text).not.toContain("llm chain exhausted");
+  fireEvent.click(screen.getByRole("button", { name: /Technical details/ }));
+  await waitFor(() => expect(screen.getByText(/llm chain exhausted/)).toBeTruthy());
+});
+
 /** The page bar's own "More" — what a phone's bar folds every other action into. */
 function pageMore(): string[] {
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
@@ -805,9 +847,12 @@ test("the phone's More holds every action but Message, and each opens what its b
   ).not.toBeNull();
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
-  // WATCH LIVE FIRST while it works, as it leads the bar.
-  expect(names.slice(0, 5)).toEqual([
+  // WATCH LIVE FIRST while it works, as it leads the bar. DIRECT MESSAGE is
+  // folded with the rest: the company runs Chatlet until the engine says
+  // otherwise, and the reader holds Chatlet through admin.
+  expect(names.slice(0, 6)).toEqual([
     "Watch live",
+    "Direct message",
     "Assign task",
     "Pause",
     "Events",
@@ -1144,7 +1189,7 @@ test("a turn on a task whose key another claimed names and opens that task, not 
   const card = document.querySelector(".prof-turn") as HTMLElement;
   await waitFor(() => expect(card.textContent).toContain("The duplicate"));
   expect(card.textContent).not.toContain("The claimant");
-  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/t-dup");
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/t-dup");
   expect(askedFor("work_item_turns").map((q) => q.params)).toEqual([{ id: "t-dup", limit: 1 }]);
 });
 
@@ -1159,7 +1204,7 @@ test("the current turn names its round against the granted cap, its calls and th
         items: [{ id: "t-7", key: "ENG-7", title: "Something else entirely", status: "todo" }],
         total_hint: 1,
       },
-      // A NATIVE TASK IS ASKED FOR BY ITS ID: its key may be one another task
+      // A WORKLET TASK IS ASKED FOR BY ITS ID: its key may be one another task
       // claimed first, which would answer about the claimant.
       work_item: (p: Record<string, unknown>) =>
         p.id === "i-412"
@@ -1180,7 +1225,7 @@ test("the current turn names its round against the granted cap, its calls and th
     limit: 1,
   });
   // And opened by the address the answer gives: the key, which it claimed.
-  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/ENG-412");
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
   const rows = [...card.querySelectorAll(".prof-feed-row")];
@@ -1204,7 +1249,7 @@ test("the current turn names its round against the granted cap, its calls and th
 
 test("the setup card reads the chart's model and tools, and the document's own rows", async () => {
   mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: DOCUMENT } });
-  await waitFor(() => expect(screen.getByText(/e2b · claude-code/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/1 setup step · up to 40 turns/)).toBeTruthy());
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("openai-fallback");
@@ -1219,7 +1264,7 @@ test("the setup card reads the chart's model and tools, and the document's own r
 test("without the document the setup card says whose read it is, not that nothing is set", async () => {
   mount("#/company/org/seats/swe", {
     answers: {
-      viewer: { login: "jane.doe", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
+      viewer: { login: "jane.doe", grants: ["worklet"], handle: "jane", owner: "jane", acts: [] },
     },
   });
   await settle();
@@ -1227,7 +1272,7 @@ test("without the document the setup card says whose read it is, not that nothin
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("Some setup is only visible to admins.");
-  expect(setup.textContent).not.toContain("Not offered");
+  expect(setup.textContent).not.toContain("The catalogue's defaults");
 });
 
 // ---------------------------------------------------------------------------
@@ -1235,12 +1280,12 @@ test("without the document the setup card says whose read it is, not that nothin
 // ---------------------------------------------------------------------------
 
 // A COLLEAGUE'S DAY IS THEIRS, and the reason a reader is not shown it depends
-// on what they hold: with Tracker it is whose the record is (their lead and an
+// on what they hold: with Worklet it is whose the record is (their lead and an
 // admin read it too); without, it is the app their whole day is kept in.
 test("a colleague's day is withheld with the reason, and never asked for", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
-      viewer: { login: "t-cto", grants: ["tracker"], handle: "cto", owner: "cto", acts: [] },
+      viewer: { login: "t-cto", grants: ["worklet"], handle: "cto", owner: "cto", acts: [] },
     },
   });
   await settle();
@@ -1256,7 +1301,7 @@ test("a colleague's day is withheld with the reason, and never asked for", async
   });
   await settle();
   expect(
-    screen.getByText("Their day needs Tracker access. An admin can give it to you."),
+    screen.getByText("Their day needs Worklet access. An admin can give it to you."),
   ).toBeTruthy();
   expect(askedFor("work_person")).toEqual([]);
 });
@@ -1294,7 +1339,7 @@ const JANE_QUEUE = {
 test("a person's Priorities tile counts what is still open, as the Work tab does", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
-      viewer: { login: "jane-token", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
+      viewer: { login: "jane-token", grants: ["worklet"], handle: "jane", owner: "jane", acts: [] },
       work_person: {
         handle: "jane",
         priorities: ["t1", "t2", "t-done"],
@@ -1341,7 +1386,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
     answers: {
       viewer: {
         login: "jane-token",
-        grants: ["tracker"],
+        grants: ["worklet"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1397,7 +1442,7 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
     answers: {
       viewer: {
         login: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
         handle: "cto",
         owner: "cto",
         acts: [],
@@ -1712,7 +1757,7 @@ test("a running turn's card stays put, its phases open, across a phase boundary"
           ...WORKING.live_call!,
           phase: "review",
           tool_executions: [],
-          running_call: null,
+          running_calls: null,
           started_at: "2026-09-21T09:52:05Z",
         },
       },
@@ -1789,42 +1834,6 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(within(card).queryByRole("button", { name: "Load older turns" })).toBeNull();
 });
 
-// THE NEWEST PAGE IS HELD from the press of "Load older turns": its cursor was
-// minted from its last turn, and read again under turns that ended since it
-// would push its last ones out of both pages. So a poll tick and a reconnect
-// ask nothing of it, and the card says the list is paused. Mutation: ask the
-// turns without the pager's hold, and the tick asks the newest page again.
-test("after Load older turns, neither a poll tick nor a reconnect asks the newest page", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const { store } = mount("#/company/org/seats/swe?tab=turns", {
-      answers: {
-        turns: (p: Record<string, unknown>) =>
-          p.before
-            ? { turns: [turnRow(50)], next: null }
-            : { turns: Array.from({ length: 50 }, (_, i) => turnRow(i)), next: "t-49" },
-      },
-    });
-    await settle();
-    const card = screen
-      .getByRole("heading", { name: "Turns" })
-      .closest(".crewlet-card") as HTMLElement;
-    fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
-    await settle();
-    expect(within(card).getByText("did thing 50")).toBeTruthy();
-    const newest = () => askedFor("turns").filter((a) => !a.params.before).length;
-    const before = newest();
-    await act(async () => void vi.advanceTimersByTime(5 * 20_000));
-    act(() => store.setConnected(false));
-    act(() => store.setConnected(true));
-    await settle();
-    expect(newest()).toBe(before);
-    expect(within(card).getByText("Paused while you page back.")).toBeTruthy();
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
 // AN OLDER PAGE OF TURNS THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN,
 // its failure said beside it, never in its place. Mutation: draw the failure
 // in the control's place again, and there is no Load older turns to press.
@@ -1853,8 +1862,8 @@ test("an older page of turns that fails keeps Load older turns, which asks it ag
   expect(within(card).queryByText(/Could not read the next page/)).toBeNull();
 });
 
-// A KEYLESS ITEM IS NAMED SHORT, whole on its title: `native:<uuid>` took the
-// whole cell on a phone and laid the summary out one letter per line.
+// A KEYLESS ITEM IS NAMED SHORT, whole on its title: `<backend>:<uuid>` took
+// the whole cell on a phone and laid the summary out one letter per line.
 test("a turn's keyless work item is named by its kind and the head of its id", async () => {
   const id = "b375beaf-1d2e-4c6a-9f0b-2a1c3d4e5f60";
   mount("#/company/org/seats/swe?tab=turns", {
@@ -1870,10 +1879,10 @@ test("a turn's keyless work item is named by its kind and the head of its id", a
   });
   await settle();
   const keyless = screen.getByText("task b375beaf");
-  expect(keyless.getAttribute("title")).toContain(`native:${id}`);
+  expect(keyless.getAttribute("title")).toContain(`Worklet task ${id}`);
   expect(keyless.className).toContain("turn-what-key");
   expect(screen.getByText("ENG-29").className).toContain("turn-what-key");
-  expect(document.body.textContent).not.toContain(`native:${id}`);
+  expect(document.body.textContent).not.toContain(`Worklet task ${id}`);
 });
 
 const memoryOf = (over: Record<string, unknown> = {}) => ({
@@ -2090,7 +2099,7 @@ test("a long ask is listed as its marked opening and read whole on demand", asyn
 });
 
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed
-// whole, a native task's `work:task:<uuid>` took the grid's width and left
+// whole, a Worklet task's `work:task:<uuid>` took the grid's width and left
 // "What it did" a third of it.
 test("an episode's conversation prints a uuid's head, and the whole key on its title", async () => {
   const key = "work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc";
@@ -2157,7 +2166,7 @@ function header(title: string): HTMLElement {
 // A THREAD'S KEY IS ITS ONLY IDENTITY, SO IT HAS THE ROW: its own line, whole,
 // with what is known about the thread as the caption under it. Beside a tag
 // and a full timestamp it kept 78px of the list and ENG-28 to ENG-32 all read
-// `work:ENG-…`. A native task's uuid is cut to its head, the key whole on the
+// `work:ENG-…`. A Worklet task's uuid is cut to its head, the key whole on the
 // row's title.
 test("a thread's key has its row, a uuid cut to its head and the key on the title", async () => {
   const native = "work:task:b375beaf-52ee-4db1-a1e3-06d450fbd9f1";
@@ -2401,7 +2410,7 @@ test("the settings tab asks for the company document once", async () => {
 test("a reader the document is not asked for is told the grant, never that none is active", async () => {
   const reader = {
     login: "jane.doe",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -2502,15 +2511,18 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   expect(document.title).toBe("SWE · Crewlet");
 });
 
-// WITHOUT CREWLET WORKS, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
+// WITHOUT WORKLET, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
 // the buttons drew nothing and their empty spans still took the bar's gap.
 // Mutation: keep the spans whatever the services, and the bar holds two
 // empty children.
-test("a company running no Crewlet Works leaves no empty slot in the seat's bar", async () => {
+test("a company running no Worklet leaves no empty slot in the seat's bar", async () => {
   mount("#/company/org/seats/swe", {
     shell: true,
     agents: [WORKING],
-    org: { ...ORG, services: { tracker: "jira", knowledge: "native" } } as OrgProjection,
+    org: {
+      ...ORG,
+      services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" },
+    } as OrgProjection,
   });
   await settle();
   const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
@@ -2518,4 +2530,72 @@ test("a company running no Crewlet Works leaves no empty slot in the seat's bar"
     [...bar.querySelectorAll(":scope > span")].filter((s) => s.childElementCount === 0),
   ).toEqual([]);
   expect(within(bar).queryByRole("button", { name: /^Message/ })).toBeNull();
+});
+
+// A PARKED RUN IS ANSWERED FROM ITS SEAT WITH WHAT IT ASKED WHOLE. The live
+// entry the seat's page draws from carries no launch, which an answer names,
+// so the answer dialog reads the run's durable row for the question, its
+// context and its options, and answers the launch that row names.
+//
+// Mutation: draw the dialog off the live entry alone, and the context and the
+// options are missing and nothing can be sent; send the option as `answer`,
+// or drop the launch, and the write is wrong.
+test("a parked run is answered from its seat with its context and options", async () => {
+  const { store } = mount("#/company/org/seats/swe", {
+    answers: {
+      viewer: { ...OPERATOR, acts: EVERY_ACT },
+      sandbox_runs: {
+        runs: [
+          {
+            turn_id: "t-7",
+            launch_id: "q-7",
+            agent_handle: "swe",
+            status: "awaiting_clarification",
+            question: "Which retry ceiling should the client use?",
+            question_context: "The API allows **five** retries.",
+            decision: {
+              question: "Which retry ceiling should the client use?",
+              options: [
+                { id: "three", label: "Three" },
+                { id: "five", label: "Five" },
+              ],
+              recommended: "three",
+              role: "contributor",
+            },
+          },
+        ],
+      },
+    },
+    agents: [WORKING],
+  });
+  act(() =>
+    store.applySandboxes([
+      {
+        turn_id: "t-7",
+        role: "SWE",
+        agent_handle: "swe",
+        agent_id: "a-swe",
+        coding_agent: "claude",
+        sandbox_id: "box-1",
+        status: "awaiting_clarification",
+        started_at: "2026-09-21T09:45:50Z",
+        question: "Which retry ceiling should the client use?",
+        question_context: "",
+      },
+    ]),
+  );
+  await settle();
+  expect(screen.getByText(/A coding run is waiting on a question:/).textContent).toContain(
+    "Which retry ceiling should the client use?",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector(".prose strong")?.textContent).toBe("five");
+  fireEvent.click(within(dialog).getByRole("button", { name: /Three/ }));
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toEqual({
+    tool: "answer_run",
+    args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
+  });
 });

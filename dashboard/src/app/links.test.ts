@@ -107,7 +107,7 @@ function goStrings(src: string): { text: string; line: number }[] {
 test("the Go string scanner reads strings and nothing else", () => {
   const src = [
     '// a comment naming "#/nowhere"',
-    'const A = "#/work" // and "#/nowhere" again',
+    'const A = "#/worklet" // and "#/nowhere" again',
     '/* a block with "#/nowhere"',
     "   across lines */",
     "var b = `#/live",
@@ -116,7 +116,7 @@ test("the Go string scanner reads strings and nothing else", () => {
     "var r = '\"'",
   ].join("\n");
   const found = goStrings(src).map((s) => `${s.line}:${s.text}`);
-  expect(found).toEqual(["2:#/work", "5:#/live\nturns", '7:an "escaped" #/inbox', '8:"']);
+  expect(found).toEqual(["2:#/worklet", "5:#/live\nturns", '7:an "escaped" #/inbox', '8:"']);
 });
 
 /** Every printed address in the tree outside the dashboard's own source. */

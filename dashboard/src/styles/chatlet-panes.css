@@ -1,0 +1,919 @@
+/*
+ * Chatlet's panes, dialogs and views: the thread, a room's details, a profile
+ * and a catch up beside the conversation; New room, Add people, a room's topic
+ * and description, templates, a delete and the shortcuts; and Activity,
+ * Threads, Drafts and sent, Saved, Search, Browse rooms and New message.
+ *
+ * THE PARTS ARE THE KIT'S (SidePanel, Modal, Tabs, ChipField, PersonRow,
+ * InboxList, ListDetail, ChatMessage): this sheet lays them out and draws only
+ * what is the screen's own, from the design system's tokens and the
+ * conversation scale (`--crewlet-chat-*`), never a literal colour.
+ *
+ * Every view keeps the transcript's side line (`--crewlet-chat-pad-x`): its
+ * head, its filters, its list and the cards in it start where a message's
+ * face does in a room. Names are medium, everything else regular; a pane's or
+ * a view's title is semibold.
+ */
+
+/* Panes ------------------------------------------------------------------ */
+
+/* The pane host draws no box, so the panel inside is the frame's grid item. */
+.chat-pane-host {
+  display: contents;
+}
+
+/* A link in a pane's subtitle: where a thread was said. */
+.chat-pane-where {
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-pane-where:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chat-pane-where:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* A flush pane with tabs: the tab row stays, the panel under it scrolls. */
+.chat-pane-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* An underline tab pads its label by the first step, so the row is inset by
+   the pane's edge less that step and the first tab starts on the edge. */
+.chat-pane-tabs {
+  flex: none;
+  padding: 0 calc(var(--spacing-4) - var(--spacing-1));
+}
+
+.chat-pane-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-pane-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4);
+}
+/* A ROOM'S DETAILS ARE TABBED (the one pane whose body is
+   `.chat-pane-scroll`), and each tab's section starts the shared step under
+   the bar (`--tab-panel-gap`). */
+.chat-pane-scroll > .chat-pane-section:first-child {
+  padding-top: var(--tab-panel-gap);
+}
+
+.chat-pane-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* A pane's transcript is the room's at the pane's narrower inset. */
+.chat-pane-transcript {
+  --crewlet-chat-pad-x: var(--spacing-4);
+}
+
+.chat-pane-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+/* A note led by a glyph or faces: the mark stays beside the words, on their
+   first line, however many lines the words wrap to. */
+.chat-pane-note--lead {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.chat-pane-note--lead > :first-child {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 1lh;
+}
+
+/* An agent writing a reply, drawn as the reply on its way: its face in the
+   avatar column, its name on the author line and what it is doing under it,
+   so the name is never what an ellipsis cuts. */
+.chat-pane-working {
+  display: grid;
+  grid-template-columns: var(--crewlet-chat-avatar) minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--crewlet-chat-gap);
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x);
+}
+
+.chat-pane-working__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--crewlet-chat-text);
+  line-height: var(--crewlet-chat-line);
+}
+
+.chat-pane-working__name {
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-inline-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.chat-muted-text {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+}
+
+.chat-nowrap {
+  white-space: nowrap;
+}
+
+/* Details: grouped cards, one row per fact, Edit where it applies. */
+.chat-about {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.chat-about__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.chat-about__row + .chat-about__row,
+.write-button + .chat-about__row {
+  border-top: 1px solid var(--color-border-default);
+}
+
+.chat-about__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.chat-about__label {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-about__value {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.chat-about__empty {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+.chat-about__note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+/* Leave fills the card's last row, in the danger ink, its ring drawn inside
+   the row where the card's clip cannot cut it. Stated through the card: the
+   ghost variant's ink outranks a lone class. */
+.write-button:has(> .chat-about__leave) {
+  display: flex;
+  border-top: 1px solid var(--color-border-default);
+}
+
+.chat-about .chat-about__leave,
+.chat-about .chat-about__leave:hover {
+  flex: 1;
+  justify-content: flex-start;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: 0;
+  color: var(--color-feedback-danger-ink);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-about .chat-about__leave:hover {
+  background: var(--color-feedback-danger-soft);
+}
+
+.chat-about .chat-about__leave:focus-visible {
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* Members: the rows' hover fill bleeds past the edge by the row's own inset,
+   so the faces stand on the edge the search field above starts at. */
+.chat-member-list,
+.chat-pick-list,
+.chat-browse-list,
+.chat-shared,
+.chat-suggest__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-pane-section .chat-member-list {
+  margin-inline: calc(var(--spacing-2) * -1);
+}
+
+.chat-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-6) var(--spacing-4) var(--spacing-2);
+  text-align: center;
+}
+
+.chat-profile__name {
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chat-profile__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.chat-profile__actions {
+  display: flex;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
+}
+
+/* Rooms in common: each room a link to it, wrapping as words do. */
+.chat-room-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* Shared: each link as the room unfurls it, who shared it under it. */
+.chat-shared {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.chat-shared__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.chat-shared__by {
+  align-self: flex-start;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-decoration: none;
+}
+
+.chat-shared__by:hover {
+  color: var(--color-text-primary);
+}
+
+.chat-shared__by:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Dialogs ---------------------------------------------------------------- */
+
+.chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.chat-dialog-note {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+}
+
+/* Two columns where the dialog has room for them and one on a phone. The
+   column's floor is half the narrow measure, read from the grid's own width. */
+.chat-pick-grid,
+.chat-shortcuts__list {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, calc(var(--size-measure-narrow) / 2)), 1fr)
+  );
+}
+
+.chat-pick-grid {
+  gap: var(--spacing-2);
+}
+
+/* The message as the room draws it: the conversation scale's sizes, its
+   author line on one baseline. */
+.chat-delete-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  font-size: var(--crewlet-chat-text);
+  line-height: var(--crewlet-chat-line);
+}
+
+.chat-delete-preview__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-delete-preview__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+
+.chat-delete-preview__name {
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-delete-preview__time {
+  color: var(--color-text-secondary);
+  font-size: var(--crewlet-chat-meta);
+  line-height: 1;
+}
+
+.chat-delete-preview__body {
+  overflow-wrap: anywhere;
+}
+
+.chat-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.chat-suggest__label {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+/* A list that scrolls in the dialog, its rows' fill bleeding past the edge. */
+.chat-suggest__list {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--size-control-lg) * 6);
+  margin-inline: calc(var(--spacing-2) * -1);
+  overflow-y: auto;
+}
+
+/* A setting only admins can see sits in a labelled frame. */
+.chat-admin-setting {
+  position: relative;
+  padding: var(--spacing-4) var(--spacing-3) var(--spacing-3);
+  border: 1px solid var(--color-edge-medium);
+  border-radius: var(--radius-md);
+}
+
+.chat-admin-setting__label {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: 0 var(--spacing-2);
+  transform: translate(-50%, -50%);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* A template's preview reads as the room's head will. */
+.chat-template-preview {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-background);
+}
+
+.chat-template-preview__caption {
+  padding: var(--spacing-2) var(--spacing-4) 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-template-preview__room {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-4) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-template-preview__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-template-preview__topic,
+.chat-template-preview__text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+}
+
+.chat-template-preview__topic {
+  color: var(--color-text-secondary);
+}
+
+.chat-template-preview__text {
+  color: var(--color-text-primary);
+}
+
+.chat-template-preview__about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  background: var(--color-surface-subtle);
+}
+
+.chat-template-preview__label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+
+.chat-shortcuts__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.chat-shortcuts__list {
+  column-gap: var(--spacing-6);
+  margin: 0;
+}
+
+.chat-shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-shortcuts__row dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.chat-shortcuts__keys {
+  display: inline-flex;
+  gap: var(--spacing-1);
+  margin: 0;
+}
+
+/* Views ------------------------------------------------------------------ */
+
+.chat-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-view-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  height: var(--size-shell-topbar);
+  padding: 0 var(--crewlet-chat-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-view-head__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-view-head__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* A view's sections are an underline tab row, inset by the side line less the
+   step a tab pads its label by. */
+.chat-view-tabs {
+  flex: none;
+  padding: 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-1));
+}
+
+.chat-view-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacing-3) var(--crewlet-chat-pad-x) var(--spacing-6);
+}
+
+.chat-view-foot {
+  flex: none;
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
+}
+
+/* Activity: the list beside the reading pane, filling the view. */
+.chat-activity {
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-activity-context {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.chat-context {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-context__head,
+.chat-thread-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-height: var(--size-control-md);
+  padding: var(--spacing-3) var(--crewlet-chat-pad-x);
+}
+
+.chat-context__where {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: var(--crewlet-chat-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-context__where > svg {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.chat-context__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context__where .chat-muted-text {
+  font-size: var(--crewlet-chat-meta);
+  white-space: nowrap;
+}
+
+.chat-context__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: var(--spacing-1);
+}
+
+.chat-context__reply {
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
+}
+
+/* Cards: Threads, Saved and the outbox, found by their fill as well as their
+   hairline, so each reads as one object on every palette. */
+.chat-thread-card,
+.chat-list-card {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.chat-thread-card__head {
+  padding-bottom: 0;
+}
+
+.chat-thread-card__foot {
+  padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
+}
+
+.chat-list-card__actions {
+  display: flex;
+  gap: var(--spacing-1);
+}
+
+.chat-list-card__gone {
+  padding: 0 var(--crewlet-chat-pad-x) var(--spacing-3);
+}
+
+/* "N more replies" starts on the words' line, under the face column. */
+.chat-more-replies {
+  align-self: flex-start;
+  margin: var(--spacing-1) var(--crewlet-chat-pad-x) var(--spacing-1)
+    calc(var(--crewlet-chat-pad-x) + var(--crewlet-chat-avatar) + var(--crewlet-chat-gap));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-link-quiet);
+  font: inherit;
+  font-size: var(--crewlet-chat-meta);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.chat-more-replies:hover {
+  color: var(--color-brand-accent-ink);
+  text-decoration: underline;
+}
+
+.chat-more-replies:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.chat-group-label {
+  margin: var(--spacing-2) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+}
+
+/* Drafts, sent messages and search hits are buttons drawn as cards. */
+.chat-draft,
+.chat-hit {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-default),
+    border-color var(--motion-duration-fast) var(--motion-easing-default);
+}
+
+/* THE HOVER OVERLAY OVER THE CARD'S OWN GROUND: an overlay lifts whatever it
+   lands on, where a rung would be right only against the ground it was
+   picked for. */
+.chat-draft:hover,
+.chat-hit:hover {
+  border-color: var(--color-border-hover);
+  background-image: linear-gradient(var(--color-surface-hover), var(--color-surface-hover));
+}
+
+.chat-draft:focus-visible,
+.chat-hit:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+.chat-draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--crewlet-chat-pad-x);
+}
+
+.chat-draft__text {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: var(--crewlet-chat-text);
+  line-height: var(--crewlet-chat-line);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Search and Browse: a field over a row of filters. */
+.chat-search-bar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--crewlet-chat-pad-x) 0;
+}
+
+.chat-search-bar + .chat-view-tabs {
+  margin-top: var(--spacing-2);
+}
+
+.chat-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* A hit is laid out as a message: the face, then the name and where on the
+   head line and the words under it, at the transcript's sizes. */
+.chat-hit {
+  display: grid;
+  grid-template-columns: var(--crewlet-chat-avatar) minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--crewlet-chat-gap);
+  padding: var(--spacing-3) var(--crewlet-chat-pad-x);
+}
+
+.chat-hit > :first-child {
+  justify-self: center;
+}
+
+.chat-hit__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--crewlet-chat-text);
+  line-height: var(--crewlet-chat-line);
+}
+
+.chat-hit__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--spacing-2);
+}
+
+.chat-hit__name {
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-hit__body {
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+/* The pick list's faces stand on the view's side line, as a message's do. */
+.chat-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin-inline: calc(var(--spacing-2) * -1);
+}
+
+/* New message: the conversation the recipients already have, and the box. */
+.chat-new-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.chat-new-preview [data-transcript] {
+  margin-inline: calc(var(--crewlet-chat-pad-x) * -1);
+}
+
+.chat-new-compose {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* Browse rooms: a row per room, Join or Open at its end. */
+.chat-browse-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-1) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-browse-row:last-child {
+  border-bottom: 0;
+}
+
+.chat-browse-row__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-browse-row__main:hover {
+  background: var(--color-surface-hover);
+}
+
+.chat-browse-row__main:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+.chat-browse-row__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-5);
+  font-size: var(--crewlet-chat-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat-browse-row__name > svg {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.chat-browse-row__topic {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--crewlet-chat-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-browse-row__meta {
+  color: var(--color-text-secondary);
+  font-size: var(--crewlet-chat-meta);
+}
+
+.chat-browse-row__note {
+  flex-basis: 100%;
+  padding: 0 var(--spacing-2) var(--spacing-2);
+}
+
+.chat-browse-row > :not(.chat-browse-row__main, .chat-browse-row__note) {
+  flex: none;
+}

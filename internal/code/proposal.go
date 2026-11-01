@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE PROPOSAL: one push as the receiving node hands it to a committer, and
@@ -238,8 +239,8 @@ func (p Proposal) ValidateCommands() error {
 		// THE ASKER'S OWN BUG, never the client's: a measure of an entry
 		// whose way is unstamped is short of the entry that will be
 		// proposed, by up to the longest way's spelling.
-		return fmt.Errorf("%w: via: %q is not one of %v — a push is measured as built", ErrInvalidProposal,
-			p.Via, proposedVias())
+		return fmt.Errorf("%w: via: %q is not one of %s — a push is measured as built", ErrInvalidProposal,
+			p.Via, words.Or(proposedVias()))
 	case len(p.Commands) == 0:
 		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:
@@ -426,10 +427,10 @@ func (p Proposal) validFields() error {
 	case !p.Via.proposed():
 		// A MERGE'S PUSH IS ITS RECORD'S, never a proposal's: a push naming
 		// via merge would move a branch as a merge does and judge it as a
-		// push, past the gate a merge is decided by (ADR-0066).
-		return fmt.Errorf("%w: via: %q is not one of %v — a push names how its pack was built, and a "+
+		// push, past the gate a merge is decided by (ADR-0089).
+		return fmt.Errorf("%w: via: %q is not one of %s — a push names how its pack was built, and a "+
 			"merge is decided through its gate, never proposed as a push", ErrInvalidProposal, p.Via,
-			proposedVias())
+			words.Or(proposedVias()))
 	case strings.TrimSpace(p.Node) == "":
 		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():

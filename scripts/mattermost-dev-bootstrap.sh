@@ -8,25 +8,24 @@
 # fresh install is auto-promoted to system admin — that is the account the
 # provisioner authenticates as), mints a personal access token for it and
 # writes it straight to the env file, reconciles the server's own Site URL
-# with the address browsers use, creates the team and its channels, proves
-# a websocket can be opened, and — with COMPANY= set — provisions the agent
-# bot accounts.
+# with the address browsers use, creates the team and its channels, and
+# proves a websocket can be opened. The agents' bots are the engine's: it
+# creates each one when the agent is turned on in the Mattermost
+# integration's Agents tab.
 #
 # Credentials are persisted the moment they exist, before any check that
 # can abort: Mattermost returns a personal access token's value exactly
 # once, so a gate that fails between minting and writing strands a live
 # admin credential nobody can read.
 #
-# The company config references this instance as ${MATTERMOST_URL} — no
-# copy or sed needed: this script writes MATTERMOST_URL and
-# MATTERMOST_ADMIN_TOKEN into the env file, and every consumer (provision,
-# the engine) resolves the ref from the sourced environment.
+# The company config references this instance as ${MATTERMOST_URL}, and
+# its administrator token as ${MATTERMOST_ADMIN_TOKEN}: this script writes
+# both into the env file, and the engine resolves the refs from the sourced
+# environment.
 #
 # Usage (from the repo root):
 #   docker compose --profile mattermost up -d --wait
 #   scripts/mattermost-dev-bootstrap.sh
-#   # or, provision the agent bots in the same run:
-#   COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 #
 # THE PUBLIC URL. Mattermost hands its own `ServiceSettings.SiteURL` to
 # every browser that loads the web app, and the web app and its plugins
@@ -645,16 +644,12 @@ else
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# 8. Optional: provision the agent bots
-# ---------------------------------------------------------------------------
-if [ -n "${COMPANY:-}" ]; then
-  say "Provisioning agent bots from ${COMPANY}"
-  MATTERMOST_ADMIN_TOKEN="$ADMIN_TOKEN" MATTERMOST_URL="$URL" \
-    crewlet mattermost provision "$COMPANY" -env-file "$ENV_FILE"
-else
-  say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
-fi
+# THE PATH `.` IS HANDED: a bare name is looked up on PATH rather than in the
+# working directory, so a relative file is spelt with its ./ prefix.
+case "$ENV_FILE" in
+  */*) ENV_SOURCE="$ENV_FILE" ;;
+  *) ENV_SOURCE="./$ENV_FILE" ;;
+esac
 
 cat <<EOF
 
@@ -673,18 +668,33 @@ Next:
            enabled: true
            url: "\${MATTERMOST_URL}"
            team: ${TEAM}
+           provisioning:
+             admin_token: "\${MATTERMOST_ADMIN_TOKEN}"
 
-  2. Provision the bots (if you did not pass COMPANY= above):
+  2. Load the env file into this shell:
 
-       crewlet mattermost provision <company.yaml>
+       set -a; . ${ENV_SOURCE}; set +a
 
-  3. Check the whole path before you boot:
+     Once the engine is up, turn each agent on in the Mattermost
+     integration's Agents tab, with its roles and channels: the engine
+     creates its bot and seals its token itself.
+
+  3. Check the whole path before you boot or restart:
 
        crewlet mattermost doctor <company.yaml>
 
-  4. Start the engine — it opens one websocket per agent seat:
+  4. Start the engine from that shell, or restart it there if it is up —
+     it opens one websocket per agent seat, with the tokens the env file
+     holds:
 
        crewlet run -config crewlet.yaml -company <company.yaml>
+
+     -company only seeds a node that runs no company yet. A node that
+     already runs one keeps it and logs that the file was ignored: once it
+     is up, hand it step 1's block with crewlet config import
+     <company.yaml> (CREWLET_API_TOKEN as in step 2), which replaces its
+     whole company with the file, with CREWLET_API_TOKEN set to one of
+     crewlet.yaml's api.auth tokens whose grants include admin.
 
 Nothing needs to reach the engine from Mattermost, so no tunnel is needed.
 See docs/integrations/mattermost.md for the full walkthrough.

@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,10 @@ import (
 
 var pinned = time.Date(2026, 8, 23, 15, 0, 0, 0, time.UTC)
 
+// thisNode is the id the fixture's surface runs under: the node an unknown
+// outcome names as holding the revision it stored.
+const thisNode = "core-1"
+
 // The webhook signing tokens the fixture company carries. Both are REAL
 // values in GitLab's own shape — whsec_ over standard base64 of a 32-byte
 // key — because config validation refuses anything else, so a fixture that
@@ -55,6 +60,7 @@ const (
 const companyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -87,31 +93,46 @@ type surface struct {
 	caller *iam.Principal
 
 	// held is what the directory this surface asks says holds each seat,
-	// and directoryDown makes every read of it fail; asked is every list of
-	// seats the surface asked about, in order, and askedAt the instant it
-	// asked at.
+	// and directoryDown makes every read of it fail; asked is every question
+	// the surface put to it, in order (the seats each admits, read with
+	// [surface.admitted]), and askedAt the instant each was asked at.
 	held          map[string]configapi.SeatHolder
 	directoryDown error
-	asked         [][]string
+	asked         []func(string) bool
 	askedAt       []time.Time
 }
 
 // holders is the directory a case's surface asks, answering from s.held.
-func (s *surface) holders(_ context.Context, seats []string, now time.Time) (
+func (s *surface) holders(_ context.Context, asked func(string) bool, now time.Time) (
 	map[string]configapi.SeatHolder, error) {
 
-	s.asked = append(s.asked, slices.Clone(seats))
+	s.asked = append(s.asked, asked)
 	s.askedAt = append(s.askedAt, now)
 	if s.directoryDown != nil {
 		return nil, s.directoryDown
 	}
 	out := map[string]configapi.SeatHolder{}
-	for _, seat := range seats {
-		if held, ok := s.held[seat]; ok {
+	for seat, held := range s.held {
+		if asked(seat) {
 			out[seat] = held
 		}
 	}
 	return out, nil
+}
+
+// admitted is which of seats the i-th question this surface put to the
+// directory asked about, in the order given; none when there was no i-th.
+func (s *surface) admitted(i int, seats ...string) []string {
+	if i >= len(s.asked) {
+		return nil
+	}
+	var out []string
+	for _, seat := range seats {
+		if s.asked[i](seat) {
+			out = append(out, seat)
+		}
+	}
+	return out
 }
 
 // newSurface is the service over a store, a plane and a KEYRING of the case's
@@ -148,8 +169,8 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	}
 	opts := configapi.Options{
 		Store: db, Plane: s.plane, Cipher: testCipher(t),
-		Holders: s.holders,
-		Now:     func() time.Time { return pinned },
+		Holders: s.holders, Node: thisNode,
+		Now: func() time.Time { return pinned },
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -170,17 +191,32 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 // query layer makes directly rather than over HTTP.
 func (s *surface) service() *configapi.Service { return s.svc }
 
-// activeDocument is the stored revision as a node applying it would see it:
+// active is the fleet's revision — the one the pointer names — as this node's
+// history holds it, which is the company every answer here is about.
+func (s *surface) active(ctx context.Context) (store.Revision, bool, error) {
+	target, pointed, err := s.plane.Target(ctx)
+	if err != nil || !pointed {
+		return store.Revision{}, false, err
+	}
+	revision, found, err := s.configs.Get(ctx, target.RevisionID)
+	if err != nil || !found {
+		return store.Revision{}, false, fmt.Errorf("the fleet's revision %s is not in "+
+			"this node's history (found=%v): %w", target.RevisionID, found, err)
+	}
+	return revision, true, nil
+}
+
+// activeDocument is the fleet's revision as a node applying it would see it:
 // unsealed and UNREDACTED, which is the only view that can prove a mask was
 // resolved rather than stored.
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
-const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
+const companyJSONDoc = `{"name":"Acme","providers":{"sandbox":{"fake":true},"llm":{"zulu":` +
 	`{"model":"claude-sonnet-5"}}}}`
 
 func (s *surface) activeDocument(t *testing.T) string {
 	t.Helper()
-	revision, found, err := s.configs.Active(t.Context())
+	revision, found, err := s.active(t.Context())
 	if err != nil || !found {
 		t.Fatalf("active revision: %v (found=%v)", err, found)
 	}
@@ -258,16 +294,34 @@ func companyJSON(t *testing.T, doc string) []byte {
 	return document
 }
 
-// seedPayload stores payload as the active revision, byte for byte.
+// seedPayload stores payload, byte for byte, and points the fleet at it, as
+// a write does: stored as history, then activated over whatever the pointer
+// named.
 func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	t.Helper()
-	id, err := s.configs.InsertActive(t.Context(), store.Revision{
+	revision := store.Revision{
 		CreatedByKind: iam.ActorOperator,
 		Source:        "test", CreatedBy: "operator", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
-	})
+	}
+	id, err := s.configs.Insert(t.Context(), revision)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	target, pointed, err := s.plane.Target(t.Context())
+	if err != nil {
+		t.Fatalf("seed: read the pointer: %v", err)
+	}
+	request := coord.ActivationRequest{
+		RevisionID: id, Summary: revision.Summary, Payload: payload, At: pinned,
+		Origin: coord.RevisionOrigin{
+			Author: revision.CreatedBy, AuthorKind: revision.CreatedByKind,
+			Source: revision.Source, CreatedAt: revision.CreatedAt,
+		},
+		Expect: target.RevisionID, ExpectAbsent: !pointed,
+	}
+	if _, err := s.plane.Activate(t.Context(), request); err != nil {
+		t.Fatalf("seed: activate: %v", err)
 	}
 	return id
 }
@@ -600,7 +654,7 @@ func TestEveryConfigRefusalCarriesItsSentence(t *testing.T) {
 	check("a write somebody else's beat", s.do(t, http.MethodPut, "/config",
 		strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base}),
-		http.StatusConflict, httpjson.CodeRevisionAdvanced)
+		http.StatusPreconditionFailed, httpjson.CodeRevisionAdvanced)
 }
 
 func TestAWriteActivatesANewRevision(t *testing.T) {
@@ -703,7 +757,7 @@ func TestAnInvalidDocumentIsRefusedWithItsReason(t *testing.T) {
 		t.Errorf("the reason does not name the fault: %v", body["detail"])
 	}
 	// And nothing was stored, so a refused write leaves no trace.
-	if _, found, _ := s.configs.Active(t.Context()); found {
+	if _, found, _ := s.active(t.Context()); found {
 		t.Error("a refused document was activated")
 	}
 }
@@ -740,8 +794,8 @@ func TestConcurrentEditorsAreToldRatherThanOverwritten(t *testing.T) {
 	// Ours was based on the revision they replaced.
 	res := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", res.Code)
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("got %d, want 412: the revision If-Match named is not the active one", res.Code)
 	}
 	body := decode(t, res)
 	if body["error"] != "revision_advanced" {
@@ -898,7 +952,7 @@ func TestASealedStoreRoundTripsThroughTheSurface(t *testing.T) {
 		t.Fatalf("put: %d", got)
 	}
 	// Stored sealed...
-	active, found, err := s.configs.Active(t.Context())
+	active, found, err := s.active(t.Context())
 	if err != nil || !found {
 		t.Fatal(err)
 	}
@@ -1063,12 +1117,20 @@ func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	t.Parallel()
 	// There is no active revision to compare against, which is a different
 	// answer from "the revision you named does not exist".
+	//
+	// A revision in this node's history that no pointer named and no tick
+	// opened is what a node looks like before its first import: there is a
+	// revision to diff, and no company to diff it against.
 	s := newSurface(t)
-	id := s.seed(t, companyDoc)
-	// Deactivate everything, which is what a node looks like before its
-	// first import.
-	if _, err := s.db.SQL().ExecContext(t.Context(),
-		`UPDATE company_config SET is_active = 0`); err != nil {
+	payload, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.configs.Insert(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
+		Summary: "stored", Payload: payload, CreatedAt: pinned,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	res := s.do(t, http.MethodGet, "/config/revisions/"+id+"/diff", "", nil)
@@ -1235,7 +1297,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
 		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
-			opening + "agent: claude-code\nmodel: claude-sonnet-5\nmode: text\nmodell: haiku\n", true, 7},
+			opening + "agent: claude-code\nmodel: claude-sonnet-5\nrun_in: direct\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1259,8 +1321,8 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	}
 }
 
-// A STORE, A PLANE AND A KEYRING ARE REQUIRED, and a missing one is refused by
-// name.
+// A STORE, A PLANE, A KEYRING AND THE NODE'S NAME ARE REQUIRED, and a missing
+// one is refused by name.
 //
 // The engine beside every API holds all three, so a nil is a wiring mistake,
 // and a narrower surface built around it (an unregistered /config, every write
@@ -1274,7 +1336,12 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // the stream it would log to, and that rule is Tier A's alone now — a node
 // on an in-memory stream does not boot, so no surface is ever asked.
 //
-// The control is the same options with all three: built.
+// THE NODE'S NAME TOO: a write stores its revision in this node's history
+// alone, and an answer that cannot say whether its activation landed sends
+// the caller to this node to diff or revert it — by a name an empty one is
+// not.
+//
+// The control is the same options with all of them: built.
 //
 // Mutation: drop any one refusal and its row builds a surface.
 func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
@@ -1283,16 +1350,17 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
-	nobody := func(context.Context, []string, time.Time) (
+	nobody := func(context.Context, func(string) bool, time.Time) (
 		map[string]configapi.SeatHolder, error) {
 
 		return nil, nil
 	}
 	for field, opts := range map[string]configapi.Options{
-		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody},
-		"Plane":   {Store: db, Cipher: cipher, Holders: nobody},
-		"Cipher":  {Store: db, Plane: fleet, Holders: nobody},
-		"Holders": {Store: db, Plane: fleet, Cipher: cipher},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody, Node: thisNode},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody, Node: thisNode},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher, Node: thisNode},
+		"Node":    {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: " "},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1304,8 +1372,8 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 		}
 	}
 	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
-		Cipher: cipher, Holders: nobody}); err != nil {
-		t.Errorf("a store, a plane, a keyring and a directory were refused: %v", err)
+		Cipher: cipher, Holders: nobody, Node: thisNode}); err != nil {
+		t.Errorf("a store, a plane, a keyring, a directory and a node were refused: %v", err)
 	}
 }
 
@@ -1335,7 +1403,7 @@ func TestAWritePublishesTheActivationNudge(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload is %T", pub.sent[0].Data)
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatalf("Active: %v", err)
 	}
@@ -1391,7 +1459,7 @@ func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
 				t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
 			}
 
-			active, _, err := s.configs.Active(t.Context())
+			active, _, err := s.active(t.Context())
 			if err != nil {
 				t.Fatalf("Active: %v", err)
 			}
@@ -1495,8 +1563,8 @@ func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
 	// The tag moved with the document, so the stale one is now refused.
 	stale := s.do(t, http.MethodPut, "/config", s.activeDocument(t),
 		map[string]string{"X-Summary": "stale write", "If-Match": tag})
-	if stale.Code != http.StatusConflict {
-		t.Errorf("PUT with a superseded tag = %d, want 409", stale.Code)
+	if stale.Code != http.StatusPreconditionFailed {
+		t.Errorf("PUT with a superseded tag = %d, want 412", stale.Code)
 	}
 }
 
@@ -1525,7 +1593,9 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // there". `If-None-Match: *` is the reverse, and the only create-only
 // precondition: every other If-Match value is an entity-tag, whatever word it
 // happens to be, and one no revision carries matches nothing, configured or
-// not.
+// not. A condition that is false is 412 (§13.1.1) whichever it is: an
+// entity-tag the active revision does not carry was answered 409, the status
+// of a race the request never stated a condition about.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1539,7 +1609,7 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
 		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
 		{"a word is an entity-tag an unconfigured node cannot match", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
-		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
+		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusPreconditionFailed, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1559,6 +1629,32 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 				if got := decode(t, res)["error"]; got != tc.code {
 					t.Errorf("%s: error = %v, want %s", tc.name, got, tc.code)
 				}
+			}
+		})
+	}
+}
+
+// IF-MATCH BESIDE IF-NONE-MATCH IS REFUSED, as an entity write refuses the
+// pair: the two ask opposite things of one company, and answering either alone
+// judged a condition the caller stated as though it had not been sent, so a
+// stale If-Match beside `If-None-Match: *` was never refused.
+func TestIfMatchBesideIfNoneMatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t, companyDoc)
+			body := s.activeDocument(t)
+			if method == http.MethodPatch {
+				body = `{"mission": "mine"}`
+			}
+			res := s.do(t, method, "/config", body, map[string]string{
+				"X-Summary": "both", "If-Match": `"stale"`, "If-None-Match": "*",
+			})
+			if res.Code != http.StatusBadRequest || decode(t, res)["error"] != "conflicting_preconditions" {
+				t.Errorf("%s /config with both = %d %s, want 400 conflicting_preconditions",
+					method, res.Code, res.Body.String())
 			}
 		})
 	}
@@ -1757,6 +1853,70 @@ func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
 	}
 	if got := decode(t, res)["error"]; got != "no_active_revision" {
 		t.Errorf("error = %v", got)
+	}
+}
+
+// A RELOAD IS HELD TO THE REVISION ITS CALLER DECIDED ON, as every write is.
+//
+// A `/setup` rotation writes a value through the `${VAR}` the revision it read
+// holds and then reloads, so a reload of whatever the pointer names by then —
+// a write in between that put a literal in that slot — republished a company
+// that never reads the value, and answered that the rotation landed. Given
+// the revision it was decided on, a moved pointer is refused before anything
+// is stored, naming both sides; given none, as `POST /config/reload` gives,
+// it re-publishes whatever the fleet runs.
+//
+// Mutation: leave the expectation out of the reload's draft, and the stale
+// reload lands over the newer revision.
+func TestAReloadIsHeldToTheRevisionItWasDecidedOn(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	read := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "the revision the rotation read"})
+	if read.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", read.Code, read.Body)
+	}
+	base, _ := decode(t, read)["revision_id"].(string)
+	meanwhile := s.do(t, http.MethodPost, "/config/reload", "",
+		map[string]string{"X-Summary": "a write in between"})
+	if meanwhile.Code != http.StatusCreated {
+		t.Fatalf("the write in between = %d: %s", meanwhile.Code, meanwhile.Body)
+	}
+	current, _ := decode(t, meanwhile)["revision_id"].(string)
+	by := iam.Actor{Name: "founder", Kind: iam.ActorHuman}
+
+	history, err := s.configs.List(t.Context(), 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.service().Reload(t.Context(), "rotate", by, base)
+	var raced *configapi.RacedError
+	if !errors.As(err, &raced) || raced.Base != base || raced.Current != current ||
+		raced.Stored != "" {
+		t.Fatalf("a reload decided on %s after %s landed = %v, want refused naming both "+
+			"and storing nothing", base, current, err)
+	}
+	if after, err := s.configs.List(t.Context(), 50, 0); err != nil || len(after) != len(history) {
+		t.Errorf("the refused reload stored a revision: %d rows, want %d (err %v)",
+			len(after), len(history), err)
+	}
+	if active, _, err := s.active(t.Context()); err != nil || active.ID != current {
+		t.Errorf("the fleet is on %s (err %v), want %s untouched", active.ID, err, current)
+	}
+
+	// THE FLEET'S OWN, bare or as the entity-tag an If-Match carries, and
+	// none at all: each lands, and moves the pointer the next is held to.
+	for _, spell := range []func(string) string{
+		func(id string) string { return id },
+		func(id string) string { return `"` + id + `"` },
+		func(string) string { return "" },
+	} {
+		expect := spell(current)
+		applied, err := s.service().Reload(t.Context(), "rotate", by, expect)
+		if err != nil {
+			t.Fatalf("a reload expecting %q, the fleet's own or none: %v", expect, err)
+		}
+		current = applied.RevisionID
 	}
 }
 

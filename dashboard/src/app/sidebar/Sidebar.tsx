@@ -4,17 +4,18 @@
  * # What is on it, and what is not
  *
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
- * the three that are about you (Home, Inbox, My work), then Company (Overview,
- * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
- * (Work, Code, Knowledge, Artifacts, Live), and Settings at the foot.
+ * the three that are about you (Home, Inbox, My work), then Company
+ * (Principles, Brand, Org chart, Schedules, Integrations, Budgets), then
+ * Workspace (Worklet, Code, Chatlet, Doclet, Artifacts, Live), and Settings at
+ * the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
  * objects are rows on the section that lists them; a sidebar that carried
  * either becomes a tree with a different shape on every screen, which is the
  * two-column navigation this replaced. The company's projects are no group
- * here for that reason: a project is a scope of Work, switched where Work's
- * trail names it (`header/ProjectSwitcher.tsx`).
+ * here for that reason: a project is a scope of Worklet, switched where
+ * Worklet's trail names it (`header/ProjectSwitcher.tsx`).
  *
  * # Running is the way to a turn from anywhere
  *
@@ -31,40 +32,66 @@
  *
  * The kit's `NavItem` takes a figure only with the words that name it, and
  * two kinds of figure are two props: a BADGE is how many things are waiting
- * on the reader (the Inbox's unread primary notices, the one accent fill in
- * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a pinned view's total). A
- * figure the engine did not answer is absent, never a zero.
+ * on the reader (the Inbox's unread primary notices, the open work assigned
+ * to them on My work, the mentions and direct messages Chatlet holds for
+ * them), a filled pill, and a COUNT is how many of something a destination
+ * holds (the turns Live is running, a pinned view's total). A badge asking for
+ * a decision is the accent's; My work's is the quiet grey, since open work is
+ * waiting on the reader without anybody asking. A figure the engine did not
+ * answer is absent, never a zero.
  *
  * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
- * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work and
- * My work where it runs no Crewlet Works, Knowledge where it runs no Crewlet
- * Knowledge, Code where the engine hosts none of its code (`nav.ts`'s
- * `serviceShown`, over `lib/services.ts`). There is nothing to ask anybody
- * for, and a locked row would say there was.
+ * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Worklet
+ * and My work where it runs no Worklet, Doclet where it runs no Doclet,
+ * Chatlet where it runs no Chatlet, Code where the engine hosts none of its
+ * code (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is nothing
+ * to ask anybody for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
  * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
  * row that vanished when access is absent is indistinguishable from one that
  * does not exist. Its title names what would open it — the access a reader
- * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
- * Knowledge. A workspace only PART of which is closed is not locked as a
- * whole: Settings draws its locks per section, in its column, and is open to
- * every reader through Spend's readings.
+ * would ask an admin for: Inbox, My work and Worklet say Worklet, Doclet says
+ * Doclet, Chatlet says Chatlet. A workspace only PART of which is closed is not
+ * locked as a whole: Settings draws its locks per section, in its column, and
+ * is open to every reader through Spend's readings.
  *
  * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
- * work's count and the pinned views are tracker answers, so a reader without
- * Tracker asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
- * [PinnedSection]) — a figure beside a lock would be a refusal drawn as a
+ * work's count and the pinned views are Worklet's answers, so a reader without
+ * Worklet asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
+ * [PinnedSection]): a figure beside a lock would be a refusal drawn as a
  * number.
+ *
+ * # Two shapes from one list
+ *
+ * Above the shell breakpoint the reader can fold the sidebar to the kit's
+ * compact rail and back, with the kit's fold control or `Mod+\`, and the
+ * choice is theirs to keep (`railShape.ts`). FOLDED, it is the kit's
+ * `CompactNav`: Search, then the places about you, each its glyph over its
+ * name, then each named group folded into ONE tile (Company, Workspace) whose
+ * flyout lists its places; Settings and the reader's face stand under the
+ * foot's rule, and the engine's status on a row of its own under the mark.
+ * Both shapes are drawn from [placeOf], so they list the same places with the
+ * same figures, links and locks, and a group's tile carries its places'
+ * badges and says when the page on screen is one of them. The live shortcuts (Pinned,
+ * Starred, Running) are the full sidebar's: the folded rail is the places,
+ * and one press unfolds the rest.
+ *
+ * Below the breakpoint the sidebar is the kit's drawer, which has the room
+ * for the full list, so it is always the full shape there and the key opens
+ * it.
  */
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import {
   AppShell,
   ArtifactKindGlyph,
   BrandLockup,
+  CompactNav,
+  CompactNavGroup,
+  CompactNavItem,
+  CompactNavSeparator,
   Kbd,
   SearchTrigger,
   SidebarNav,
@@ -72,7 +99,7 @@ import {
   useAppShell,
   type NavItemProps,
 } from "@crewlethq/ui";
-import { ActivityGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, PinGlyph, SearchGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   SIDEBAR_GROUPS,
@@ -102,8 +129,9 @@ import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { artifactPath } from "~/app/routes.ts";
 import { usePins } from "~/lib/artifacts/pins.ts";
-import { capsOf, keyRow, useKeymap } from "../keymap.ts";
+import { ariaKeysOf, capsOf, keyRow, pressText, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
+import { attentionFigure, useChatAttention } from "~/lib/chatRooms.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
@@ -111,6 +139,14 @@ import { preload } from "../lazyScreen.ts";
 import { UserBlock, type FootPlace } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
+import { toggleRailShape } from "./railShape.ts";
+
+/**
+ * What the search control is called in either shape: the full sidebar's field
+ * and the compact rail's Search tile open the same palette, so they name it
+ * with the same words.
+ */
+const SEARCH_LABEL = "Search everything";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
@@ -129,14 +165,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     return held !== null && backups !== undefined && sectionOpen(backups, held);
   }, [held]);
 
-  // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
-  // the reader's way to it without reaching for the toggle in the bar. Only
-  // there: above the breakpoint the sidebar is always on screen and there is
-  // nothing to open. It OPENS rather than toggles, because an open drawer is
-  // a modal layer that owns the keyboard (`lib/keys.ts` stands aside for
-  // one), and the drawer's own Escape is what closes it.
+  // MOD+\ IS THE SIDEBAR'S KEY IN EITHER SHAPE OF THE FRAME. Where the
+  // sidebar stands beside the page it folds it and unfolds it, as the kit's
+  // fold control does. Below the shell breakpoint the sidebar is a drawer, and
+  // the key OPENS it rather than toggling it, because an open drawer is a
+  // modal layer that owns the keyboard (`lib/keys.ts` stands aside for one),
+  // and the drawer's own Escape is what closes it; the stored shape is left
+  // alone there, since the drawer has nothing to fold.
   const shell = useAppShell();
-  useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
+  useKeymap({ sidebar: () => (shell.narrow ? shell.openDrawer() : toggleRailShape()) });
+  // THE SHAPE DRAWN NOW, which is the kit's to say: the reader's choice above
+  // the breakpoint, and always the full list in the drawer.
+  const compact = shell.rail === "compact";
   const keyHints = useKeyHints();
   const org = useOrg();
   const agents = useAgents();
@@ -147,6 +187,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // earlier socket may have left behind, are not drawn.
   const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
+  const chat = useChatAttention();
   const runs = useServicesRun();
   const known = useServicesKnown();
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
@@ -178,7 +219,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavItemProps, "badge" | "count">>> = {
-    // WHERE THE COMPANY RUNS NO CREWLET WORKS no notice reaches the Inbox,
+    // WHERE THE COMPANY RUNS NO WORKLET no notice reaches the Inbox,
     // and its badge counts what still does: what waits on the reader's
     // decision ([useNeedsYouCount]).
     inbox: runs.tracker
@@ -188,6 +229,21 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       : needsYou !== null && needsYou > 0
         ? { badge: { value: String(needsYou), label: "waiting on your decision" } }
         : {},
+    // WHAT WAITS ON THE READER IN CHATLET: the unread messages that name
+    // them, and every unread direct message, in the rooms they have not muted
+    // (`lib/chatRooms.ts`). A badge, because each of them is addressed to the
+    // reader; none where the counts were not measured or nothing waits.
+    chatlet: chat
+      ? {
+          badge: {
+            value: attentionFigure(chat),
+            label: "unread mentions and direct messages",
+          },
+        }
+      : {},
+    // THE OPEN WORK ASSIGNED TO THE READER IS A BADGE, the Inbox's filled
+    // pill on the same end line, in the QUIET tone: it waits on them, but
+    // nobody asked, so it does not take the accent the Inbox's asks hold.
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
     // good on a quiet day.
@@ -197,9 +253,10 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           // `+` where the engine stopped counting: the row said "10000+"
           // beside a tab that said "10,000+".
           {
-            count: {
+            badge: {
               value: pageCount(queue.total, queue.capped === true),
               label: "open, assigned to you",
+              tone: "quiet",
             },
           }
         : {},
@@ -227,49 +284,57 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // ONE CURRENT ROW. A pin, a star or a running turn that opens exactly this
   // page is the row the reader followed, and the workspace row containing it
   // gives the mark up: both carried the current fill and `aria-current`.
+  // FOLDED, NO SHORTCUT IS DRAWN, so none takes the mark from its place, and
+  // the pins are not asked for until the sidebar unfolds to draw them.
   const viewKey = route.query.get("view") ?? "";
   const pinned = usePinned({
     owner: viewer.owner,
-    tracker: viewer.tracker && runs.tracker,
-    enabled: !unserved,
+    worklet: viewer.worklet && runs.tracker,
+    enabled: !unserved && !compact,
   });
   // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its star's row is
   // drawn nowhere, and the star is kept until it runs it again.
   const stars = useStarred().filter((s) => pathShown(s.path, runs));
   const shortcutHere =
-    (!unserved && pinnedHere(pinned, route.path, viewKey)) ||
-    stars.some((s) => samePath(route.path, s.path)) ||
-    running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
+    !compact &&
+    ((!unserved && pinnedHere(pinned, route.path, viewKey)) ||
+      stars.some((s) => samePath(route.path, s.path)) ||
+      running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path)));
 
   const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  // ONE PLACE, AS EVERY SHAPE DRAWS IT: the full row, the compact tile and a
+  // folded group's flyout link all spread this, so the two shapes cannot list
+  // a place with a different link, lock or figure.
+  const placeOf = (ws: WorkspaceRow) => ({
+    label: ws.label,
+    // LOCKED, NEVER HIDDEN, by the one rule every lock is drawn by; in a
+    // group the reader holds none of, the group's label carries the key.
+    locked: lockOf(ws),
+    icon: <WorkspaceGlyph icon={ws.icon} />,
+    // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
+    // opens the first of its sections the reader may open.
+    ...linkTo(landingPath(ws, held, runs)),
+    current: here === ws.key && !shortcutHere,
+    ...figures[ws.key],
+  });
   const footPlace = (ws: WorkspaceRow): FootPlace => {
-    const lock = lockOf(ws);
+    const { label, locked, icon, href, onPrefetch, current } = placeOf(ws);
     return {
       key: ws.key,
-      label: ws.label,
-      icon: <WorkspaceGlyph icon={ws.icon} />,
-      ...linkTo(landingPath(ws, held, runs)),
-      current: here === ws.key && !shortcutHere,
-      title: lock ? `${ws.label}. ${lock}` : ws.label,
+      label,
+      icon,
+      href,
+      onPrefetch,
+      current,
+      locked,
+      title: locked ? `${label}. ${locked}` : label,
     };
   };
-  const row = (ws: WorkspaceRow) => {
-    return (
-      <SidebarNav.Item
-        key={ws.key}
-        label={ws.label}
-        // LOCKED, NEVER HIDDEN, by the one rule every lock is drawn by; in a
-        // group the reader holds none of, the group's label carries the key.
-        locked={lockOf(ws)}
-        icon={<WorkspaceGlyph icon={ws.icon} />}
-        // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
-        // opens the first of its sections the reader may open.
-        {...linkTo(landingPath(ws, held, runs))}
-        current={here === ws.key && !shortcutHere}
-        {...figures[ws.key]}
-      />
-    );
-  };
+  const row = (ws: WorkspaceRow) => <SidebarNav.Item key={ws.key} {...placeOf(ws)} />;
+  // THE NAMED GROUPS ARE PARTED FROM THE PLACES ABOUT YOU BY ONE RULE, named
+  // for the groups it introduces.
+  const named = SIDEBAR_GROUPS.filter((group) => group.label !== "");
+  const palette = keyRow("palette").presses[0]!;
 
   return (
     <AppShell.Rail
@@ -291,24 +356,24 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
         />
       }
-      // THE RAIL'S FIELD, in the kit's own slot on the nav's columns.
+      // THE RAIL'S FIELD, in the kit's own slot on the nav's columns. The
+      // compact rail draws no field: its Search tile opens the same palette.
       search={
         <SearchTrigger
           variant="rail"
-          label="Ask or jump to…"
-          title="Search everything"
+          label={SEARCH_LABEL}
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
           // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
           // phone's drawer "Ctrl + K" named a key nobody there has, and cut
-          // the trigger's own label to "Ask or jump t…".
-          shortcut={
-            keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
-          }
+          // the trigger's own label short.
+          shortcut={keyHints ? <Kbd keys={capsOf(palette)} subtle /> : undefined}
         />
       }
       // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
-      // alarms, its words in its name and title, the panel below it.
+      // alarms, its words in its name and title, the panel below it. In the
+      // compact rail the kit stands it on a row of its own under the mark,
+      // and the panel still opens below it.
       status={
         <RailBoundary label="Engine" resetKey={at} compact>
           <EnginePanel
@@ -331,37 +396,72 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       // fetching it on the pointer, and naming its lock, never hidden.
       footer={
         <RailBoundary label="You" resetKey={at}>
-          <UserBlock viewer={viewer} seatName={seatName} places={shown("foot").map(footPlace)} />
+          <UserBlock
+            viewer={viewer}
+            seatName={seatName}
+            places={shown("foot").map(footPlace)}
+            compact={compact}
+          />
         </RailBoundary>
       }
     >
-      <SidebarNav label="Navigation">
-        {SIDEBAR_GROUPS.map((group) => (
-          <SidebarNav.Group
-            key={group.place}
-            {...(group.label ? { label: group.label } : {})}
-            // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on its label.
-            locked={groupLock(shown(group.place).map(lockOf))}
-          >
-            {shown(group.place).map(row)}
-          </SidebarNav.Group>
-        ))}
-        {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
+      {compact ? (
+        <CompactNav label="Navigation">
+          {/* SEARCH FIRST, where the full sidebar's field stands: the same
+              palette, named by the same words, with its key in the tip. */}
+          <CompactNavItem
+            label="Search"
+            icon={<SearchGlyph size="sm" />}
+            title={keyHints ? `${SEARCH_LABEL} (${pressText(palette)})` : SEARCH_LABEL}
+            keyshortcuts={ariaKeysOf(palette)}
+            onClick={onSearch}
+          />
+          {SIDEBAR_GROUPS.map((group) =>
+            group.label === "" || !group.icon ? (
+              shown(group.place).map((ws) => <CompactNavItem key={ws.key} {...placeOf(ws)} />)
+            ) : (
+              <Fragment key={group.place}>
+                {group === named[0] && (
+                  <CompactNavSeparator label={named.map((g) => g.label).join(" and ")} />
+                )}
+                <CompactNavGroup
+                  label={group.label}
+                  icon={<WorkspaceGlyph icon={group.icon} />}
+                  links={shown(group.place).map((ws) => ({ key: ws.key, ...placeOf(ws) }))}
+                />
+              </Fragment>
+            ),
+          )}
+        </CompactNav>
+      ) : (
+        <SidebarNav label="Navigation">
+          {SIDEBAR_GROUPS.map((group) => (
+            <SidebarNav.Group
+              key={group.place}
+              {...(group.label ? { label: group.label } : {})}
+              // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on its label.
+              locked={groupLock(shown(group.place).map(lockOf))}
+            >
+              {shown(group.place).map(row)}
+            </SidebarNav.Group>
+          ))}
+          {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        {!unserved && (
-          <RailBoundary label="Pinned" resetKey={at}>
-            <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
+          {!unserved && (
+            <RailBoundary label="Pinned" resetKey={at}>
+              <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
+            </RailBoundary>
+          )}
+          <RailBoundary label="Starred" resetKey={at}>
+            <StarredSection path={route.path} stars={stars} />
           </RailBoundary>
-        )}
-        <RailBoundary label="Starred" resetKey={at}>
-          <StarredSection path={route.path} stars={stars} />
-        </RailBoundary>
-        {/* LAST, so a turn starting or ending moves nothing above it. */}
-        <RailBoundary label="Running" resetKey={at}>
-          <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
-        </RailBoundary>
-      </SidebarNav>
+          {/* LAST, so a turn starting or ending moves nothing above it. */}
+          <RailBoundary label="Running" resetKey={at}>
+            <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
+          </RailBoundary>
+        </SidebarNav>
+      )}
     </AppShell.Rail>
   );
 }
@@ -390,8 +490,8 @@ function linkTo(path: string[], query?: Record<string, string>) {
  * pins of whoever asks — a `viewer=` that named anybody else was a free choice
  * of whose personal views to read, and the engine takes none — so the section
  * asks only once the reader has a record to keep pins under (`owner`), and
- * asks nothing of a reader with none. A saved view is the tracker's, so the
- * section is mounted only for a reader holding Tracker.
+ * asks nothing of a reader with none. A saved view is Worklet's, so the
+ * section is mounted only for a reader holding Worklet.
  *
  * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
  * view pinned from a project board lives in that project, and read from the
@@ -408,13 +508,13 @@ function linkTo(path: string[], query?: Record<string, string>) {
  */
 function usePinned({
   owner,
-  tracker,
+  worklet,
   enabled,
 }: {
   /** The name the reader's own record is kept under, or "" for nobody's. */
   owner: string;
-  /** Whether the reader holds Tracker, which saved views need. */
-  tracker: boolean;
+  /** Whether the reader holds Worklet and the company runs it, which saved views need. */
+  worklet: boolean;
   /** False where the engine serves this browser nothing at all. */
   enabled: boolean;
 }) {
@@ -422,13 +522,13 @@ function usePinned({
     "work_saved_views",
     { counts: true },
     {
-      enabled: enabled && tracker && owner !== "",
+      enabled: enabled && worklet && owner !== "",
       pollMs: 120_000,
     },
   );
   const artifacts = usePins(enabled);
   return {
-    views: tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
+    views: worklet ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
     artifacts: artifacts.data?.contents ?? [],
   };
 }
@@ -462,7 +562,7 @@ function PinnedSection({
         // describes the view and offers a button to run it — so the row a
         // reader pinned to get to their work one click away was two clicks
         // away, through a page about the pin. The inventory is still
-        // `#/work/views`, one tab over.
+        // `#/worklet/views`, one tab over.
         const run = viewRun(v);
         return (
           <SidebarNav.Item

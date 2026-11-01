@@ -1,9 +1,10 @@
 /**
  * Coding runs.
  *
- * A coding run is a DETACHED Execute phase: the tool starts it, the phase
- * suspends, and the engine resumes that same loop minutes later — possibly
- * after a restart, possibly on another node. So there are two sources and they
+ * A coding run is a seat's executor: its coding CLI's own run, in a box. The
+ * turn parks at the launch, and the run's collection resumes that same turn
+ * minutes later — possibly after a restart, possibly on another node — for
+ * the engine's check and the reviewer. So there are two sources and they
  * answer different questions: the live projection knows what is in flight
  * right now, and `sandbox_runs` knows what the store remembers, including runs
  * whose box has already been reclaimed. The screen this replaces showed only
@@ -51,13 +52,14 @@ import {
   TableStatusCell,
   TableTextCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
   CircleQuestionMarkGlyph,
@@ -71,6 +73,7 @@ import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
@@ -85,6 +88,7 @@ import {
   tsKey,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { andList } from "~/lib/words.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import type {
   BridgeCall,
@@ -139,12 +143,16 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     // mirrors whatever the run reported; it is the same vocabulary.
     status: box.status as SandboxStatus,
     coding_agent: box.coding_agent,
+    ...(box.provider_key ? { provider_key: box.provider_key } : {}),
+    ...(box.model ? { model: box.model } : {}),
     placement: "",
     // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
     // from this reader, who is told so (`body_withheld`) rather than shown a
     // run with no task.
     ...(box.task !== undefined ? { task_description: box.task } : {}),
     ...(box.question !== undefined ? { question: box.question } : {}),
+    question_context: box.question_context,
+    ...(box.decision ? { decision: box.decision } : {}),
     ...(box.body_withheld ? { body_withheld: true } : {}),
     audience: box.audience ?? "",
     // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
@@ -226,6 +234,23 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
+    // THE MEMBER THE JOB WAS LAUNCHED ON, and its model: a fallback at launch
+    // runs it on an entry other than the chain's head, and which entry's plan a
+    // long run is spending is the first thing an admin watching it asks. The
+    // entry is the company's configuration, which the engine sends an admin
+    // alone; every other reader is sent the model, the run's own fact, and is
+    // told that rather than nothing.
+    {
+      label: "Launched on",
+      value: run.provider_key ? (
+        <span>
+          <InlineCode>{run.provider_key}</InlineCode>
+          {run.model ? ` · ${run.model}` : ""}
+        </span>
+      ) : (
+        (run.model ?? "")
+      ),
+    },
     { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },
     // NOT "up / reclaimed" as a plain word pair: whether the box still exists
     // is the difference between a run somebody can answer and a run whose work
@@ -298,16 +323,20 @@ export function AwaitingBanner({
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col gap-2 run-awaiting">
         <strong>
-          {run.question ||
-            (questionWithheld(run)
-              ? "Waiting on a question you can’t see."
-              : "The run asked a question.")}
+          <RunQuestionLine
+            question={run.question}
+            empty={
+              questionWithheld(run)
+                ? "Waiting on a question you can’t see."
+                : "The run asked a question."
+            }
+          />
         </strong>
         <span className="t-caption">
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
               — never re-derived here from the coding agent's own label. */}
           {audience.length > 0
-            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
           {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
@@ -322,17 +351,11 @@ export function AwaitingBanner({
             : ""}
         </span>
         <span className="row gap-2">
-          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question ?? ""} />
+          <AnswerRunButton run={run} seat={seat} />
         </span>
       </span>
     </Callout>
   );
-}
-
-/** "A", "A and B", "A, B and C". */
-function listWords(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** What the run is doing, for a run nobody is being waited on by. */
@@ -359,11 +382,18 @@ function doingLine(run: SandboxRun): string {
  * page's job, and `Open ↗` is one click away.
  */
 function BridgeSummary({ run }: { run: SandboxRun }) {
-  const calls = run.bridge_calls ?? [];
-  // ABSENT ON AN ORDINARY RUN rather than empty — see [BridgeLog]: a run that
-  // is not bridged made no calls through a bridge, which is not the same fact
-  // as a bridged one that made none.
-  if (calls.length === 0) return null;
+  // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
+  // not sent, and an empty one is a run that has called nothing, said so.
+  if (run.bridge_calls === undefined) return null;
+  const calls = run.bridge_calls;
+  if (calls.length === 0) {
+    return (
+      <section className="col gap-2">
+        <div className="t-label">Tool calls</div>
+        <span className="t-caption">{noCallsWords(run)}</span>
+      </section>
+    );
+  }
   const failures = calls.filter((c) => c.failed).length;
   const last = calls[calls.length - 1];
   return (
@@ -514,7 +544,7 @@ export function Runs() {
   const openRun = useCallback(
     (r: SandboxRun, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "run", id: r.turn_id });
-      // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one
+      // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
       // ctrl, shift, alt and the middle button belong to the browser, which is
       // what keeps the row a real link to the run's page. The `enter` chord
@@ -523,7 +553,7 @@ export function Runs() {
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek],
   );
@@ -567,8 +597,9 @@ export function Runs() {
             rows is structurally zero on every company for ever — and a tile
             reading "Failed 0" tells an operator nothing failed, when what is
             true is that this is not where failures are recorded. They are on
-            the event stream, as the resumed turn's own events or a
-            `sandbox_run_failed` naming the reason. */}
+            the event stream, as the resumed turn's own events, a
+            `sandbox_run_failed` naming the reason, or a
+            `sandbox_run_stopped` naming who stopped it. */}
         <StatCard
           icon={<PackageGlyph size="xs" />}
           label="In the record"
@@ -634,6 +665,8 @@ export function Runs() {
                 key: "task",
                 header: "Task",
                 floor: "10rem",
+                // A RUN WITH NO TASK RECORDED (or one withheld) sorts last.
+                sortValue: (r) => r.task_description || null,
                 cell: (r) =>
                   r.task_description ? (
                     <TableTextCell>{r.task_description}</TableTextCell>
@@ -692,6 +725,7 @@ export function Runs() {
               },
               {
                 key: "updated",
+                align: "right",
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
@@ -1051,19 +1085,30 @@ function CollectedRun({
  * and unaskable — and "it called nothing" is exactly the shape the delivery
  * check reads as a turn that did not act.
  *
- * ABSENT ON AN ORDINARY RUN rather than empty: a coding run that is not
- * bridged made no calls through a bridge, which is not the same as a bridged
- * one that made none. The panel is not rendered at all for the first.
+ * EVERY RUN IS BRIDGED, so an empty log is a FACT and is said: a run that has
+ * called nothing — not even its submission — is exactly the run a reader
+ * opened this page to understand, and a panel that vanished for it read as a
+ * page with nothing to show. ABSENT is different: a log this reader was not
+ * sent (a live entry whose row is not read yet, a body withheld from them)
+ * draws no panel, because "made no calls" would be a claim nobody can make.
  */
 export function BridgeLog({ run }: { run: SandboxRun }) {
-  const calls = run.bridge_calls ?? [];
+  if (run.bridge_calls === undefined) return null;
+  const calls = run.bridge_calls;
   const elided = run.bridge_calls_elided ?? 0;
   // AN EMPTY LOG IS AN EMPTY LOG, elision included: the engine drops the
   // MIDDLE of a bounded list and keeps the first and last hundred, so a run
-  // with calls elided always still has calls. Guarding on the count alone is
-  // therefore complete, and a second clause for `elided > 0 && no calls` would
-  // be a branch nothing can reach and nothing can test.
-  if (calls.length === 0) return null;
+  // with calls elided always still has calls.
+  if (calls.length === 0) {
+    return (
+      <Card>
+        <Card.Header icon={<SquareTerminalGlyph size="sm" />} count={0}>
+          <Card.Title>Tool calls</Card.Title>
+        </Card.Header>
+        <EmptyValue label={noCallsWords(run)} />
+      </Card>
+    );
+  }
   const failures = calls.filter((c) => c.failed).length;
   return (
     <Card>
@@ -1095,6 +1140,16 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
       </div>
     </Card>
   );
+}
+
+/**
+ * What a run with an empty bridge log is said to have done: nothing YET while
+ * its job may still be working, and nothing at all once it has stopped.
+ */
+function noCallsWords(run: SandboxRun): string {
+  return run.status === "launching" || run.status === "running"
+    ? "No calls through the MCP bridge yet"
+    : "Made no calls through the MCP bridge, not even its submission";
 }
 
 /**

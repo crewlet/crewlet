@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHANGE READS: code_list_changes, the company's changes a page at a time,
@@ -311,14 +312,14 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Fresh: seatRead}
 	if s := code.ChangeState(strings.TrimSpace(argString(args, "state"))); s != "" {
 		if !s.Valid() {
-			return failed(fmt.Sprintf("%s: `state` is one of %v, not %q.", t.Name(), code.ChangeStates(),
+			return failed(fmt.Sprintf("%s: `state` is one of %s, not %q.", t.Name(), words.Or(code.ChangeStates()),
 				clip(string(s)))), nil
 		}
 		q.State = s
 	}
 	if n := code.Need(strings.TrimSpace(argString(args, "needs"))); n != "" {
 		if !n.Valid() {
-			return failed(fmt.Sprintf("%s: `needs` is one of %v, not %q.", t.Name(), code.Needs(),
+			return failed(fmt.Sprintf("%s: `needs` is one of %s, not %q.", t.Name(), words.Or(code.Needs()),
 				clip(string(n)))), nil
 		}
 		q.Needs = n
@@ -332,7 +333,7 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// index holds every change the company has, so a listing names what
 		// it walks.
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
-			"`reviewer` or `needs` (%v) — `needs: me` is what waits on you.", t.Name(), code.Needs())), nil
+			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(code.Needs()))), nil
 	}
 	var repo code.RepoRef
 	if named {
@@ -473,23 +474,21 @@ func (t *codeGetChange) Call(ctx context.Context, args map[string]any) (tools.Re
 // rest of a call's arguments, before anything is.
 func changeArg(tool string, args map[string]any) (string, int64, *tools.Result) {
 	repo := strings.TrimSpace(argString(args, "repo"))
-	var number int64
-	switch v := args["change"].(type) {
-	case string:
-		s := strings.TrimSpace(v)
-		if name, n, ok := strings.Cut(s, "!"); ok {
-			if repo != "" && repo != name {
-				r := failed(fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
-					"name one repository.", tool, clip(s), clip(name), clip(repo)))
-				return "", 0, &r
-			}
-			repo, s = name, n
+	// `change` IS DECLARED TEXT, read by the check's own readers: a number
+	// the model sent is the text it spells (argval.String), and the number
+	// in it is read by the one integer rule (argval.Whole), so "42", 42 and
+	// "web!42" all name change 42.
+	s := strings.TrimSpace(argString(args, "change"))
+	if name, n, ok := strings.Cut(s, "!"); ok {
+		if repo != "" && repo != name {
+			r := failed(fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
+				"name one repository.", tool, clip(s), clip(name), clip(repo)))
+			return "", 0, &r
 		}
-		number, _ = strconv.ParseInt(s, 10, 64)
-	case nil:
-	default:
-		number = int64(argInt(args, "change", 0))
+		repo, s = name, n
 	}
+	whole, _ := argval.Whole(s)
+	number := int64(whole)
 	if number < 1 {
 		r := failed(fmt.Sprintf("%s needs `change`: a change's number on `repo`, or its reference as %s "+
 			"names it (web!42).", tool, CodeListChangesTool))
@@ -531,7 +530,7 @@ func changeCallArgs(tool string, args map[string]any) (changeCall, *tools.Result
 	takes := func(ps ...changePart) bool { return slices.Contains(ps, call.part) }
 	switch {
 	case !call.part.Valid():
-		return refuse(fmt.Sprintf("`part` is one of %v, not %q.", changeParts(), clip(string(call.part))))
+		return refuse(fmt.Sprintf("`part` is one of %s, not %q.", words.Or(changeParts()), clip(string(call.part))))
 	case call.revision < 0 || call.since < 0:
 		return refuse("a revision is numbered from 1.")
 	case call.revision != 0 && !takes(partFiles, partDiff, partFindings):
@@ -965,7 +964,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 	if df := page.Diff; df != nil && df.Patch != "" {
 		// A PATCH IS THE REPOSITORY'S TEXT, both sides of it, which nobody
 		// this read can name vouches for: fenced as code_diff fences one.
-		read.fence(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, nil, false, df.Patch)
+		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, df.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read the file's "+
 			"lines at the revision's head (%s) with %s and a line range instead.", rev.Head, CodeReadTool)
 	}
@@ -982,9 +981,11 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 func (g changeRead) recorded(d *code.ChangeDetail, r code.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
 	case code.FilesPending:
-		res := refused(tools.RefusalUnavailable, fmt.Sprintf("%s: revision %d of %s has no recorded base yet: "+
-			"the repository's home git node records each revision's facts against its target within a minute "+
-			"of its push. Try again shortly.", g.tool, r.N, g.ref()))
+		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
+		// within a minute of the push, and nothing a person does is needed.
+		res := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s: revision %d of %s has no "+
+			"recorded base yet: the repository's home git node records each revision's facts against its "+
+			"target within a minute of its push. Try again shortly.", g.tool, r.N, g.ref()))
 		return &res
 	case code.FilesUnrecorded:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s was %s before its home recorded revision %d's "+

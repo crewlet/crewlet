@@ -1,6 +1,6 @@
 /**
  * A seat's diary and its episodes, as two cards — drawn on the seat's Memory
- * tab and on its page under Knowledge › Agent diaries.
+ * tab and on its page under Doclet › Agent diaries.
  *
  * ONE DRAWING FOR ONE ANSWER. Both screens render the same `agent_memory`
  * answer, and two copies of the cards would disagree about the first thing a
@@ -307,6 +307,7 @@ export function EpisodesCard({
         columns={[
           {
             key: "at",
+            align: "right",
             header: "When",
             shrink: true,
             // THROUGH `tsKey`, never `<` on the string: the engine
@@ -372,7 +373,7 @@ export function EpisodesCard({
             key: "conv",
             header: "Conversation",
             // CONTENT-SIZED AND CAPPED, with a uuid cut to its head:
-            // flexible, a native task's `work:task:<uuid>` took the
+            // flexible, a Worklet task's `work:task:<uuid>` took the
             // width and "What it did" — the column a reader scans —
             // was cut at a third of the grid.
             shrink: true,

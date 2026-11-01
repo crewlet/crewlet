@@ -10,7 +10,7 @@
  * hides that its real work is still out in a box.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -20,7 +20,6 @@ import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
-import { afterMicrotasks, settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -139,7 +138,13 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   );
 }
 
-const SUMMARIES = ["the finished one", "the parked one", "the running one", "the stopped one"];
+const SUMMARIES = [
+  "the finished one",
+  "the parked one",
+  "the running one",
+  "the stopped one",
+  "the halted one",
+];
 
 /** The widest element around one summary that holds no other row's — its row,
  *  whatever markup the table draws a row with. */
@@ -163,6 +168,11 @@ test("a parked turn is marked parked, and an open one running or not settled by 
       row("t-parked", "the parked one", { parked: true, duration_ms: 3_000 }),
       row("t-live", "the running one", {}),
       row("t-dead", "the stopped one", {}),
+      row("t-halted", "the halted one", {
+        complete: true,
+        stopped: true,
+        duration_ms: 2_000,
+      }),
     ],
     [
       {
@@ -184,6 +194,10 @@ test("a parked turn is marked parked, and an open one running or not settled by 
   expect(rowOf("the stopped one").textContent).toContain("not settled");
   expect(rowOf("the stopped one").textContent).not.toContain("running");
   expect(rowOf("the finished one").textContent).not.toMatch(/parked|running|settled/);
+  // A TURN A PERSON STOPPED SAYS SO, and never as a failure.
+  expect(rowOf("the halted one").textContent).toContain("stopped");
+  expect(rowOf("the halted one").textContent).not.toMatch(/failure|parked|running/);
+  expect(rowOf("the finished one").textContent).not.toContain("stopped");
 });
 
 /**
@@ -305,7 +319,8 @@ test("sort=-tokens asks the engine for the costliest turns first", async () => {
 });
 
 // A NODE THAT DID NOT ANSWER IS NAMED. The fleet's turns are read from every
-// node at query time, and a short list with no note reads as a quiet company.
+// data node at query time, and a short list with no note reads as a quiet
+// company.
 test("a node missing from the answer is named above the list", async () => {
   mountWith({
     turns: {
@@ -369,40 +384,6 @@ test("an older page that fails keeps Load older, which asks it again", async () 
   await screen.findByText("the older one");
   expect(screen.queryByText(/Could not read the next page/)).toBeNull();
   expect(asked.filter((q) => q.kind === "turns" && q.params.before === "cursor-1")).toHaveLength(2);
-});
-
-// FROM THE PRESS OF LOAD OLDER THE FIRST PAGE IS HELD: its cursor was minted
-// from its last turn, and read again under turns that ended since it would
-// push its last ones out of both pages — so neither its poll nor a reconnect
-// asks it, and the list says it is paused. Mutation: ask the turns without the
-// pager's hold, and the tick asks the first page again.
-test("after Load older, neither a poll tick nor a reconnect asks the first page", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const { asked, store } = mountWith({
-      turns: (p: Record<string, unknown>) =>
-        p.before
-          ? { turns: [row("t-2", "the older one", { complete: true })], next: null }
-          : { turns: [row("t-1", "the newer one", { complete: true })], next: "cursor-1" },
-      event_series: series(2),
-    });
-    // SETTLED ON THE READS, never `findBy…`: the testing library's wait ends
-    // on a timer this case fakes.
-    await settled(() => asked.length);
-    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
-    await settled(() => asked.length);
-    expect(screen.getByText("the older one")).toBeTruthy();
-    const firsts = () => asked.filter((q) => q.kind === "turns" && !q.params.before).length;
-    const before = firsts();
-    await act(async () => void vi.advanceTimersByTime(5 * 20_000));
-    act(() => store.setConnected(false));
-    act(() => store.setConnected(true));
-    await afterMicrotasks();
-    expect(firsts()).toBe(before);
-    expect(screen.getByText("Paused while you page back.")).toBeTruthy();
-  } finally {
-    vi.useRealTimers();
-  }
 });
 
 // A BAR PICKED IN THE PAST IS ASKED FOR AS ITSELF.

@@ -53,7 +53,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { KNOWLEDGE, needsWords } from "~/lib/access.ts";
+import { DOCLET, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
@@ -299,8 +299,8 @@ export const Composer = forwardRef<
   );
 });
 
-/** The fewest and most options an ask may offer — `tracker.MinDecisionOptions`
- *  and `MaxDecisionOptions`, which refuse anything outside them. */
+/** The fewest and most options an ask may offer: `decision.MinOptions`
+ *  and `MaxOptions`, which refuse anything outside them. */
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 6;
 
@@ -681,15 +681,15 @@ function AttachPageDialog({
   // field instead.
   const [title, setTitle] = useState(firstLine(draft));
   const titleBudget = textBudget(title, PAGE_TITLE_MAX_BYTES, "a page's title");
-  // THE KNOWLEDGE BASE'S LISTING, asked only of a reader holding Knowledge:
-  // anybody else is told what would let them find a page, rather than "no
-  // page has that in its title" about a question never answered.
-  const { knowledge, loading: asking } = useViewer();
-  const pagesLocked = !asking && !knowledge;
+  // DOCLET'S LISTING, asked only of a reader holding Doclet: anybody else is
+  // told what would let them find a page, rather than "no page has that in
+  // its title" about a question never answered.
+  const { doclet, loading: asking } = useViewer();
+  const pagesLocked = !asking && !doclet;
   const found = useQuery(
     "pages",
     { title: q.trim(), limit: 8 },
-    { enabled: q.trim().length >= 2 && knowledge },
+    { enabled: q.trim().length >= 2 && doclet },
   );
   const busy = link.busy || save.busy;
 
@@ -757,7 +757,7 @@ function AttachPageDialog({
           }}
           empty={
             pagesLocked
-              ? needsWords("Finding a page", [KNOWLEDGE])
+              ? needsWords("Finding a page", [DOCLET])
               : q.trim().length < 2
                 ? "Type two characters to search."
                 : found.loading

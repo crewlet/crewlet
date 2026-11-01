@@ -102,15 +102,18 @@ import {
 import {
   decisionLabel,
   decisionTone,
+  outcomeWords,
   phaseDuration,
+  runGroups,
   transcriptLength,
+  type Invocation,
   type PhaseRecord,
   type Round,
   rounds,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { indexOrg, seatPath, staleness } from "~/lib/seats.ts";
+import { failureWords, indexOrg, seatPath, staleness } from "~/lib/seats.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
@@ -199,19 +202,51 @@ function ToolRecords({
   );
 }
 
+/**
+ * What a call still running shows opened: what it was handed, and that it has
+ * no result yet — said, rather than drawn as an empty result, which reads as a
+ * call that returned nothing. A withheld body has no arguments to show, and
+ * the card's own note already says what was withheld.
+ */
+function RunningRecords({ name, args }: { name: string; args: string }) {
+  const prettyArgs = useMemo(() => indentJSON(args), [args]);
+  return (
+    <div className="col gap-1">
+      {args && (
+        <>
+          <div className="t-label">Arguments</div>
+          <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs} />
+        </>
+      )}
+      <span className="t-caption">Still running: its result lands here when it returns.</span>
+    </div>
+  );
+}
+
+/**
+ * One tool call of a round — answered, or still running (`running`).
+ *
+ * ONE COMPONENT FOR BOTH, because a call is one row for its whole life: a CLI
+ * runs a response's calls side by side, each listed while it runs and answered
+ * when its result lands, and a row that changed component as it answered would
+ * be unmounted and mounted again, closing what the reader had opened.
+ */
 function ToolRow({
   name,
   args,
   result,
   failed,
+  running,
 }: {
   name: string;
   args: string;
   result: string;
   failed: boolean;
+  /** The call is still in flight: since when, and the clock it is read on. */
+  running?: { since: number; now: number };
 }) {
   return (
-    <div className={cx("tool-row", failed && "failed")}>
+    <div className={cx("tool-row", failed && "failed", running && "running")}>
       <Disclosure
         mono
         // THE WORD, not a glyph. `meta` IS our `mark`: a SIBLING of the name
@@ -225,7 +260,19 @@ function ToolRow({
         // "failed" now, after the tool's name and part of what the control is
         // called; the row keeps its own tint, so colour and word say it
         // together.
-        meta={failed ? "failed" : undefined}
+        //
+        // A CALL STILL RUNNING says so the same way, with how long: a call
+        // four minutes in is the answer to "why is this phase slow", and it
+        // should not take opening the row to find it.
+        meta={
+          running
+            ? running.since > 0
+              ? `running ${fmtElapsed(running.now - running.since)}`
+              : "running"
+            : failed
+              ? "failed"
+              : undefined
+        }
         title={name}
         // A TRANSCRIPT ITEM IS NOT A SECTION OF THE PAGE. uilet wraps a
         // disclosure's trigger in a real heading by default, which is right for
@@ -239,9 +286,83 @@ function ToolRow({
         // round's text.
         lazy
       >
-        <ToolRecords name={name} args={args} result={result} failed={failed} />
+        {running ? (
+          <RunningRecords name={name} args={args} />
+        ) : (
+          <ToolRecords name={name} args={args} result={result} failed={failed} />
+        )}
       </Disclosure>
-      <WrittenArtifactLink artifact={writtenArtifact(name, args, result, failed)} />
+      {!running && <WrittenArtifactLink artifact={writtenArtifact(name, args, result, failed)} />}
+    </div>
+  );
+}
+
+/**
+ * The head of one CLI run's rounds: which entry served it, how many rounds it
+ * made, how long it lived, what it spent and how it ended — or, for the run
+ * still in flight, that it is running.
+ *
+ * A RUN IS WHAT THE ENGINE STARTS AND ENDS, where a round is one model request
+ * the CLI's record shows; most phases are one run, and a phase that was
+ * steered, delegated or corrected is several — each a CLI process handed the
+ * conversation so far. A run whose CLI showed no requests is ONE round, and its
+ * head says so, since that round's timing is the run's.
+ */
+function RunHead({
+  run,
+  ordinal,
+  live,
+}: {
+  run: Invocation | null;
+  ordinal: number;
+  live: boolean;
+}) {
+  if (!run) {
+    return (
+      <div className="run-head">
+        <span className="run-name">CLI run {ordinal}</span>
+        {live && <Tag variant="info">running</Tag>}
+      </div>
+    );
+  }
+  const ended = outcomeWords(run.outcome);
+  const made = run.firstRound > 0 ? run.lastRound - run.firstRound + 1 : 0;
+  const tokens = run.inputTokens + run.outputTokens;
+  return (
+    <div className="col gap-1">
+      <div className="run-head">
+        <span className="run-name">CLI run {run.run}</span>
+        {run.providerKey && (
+          <span className="t-caption mono" title="the providers.llm entry that served it">
+            {run.providerKey}
+          </span>
+        )}
+        <span className="t-caption t-num" title="the rounds this run made">
+          {made === 0
+            ? "no request"
+            : made === 1
+              ? `round ${run.firstRound}`
+              : `rounds ${run.firstRound}–${run.lastRound}`}
+        </span>
+        {run.durationMs > 0 && (
+          <span className="t-caption t-num" title="how long the CLI ran">
+            {fmtDuration(run.durationMs)}
+          </span>
+        )}
+        {tokens > 0 && (
+          <span className="t-caption t-num" title="what the run spent">
+            {`${fmtCount(tokens)} tokens`}
+          </span>
+        )}
+        <Tag variant={uiletTone(ended.tone)} appearance="outline">
+          {ended.label}
+        </Tag>
+      </div>
+      {!run.requestsObserved && made > 0 && (
+        <p className="round-note">
+          Its CLI’s record showed no requests, so the whole run is one round.
+        </p>
+      )}
     </div>
   );
 }
@@ -400,18 +521,42 @@ function Words({ text, streaming }: { text: string; streaming?: boolean }) {
   return <div className={cx("prose md", streaming && "stream")}>{nodes}</div>;
 }
 
+/**
+ * The sentence under a round the CLI's own turn cap ended (`stop_reason: cap`).
+ *
+ * THE ONE STOP REASON THAT ENDS A ROUND UNFINISHED, which is why the reason
+ * gate (`contract/stops.ts`) asks for a sentence: an answer and a set of calls
+ * are rounds that finished and say nothing, while here the CLI stopped asking
+ * with the model still working — the run ended for want of turns, not because
+ * the model was done. CAUTION, as a declined round's last word is: the phase
+ * goes on to whatever its cap decides.
+ */
+function CapNote() {
+  return (
+    <p className="round-note caution">
+      <TriangleAlertGlyph size="xs" /> The CLI’s own turn cap ended its run here, with the model
+      still working.
+    </p>
+  );
+}
+
 /** One round: what the model said, then the calls that round asked for. */
 function RoundBlock({
   round,
   live,
   declined,
   rescued,
+  capped,
+  now,
 }: {
   round: Round;
   live: boolean;
   /** What became of this round when it declined to call a tool; absent otherwise. */
   declined?: Declined;
   rescued: boolean;
+  /** The CLI's own turn cap ended its run at this round. */
+  capped: boolean;
+  now: number;
 }) {
   const said = round.content.trim();
   // Marked on the ROUND, not just on the row inside it: "which round went
@@ -455,11 +600,37 @@ function RoundBlock({
         ))}
         {said && <Words text={said} streaming={round.streaming} />}
         {declined && <DeclinedNote fate={declined} rescued={rescued} />}
-        {round.tools.length > 0 && (
+        {capped && <CapNote />}
+        {round.tools.length + round.running.length > 0 && (
           <div className="round-tools">
-            {round.tools.map((t, i) => (
-              <ToolRow key={`${t.name}-${i}`} {...t} />
-            ))}
+            {/* ONE COMPONENT FOR A CALL ANSWERED AND A CALL RUNNING, in ONE
+                list, keyed by the call's own id where it has one — the id its
+                running entry and its answered row share. So a call that
+                answers is the SAME row, open if the reader opened it: React
+                matches keys within one array only, and a row that moved from
+                a list of running calls to a list of answered ones would be
+                unmounted and another mounted in its place. */}
+            {[
+              ...round.tools.map((t, i) => (
+                <ToolRow
+                  key={t.callId ? `call-${t.callId}` : `${t.name}-${i}`}
+                  name={t.name}
+                  args={t.args}
+                  result={t.result}
+                  failed={t.failed}
+                />
+              )),
+              ...round.running.map((c, i) => (
+                <ToolRow
+                  key={c.id ? `call-${c.id}` : `running-${c.name}-${i}`}
+                  name={c.name}
+                  args={c.arguments}
+                  result=""
+                  failed={false}
+                  running={{ since: tsKey(c.startedAt), now }}
+                />
+              )),
+            ]}
           </div>
         )}
       </div>
@@ -508,7 +679,17 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
-  const ledger = rounds(record.tools, record.narration, record.partial);
+  const ledger = rounds(record.tools, record.narration, record.partial, record.runningCalls);
+  // THE ROUNDS UNDER THE CLI RUN THAT MADE THEM, by the round span each run
+  // names. Headed wherever the phase's runs are known: a phase that recorded
+  // its runs, and a live one, whose run in flight heads the rounds past every
+  // run that has ended — so a running phase and the record it becomes are one
+  // shape, and nothing moves when a run ends but its head's words.
+  const groups = runGroups(ledger, record.invocations);
+  const headed = record.invocations.length > 0 || record.live;
+  const capped = new Set(
+    record.timedRounds.filter((r) => r.stopReason === "cap").map((r) => r.round),
+  );
   // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
   // engine drove none — the run's own loop happened in a box — so its
   // `response` is the report the run wrote back, and it carries an activity
@@ -545,11 +726,28 @@ export function PhaseCard({
   // ledger, live and settled alike, so the chip and the per-round notes are
   // one reading of one list.
   const declined = ledger.filter((r) => r.declined).length;
-  const fateOf = (i: number): Declined | undefined => {
-    if (!ledger[i]?.declined) return undefined;
-    if (i < ledger.length - 1) return "asked";
+  const last = ledger.at(-1)?.round;
+  const fateOf = (r: Round): Declined | undefined => {
+    if (!r.declined) return undefined;
+    if (r.round !== last) return "asked";
     return record.live ? "open" : "spent";
   };
+  // One run's rounds — or, on a phase whose runs are not known, all of them.
+  const roundList = (list: readonly Round[]) => (
+    <ol className="round-ledger">
+      {list.map((r) => (
+        <RoundBlock
+          key={r.round}
+          round={r}
+          live={record.live && r.round === last}
+          declined={fateOf(r)}
+          rescued={record.rescueFired}
+          capped={capped.has(r.round)}
+          now={now}
+        />
+      ))}
+    </ol>
+  );
 
   return (
     <article
@@ -648,7 +846,7 @@ export function PhaseCard({
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
-        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
+        {record.failed && <Tag variant="danger">{failureWords(record.errorKind).tag}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked
@@ -817,23 +1015,45 @@ export function PhaseCard({
           )}
 
           {/* The transcript. One block per round — speech, then calls —
-              in the order they happened. Rounds append, so nothing above an
-              insertion can move, which is the whole point. */}
+              in the order they happened, under the CLI run that made them.
+              Rounds append, so nothing above an insertion can move, which is
+              the whole point. */}
           {ledger.length > 0 && (
             <section className="col gap-1">
               <div className="t-label">Rounds</div>
               <div ref={tailRef} className={cx("tail-scroll", record.live && "tailing")}>
-                <ol className="round-ledger">
-                  {ledger.map((r, i) => (
-                    <RoundBlock
-                      key={r.round}
-                      round={r}
-                      live={record.live && i === ledger.length - 1}
-                      declined={fateOf(i)}
-                      rescued={record.rescueFired}
-                    />
-                  ))}
-                </ol>
+                {headed ? (
+                  <ol className="run-ledger">
+                    {groups.map((g, i) => {
+                      // THE RUN IN FLIGHT is the trailing group no ended run
+                      // claims, on a live phase. A group like it anywhere
+                      // else is rounds no run named, drawn without a head
+                      // rather than credited to a run that did not make them.
+                      const inFlight = !g.run && record.live && i === groups.length - 1;
+                      // KEYED BY THE RUN'S ORDINAL, the in-flight run by the
+                      // one it will have once it ends — so its rounds stay
+                      // mounted, and open where the reader opened them.
+                      const ordinal = g.run?.run ?? record.invocations.length + 1;
+                      return (
+                        <li
+                          key={
+                            g.run || inFlight
+                              ? `run-${ordinal}`
+                              : `rounds-${g.rounds[0]?.round ?? i}`
+                          }
+                          className="run"
+                        >
+                          {(g.run || inFlight) && (
+                            <RunHead run={g.run} ordinal={ordinal} live={inFlight} />
+                          )}
+                          {g.rounds.length > 0 && roundList(g.rounds)}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : (
+                  roundList(ledger)
+                )}
               </div>
             </section>
           )}

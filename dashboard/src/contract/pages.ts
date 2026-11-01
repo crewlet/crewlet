@@ -101,34 +101,48 @@ export interface PageBacklinks {
 }
 
 /**
- * The most a page's TITLE holds, in UTF-8 bytes — `internal/pages`' `MaxTitle`.
+ * The most a page's TITLE holds, in UTF-8 bytes: `internal/doclet`' `MaxTitle`.
  * Every form that names a page bounds its title here, before the press: the
  * engine refuses a title past it rather than cutting it, and the fields used to
  * carry `maxLength={200}`, which the browser applies by cutting a paste —
  * silently, in characters, short of what the engine would take. Held against the
- * engine's figure by `internal/pages/client_gate_test.go`.
+ * engine's figure by `internal/doclet/client_gate_test.go`.
  */
 export const PAGE_TITLE_MAX_BYTES = 256;
 
 /**
- * The most a page save's MESSAGE holds, in UTF-8 bytes — `internal/pages`'
+ * The most a page save's MESSAGE holds, in UTF-8 bytes: `internal/doclet`'
  * `MaxMessage`. Bounded on the editor for the reason a title is, by the same
  * gate.
  */
 export const PAGE_MESSAGE_MAX_BYTES = 256;
 
 /**
- * The most a page's BODY holds, in UTF-8 bytes: `internal/pages`' `MaxBody`.
+ * The most a page's BODY holds, in UTF-8 bytes: `internal/doclet`' `MaxBody`.
  * The composer counts against it and holds Publish past it, because the
  * engine refuses a body past the cap rather than cutting it.
  */
 export const PAGE_BODY_MAX_BYTES = 524288;
 
-/** The most labels a page carries: `internal/pages`' `MaxLabels`. */
+/** The most labels a page carries: `internal/doclet`' `MaxLabels`. */
 export const PAGE_LABELS_MAX = 32;
 
-/** The most one label holds, in UTF-8 bytes: `internal/pages`' `MaxLabelLength`. */
+/** The most one label holds, in UTF-8 bytes: `internal/doclet`' `MaxLabelLength`. */
 export const PAGE_LABEL_MAX_BYTES = 64;
+
+/**
+ * The orders a `pages` listing is read in — `internal/doclet`' `ListOrders`:
+ * `title`, the knowledge base's own (by space, title and id, the order every
+ * tree is drawn in), and `newest`, by when each page last changed, which the
+ * engine serves beside `skills: true` alone. Agent skills offers both, and
+ * Home's Agent skills widget asks for the newest.
+ *
+ * Held against the engine's list in both directions by
+ * `internal/doclet/client_gate_test.go`: an order the engine does not read is
+ * a `bad_params` refusal of the whole listing, and one it grew that nothing
+ * here names is an order nobody can ask for.
+ */
+export const PAGE_LIST_ORDERS = ["title", "newest"] as const;
 
 /**
  * What each change to a page reads as, in the two places a change is drawn:
@@ -136,8 +150,8 @@ export const PAGE_LABEL_MAX_BYTES = 64;
  * runbook"), and `phrase` on the page's own history, where the page goes
  * without saying ("Ana saved it").
  *
- * ONE DECLARATION, held against `pages.ChangeKinds` by
- * `internal/pages/client_gate_test.go`: a kind the engine writes and this list
+ * ONE DECLARATION, held against `doclet.ChangeKinds` by
+ * `internal/doclet/client_gate_test.go`: a kind the engine writes and this list
  * does not name reads as the bare kind after the writer's name, silently, and
  * a kind named here the engine never writes is a sentence nothing reaches.
  */

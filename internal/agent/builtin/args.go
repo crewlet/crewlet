@@ -2,22 +2,25 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The shared argument and output helpers.
@@ -31,51 +34,19 @@ import (
 // sent where a string belongs — which they do, and refusing it teaches
 // nothing.
 func argString(args map[string]any, key string) string {
-	switch v := args[key].(type) {
-	case string:
-		return v
-	case nil:
-		return ""
-	case float64:
-		return fmt.Sprintf("%g", v)
-	case json.Number:
-		// THE LITERAL, not `%g` of it: this is the spelling the model
-		// sent, and it is exact where the float rendering is not.
-		return v.String()
-	case bool:
-		return fmt.Sprintf("%t", v)
-	}
-	return ""
+	s, _ := argval.String(args[key])
+	return s
 }
 
-// argInt reads an integer argument, or the fallback.
+// argInt reads an integer argument, or the fallback when it is absent.
 //
-// JSON has one number type, so an int arrives as a number through every
-// decoder in this path; the int cases are for the callers that hand a map
-// straight in.
+// THE CHECK'S OWN READER ([argval.Whole]), so a value the check at the surface
+// admits is the value read here, and one it refuses never reaches the tool.
+// The fallback is for an absent argument; a present one the reader cannot
+// read was refused before the tool ran (ADR-0059).
 func argInt(args map[string]any, key string, fallback int) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case json.Number:
-		// INT64 FIRST, because that is the whole reason the decoders on
-		// this path read through json.Number: an id past 2^53 is exact
-		// here and rounded the moment it becomes a float.
-		if i, err := v.Int64(); err == nil {
-			return int(i)
-		}
-		if f, err := v.Float64(); err == nil {
-			return int(f)
-		}
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case string:
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
-			return n
-		}
+	if n, ok := argval.Whole(args[key]); ok {
+		return n
 	}
 	return fallback
 }
@@ -84,44 +55,8 @@ func argInt(args map[string]any, key string, fallback int) int {
 // model sends where a list belongs — which they do, constantly, and refusing
 // it costs a round to teach nothing.
 func argStrings(args map[string]any, key string) []string {
-	switch v := args[key].(type) {
-	case []string:
-		return cleanStrings(v)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			out = append(out, argString(map[string]any{"v": item}, "v"))
-		}
-		return cleanStrings(out)
-	case string:
-		// A COMMA-SEPARATED STRING IS ALSO ACCEPTED, for the same reason:
-		// "backend, api" is what a model writes when it has decided a
-		// list field takes prose, and splitting it is right far more
-		// often than treating it as one label containing a comma.
-		return cleanStrings(strings.Split(v, ","))
-	}
-	return nil
-}
-
-// cleanStrings trims, drops empties and deduplicates, preserving order.
-func cleanStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		v = strings.TrimSpace(v)
-		if v == "" || seen[v] {
-			continue
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	list, _ := argval.Strings(args[key])
+	return list
 }
 
 // argBool reads a boolean argument, false when absent or not one.
@@ -131,8 +66,8 @@ func cleanStrings(in []string) []string {
 // with three states: "do not protect this view" and "say nothing about
 // protecting it" are the same instruction.
 func argBool(args map[string]any, key string) bool {
-	value, _ := args[key].(bool)
-	return value
+	b, _ := argval.Bool(args[key])
+	return b
 }
 
 // argFloat reads a numeric argument, zero when absent or not one.
@@ -141,22 +76,11 @@ func argBool(args map[string]any, key string) bool {
 // whose zero IS its default — a target that starts at zero, a current nobody
 // has moved. A field where zero were a distinct setting would take a pointer,
 // which is the rule the config models follow for the same reason.
+//
+// THE CHECK'S OWN READER ([argval.Number]), as for [argInt].
 func argFloat(args map[string]any, key string) float64 {
-	switch v := args[key].(type) {
-	case float64:
-		return v
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f
-		}
-	case int:
-		return float64(v)
-	case string:
-		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			return n
-		}
-	}
-	return 0
+	f, _ := argval.Number(args[key])
+	return f
 }
 
 // argStringMap reads an object argument whose values are strings.
@@ -176,15 +100,11 @@ func argStringMap(args map[string]any, key string) map[string]string {
 		if k = strings.TrimSpace(k); k == "" || v == nil {
 			continue
 		}
-		switch typed := v.(type) {
-		case string:
-			out[k] = typed
-		case bool:
-			out[k] = strconv.FormatBool(typed)
-		case float64:
-			out[k] = strconv.FormatFloat(typed, 'f', -1, 64)
-		default:
-			out[k] = fmt.Sprint(v)
+		// BY THE CHECK'S OWN READER ([argval.String]), which renders a
+		// number or a boolean as written and reads nothing from an object
+		// or a list (refused at the surface before the tool runs).
+		if s, ok := argval.String(v); ok {
+			out[k] = s
 		}
 	}
 	if len(out) == 0 {
@@ -229,8 +149,22 @@ func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg)
 // statement about THIS call, which is why it is an argument: an item that does
 // not exist is not-found when the call is about it and an invalid argument
 // when the call merely named it.
+//
+// AND THE PERSON'S WORDS ARE THE CAUSE'S (ADR-0060): a writer that refused
+// with a person's phrasing beside its error ([caveat.Saying]) has it lifted
+// onto the result here, the one place a refusal with a cause is made, so no
+// tool answering that error has to remember to carry it.
 func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
-	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause)}
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause),
+		PersonRefusal: caveat.RefusalOf(cause)}
+}
+
+// toPerson is a refusal with a person's phrasing of it ([caveat.Refusal]),
+// for a refusal the tool itself decided: the model's sentence is untouched,
+// and the act route answers the phrasing in its place (ADR-0060).
+func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
+	r.PersonRefusal = words
+	return r
 }
 
 // Condition says whether a failure no sentinel of the caller's claimed is a
@@ -245,14 +179,24 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // log that refused the append); a coordination store that did not answer
 // ([coord.ErrUnavailable]); the estate's router finding no data node to run
 // the call on ([estate.ErrUnserved]) — every node holding the company's
-// records answered that its copy is out of service or behind, or did not
-// answer at all; an estate held closed while a peer's snapshot is adopted
+// records answered that its copy is out of service or behind, or, for a read,
+// did not answer at all; an estate held closed while a peer's snapshot is adopted
 // ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
 // event broker this node could not reach — its connection reconnecting, or the
-// broker not answering in time ([queue.ErrUnavailable]); a wait that ran out of
-// time or was abandoned. Everything else that reaches a tool unmarked — a read
+// broker not answering in time ([queue.ErrUnavailable]); a note the node
+// running its turn could not verify because the two nodes do not hold the same
+// keys ([steer.ErrUnverified]), and a coding run's record naming its seat under
+// a key this node does not hold ([steer.ErrSeatKeyUnknown]), neither of which a
+// wait clears; a coding sandbox that
+// failed for a reason its backend classed ([sandbox.WhyOf]: its provider not
+// answering, at a limit, refusing the company's key or wanting its account
+// paid, or a setup a person has to change), told by the class and never the
+// provider's own words, whose wait follows the class ([sandbox.Why.Waits]); the
+// node running a coding run unable to answer about it for a reason of its own
+// ([sandbox.ErrTailUnanswered]); a wait that ran out of time or was abandoned. Everything else that reaches a
+// tool unmarked — a read
 // of this node's own store that broke, a database that refused a statement, a
 // path in its own code that went wrong — is a fault.
 //
@@ -288,70 +232,373 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // sentinel this rule already knew, so until it was named here every such call
 // was answered `500` and told the caller sending it again would not help.
 // What the router COULD NOT ACCOUNT FOR is a different answer, never this one:
-// a write it sent and never heard back about ([estate.ErrOutcomeUnknown]) may
-// have landed, and is an unknown outcome ([UnknownCause]).
+// a write it sent and never heard back about — from the one node a write with
+// no key of its caller's goes to, or from every node a repeatable write was
+// asked of ([estate.ErrOutcomeUnknown]) — may have landed, and is an unknown
+// outcome ([UnknownCause]), told in [Unanswered].
 //
-// # Why the words are chosen rather than the error's own
+// # Two readers, and the words each is told
 //
-// The state log composes every refusal's words for the caller who receives
-// them ([statelog.Unavailable]'s detail and [statelog.Refused]'s are never an
-// error's own text), so the REFUSAL's message is told — the refusal itself,
-// read out of the chain, and never the chain's whole message, because a
-// wrapper is free to join an error of its own beside it (`%w: %w`), and that
-// one may be a driver's. Everything else is told in fixed words: a
-// coordination backend wraps its transport's error, which names hosts and
-// ports, a queue's names its broker, and the router's names every node it
-// asked and what each said — which it logs where it concludes it.
+// A condition reaches a MODEL inside a tool's sentence ("Could not read your
+// notes (…). Try again shortly."), and a PERSON on a screen, through every
+// surface that tells one in a person's words: the identity directory, the
+// artifacts, the configuration, a read of the human write surface. So each
+// condition is told twice, from one classification ([condition]), and the two
+// can never cover different sets: [Condition] is the model's clause and
+// [ConditionSentence] the person's whole sentence, what happened and what to
+// do, in the short voice a screen is written in. The act route and a write of
+// the human write surface tell a person only words the refusal catalog wrote
+// (ADR-0060), and the catalog words no condition, so there one is told in its
+// code's own sentence, under the hint [RetryAfter] gives it.
+//
+// NEITHER IS EVER THE ERROR'S OWN TEXT. A state-log refusal is told in the
+// state log's own words for it ([statelog.ConditionWords]), one per code: its
+// error opens with the framework's name and its reason's spelling, and its
+// detail ([statelog.Unavailable.Detail], [statelog.Refused.Detail]) names
+// positions, settings and the broker's words, written for whoever runs the
+// node — so it goes to the node's log, where the surface answering it puts
+// it, and to nobody's prompt or screen. It used to be handed whole to both,
+// so a model read "statelog: unavailable (behind): …" and a person read the
+// same under "this node could not read what the decision is about". Every
+// other condition is told in fixed words: a coordination backend wraps its
+// transport's error, which names hosts and ports, a queue's names its broker,
+// and the router's names every node it asked and what each said — which it
+// logs where it concludes it.
+//
+// WHAT TO DO IS THE CONDITION'S TO SAY where waiting does not clear it
+// ([conditionNext]): a tool's sentence told a model to try again shortly
+// whatever the condition was, so a full log or an evicted node was retried for
+// as long as the turn lasted.
 //
 // EXPORTED for the human write surface, whose tool-less writers class their
 // writers' errors by this same rule (internal/api/operator's ClassifyWrite).
 func Condition(err error) (words string, ok bool) {
-	switch {
-	case err == nil:
-		return "", false
-	case errors.Is(err, statelog.ErrUnavailable):
-		return stateLogWords(err), true
-	case errors.Is(err, coord.ErrUnavailable):
-		return "the coordination store did not answer", true
-	case errors.As(err, new(*estate.ErrUnserved)):
-		return "no data node could serve it right now — every node holding the " +
-			"company's records answered that its copy is out of service or " +
-			"behind, or did not answer at all", true
-	case errors.Is(err, store.ErrNoEstate):
-		return "this node's store is closed while it adopts a peer's snapshot " +
-			"or shuts down", true
-	case errors.Is(err, store.ErrBusy):
-		return "this node's store was busy with other writes and could not take " +
-			"this one in time", true
-	case errors.Is(err, queue.ErrNotLive):
-		return "this node's event queue is not running — it is starting or " +
-			"shutting down", true
-	case errors.Is(err, queue.ErrUnavailable):
-		return "this node could not reach its event broker — the connection is " +
-			"reconnecting, or the broker did not answer in time", true
-	case errors.Is(err, context.DeadlineExceeded):
-		return "it ran out of time", true
-	case errors.Is(err, context.Canceled):
-		return "it was abandoned before it finished", true
-	}
-	return "", false
+	said, ok := condition(err)
+	return said.clause, ok
 }
 
-// stateLogWords is how a state-log refusal reads to a caller: the refusal's
-// own message, composed by internal/statelog for whoever receives it — a read
-// refused ([statelog.Refused]) or a write ([statelog.Unavailable]) — or, for
-// a bare sentinel somebody wrapped, fixed words, since nothing composed that
-// chain for a reader.
-func stateLogWords(err error) string {
-	var unavailable *statelog.Unavailable
-	if errors.As(err, &unavailable) {
-		return unavailable.Error()
+// ConditionSentence is the condition err is, as a PERSON is told it: what
+// happened and what to do, with nothing of the error's own text — see
+// [Condition], which is the same classification told to a model. False for a
+// fault, and for anything else no condition claims.
+func ConditionSentence(err error) (string, bool) {
+	said, ok := condition(err)
+	return said.person, ok
+}
+
+// conditionSaid is one condition as each of its two readers is told it.
+type conditionSaid struct {
+	// clause is what happened, a clause a tool's sentence carries, for a
+	// model.
+	clause string
+
+	// person is what happened and what to do, a whole sentence, for a
+	// person.
+	person string
+
+	// stuck is a condition no wait clears ([statelog.RetryAfter] is zero):
+	// a tool then says so in place of its own invitation to try again, in
+	// words of a model's own ([stuckRead], [stuckWrite]) — never the
+	// person's advice beside [statelog.ConditionSentence], which sends them
+	// to another node or an administrator, neither of which a model can
+	// reach.
+	stuck bool
+
+	// after is the soonest a wait can clear it, where the condition knows
+	// one the state log's rule does not ([RetryAfter]); zero leaves the
+	// hint to that rule.
+	after time.Duration
+}
+
+// waitsUntil is the cause of an unavailable refusal a wait clears at a known
+// instant and no condition names: a model at a usage limit its CLI reported,
+// which its backend sits out until at (ADR-0064). [RetryAfter] answers the
+// wait left until then, never less than a second, where this node's undecided
+// hint told a person to come back in two seconds to a limit lifting in an
+// hour; a zero instant, a limit nothing said the end of, takes the hint as any
+// cause [RetryAfter] doesn't know.
+func waitsUntil(at time.Time) error { return &waitUntil{at: at} }
+
+// waitUntil is [waitsUntil]'s mark: the instant, and nothing of what was met,
+// for [waitless]'s reason.
+type waitUntil struct{ at time.Time }
+
+func (w *waitUntil) Error() string {
+	return "builtin: waiting clears this at " + w.at.UTC().Format(time.RFC3339)
+}
+
+// errWaitless is the mark beneath an unavailable refusal that no wait clears
+// and no condition names ([waitless]).
+var errWaitless = errors.New("builtin: no wait clears this")
+
+// waitless is the cause of an unavailable refusal no wait clears and no
+// condition names: a company that runs no model for the call, a login the
+// model's CLI reports refused or missing, a call the engine itself cannot make
+// (llm.KindFatal). The class says "this node cannot serve it", which is true,
+// and it was answered as every unavailable refusal is, under this node's
+// undecided hint, so a person told "an administrator needs to set one up" was
+// told in the same answer to come back in two seconds. [RetryAfter] answers the
+// mark with no hint. The mark carries no error of its own: the tool logs what
+// it met, and one beneath the mark could be read as a condition with its own
+// words.
+func waitless() error { return errWaitless }
+
+// errWaits is the mark beneath an unavailable refusal a wait can clear
+// ([waits]).
+var errWaits = errors.New("builtin: waiting can clear this")
+
+// waits is the cause of an unavailable refusal a wait can clear and no
+// condition names: a read that didn't answer, an index still being built, a
+// node that didn't answer in time. [RetryAfter] answers it with the hint, as
+// it answers any cause it doesn't know. It is a mark rather than nothing so
+// every unavailable refusal says which it is, waits, [waitsUntil] or
+// [waitless]: a bare one said neither, and the walk that kept the waitless
+// ones marked guessed from their wording, which a sentence reworded in the
+// voice it judged ("isn't configured" for "is not configured") passed
+// straight through (TestEveryUnavailableRefusalSaysWhetherAWaitClearsIt).
+func waits() error { return errWaits }
+
+// RetryAfter is how long somebody told about err should wait before asking
+// again: NONE for a condition no wait clears ([condition]'s stuck — a log at
+// its ceiling, a company whose file storage is full) and for a refusal a tool
+// marked as one ([waitless]), the wait until the instant a tool marked
+// ([waitsUntil]), the condition's own soonest where it knows one, and
+// otherwise [statelog.RetryAfter]'s reading of err, with otherwise as this
+// node's hint where nothing derived one.
+//
+// THE ONE HINT every surface answering a refusal or a condition in status
+// codes takes, BESIDE [ConditionSentence], so the words and the Retry-After
+// come from one classification: read from the state log's rule alone, a full
+// file store was told "an administrator needs to make room" under a
+// Retry-After of two seconds on the operator's surface, and an object store
+// that did not answer was told an election's wait on one surface and none on
+// the next.
+func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	if errors.Is(err, errWaitless) {
+		return 0
 	}
-	var refused *statelog.Refused
-	if errors.As(err, &refused) {
-		return refused.Error()
+	var until *waitUntil
+	if errors.As(err, &until) && !until.at.IsZero() {
+		return max(time.Until(until.at), time.Second)
 	}
-	return "the state log refused it on this node"
+	if said, ok := condition(err); ok {
+		switch {
+		case said.stuck:
+			return 0
+		case said.after > 0:
+			return said.after
+		}
+	}
+	return statelog.RetryAfter(err, otherwise)
+}
+
+// condition is the one classification [Condition] and [ConditionSentence]
+// read: the condition err is, or false for a fault.
+func condition(err error) (conditionSaid, bool) {
+	switch {
+	case err == nil:
+		return conditionSaid{}, false
+	case errors.Is(err, statelog.ErrUnavailable):
+		return stateLogSaid(err), true
+	case errors.Is(err, objstore.ErrFull):
+		// THE DEPLOYMENT'S FILE STORAGE AT ITS RESERVATION, which no wait
+		// clears and nobody uploading can change: somebody has to make
+		// room ([objstore.FullWords]).
+		return conditionSaid{clause: "the company's file storage is full",
+			person: objstore.FullWords, stuck: true}, true
+	case errors.Is(err, objstore.ErrUnanswered):
+		// THE FILE STORE DID NOT TAKE THE BYTES, which clears when it
+		// answers again: the default store is the data nodes' own bucket,
+		// which answers no sooner than its group elects.
+		return conditionSaid{clause: "the company's file storage did not answer",
+			person: "The company's files couldn't be saved just now. " +
+				statelog.TryAgainSoon, after: statelog.ElectionRetryHint}, true
+	case errors.Is(err, coord.ErrUnavailable):
+		return conditionSaid{clause: "the coordination store did not answer",
+			person: "This node couldn't reach the rest of the fleet. " +
+				statelog.TryAgainSoon}, true
+	case errors.As(err, new(*estate.ErrUnserved)):
+		return conditionSaid{clause: "no data node could serve it right now — " +
+			"every node holding the company's records answered that its copy is " +
+			"out of service or behind, or, asked to read, did not answer at all",
+			person: "No node could serve this right now. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, store.ErrNoEstate):
+		return conditionSaid{clause: "this node's store is closed while it adopts " +
+			"a peer's snapshot or shuts down",
+			person: "This node is catching up from another node or shutting " +
+				"down. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, store.ErrBusy):
+		return conditionSaid{clause: "this node's store was busy with other writes " +
+			"and could not take this one in time",
+			person: "This node was too busy to take this in time. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, queue.ErrNotLive):
+		return conditionSaid{clause: "this node's event queue is not running — it " +
+			"is starting or shutting down",
+			person: "This node is starting up or shutting down. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, queue.ErrUnavailable):
+		return conditionSaid{clause: "this node could not reach its event broker — " +
+			"the connection is reconnecting, or the broker did not answer in time",
+			person: "This node lost touch with the rest of the fleet. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, sandbox.ErrTailUnanswered):
+		// THE NODE RUNNING A CODING RUN COULD NOT READ IT FOR A REASON OF
+		// ITS OWN a wait clears: the run's seat moving, the node stopping,
+		// or what it reads the run's record from not answering. Its own
+		// log has which.
+		return conditionSaid{clause: "the node running the coding run couldn't " +
+			"answer just now",
+			person: "The node running this coding run couldn't answer just now. " +
+				statelog.TryAgainSoon}, true
+	case errors.Is(err, steer.ErrUnverified):
+		// THE FLEET'S NODES DO NOT HOLD THE SAME KEYS, so the node running a
+		// turn took nothing it could not verify: only an operator giving them
+		// the same keys clears it. The keys go to the log; the person's
+		// sentence says who fixes it.
+		return conditionSaid{clause: "the node running the turn couldn't verify " +
+			"the note, because the two nodes don't hold the same keys",
+			person: "The node running this turn couldn't verify your note, so it " +
+				"took nothing. An administrator needs to give the fleet's nodes the " +
+				"same keys.", stuck: true}, true
+	case errors.Is(err, steer.ErrSeatKeyUnknown):
+		// THE SAME FACT ON THE RUN'S RECORD: the seat it names, which a
+		// person's authority to steer is decided on, is sealed under a key
+		// this node does not hold, so nothing is decided and nothing is sent
+		// until an operator gives the nodes the same keys.
+		return conditionSaid{clause: "this node couldn't tell whose turn it is, because " +
+			"the fleet's nodes don't hold the same keys",
+			person: "This node couldn't tell whose turn this is, so your note wasn't " +
+				"sent. An administrator needs to give the fleet's nodes the same keys.",
+			stuck: true}, true
+	}
+	// THE SANDBOX'S CLASS, read before a deadline or a cancellation its own
+	// chain may carry: the backend that met the failure knew what it was,
+	// and a provider's request that ran out of time is the provider not
+	// answering, which a class says and a deadline does not.
+	if why, ok := sandbox.WhyOf(err); ok {
+		if said, ok := sandboxConditions[why]; ok {
+			return said, true
+		}
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return conditionSaid{clause: "it ran out of time",
+			person: "This took too long, so it stopped. " + statelog.TryAgainSoon}, true
+	case errors.Is(err, context.Canceled):
+		return conditionSaid{clause: "it was abandoned before it finished",
+			person: "This stopped before it finished. " + statelog.TryAgainSoon}, true
+	}
+	return conditionSaid{}, false
+}
+
+// sandboxConditions is every class a coding sandbox's backend marks a failure
+// with ([sandbox.Why]), as each of a condition's two readers is told it: a
+// model by what failed, a person by what failed and who clears it.
+//
+// NO WAIT CLEARS A CLASS THE SANDBOX SAYS NO WAIT CLEARS ([sandbox.Why.Waits]):
+// a broken setup, a refused key and an unpaid account are each somebody's to
+// change, so each is stuck and none is offered a retry. A box read words its
+// own classes in its own sentences ([boxFailure]); this is every other
+// reader's — a tool that met one in a call of its own, and the query surface
+// answering a running run's output ([sandbox.TailReader]), which answers a
+// class through this classification and its hint.
+// TestEverySandboxClassIsACondition holds every class to an entry here.
+//
+// ONE CLASS CLEARS ON ITS OWN BUT NOT SOON: a provider's account limit, which
+// clears when a box ends or its window passes. It is told "in a few minutes"
+// with a hint of [sandboxLaterWait], the words a box read already uses for
+// it: told "in a moment" with the health tick's five seconds, a person
+// watching a rate-limited run was offered a wait the class itself doesn't
+// promise.
+//
+// A SETUP'S DOWNLOAD THAT FAILED FOR NOW clears soon, as a provider that
+// didn't answer does: its recipe exits 75 ([sandbox.WhySetupUnavailable])
+// only once its own retries are spent on a service still failing on its
+// side, so it is told "in a moment", with the hint its caller gives.
+var sandboxConditions = map[sandbox.Why]conditionSaid{
+	sandbox.WhyConfiguration: {clause: "the coding sandbox isn't set up for this",
+		person: "The coding sandbox isn't set up for this. An administrator needs " +
+			"to fix its setup.", stuck: true},
+	sandbox.WhySetupUnavailable: {clause: "a download the coding sandbox's setup " +
+		"makes failed for now",
+		person: "A download the coding sandbox's setup makes failed for now. " +
+			statelog.TryAgainSoon},
+	sandbox.WhyProviderRefused: {clause: "the sandbox provider refused the company's " +
+		"credentials",
+		person: "The sandbox provider refused the company's credentials. An " +
+			"administrator needs to fix them.", stuck: true},
+	sandbox.WhyProviderBilling: {clause: "the sandbox provider's account for the " +
+		"company needs paying for",
+		person: "The sandbox provider's account needs paying for. An administrator " +
+			"needs to check it.", stuck: true},
+	sandbox.WhyProviderLimit: {clause: "the sandbox provider is at a limit of the " +
+		"company's account",
+		person: "The sandbox provider is at the company's account limit. " +
+			statelog.TryAgainLater, after: sandboxLaterWait},
+	sandbox.WhyProviderUnavailable: {clause: "the sandbox provider or the coding " +
+		"run's box didn't answer, or failed on its side",
+		person: "The coding sandbox didn't answer. " + statelog.TryAgainSoon},
+}
+
+// sandboxLaterWait is the hint for a sandbox class that clears on its own but
+// not soon: a minute, the shortest wait worth asking a limited provider again
+// after, and short enough that a screen showing the run recovers by itself
+// rather than after a reload.
+const sandboxLaterWait = time.Minute
+
+// stateLogSaid is how a state-log refusal reads: the refusal read out of the
+// chain — a read refused ([statelog.Refused]), a write ([statelog.Unavailable])
+// or a bare sentinel somebody wrapped — in the state log's own words for it
+// ([statelog.ConditionWords]), and never its error or its detail, which are
+// the log's.
+//
+// THE REFUSAL ITSELF, never the chain's whole message: a wrapper is free to
+// join an error of its own beside it (`%w: %w`), and that one may be a
+// driver's.
+func stateLogSaid(err error) conditionSaid {
+	what, _, _ := statelog.ConditionWords(err)
+	person, _ := statelog.ConditionSentence(err)
+	return conditionSaid{clause: what, person: person,
+		stuck: statelog.RetryAfter(err, time.Second) == 0}
+}
+
+// What a model is told about a condition no wait clears, in place of a tool's
+// invitation to try again: that trying again does not help, and what to say
+// instead — the one thing a model can do about a full log or an evicted node,
+// since it neither chooses the node a call goes to nor has an administrator to
+// ask.
+const (
+	// stuckRead is a read's: it says it could not check, as every read
+	// failure's sentence asks.
+	stuckRead = "Trying again won't clear this, so say you could not check, " +
+		"and why."
+
+	// stuckWrite is a write's, or a call's that may be either.
+	stuckWrite = "Trying again won't clear this, so say it could not be done, " +
+		"and why."
+)
+
+// conditionNext is what a tool's sentence about a condition advises: soon, the
+// tool's own invitation to try again, where waiting clears it — and where it
+// does not, stuck ([stuckRead] or [stuckWrite]), since a model told to try
+// again shortly retries a full log or an evicted node for as long as its turn
+// lasts.
+func conditionNext(err error, soon, stuck string) string {
+	if said, ok := condition(err); ok && said.stuck {
+		return stuck
+	}
+	return soon
+}
+
+// rightNow is " right now" for a condition waiting clears and nothing for one
+// it does not, so a sentence saying a tool could not do something "right now"
+// does not promise a wait its own advice rules out.
+func rightNow(err error) string {
+	if said, ok := condition(err); ok && said.stuck {
+		return ""
+	}
+	return " right now"
 }
 
 // faultSaid is the clause a FAULT is told in, wherever a sentence names one:
@@ -380,12 +627,30 @@ func faulted(ctx context.Context, tool string, err error, sentence string) tools
 }
 
 // toldOf is how a failed result's reason reads inside a sentence that names
-// what it stopped: [faultSaid] for a fault, whose error is the log's; a
-// condition's words ([Condition]); and otherwise the error's own — a refusal
-// the domain composed for a caller.
+// what it stopped: [faultSaid] for a fault, whose error is the log's;
+// [Unanswered] for a write no data node answered, whose error names every node
+// it was sent to; a refusal a native domain or the framework decided, in the
+// deciding one's words ([WriterSentence]); a condition's words ([Condition]);
+// and otherwise the error's own.
+//
+// THE UNANSWERED WRITE GOES BEFORE THE CONDITION, because one whose caller's
+// context ended while it waited carries that context's error too, and "it ran
+// out of time" read beside "did not finish" says the write did not land.
+//
+// AND THE DECIDED REFUSAL GOES BEFORE IT TOO: a write about what a deletion
+// keeps deleted is a refusal the framework states as one of its conditions, so
+// asked second it was told as the framework's whole text, the deleted object's
+// broker subject included, and the domain's own refusals as their Go error,
+// package name and all.
 func toldOf(failure tools.Result, err error) string {
 	if tools.RefusalOf(failure) == tools.RefusalInternalError {
 		return faultSaid
+	}
+	if errors.Is(err, estate.ErrOutcomeUnknown) {
+		return Unanswered
+	}
+	if said, ok := WriterSentence(err); ok {
+		return said
 	}
 	if why, ok := Condition(err); ok {
 		return why
@@ -410,7 +675,8 @@ func toldOf(failure tools.Result, err error) string {
 func nodeFailure(ctx context.Context, tool string, err error, stopped, fact string) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err,
-			sentence(stopped+" ("+why+").", fact, "Try again shortly."))
+			sentence(stopped+" ("+why+").", fact, conditionNext(err, "Try again shortly.",
+				stuckWrite)))
 	}
 	return faulted(ctx, tool, err, sentence(stopped+": "+faultSaid+".", fact))
 }
@@ -457,7 +723,7 @@ type UnknownOutcome struct {
 	Unvouched bool
 
 	// Err is what the writer answered, for a gesture that STOPPED at the
-	// unknown step ([tracker.ErrStepUnresolved]); nil for a write that
+	// unknown step ([worklet.ErrStepUnresolved]); nil for a write that
 	// answered `unknown` with no error of its own.
 	Err error
 }
@@ -506,12 +772,13 @@ func writeCause(actor Actor, err error) error {
 // that:
 //
 //   - a walking gesture that stopped at a step whose outcome is unknown
-//     ([tracker.ErrStepUnresolved]): the steps before it landed and the step
+//     ([worklet.ErrStepUnresolved]): the steps before it landed and the step
 //     itself may have;
-//   - a write the estate's router SENT to a data node that never answered,
-//     of a kind it may not send to a second ([estate.ErrOutcomeUnknown]) —
-//     a page write that names no operation of its own: the node may have
-//     run it before it went quiet.
+//   - a write the estate's router SENT and never heard back about
+//     ([estate.ErrOutcomeUnknown]): a page write that names no operation of
+//     its own, which goes to one data node only, or a write carrying its
+//     caller's operation that no data node it was asked of answered — each
+//     node that went quiet may have run it.
 //
 // BECAUSE EACH IS AN UNKNOWN, not a refusal: a caller answering in status
 // codes owes it the answer it gives every unknown — read back before writing
@@ -525,9 +792,9 @@ func writeCause(actor Actor, err error) error {
 // which writer errors may have landed is a list that misses one.
 func UnknownCause(opID string, err error) error {
 	switch {
-	case errors.Is(err, tracker.ErrStepUnresolved):
+	case errors.Is(err, worklet.ErrStepUnresolved):
 		return &UnknownOutcome{OpID: opID,
-			Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
+			Unvouched: errors.Is(err, worklet.ErrStepUnvouched), Err: err}
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return &UnknownOutcome{OpID: opID, Err: err}
 	}
@@ -536,8 +803,12 @@ func UnknownCause(opID string, err error) error {
 
 // Unanswered is how a write the estate's router sent and never heard back
 // about ([estate.ErrOutcomeUnknown]) reads to whoever made it — in fixed
-// words, because the router's own name every node it asked.
-const Unanswered = "the data node this write was sent to did not answer, so " +
+// words, because the router's own name every node it asked. "A" DATA NODE,
+// NEVER "THE": a write with no key of its caller's goes to one data node, and
+// a repeatable one to every data node in turn, which ends unknown when none
+// ran it and any one of them stayed silent — the others may have answered
+// that they did not run it, so "none answered" would not be true either.
+const Unanswered = "a data node this write was sent to did not answer, so " +
 	"whether it landed is unknown"
 
 // clip flattens a caller-supplied string echoed back into a tool result or a
@@ -585,75 +856,6 @@ func sortedKeys(m map[string]string) []string {
 // rule and a second spelling of the json.Number / finiteness discipline is how
 // one of them stops matching the other — the objection [textcut] and [whsec]
 // each record for a grammar that was written twice.
-func argIntValue(raw any) (int, bool) {
-	switch v := raw.(type) {
-	case json.Number:
-		// BACK THROUGH THIS FUNCTION rather than repeating the whole-number
-		// and finiteness discipline below, which is the half a second
-		// spelling always gets wrong. An integer past 2^53 is none of the
-		// things this reads — minutes, story points, decimal places — so
-		// the float is the honest intermediate here, unlike in [argInt].
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return argIntValue(f)
-	case float64:
-		// JSON has one number type, so a whole number arrives here. A
-		// fraction is not a whole number of minutes, nor of decimal
-		// places, and is refused rather than truncated to one nobody
-		// typed.
-		//
-		// FINITE FIRST, because the fraction test does not cover it: an
-		// infinity IS its own truncation, so it passed, and `int(+Inf)`
-		// is not defined by the language — it lands on the platform's
-		// minimum int, which the negative check below then refuses as a
-		// NEGATIVE estimate. Right answer, wrong reason, and a message
-		// naming a sign nobody typed.
-		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
-			return 0, false
-		}
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		return n, err == nil
-	}
-	return 0, false
-}
+func argIntValue(raw any) (int, bool) { return argval.Whole(raw) }
 
-func argFloatValue(raw any) (float64, bool) {
-	switch v := raw.(type) {
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return argFloatValue(f)
-	case float64:
-		return v, finite(v)
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case string:
-		// [strconv.ParseFloat] ACCEPTS "NaN", "Inf" and "infinity" in
-		// every casing, which is why the check is here rather than left
-		// to the caller: a size of NaN passed the `points < 0` guard
-		// below — every comparison with NaN is false — and an infinity
-		// passed it honestly, so both reached the writer. Downstream
-		// neither is a number a total can be summed from, and JSON
-		// cannot even encode them, so the failure surfaced as a broken
-		// answer somewhere with no memory of who typed it.
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return n, err == nil && finite(n)
-	}
-	return 0, false
-}
-
-// finite is what a size has to be: a real number a total can be summed from,
-// which NaN and the infinities are not.
-func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func argFloatValue(raw any) (float64, bool) { return argval.Number(raw) }

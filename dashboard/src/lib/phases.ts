@@ -37,6 +37,7 @@ import type {
 import { fmtBytes, fmtExact, plural, tsKey } from "./format.ts";
 import { decodeSections } from "./promptmap.ts";
 import type { Tone } from "~/ui/primitives.tsx";
+import type { InvocationOutcome } from "~/contract/stops.ts";
 
 export interface ToolCall {
   name: string;
@@ -62,6 +63,28 @@ export interface ToolCall {
    *  running the round's calls one after another from the model's answer only
    *  where this is absent. */
   startedAt: string;
+  /** The call's own id (`call_id`): what tells two calls of one response
+   *  apart, and what the call carried while it ran (`running_calls[].id`),
+   *  so its running row and its answered one are one row. "" where nothing
+   *  named the call. */
+  callId: string;
+}
+
+/**
+ * A tool call in flight (`running_calls[]` on a live call): it has no row in
+ * `tools` until it answers. A CLI may run a response's calls at once, so a
+ * phase has any number of them.
+ */
+export interface RunningToolCall {
+  /** The call's own id — what its answered row's [ToolCall.callId] will be;
+   *  "" where nothing named it. */
+  id: string;
+  round: number;
+  name: string;
+  /** "" where the reader was withheld the body ([PhaseRecord.bodyWithheld]):
+   *  what a call was handed is the seat's trail, its name and timing never. */
+  arguments: string;
+  startedAt: string;
 }
 
 /**
@@ -75,6 +98,36 @@ export interface TimedRound {
   startedAt: string;
   durationMs: number;
   model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  toolCalls: number;
+  /** Why the model stopped writing (`contract/stops.ts`), or "" where its
+   *  backend reported none. */
+  stopReason: string;
+}
+
+/**
+ * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * own loop over the phase's tools, from launch to exit.
+ */
+export interface Invocation {
+  /** One-based, in the order the phase's runs happened. */
+  run: number;
+  startedAt: string;
+  durationMs: number;
+  providerKey: string;
+  model: string;
+  /** `end`, `cap`, `stopped` or `failed` — see [OUTCOME_WORDS]; a string, so
+   *  one a newer engine records arrives as itself. */
+  outcome: string;
+  /** The rounds it made, both inclusive, on the scale every round list
+   *  shares; both 0 for a run that made no request. */
+  firstRound: number;
+  lastRound: number;
+  /** False where its CLI's record showed no requests: the whole run is then
+   *  ONE round, which nothing timed on its own. */
+  requestsObserved: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -100,6 +153,9 @@ export interface Round {
   /** The model's prose for this round. */
   content: string;
   tools: ToolCall[];
+  /** The round's calls still in flight, in the order they arrived: a call
+   *  leaves this list for `tools` when it answers. Live phases only. */
+  running: RunningToolCall[];
   /** Still being written: this text is arriving, not committed. */
   streaming: boolean;
   /** Attempts a provider gave up on partway through, oldest first. */
@@ -271,6 +327,13 @@ export interface PhaseRecord {
    */
   timedRounds: TimedRound[];
   /**
+   * The phase's CLI runs that have ENDED, oldest first — on a live phase the
+   * run in flight is not among them, and its rounds are the ones past every
+   * run's `lastRound`. Empty on a phase that ran no CLI of its own (a coding
+   * run).
+   */
+  invocations: Invocation[];
+  /**
    * The round of the host phase a worker or a judge ran in (`host_round`),
    * 0 where the record does not say — which nests a delegate's workers
    * under the round that spawned them rather than beside it.
@@ -284,13 +347,16 @@ export interface PhaseRecord {
    */
   maxRounds: number;
   /**
-   * When the round in flight began its provider call, and the tool call
-   * running right now — a LIVE phase's only, "" / null otherwise.
+   * When the round in flight began its provider call, and the tool calls
+   * running right now — a LIVE phase's only, "" / empty otherwise.
    */
   roundStartedAt: string;
-  /** The tool call running now; its `arguments` are "" where its body was
-   *  withheld ([bodyWithheld]), its name and timing never. */
-  runningCall: { round: number; name: string; arguments: string; startedAt: string } | null;
+  /** When the CLI run in flight was launched — a LIVE phase's only, "" between
+   *  runs and otherwise. */
+  runStartedAt: string;
+  /** Every tool call running now, in the order they arrived — a CLI may run
+   *  a response's calls at once. */
+  runningCalls: RunningToolCall[];
   /**
    * The engine withheld this phase's BODY from this reader — the prompts, the
    * response, the tool calls, the narration and the trigger's words — and sent
@@ -300,9 +366,9 @@ export interface PhaseRecord {
    * trail's and answered whole or not at all.
    */
   bodyWithheld: boolean;
-  /** The notes a person sent the turn that this phase read, and the round
-   *  whose provider call first saw each. */
-  steers: { round: number; noteId: string }[];
+  /** The notes a person sent the turn that this phase read, the round whose
+   *  provider call first saw each, and the kind of step that read it. */
+  steers: { round: number; noteId: string; boundary: string }[];
   /** The node that ran the phase, off the live call; "" on a stored record,
    *  whose row carries no node (the turn answer's `nodes` says it). */
   node: string;
@@ -328,10 +394,11 @@ export interface PhaseRecord {
    * How long this phase took, in milliseconds, as the engine measured it.
    *
    * Straight off `agent_phase_completed.duration_ms`. Zero on a live record,
-   * which has not finished, and on a record the engine could not measure —
-   * an agent-mode executor whose rounds ran inside a coding CLI's own loop,
-   * in another process. Read it through [phaseDuration], never directly:
-   * "no duration" and "took no time" must not render alike.
+   * which has not finished. An executor's record states its two segments —
+   * the launch and the collection — and never the run between them, which
+   * is the run's own fact on its `sandbox` record. Read it through
+   * [phaseDuration], never directly: "no duration" and "took no time" must
+   * not render alike.
    */
   durationMs: number;
   /** The event id, when this came from the store — for a deep link. */
@@ -376,17 +443,75 @@ export function toolCalls(raw: unknown): ToolCall[] {
       result: str(rec.result),
       failed: rec.success === false || Boolean(rec.error),
       // How long the call took, and who answered it: the tool loop times
-      // every call and the surface names the origin that served it. Absent
+      // every call it runs, the bridge every call an executor run makes
+      // over it, and the surface names the origin that served it. Absent
       // on a row nothing timed (a call whose arguments did not parse, which
-      // was answered rather than run, and an agent-mode run's bridged call,
-      // whose rounds ran inside somebody else's loop), which reads as 0 /
-      // "" — "not recorded", never "instant" or "the engine's own".
+      // was answered rather than run), which reads as 0 / "" — "not
+      // recorded", never "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",
       startedAt: typeof rec.started_at === "string" ? rec.started_at : "",
+      callId: typeof rec.call_id === "string" ? rec.call_id : "",
     };
   });
+}
+
+/** Normalise the `running_calls` list — every tool call in flight. */
+export function runningCalls(raw: unknown): RunningToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as unknown[])
+    .filter((rec): rec is Record<string, unknown> => !!rec && typeof rec === "object")
+    .map((rec) => ({
+      id: typeof rec.id === "string" ? rec.id : "",
+      round: num(rec.round),
+      name: typeof rec.name === "string" ? rec.name : "tool",
+      arguments: typeof rec.arguments === "string" ? rec.arguments : "",
+      startedAt: typeof rec.started_at === "string" ? rec.started_at : "",
+    }));
+}
+
+/** Normalise the `invocations` list — the phase's CLI runs, in order. */
+export function invocations(raw: unknown): Invocation[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as unknown[])
+    .filter((rec): rec is Record<string, unknown> => !!rec && typeof rec === "object")
+    .map((rec, i) => ({
+      run: i + 1,
+      startedAt: typeof rec.started_at === "string" ? rec.started_at : "",
+      durationMs: num(rec.duration_ms),
+      providerKey: typeof rec.provider_key === "string" ? rec.provider_key : "",
+      model: typeof rec.model === "string" ? rec.model : "",
+      outcome: typeof rec.outcome === "string" ? rec.outcome : "",
+      firstRound: num(rec.first_round),
+      lastRound: num(rec.last_round),
+      // `!== false`, never truthiness: the engine states it on every run, and
+      // a run that says nothing has said nothing about its record.
+      requestsObserved: rec.requests_observed !== false,
+      inputTokens: num(rec.input_tokens),
+      outputTokens: num(rec.output_tokens),
+      cacheReadTokens: num(rec.cache_read_tokens),
+      toolCalls: num(rec.tool_calls),
+    }));
+}
+
+/**
+ * How a CLI run ended, in words: what the head of its rounds says. EXHAUSTIVE
+ * over the engine's four outcomes (`toolloop.InvocationOutcome`), with the
+ * value itself for one this build does not know ([outcomeWords]).
+ */
+export const OUTCOME_WORDS: Record<InvocationOutcome, { label: string; tone: Tone }> = {
+  end: { label: "the model finished", tone: "neutral" },
+  cap: { label: "the CLI’s own turn cap stopped it", tone: "caution" },
+  stopped: { label: "the engine ended it", tone: "neutral" },
+  failed: { label: "failed", tone: "critical" },
+};
+
+/** A run's outcome in words, or the value itself for one this build does not know. */
+export function outcomeWords(outcome: string): { label: string; tone: Tone } {
+  return Object.hasOwn(OUTCOME_WORDS, outcome)
+    ? OUTCOME_WORDS[outcome as InvocationOutcome]
+    : { label: outcome ? `ended “${outcome}”` : "ended", tone: "neutral" };
 }
 
 /** Normalise the `rounds` list — each round's model call, as the loop timed it. */
@@ -402,6 +527,7 @@ export function timedRounds(raw: unknown): TimedRound[] {
       outputTokens: num(rec.output_tokens),
       cacheReadTokens: num(rec.cache_read_tokens),
       toolCalls: num(rec.tool_calls),
+      stopReason: typeof rec.stop_reason === "string" ? rec.stop_reason : "",
     }))
     .filter((r) => r.round > 0)
     .sort((a, b) => a.round - b.round);
@@ -432,6 +558,7 @@ export function rounds(
   calls: ToolCall[],
   narration: Narration[] = [],
   partial?: PartialRound | null,
+  running: readonly RunningToolCall[] = [],
 ): Round[] {
   const byRound = new Map<number, Round>();
   const at = (round: number): Round => {
@@ -441,6 +568,7 @@ export function rounds(
         round,
         content: "",
         tools: [],
+        running: [],
         streaming: false,
         abandoned: [],
         declined: false,
@@ -457,6 +585,10 @@ export function rounds(
     r.declined = n.declined;
   }
   for (const call of calls) at(call.round).tools.push(call);
+  // The calls in flight, after the round's answered ones — a round whose
+  // calls are all still running, side by side, is opened by them, since it
+  // has nothing else to show yet.
+  for (const call of running) at(call.round).running.push(call);
   // The round in flight. The engine clears it the instant that round's real
   // narration exists, so the two can never describe one round at once.
   if (partial && typeof partial.round === "number") {
@@ -468,6 +600,49 @@ export function rounds(
     r.abandoned = narrations(partial.abandoned);
   }
   return [...byRound.values()].sort((a, b) => a.round - b.round);
+}
+
+/**
+ * A phase's rounds under the CLI run that made them: `run` is null for rounds
+ * no ended run claims — on a live phase, the run in flight's.
+ */
+export interface RunGroup {
+  run: Invocation | null;
+  rounds: Round[];
+}
+
+/**
+ * Group a phase's ledger under its CLI runs, by the round span each run names
+ * (`first_round`–`last_round`) — the number the rounds, the calls and the
+ * narration already join on, and never an instant: an unobserved run's one
+ * round has none.
+ *
+ * EVERY RUN IS A GROUP, one that made no request included — a run that failed
+ * before its first request is the one a reader opened the phase to find. The
+ * rounds past every run are a last group of their own: on a live phase, the run
+ * in flight's. A round before a run that no run claims (a producer that named
+ * none) keeps its place in a group of its own, never dropped and never filed
+ * under a run that did not make it.
+ */
+export function runGroups(ledger: readonly Round[], runs: readonly Invocation[]): RunGroup[] {
+  const groups: RunGroup[] = [];
+  let next = 0;
+  for (const run of runs) {
+    const mine: Round[] = [];
+    if (run.firstRound > 0) {
+      const before: Round[] = [];
+      while (next < ledger.length && ledger[next]!.round < run.firstRound) {
+        before.push(ledger[next++]!);
+      }
+      if (before.length) groups.push({ run: null, rounds: before });
+      while (next < ledger.length && ledger[next]!.round <= run.lastRound) {
+        mine.push(ledger[next++]!);
+      }
+    }
+    groups.push({ run, rounds: mine });
+  }
+  if (next < ledger.length) groups.push({ run: null, rounds: ledger.slice(next) });
+  return groups;
 }
 
 /** The first message with this role that carries text, or null. */
@@ -495,9 +670,10 @@ function promptRole(
  * the page. A turn's own phases have no task id and keep the three-part key
  * they have always had.
  *
- * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a
- * resumed executor that calls `run_sandbox` again in one iteration launches a
- * second run, and each is a `sandbox` phase of that iteration. It keys the
+ * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a run
+ * that parked on a question and is relaunched on its answer is a second
+ * launch in the same iteration, and each is a `sandbox` phase of that
+ * iteration. It keys the
  * `sandbox` phase ONLY — the resumed executor's record names the run it
  * collected too, and keyed on it that record would stop matching the live
  * call it replaces.
@@ -538,7 +714,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     providerKey: "",
     live: call.in_progress !== false && !call.failed,
     failed: !!call.failed,
-    error: call.error?.message ?? "",
+    error: call.error?.detail ?? "",
     errorKind: call.error?.kind ?? "",
     // Read off `prompt_messages`, which the engine has always sent and
     // nothing read. Hardcoding "" here meant a RUNNING phase could never
@@ -581,20 +757,19 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     transcriptElidedBytes: 0,
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     timedRounds: timedRounds(call.rounds),
+    invocations: invocations(call.invocations),
     hostRound: 0,
     cacheReadTokens: call.cache_read_tokens ?? 0,
     maxRounds: call.max_rounds ?? 0,
     roundStartedAt: call.round_started_at ?? "",
-    runningCall: call.running_call
-      ? {
-          round: call.running_call.round,
-          name: call.running_call.name,
-          arguments: call.running_call.arguments ?? "",
-          startedAt: call.running_call.started_at,
-        }
-      : null,
+    runStartedAt: call.run_started_at ?? "",
+    runningCalls: runningCalls(call.running_calls),
     bodyWithheld: call.body_withheld === true,
-    steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
+    steers: (call.steers ?? []).map((s) => ({
+      round: s.round,
+      noteId: s.note_id,
+      boundary: s.boundary,
+    })),
     node: call.node ?? "",
     clockStart: call.started_at ?? "",
     at: call.updated_at,
@@ -682,16 +857,21 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     transcriptElidedBytes: num(p.activity_transcript_elided_bytes),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     timedRounds: timedRounds(p.rounds),
+    invocations: invocations(p.invocations),
     hostRound: num(p.host_round),
     cacheReadTokens: num(p.cache_read_tokens),
     maxRounds: num(p.max_rounds),
     roundStartedAt: "",
-    runningCall: null,
+    runStartedAt: "",
+    // A finished phase has nothing in flight: a call that never returned is
+    // the failure its record carries.
+    runningCalls: [],
     bodyWithheld: false,
     steers: Array.isArray(p.steers)
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
           round: num(s.round),
           noteId: String(s.note_id ?? ""),
+          boundary: typeof s.boundary === "string" ? s.boundary : "",
         }))
       : [],
     node: "",

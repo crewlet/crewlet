@@ -26,9 +26,10 @@ import (
 //
 // # It is not a fallback, it is the primary path for a running fleet
 //
-// An offline import marks a revision active in THIS node's database and
-// cannot move the fleet's activation pointer, because on the default topology
-// that pointer lives inside the engine's own process. PUT /config stores the
+// An offline import only OFFERS a revision: this node's store boots on it and
+// the next start publishes it, and only over the revision it was built on —
+// it cannot move the fleet's activation pointer, which on the default
+// topology lives inside the engine's own process. PUT /config stores the
 // revision AND activates it, so every node converges on it with no restart.
 
 // configClient talks to a running node's /config surface.
@@ -120,7 +121,7 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 			"the engine rather than something in front of it", c.base, c.answerCap, landed)
 	}
 	if resp.StatusCode/100 != 2 {
-		return "", 0, c.refusal(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
+		return "", 0, c.refusal(resp.StatusCode, resp.Header, raw)
 	}
 	var body struct {
 		RevisionID string `json:"revision_id"`
@@ -152,25 +153,57 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
-func (c *configClient) refusal(status int, contentType string, raw []byte) error {
+func (c *configClient) refusal(status int, header http.Header, raw []byte) error {
+	own := ownBody(header, raw)
 	var body struct {
+		refusalWords
 		Error   string `json:"error"`
-		Detail  string `json:"detail"`
-		Hint    string `json:"hint"`
+		Reason  string `json:"reason"`
 		Current string `json:"current_revision_id"`
 		Stored  string `json:"stored_revision_id"`
+		// Node is the node whose history alone holds Stored, which the
+		// engine names beside it on every answer that names one.
+		Node    string `json:"node"`
+		Outcome string `json:"outcome"`
 	}
-	_ = json.Unmarshal(raw, &body)
-	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return fmt.Errorf("%s: %s", c.base, msg)
+	_ = json.Unmarshal(own, &body)
+	if own != nil {
+		if msg, ok := credentialRefusal(status, own, true); ok {
+			return fmt.Errorf("%s: %s", c.base, msg)
+		}
 	}
 	switch {
 	case status == http.StatusNotFound:
 		// PUT /config answers no 404 of its own, so any 404 is the surface
 		// missing rather than something under it.
-		return missingSurface(c.base, "/config", body.Error, "-api")
+		return missingSurface(c.base, "/config", body.Error)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
-		return lostRace(c.base, body.Current, body.Stored)
+		return lostRace(c.base, body.Current, body.Stored, body.Node)
+	case status == http.StatusServiceUnavailable && body.Outcome == httpjson.OutcomeUnknown:
+		return unansweredImport(c.base, body.Stored, body.Node)
+	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable) &&
+		body.Reason == "" && body.Detail != "":
+		// ANY OTHER CONDITION OF THE NODE — a store too busy to take the
+		// revision, one closed for a snapshot, a log at its ceiling — is told
+		// in the node's own words for a person, which say whether waiting
+		// clears it: blaming every 503 on a leader election sent an operator
+		// waiting for one that was never coming.
+		return fmt.Errorf("%s could not take the import, so nothing was written. %s",
+			c.base, body.Detail)
+	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable):
+		// THE FLEET'S POINTER COULD NOT BE READ, which every write is built
+		// on: nothing was written, and it clears within a leader election.
+		// Said as that, because "answered 503: unavailable" reads as a node
+		// that is down, and the gesture is the same import a moment later.
+		// A write the node STORED and could not activate is the unknown
+		// outcome above, which this is never said of.
+		reason := body.Reason
+		if reason == "" {
+			reason = "the node could not read the fleet's activation"
+		}
+		return fmt.Errorf("%s could not take the import yet, so nothing was written: %s.\n"+
+			"  It clears within a few seconds (a coordination leader election); run this "+
+			"import again", c.base, reason)
 	case status == http.StatusForbidden && body.Error == string(httpjson.CodeConfigManaged):
 		// THE CREDENTIAL IS VALID AND NOT A WRITER, so the remedy is which
 		// token this command sent, and the refusal says where it came from.
@@ -180,10 +213,49 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = foreignAnswer(contentType, raw)
+		msg = foreignAnswer(header.Get("Content-Type"), raw)
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+		withRefusalDetail(msg, body.refusalWords))
+}
+
+// unansweredImport is an import the node stored and whose activation the
+// coordination store never answered: it may be what the fleet runs already, so
+// it is never said to have written nothing, and running the import again —
+// which makes another revision, over this one if it landed — is not the remedy.
+// Looking is: the active revision either is the stored one or is not.
+//
+// AND WHERE TO LOOK, which is one node. The revision is in the history of the
+// node that stored it and of no other until an activation names it, so the
+// diff and the revert that make it live answer there alone; -api naming a
+// load balancer or a shared Service in front of several reaches another,
+// which answers 404, and the operator concludes the import is lost. The answer
+// names that node, and so does this.
+func unansweredImport(base, stored, node string) error {
+	if stored == "" {
+		return fmt.Errorf("%s stored this document and could not tell whether the fleet "+
+			"activated it.\nRead %s/config once the node answers again to see which "+
+			"revision is live before running this import again", base, base)
+	}
+	return fmt.Errorf("%s stored this document as revision %s and could not tell "+
+		"whether the fleet activated it: the coordination store did not answer.\n"+
+		"Once it answers again, GET %s/config names the live revision. If it is %s, "+
+		"the import landed; if it is not, make it live through %s:\n"+
+		"  GET  %s/config/revisions/%s/diff\n"+
+		"  POST %s/config/revisions/%s/revert\n"+
+		"Running this import again makes another revision, over this one if it landed",
+		base, stored, base, stored, holderOf(node), base, stored, base, stored)
+}
+
+// holderOf names the node whose history alone holds a stored revision, and
+// what reaching it takes: -api may name an address several nodes share, and
+// every node but this one answers 404 for the revision.
+func holderOf(node string) string {
+	if node == "" {
+		return "the node that answered, which alone holds it"
+	}
+	return "node " + node + ", which alone holds it, by its own address if -api " +
+		"names one several nodes share, since any other answers 404 for it"
 }
 
 // lostRace is what an import refused with revision_advanced tells the
@@ -200,8 +272,9 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 //
 // NOTHING STORED IS ITS OWN ANSWER. A write refused before it stored anything
 // names no revision, and a hint built around one sent the operator to
-// activate an empty id.
-func lostRace(base, current, stored string) error {
+// activate an empty id. And what was stored is one node's ([holderOf]), as an
+// unanswered import's is: a revision that lost its activation reached no other.
+func lostRace(base, current, stored, node string) error {
 	fleet := "a newer revision"
 	if current != "" {
 		fleet = "revision " + current
@@ -214,8 +287,8 @@ func lostRace(base, current, stored string) error {
 	return fmt.Errorf("another write activated first, so this document was "+
 		"stored as revision %s but is NOT active (the fleet is on %s).\n"+
 		"Compare it with what is live, and make it live if it is still what you "+
-		"want, through the node that answered:\n"+
+		"want, through %s:\n"+
 		"  GET  %s/config/revisions/%s/diff\n"+
 		"  POST %s/config/revisions/%s/revert",
-		stored, fleet, base, stored, base, stored)
+		stored, fleet, holderOf(node), base, stored, base, stored)
 }

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE WORK TOOLS CUT THEIR DAY ON THE COMPANY'S CLOCK, AS IT IS AT THE CALL
@@ -40,7 +40,7 @@ func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 		Zone: clock.Load,
 	})
 
-	if res := callWork(t, reg, tracker.ListWorkItemsTool, map[string]any{"due": "overdue"}); res.Failed {
+	if res := callWork(t, reg, worklet.ListWorkItemsTool, map[string]any{"due": "overdue"}); res.Failed {
 		t.Fatalf("list_work_items: %s", res.Output)
 	}
 	// Midnight on the 23rd in Los Angeles (PDT, UTC-7), which is where
@@ -49,7 +49,7 @@ func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 		t.Errorf("list_work_items cut today at %v, want the company's midnight %v",
 			trk.query.DayStart, want)
 	}
-	callWork(t, reg, tracker.MyWorkTool, nil)
+	callWork(t, reg, worklet.MyWorkTool, nil)
 	if trk.myWorkZone != losAngeles {
 		t.Errorf("my_work cut its day on %v, want the company's clock %v",
 			trk.myWorkZone, losAngeles)
@@ -57,7 +57,7 @@ func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 
 	// AN APPLY MOVES THE CLOCK, and the same registered tools follow it.
 	clock.Store(berlin)
-	if res := callWork(t, reg, tracker.ListWorkItemsTool, map[string]any{"due": "overdue"}); res.Failed {
+	if res := callWork(t, reg, worklet.ListWorkItemsTool, map[string]any{"due": "overdue"}); res.Failed {
 		t.Fatalf("list_work_items: %s", res.Output)
 	}
 	// Midnight on the 24th in Berlin (CEST, UTC+2).
@@ -65,7 +65,7 @@ func TestTheWorkToolsCutTheirDayOnTheCompanysClockAtTheCall(t *testing.T) {
 		t.Errorf("after the clock moved, list_work_items cut today at %v, want %v",
 			trk.query.DayStart, want)
 	}
-	callWork(t, reg, tracker.MyWorkTool, nil)
+	callWork(t, reg, worklet.MyWorkTool, nil)
 	if trk.myWorkZone != berlin {
 		t.Errorf("after the clock moved, my_work cut its day on %v, want %v",
 			trk.myWorkZone, berlin)
@@ -89,7 +89,7 @@ func TestAWorkSurfaceWithNoClockCutsOnUTC(t *testing.T) {
 				Now:  func() time.Time { return now },
 				Zone: zone,
 			})
-			callWork(t, reg, tracker.MyWorkTool, nil)
+			callWork(t, reg, worklet.MyWorkTool, nil)
 			if trk.myWorkZone != time.UTC {
 				t.Errorf("my_work cut its day on %v, want UTC", trk.myWorkZone)
 			}

@@ -233,7 +233,7 @@ func TestAnIncompleteEstateIsNeverDone(t *testing.T) {
 }
 
 // A STORE MOVE COPIES WHAT A DERIVED ROW NAMES, VERIFIED, as it copies a
-// file (ADR-0051): an object the engine can build again is one every node of
+// file (ADR-0074): an object the engine can build again is one every node of
 // the moved fleet would otherwise build again, at a cost that grows with what
 // it was built from, where the copy costs its bytes once. It is counted apart
 // from the files, and a second pass finds it present and copies nothing.

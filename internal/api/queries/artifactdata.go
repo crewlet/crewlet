@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // THE DATASTORE'S READ QUESTIONS: an artifact's documents, one document, a
@@ -119,7 +120,7 @@ func dataFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor),
 		errors.Is(err, query.ErrInvalid), errors.Is(err, query.ErrNotIndexed):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, artifactdata.Sentence(err))
 	}
 	return err
 }
@@ -132,7 +133,7 @@ func (s artifactData) docs(ctx context.Context, p Params) (any, error) {
 	}
 	since, ok := p.WholeInt("since")
 	if p.Has("since") && (!ok || since < 0) {
-		return nil, fmt.Errorf("%w: since is a version a read returned", ErrBadParams)
+		return nil, fmt.Errorf("%w: the since parameter is a version a read returned", ErrBadParams)
 	}
 	id, a, err := s.admit(ctx, "artifact_data", authz.ActionArtifactDataRead, p)
 	if err != nil {
@@ -167,7 +168,8 @@ func (s artifactData) query(ctx context.Context, p Params) (any, error) {
 	var q query.Query
 	if raw := p.String("q"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &q); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-			return nil, fmt.Errorf("%w: q is a query as JSON: %w", ErrBadParams, err)
+			return nil, fmt.Errorf("%w: %s. It takes a query as JSON", ErrBadParams,
+				plainjson.Unreadable("the q parameter", err))
 		}
 	}
 	id, a, err := s.admit(ctx, "artifact_data_query", authz.ActionArtifactDataQuery, p)
@@ -256,7 +258,7 @@ func (s artifactData) usage(ctx context.Context, _ Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_data_usage", d)
+		return nil, NewRefusal("artifact_data_usage", d)
 	}
 	usage, err := s.Reads.Usage(ctx)
 	if err != nil {

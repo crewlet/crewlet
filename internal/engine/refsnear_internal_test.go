@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -59,7 +58,7 @@ func TestTheRefsAlarmIsMeasuredOnTheTrimTick(t *testing.T) {
 	now := time.Now().UTC()
 	evaluate := func() (alarm statelog.Alarm, firing bool) {
 		for range 10 {
-			alarm, firing = refsAlarm(statelog.Evaluate(r.reading(ctx, now, coord.BackupPoint{}, false, nil)))
+			alarm, firing = refsAlarm(statelog.Evaluate(r.reading(ctx, now, nil, nil)))
 		}
 		return alarm, firing
 	}

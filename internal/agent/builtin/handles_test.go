@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A HANDLE NOBODY HAS IS REFUSED, AT EVERY ARGUMENT THAT TAKES ONE.
@@ -28,16 +28,16 @@ func TestAHandleNobodyHasIsRefused(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		"a create's assignee": {tracker.CreateWorkItemTool, map[string]any{
+		"a create's assignee": {worklet.CreateWorkItemTool, map[string]any{
 			"title": "A task", "assignee": "nobody-here",
 		}},
-		"an update's assignee": {tracker.UpdateWorkItemTool, map[string]any{
+		"an update's assignee": {worklet.UpdateWorkItemTool, map[string]any{
 			"item": "ENG-1", "assignee": "nobody-here",
 		}},
-		"a priority list's owner": {tracker.SetPrioritiesTool, map[string]any{
+		"a priority list's owner": {worklet.SetPrioritiesTool, map[string]any{
 			"handle": "nobody-here", "items": []any{"ENG-1"},
 		}},
-		"a project's default assignee": {tracker.WriteProjectTool, map[string]any{
+		"a project's default assignee": {worklet.WriteProjectTool, map[string]any{
 			"project": "ENG", "default_assignee": "nobody-here",
 		}},
 	} {
@@ -65,7 +65,7 @@ func TestAKnownHandleIsAccepted(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := rosterRegistry(t, trk)
-	got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
+	got := callWork(t, reg, worklet.CreateWorkItemTool, map[string]any{
 		"title": "A task", "assignee": "alice", "project": "ENG",
 	})
 	if got.Failed {
@@ -82,7 +82,7 @@ func TestAHandleIsResolvedToItsCanonicalForm(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := rosterRegistry(t, trk)
-	got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
+	got := callWork(t, reg, worklet.CreateWorkItemTool, map[string]any{
 		"title": "A task", "assignee": "Alice Engineer", "project": "ENG",
 	})
 	if got.Failed {
@@ -110,7 +110,7 @@ func TestNoRosterAdmitsEveryHandle(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if got := callWork(t, reg, tracker.CreateWorkItemTool, map[string]any{
+	if got := callWork(t, reg, worklet.CreateWorkItemTool, map[string]any{
 		"title": "A task", "assignee": "anybody",
 	}); got.Failed {
 		t.Fatalf("a build with no chart refused a handle: %q", got.Output)
@@ -135,7 +135,7 @@ func rosterRegistry(t *testing.T, trk *fakeTracker) *tools.Registry {
 			Seats:          func() []colleague.Seat { return seats },
 			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),

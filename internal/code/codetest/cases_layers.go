@@ -22,7 +22,7 @@ import (
 // by its maintainer, as a layer of a chain every git node installs only over
 // its own packs, matching its row and in the rows' order — and a node that
 // cannot install one serving from the layers below it, never an error
-// (ADR-0061) — through the production compactor every git node of a topology
+// (ADR-0084) — through the production compactor every git node of a topology
 // is built with, never started, so each case drives its publications itself.
 
 // otherThan is the first running git node that is not n.

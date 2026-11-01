@@ -40,6 +40,8 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
 import { settled } from "~/test/settle.ts";
+import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -87,7 +89,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -195,7 +197,7 @@ const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
   login: "ops-1",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "ada",
   owner: "ada",
   name: "Ada Okonkwo",
@@ -205,7 +207,7 @@ const ada = {
 /** A principal the directory binds to no seat: their record is their login. */
 const unbound = {
   login: "token:ops-7",
-  grants: ["tracker", "knowledge", "admin"],
+  grants: ["worklet", "doclet", "admin"],
   handle: "",
   owner: "token:ops-7",
   name: "",
@@ -268,10 +270,12 @@ async function counts(): Promise<Record<string, string>> {
 test("with no handle it shows the viewer's own day, and says it is theirs", async () => {
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount();
-  await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
-  // SECOND PERSON on your own day. Awaited separately: the viewer resolves
-  // first and the day is a second round trip, so the badge is on screen a
-  // render before the panels are.
+  // THE PICKER NAMES THEM, and the day speaks in the SECOND PERSON.
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Whose day" }).textContent).toContain(
+      "Ada Okonkwo",
+    ),
+  );
   await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
 });
 
@@ -282,13 +286,11 @@ test("an explicit handle names whose day it is, in the third person", async () =
   location.hash = "#/me?handle=rui";
   serving({ viewer: ada, work_my_work: { ...emptyDay, handle: "rui" }, work_items: noWork });
   mount();
-  // NAMED IN THE BANNER, as a link to that person's own seat — the picker
-  // below lists every seat by name too, so the assertion is on the one that is
-  // a way somewhere.
-  await waitFor(() => expect(screen.getByRole("link", { name: /Rui Santos/ })).toBeTruthy());
-  expect(screen.getByText("their day")).toBeTruthy();
+  // NAMED BY THE PICKER, and the day speaks in the THIRD PERSON.
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Whose day" }).textContent).toContain("Rui Santos"),
+  );
   await waitFor(() => expect(screen.getByText("Nothing is assigned to them")).toBeTruthy());
-  expect(screen.queryByText("yours")).toBeNull();
 });
 
 // AN UNBOUND READER HAS A DAY OF THEIR OWN, kept under their login — the name
@@ -303,7 +305,6 @@ test("an unbound reader's own day is the one kept under their login", async () =
     work_items: noWork,
   });
   mount();
-  await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
   await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
   expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
   // AND WHAT BINDING WOULD ADD, with the command that binds it, rather than
@@ -311,9 +312,9 @@ test("an unbound reader's own day is the one kept under their login", async () =
   expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
   expect(screen.getByText("crewlet iam bind ID SEAT")).toBeTruthy();
   expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
+  // THE LOGIN IS NAMED BY THE NOTE ABOVE THE DAY, never as a link: a login is
+  // not a seat, and a seat page for it would answer "no such seat".
   expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);
-  // A LOGIN IS NOT A SEAT, so the banner names it without a chip linking to a
-  // seat page that would answer "no such seat".
   expect(screen.queryByRole("link", { name: /token:ops-7/ })).toBeNull();
 });
 
@@ -370,39 +371,11 @@ test("the reader's own day is asked again when their inbox moves", async () => {
   await waitFor(() => expect(asked("work_items")).toBeGreaterThan(before.count));
 });
 
-/** The banner's whose-day pill, as it is drawn for one reader. */
-async function whoseTagClass(hash: string, day: string, label: string): Promise<string> {
-  location.hash = hash;
-  serving({ viewer: ada, work_my_work: { ...emptyDay, handle: day }, work_items: noWork });
-  mount();
-  const pill = (await screen.findByText(label)).closest(".crewlet-tag");
-  const drawn = pill?.className ?? "";
-  cleanup();
-  return drawn;
-}
-
-// COLOUR CARRIES STATE, NEVER IDENTITY, and whose day this is is identity. The
-// pill was drawn `success` — the positive status hue — for your own day and the
-// neutral outline for anybody else's, so the one thing it separated was two
-// people.
-//
-// ASSERTED AS "THE TWO BRANCHES ARE DRAWN IDENTICALLY" rather than "it is not
-// green", because a hue is not the only way chrome can carry identity: the
-// appearance tracked whose day it was too, and a fix that neutralised the
-// variant alone would leave a filled pill against a hairline one and this test
-// would still pass.
-test("the whose-day pill is drawn the same for both, so only the words differ", async () => {
-  const own = await whoseTagClass("#/me", "ada", "yours");
-  const theirs = await whoseTagClass("#/me?handle=rui", "rui", "their day");
-  expect(own).toContain("crewlet-tag--neutral");
-  expect(theirs).toBe(own);
-});
-
-// AND THE BAND NAMES THE PERSON AND THE WAY TO THEIR SEAT. A page called "My
-// work" on a company's first morning is seven zeros over one empty panel
-// unless something on it is true before any count is: who this is, what their
-// seat is, and where that seat's own page is.
-test("the banner names whose day it is and links to their seat", async () => {
+// NO ROW REPEATS WHOSE DAY THIS IS. The picker names the person and every
+// held control on somebody else's day says whose it is; a row under them
+// repeating the seat's chip, its handle and "yours" or "their day" said it a
+// third time, and it is gone. Mutation: draw the row again and this fails.
+test("no row under the bar repeats whose day it is", async () => {
   location.hash = "#/me?handle=rui";
   serving({
     viewer: ada,
@@ -411,10 +384,11 @@ test("the banner names whose day it is and links to their seat", async () => {
     work_person: { handle: "rui", version: 1, held: true, complete: true },
   });
   mount();
-  const chip = await screen.findByRole("link", { name: /Rui Santos/ });
-  expect(chip.getAttribute("href")).toBe("#/company/org/seats/rui");
-  expect(screen.getByText("rui")).toBeTruthy();
-  expect(screen.getByText("their day")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("Nothing is assigned to them")).toBeTruthy());
+  expect(screen.queryByRole("link", { name: /Rui Santos/ })).toBeNull();
+  expect(document.querySelector('a[href="#/company/org/seats/rui"]')).toBeNull();
+  expect(screen.queryByText("their day")).toBeNull();
+  expect(screen.queryByText("yours")).toBeNull();
 });
 
 // ---------------------------------------------------------------------------
@@ -617,6 +591,30 @@ test("the queue draws the work list's own toolbar", async () => {
   expect(screen.getByText("1 in Open")).toBeTruthy();
 });
 
+// THE WORK LIST IS ONE BOX on every host: its row of shapes, the band that
+// cuts the answer and the answer stand together in `.work-view`, which spaces
+// them by nothing, so the band's own padding is all the room either side of
+// its controls. Returned as loose rows, they took the content column's 20px
+// gap here (and `.work-main`'s 16px on Worklet), and the band stood in 28px
+// of empty space above and below. Mutation: return the rows loose, or give
+// the box a gap, and this goes red.
+test("the queue's work list is one box, its rows standing together", async () => {
+  serving({ viewer: ada, work_my_work: emptyDay, work_items: { ...noWork, items: [task()] } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const box = document.querySelector(".toolbar.work-bar")!.parentElement!;
+  expect(box.classList.contains("work-view")).toBe(true);
+  expect([...box.children].map((row) => row.classList[0])).toEqual([
+    "work-tabs",
+    "toolbar",
+    "work-body",
+  ]);
+  const sheet = readFileSync(join(process.cwd(), "src/styles/screens.css"), "utf8");
+  const rule = /\.work-view \{([^}]*)\}/.exec(sheet)?.[1] ?? "";
+  expect(rule).toContain("flex-direction: column");
+  expect(rule).not.toMatch(/gap/);
+});
+
 // AND THE BANDS ARE THE ENGINE'S. `due:bucket` is cut against the COMPANY's
 // day start, like the row's own overdue flag and every `due=` filter, so the
 // heading a task sits under and the flag beside it cannot disagree. Computed
@@ -698,6 +696,50 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   await waitFor(() => expect(screen.getByText("priority=")).toBeTruthy());
   expect(screen.queryByText("assignee=")).toBeNull();
+});
+
+// AND THE ASSISTANT CANNOT WIDEN IT EITHER: the queue's page action writes
+// the list's own filters, and refuses a patch naming the key the page is,
+// clearing it included, rather than applying a change the lock would undo.
+test("the assistant's page action never widens the queue past its person", async () => {
+  location.hash = "#/me?handle=rui";
+  serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, handle: "rui" },
+    work_items: { ...noWork, items: [task()] },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const ask = (payload: unknown) =>
+    applyPageAction({
+      correlation_id: "c",
+      action: "work.filter.apply",
+      payload,
+      source_revision: "",
+    });
+  for (const payload of [
+    { assignee: null },
+    { assignee: "ada" },
+    { status: "open", assignee: "" },
+  ]) {
+    expect(ask(payload)).toMatchObject({ outcome: "blocked" });
+  }
+  expect(location.hash).not.toContain("assignee=");
+  expect(ask({ status: "open" }).outcome).toBe("applied");
+  await waitFor(() => expect(location.hash).toContain("status=open"));
+  // AND CLEAR TAKES THE FILTER OFF AND LEAVES THE PERSON.
+  expect(
+    applyPageAction({
+      correlation_id: "d",
+      action: "work.filters.clear",
+      payload: {},
+      source_revision: "",
+    }).outcome,
+  ).toBe("applied");
+  await waitFor(() => expect(location.hash).not.toContain("status="));
+  expect(location.hash).toContain("handle=rui");
+  expect(location.hash).not.toContain("assignee=");
+  resetPageContextForTest();
 });
 
 // AND THE WORKSPACE'S SAVED VIEWS ARE NOT THIS PERSON'S CLAIMS. The strip's
@@ -1383,7 +1425,7 @@ test("a reorder in flight keeps every row's grip and the list's place track", as
       await new Promise<void>((resolve) => (release = resolve));
       return new Response(JSON.stringify(reply.body), {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

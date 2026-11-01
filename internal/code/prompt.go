@@ -5,6 +5,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Prompt is what a code wake asks of the seat it reached: the change, why the
@@ -12,9 +14,10 @@ import (
 //
 // It NAMES ITS TOOLS, as the tracker's and the knowledge base's do: they ship
 // with this build under names this build chose, and every seat a code wake
-// reaches is offered the code tools that read a change. The names are literals
-// because internal/agent/builtin, which registers them, imports this package;
-// TestThePromptNamesOnlyRegisteredChangeTools holds the two together.
+// reaches is offered the code tools that read a change. The names are read
+// from internal/toolname, because internal/agent/builtin, which registers
+// them, imports this package; TestThePromptNamesOnlyRegisteredChangeTools
+// holds the two together.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -62,7 +65,7 @@ func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string 
 }
 
 // WorkItem is the work item a code wake is about — the one the change
-// implements (ADR-0067) — which is the item the turn it wakes is charged to
+// implements (ADR-0090) — which is the item the turn it wakes is charged to
 // (ADR-0022's trigger rule). None for a change that names none.
 func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 	id := metadata[MetaWorkID]
@@ -76,7 +79,15 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 // WakesActor implements [notify.Prompt]: never. No code reason is news to
 // whoever made the change — a reviewer knows their review, a pusher their
 // merge — which the routing already holds to ([Concern.Hears]).
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
+
+// Provenance implements [notify.Prompt]: the change text the wake carries, on
+// the engine's own code host, by the writer its record names (stamped by
+// inboundOf); a wake whose stamp this build does not know reads as a remark in
+// the change's thread.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	return notify.StatedHosted(n, parties, provenance.SourceChangeComment)
+}
 
 // DigestBody implements [notify.Prompt]: what somebody SAID keeps its text —
 // a comment, a review's summary, an ask's note, a description, a close's
@@ -106,7 +117,7 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 		b.WriteString("\n**What they wrote:**\n" + n.Body + "\n")
 	}
 	ref := meta[MetaChangeRef]
-	b.WriteString("\n## Get full context\nRead the change with `code_get_change` (`change: " + ref +
+	b.WriteString("\n## Get full context\nRead the change with `" + toolname.CodeGetChange + "` (`change: " + ref +
 		"`) before you act: this wake says what happened, not what the change is — its `summary`, its " +
 		"`merge_readiness`, and with `files` and `diff` what it changes.\n")
 	b.WriteString("\n## How to handle this\n" + wakeHandling(reason) + "\n")
@@ -155,22 +166,23 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 func wakeHandling(reason Reason) string {
 	switch reason {
 	case ReasonReviewRequested, ReasonReReview:
-		return "Review it with `code_review_change`, on the revision you read: approve, comment, or " +
+		return "Review it with `" + toolname.CodeReviewChange + "`, on the revision you read: approve, comment, or " +
 			"request changes, each finding placed on the lines it is about — a blocker only for what " +
 			"must not merge."
 	case ReasonChangesRequested, ReasonConflicted:
 		return "Fix it on the change's source branch, which makes its next revision, then answer each " +
-			"finding with `code_resolve_finding` and say what you did with `code_comment_on_change`. " +
+			"finding with `" + toolname.CodeResolveFinding + "` and say what you did with `" +
+			toolname.CodeCommentOnChange + "`. " +
 			"Disagree in a comment rather than by pushing past it."
 	case ReasonMention, ReasonThread, ReasonFindingReplied:
-		return "Answer on the change with `code_comment_on_change`, in the thread you are answering, " +
+		return "Answer on the change with `" + toolname.CodeCommentOnChange + "`, in the thread you are answering, " +
 			"so the answer sits beside the question."
 	case ReasonReadyToMerge:
 		return "Every precondition of its merge is met. Say so to whoever merges it — where the work " +
-			"item it implements is tracked, or on the change with `code_comment_on_change`."
+			"item it implements is tracked, or on the change with `" + toolname.CodeCommentOnChange + "`."
 	case ReasonLeadFallback:
-		return "Ask somebody who may review it with `code_request_review`, or review it yourself with " +
-			"`code_review_change`."
+		return "Ask somebody who may review it with `" + toolname.CodeRequestReview + "`, or review it " +
+			"yourself with `" + toolname.CodeReviewChange + "`."
 	}
 	return "This is news, not a request: act only if it bears on work you have in hand, and then say so " +
 		"where that work is tracked."

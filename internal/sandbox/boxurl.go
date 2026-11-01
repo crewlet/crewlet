@@ -41,7 +41,7 @@ const boxURLShape = "https://host[:port][/path]"
 // wrong, and the caller refuses the boot on it: a value that is set and
 // unusable is a deployment that asked for the feature and would get none. The
 // alternative is the failure this replaced — every box handed an endpoint its
-// client cannot use, so a run's telemetry went nowhere and an agent-mode run's
+// client cannot use, so a run's telemetry went nowhere and an executor run's
 // every tool call failed, each silently, inside a box the engine never hears
 // from again.
 //

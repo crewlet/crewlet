@@ -9,15 +9,7 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
-import {
-  activityOf,
-  isOwnSeat,
-  leadsInLine,
-  roundOf,
-  type OrgIndex,
-  type Seat,
-  type SeatState,
-} from "~/lib/seats.ts";
+import { isOwnSeat, leadsInLine, roundOf, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
@@ -47,14 +39,22 @@ import type {
  * WORK IS ON BOTH: a person has tasks assigned to them and questions put to
  * them, which is the whole of what this product asks a person to do.
  */
-export const AGENT_TABS = ["overview", "work", "turns", "memory", "schedules", "settings"] as const;
+export const AGENT_TABS = [
+  "overview",
+  "work",
+  "turns",
+  "memory",
+  "schedules",
+  "access",
+  "settings",
+] as const;
 export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
 
 /**
  * The tabs a seat's page draws for a company running `runs`: its kind's,
- * without Work where the company runs no Crewlet Works, since every task on it
- * is that tracker's.
+ * without Work where the company runs no Worklet, since every task on it is
+ * Worklet's.
  */
 export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
   const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;
@@ -68,6 +68,7 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
   turns: "Turns",
   memory: "Memory",
   schedules: "Schedules",
+  access: "Access",
   settings: "Settings",
 };
 
@@ -96,21 +97,21 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
 /**
  * Whether this page asks for a person's own record — their inbox, the order
  * they mean to work in, the claims on their plate — which the engine answers
- * to a TRACKER holder who owns it, leads them or is an admin.
+ * to a WORKLET holder who owns it, leads them or is an admin.
  *
- * THE APP FIRST: every one of those questions is the tracker's, so a reader
- * without Tracker is asked nothing, whoever they lead. THEN THE LEAD, on the
+ * THE APP FIRST: every one of those questions is Worklet's, so a reader
+ * without Worklet is asked nothing, whoever they lead. THEN THE LEAD, on the
  * chart's own reading of who is in their line, the rule My work reads a
  * report's day by. Asked only on Admin and the owner, a lead opening a
  * report's page was told the record needs Admin "or leading them" about
  * somebody they lead, and their day was never drawn.
  */
 export function mayReadRecord(
-  viewer: Pick<ViewerState, "admin" | "tracker" | "handle">,
+  viewer: Pick<ViewerState, "admin" | "worklet" | "handle">,
   index: OrgIndex,
   handle: string,
 ): boolean {
-  if (!viewer.tracker) return false;
+  if (!viewer.worklet) return false;
   if (viewer.admin) return true;
   if (isOwnSeat(viewer, handle)) return true;
   return leadsInLine(index, viewer.handle, handle);
@@ -170,41 +171,6 @@ export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): Sandbox
 // ---------------------------------------------------------------------------
 // The header
 // ---------------------------------------------------------------------------
-
-/**
- * The state pill's word — short, because the callout under the header says
- * the rest (who paused it and why, which run is waiting): "Working", "Needs
- * you", "Paused", "Stopped · budget", "Not placed", "Idle".
- *
- * Every word is the engine's `activity` and `stopped_reason`; a reason this
- * build does not know reads "Stopped" rather than a guess.
- */
-export function pillWord(row: AgentRow | null | undefined): string {
-  const state: SeatState = activityOf(row);
-  switch (state) {
-    case "working":
-      return "Working";
-    case "needs":
-      return "Needs you";
-    case "idle":
-      return "Idle";
-    case "offline":
-      return "No state yet";
-    case "stopped":
-      switch (row?.stopped_reason) {
-        case "paused":
-          return "Paused";
-        case "budget":
-          return "Stopped · budget";
-        case "provider":
-          return "Stopped · provider";
-        case "unplaced":
-          return "Not placed";
-        default:
-          return "Stopped";
-      }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // The figures
@@ -344,19 +310,21 @@ export interface FeedRow {
 export const FEED_ROWS = 5;
 
 /**
- * The calls the turn's phase in flight has made, newest last, with the one
+ * The calls the turn's phase in flight has made, newest last, with the ones
  * running now at the foot — every time and duration the engine's own
- * (`started_at`, `duration_ms`, `running_call.started_at`), never a gap
- * between two pushes measured here. At most `limit` rows, the running one
- * counted: it is the row the card exists for, so it is never the one cut.
+ * (`started_at`, `duration_ms`, `running_calls[].started_at`), never a gap
+ * between two pushes measured here. At most `limit` rows, the running ones
+ * counted: they are the rows the card exists for, so an answered call is cut
+ * before any of them — and where more run side by side than the card holds,
+ * the newest of them are the ones it shows, as everywhere else in a feed.
  */
 export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
   const call = row.live_call;
   if (!call) return [];
-  const running = call.running_call;
-  const room = Math.max(0, limit - (running ? 1 : 0));
+  const running = (call.running_calls ?? []).slice(-limit);
+  const room = Math.max(0, limit - running.length);
   const done: FeedRow[] = (call.tool_executions ?? []).map((ex, i) => ({
-    key: `done-${ex.round}-${i}`,
+    key: ex.call_id ? `call-${ex.call_id}` : `done-${ex.round}-${i}`,
     at: ex.started_at ?? "",
     name: ex.name,
     words: callWords(ex.arguments),
@@ -367,16 +335,18 @@ export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
     running: false,
   }));
   const shown = room > 0 ? done.slice(-room) : [];
-  if (running) {
+  running.forEach((c, i) => {
     shown.push({
-      key: `running-${running.round}-${running.name}`,
-      at: running.started_at,
-      name: running.name,
-      words: callWords(running.arguments),
+      // THE CALL'S OWN ID where it has one, which its answered row keys by
+      // too — one row for the call's whole life.
+      key: c.id ? `call-${c.id}` : `running-${c.round}-${c.name}-${i}`,
+      at: c.started_at,
+      name: c.name,
+      words: callWords(c.arguments),
       failed: false,
       running: true,
     });
-  }
+  });
   return shown;
 }
 
@@ -416,20 +386,38 @@ export function turnTokens(
 // ---------------------------------------------------------------------------
 
 /**
- * Where a seat's code work runs, in a reader's words: "not offered", or the
- * cell and the coding agent — "e2b · claude-code". An empty `run_in` or
- * `coding_agent` inherits the provider's default, and says so rather than
- * naming a default this client would have to guess. Every value on the setup
- * card starts the line it stands on, so each is written with its capital, as
- * "No provider configured" beside it is.
+ * What a seat sets for the box its executor runs in, in a reader's words:
+ * "The catalogue's defaults", or what its own `sandbox` block adds — "2 setup
+ * steps · 3 variables · up to 40 turns".
+ *
+ * NOT WHERE THE BOX IS, and never "not offered": every agent seat's executor
+ * is its coding CLI's own run in a box, placed by the `run_in` of whichever
+ * model entry launches it, which the seat's own block does not say — so this
+ * says only what the block does. Every value on the setup card starts the line
+ * it stands on, so each is written with its capital, as "No provider
+ * configured" beside it is.
  */
 export function sandboxWords(role: ConfigRole): string {
-  const box = role.sandbox as
-    { enabled?: boolean; run_in?: string; coding_agent?: string } | undefined;
-  if (!box?.enabled) return "Not offered";
-  return [box.run_in || "The provider's default cell", box.coding_agent]
-    .filter(Boolean)
-    .join(" · ");
+  const box = (role.sandbox ?? {}) as {
+    setup?: unknown[];
+    env?: Record<string, unknown>;
+    mcp?: { servers?: unknown[] };
+    max_turns?: number;
+  };
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  const steps = Array.isArray(box.setup) ? box.setup.length : 0;
+  if (steps > 0) parts.push(count(steps, "setup step", "setup steps"));
+  const vars = box.env && typeof box.env === "object" ? Object.keys(box.env).length : 0;
+  if (vars > 0) parts.push(count(vars, "variable", "variables"));
+  const servers = Array.isArray(box.mcp?.servers) ? box.mcp.servers.length : 0;
+  if (servers > 0) parts.push(count(servers, "tool server", "tool servers"));
+  if (typeof box.max_turns === "number") {
+    parts.push(box.max_turns === 0 ? "no turn cap" : `up to ${box.max_turns} turns`);
+  }
+  if (parts.length === 0) return "The catalogue's defaults";
+  const [first, ...rest] = parts;
+  return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(" · ");
 }
 
 /**
@@ -490,4 +478,21 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
 export function sentence(text: string): string {
   const t = text.trim();
   return /[.!?…]$/.test(t) ? t : `${t}.`;
+}
+
+/**
+ * How a seat's last turn ended, as the line under "Not on a turn" says it.
+ *
+ * A PERSON'S STOP IS ITS OWN WORD: a turn somebody ended by pausing the seat
+ * did not fail, and "ended" alone would hide that anybody stopped it.
+ */
+export function lastTurnEnded(outcome: "completed" | "failed" | "stopped"): string {
+  switch (outcome) {
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "was stopped";
+    default:
+      return "ended";
+  }
 }

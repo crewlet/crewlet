@@ -55,6 +55,20 @@ const (
 	// this deployment's own secret store, whoever mints it at the vendor.
 	FindingCredentialExpiring FindingKind = "credential_expiring"
 
+	// FindingCredentialShared is a company credential an agent seat once
+	// kept its own credential in (the incident D12 repairs): an engine before
+	// per-seat access minted the seat's key into a variable a company setting
+	// also reads, so that variable may hold the agent's value rather than the
+	// company's. [Finding.Subject] names the variable, never its value, and
+	// [Finding.Subjects] the seats.
+	//
+	// THE OPERATOR'S, like an expiring credential: the fix is a new value
+	// written to that variable, and the finding clears once the variable's
+	// row in the secret store is rewritten after it was raised. DEGRADED
+	// rather than ready, because a credential that may be an agent's is a
+	// security fault, not a note, however well everything else works.
+	FindingCredentialShared FindingKind = "credential_shared"
+
 	// FindingApprovalRequired is an app or scope a person must install or
 	// approve at the third-party app. ActionURL carries where.
 	FindingApprovalRequired FindingKind = "approval_required"
@@ -241,18 +255,23 @@ func (f FindingKind) severity() int {
 		return 7
 	case FindingUnknownTier:
 		return 8
-	case FindingGrantShort:
+	case FindingCredentialShared:
+		// Below every fault that stops the integration, and above the
+		// ones about an agent's own access: a credential that may be an
+		// agent's is a security fault on a surface that otherwise works.
 		return 9
+	case FindingGrantShort:
+		return 10
 	case FindingContactUnknown:
 		// Every agent on the surface works whole: what is lost is one
 		// person's name on what they write, which is less of the
 		// integration than an agent short of the access its role needs.
-		return 10
+		return 11
 	case FindingContactMoved:
 		// THE LAST REAL PROBLEM, below the unknown contact: here the
 		// person's name still attributes what is written, and what is in
 		// question is only whether the account now holding it is theirs.
-		return 11
+		return 12
 	case FindingCredentialExpiring:
 		// THE FIRST ADVISORY, and the reason is the whole comment above:
 		// its verdict is ready, so anything it outranks is a problem it
@@ -260,22 +279,22 @@ func (f FindingKind) severity() int {
 		// a kind this build cannot read. First among the notes because it
 		// is the only one with a date on it: the others are loose ends,
 		// and this one becomes an outage if nobody reads it.
-		return 13
+		return 14
 	case FindingGrantExcess:
 		// Beneath the expiring credential: a spare permission is a note
 		// that stays a note.
-		return 14
+		return 15
 	case FindingRegistrationOrphaned:
 		// Beneath the excess grant. Both report ready; this one is the
 		// more purely informational of the two, because what it names is
 		// still working.
-		return 15
+		return 16
 	case FindingCoveragePartial:
 		// LAST OF ALL, because it is the only one naming nothing wrong.
 		// The two above it are loose ends somebody may want to tidy; this
 		// is a decision already taken, reported so a reader does not have
 		// to infer it from silence. Anything else present outranks it.
-		return 16
+		return 17
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -283,7 +302,7 @@ func (f FindingKind) severity() int {
 		// ranking it worst would let an older node report a healthy
 		// company as broken, and ranking it below the advisory would let
 		// one spare permission hide a finding this binary cannot read.
-		return 12
+		return 13
 	}
 }
 
@@ -312,6 +331,9 @@ func (f FindingKind) Verdict() (Phase, Actor) {
 		// it is of an absent one. And the OPERATOR's, not the engine's:
 		// no retry fixes a token the third-party app will not accept.
 		return PhaseUnconfigured, ActorOperator
+	case FindingCredentialShared:
+		// DEGRADED and the OPERATOR's: see [FindingCredentialShared].
+		return PhaseDegraded, ActorOperator
 	case FindingCredentialExpiring:
 		// READY, because the credential works today, and the OPERATOR's,
 		// because the replacement lands in this deployment's secret store.
@@ -389,6 +411,8 @@ func (f FindingKind) sentence(subject string) string {
 		return "the third-party app refused this integration's credential" + about
 	case FindingCredentialExpiring:
 		return "this integration's credential expires soon" + about
+	case FindingCredentialShared:
+		return "a company credential may hold an agent's own value" + about
 	case FindingApprovalRequired:
 		return "an administrator must approve this integration at the third-party app" + about
 	case FindingIngressBlocked:
@@ -432,6 +456,25 @@ type Finding struct {
 	// repository, a channel. Empty when the finding is about the
 	// integration as a whole.
 	Subject string `json:"subject,omitempty"`
+	// Seat marks a finding about one agent's own account that the agent's
+	// access record also carries: a step waiting on a person, a vendor's
+	// refusal of the agent's sync. Subject is the agent's handle.
+	//
+	// THE AGENT'S ROW SAYS IT, NOT THE INTEGRATION'S LIST. The Agents tab
+	// draws each agent's wait or refusal on its own row, from that record,
+	// beside the one control the step takes; listed again above the table it
+	// read as a second card about the same thing, under a generic action.
+	// It still counts toward the integration's phase, so a card in the
+	// directory says somebody is waiting.
+	Seat bool `json:"seat,omitempty"`
+	// Title is the finding's lead: a few words naming it, which a reader
+	// scans before the sentence ("GitHub can't reach this engine").
+	//
+	// A FIELD OF ITS OWN, so a list can set it in bold ahead of [Detail]
+	// without reading the sentence apart in the client. Set on every
+	// advisory, where the integration's notes lead with it; a finding
+	// without one is read by its sentence alone.
+	Title string `json:"title,omitempty"`
 	// Detail is one sentence naming what is outstanding, addressed to the
 	// actor the kind implies. Empty falls back to [FindingKind.sentence].
 	//
@@ -509,6 +552,8 @@ type Finding struct {
 func (f Finding) Same(other Finding) bool {
 	return f.Kind == other.Kind &&
 		f.Subject == other.Subject &&
+		f.Title == other.Title &&
+		f.Seat == other.Seat &&
 		f.Detail == other.Detail &&
 		f.ActionURL == other.ActionURL &&
 		f.Remedy == other.Remedy &&

@@ -13,7 +13,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import type { HomeData } from "./useHomeData.ts";
-import { HOME_RANGES, greeting } from "./model.ts";
+import { HOME_RANGES } from "./model.ts";
+import { greeting } from "~/lib/format.ts";
 import { KPI_IDS, Kpis, kpisShown, type KpiId } from "./Kpis.tsx";
 import { useServicesRun } from "~/lib/services.ts";
 import { Decisions } from "./Decisions.tsx";
@@ -143,7 +144,7 @@ export function SectionView({ id, data }: { id: SectionId; data: HomeData }) {
       return <LiveNow agents={data.agents} now={data.now} />;
     case "completed":
       return (
-        <CompletedChart flow={data.flow} locked={!data.viewer.loading && !data.viewer.tracker} />
+        <CompletedChart flow={data.flow} locked={!data.viewer.loading && !data.viewer.worklet} />
       );
     case "tokens":
       return <TokensByTeam spend={data.spend} range={data.range} />;

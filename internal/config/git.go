@@ -225,7 +225,7 @@ func (g Git) validate(path Path, store Store) error {
 	switch {
 	case g.CacheMaxBytes < 0:
 		p.add(at(path, "cache_max_bytes"), ErrOutOfRange,
-			"must be 0 or unset — which derives it from the cache's volume — or a "+
+			"must be 0 or unset (which derives it from the cache's volume) or a "+
 				"budget in bytes, got %d", g.CacheMaxBytes)
 	default:
 		bytesInRange(&p, path, "cache_max_bytes", g.CacheMaxBytes,
@@ -234,7 +234,7 @@ func (g Git) validate(path Path, store Store) error {
 	switch {
 	case g.MaxProcesses < 0:
 		p.add(at(path, "max_processes"), ErrOutOfRange,
-			"must be 0 — one a core — or a positive number of processes, got %d",
+			"must be 0 (one a core) or a positive number of processes, got %d",
 			g.MaxProcesses)
 	case g.MaxProcesses > GitMaxProcessesCeiling:
 		p.add(at(path, "max_processes"), ErrOutOfRange,
@@ -244,7 +244,7 @@ func (g Git) validate(path Path, store Store) error {
 	switch {
 	case g.MaxTransfers < 0:
 		p.add(at(path, "max_transfers"), ErrOutOfRange,
-			"must be 0 — four for each process slot — or a positive number of "+
+			"must be 0 (four for each process slot) or a positive number of "+
 				"transfers, got %d", g.MaxTransfers)
 	case g.MaxTransfers > GitMaxTransfersCeiling:
 		p.add(at(path, "max_transfers"), ErrOutOfRange,
@@ -253,13 +253,13 @@ func (g Git) validate(path Path, store Store) error {
 	}
 	if n := g.MaxChecks; n != nil && (*n < 0 || *n > GitMaxChecksCeiling) {
 		p.add(at(path, "max_checks"), ErrOutOfRange,
-			"%d is outside 0..%d container checks at once — 0 runs none on this node — or unset for a "+
+			"%d is outside 0..%d container checks at once (0 runs none on this node), or unset for a "+
 				"quarter of the node's cores, at least one", *n, GitMaxChecksCeiling)
 	}
 	if held, what := g.holdsStore(store); held != "" {
 		p.add(at(path, "cache_dir"), ErrConflict,
 			"resolves to %s, which holds %s: the cache removes what it finds under "+
-				"its tmp/, scratch/ and trash/ at every boot — give it a directory of "+
+				"its tmp/, scratch/ and trash/ at every boot: give it a directory of "+
 				"its own (unset is <store dir>/%s)", held, what, defaultGitCacheDirName)
 	}
 	return p.err()

@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // PublishPoll is the interval between two passes of the PUBLICATION loop: one
@@ -1015,16 +1016,16 @@ func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, adm *cache.
 	case len(graphs) == len(baseGraphs)+1 && slices.Equal(graphs[:len(baseGraphs)], baseGraphs):
 		b.paths[2] = filepath.Join(b.sc.Dir, "objects", "info", "commit-graphs", "graph-"+graphs[len(graphs)-1]+".graph")
 	case !slices.Equal(graphs, baseGraphs):
-		return fmt.Errorf("compact: the commit-graph write left the chain %v over the base's %v: no layer "+
-			"over exactly that base", graphs, baseGraphs)
+		return fmt.Errorf("compact: the commit-graph write left the chain %s over the base's %s: no layer "+
+			"over exactly that base", words.And(graphs), words.And(baseGraphs))
 	}
 	ref, err := code.LayLayer(ctx, b.paths[0], b.paths[1], b.paths[2], baseGraphs, code.Pieces{})
 	if err != nil {
 		return fmt.Errorf("compact: lay out layer %s: %w", id, err)
 	}
 	if !slices.Equal(ref.Packs, packs) {
-		return fmt.Errorf("compact: layer %s names the packs %v, and the build wrote it over %v", id, ref.Packs,
-			packs)
+		return fmt.Errorf("compact: layer %s names the packs %s, and the build wrote it over %s", id, words.And(ref.Packs),
+			words.And(packs))
 	}
 	ref.BaseID, ref.Replaces, ref.Git = baseID, slices.Clone(b.plan.replaces), adm.GitVersion().String()
 	b.proposal.Compaction.Layer = &ref

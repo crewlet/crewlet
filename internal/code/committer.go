@@ -172,7 +172,7 @@ import (
 // gate, and a dequeue — so a change's entry, its lifecycle and the pushes that
 // move its head are decided by one writer. And so does a change's MERGE
 // ([Committer.ProposeMerge]), decided by its merge gate from one snapshot and
-// applied as one record that merges the change and moves its target (ADR-0066)
+// applied as one record that merges the change and moves its target (ADR-0089)
 // — so no push, change or queue write of the repository lands between the
 // snapshot that proved the gate and the record that moves the branch.
 //
@@ -271,7 +271,7 @@ type CommitterOptions struct {
 // one's lag is unconfirmed, about a minute at worst (configplane.LagGrace,
 // 45 s, from its first read of the activation's pointer, and its next posture
 // decision): a node CONFIRMED behind decides no seat's push at all
-// ([CommitterOptions.Current], ADR-0058).
+// ([CommitterOptions.Current], ADR-0081).
 type SeatRules struct {
 	// Roster is the chart a seat's grant is judged by ([GrantOf]).
 	Roster Roster

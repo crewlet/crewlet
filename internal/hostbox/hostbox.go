@@ -19,12 +19,18 @@
 // handed ([InHome], [SafeJoin]), which config validation applies to a setup
 // step before any box exists. It is also where a freshly written executable is
 // waited for ([Settle]), because the code host's hook script and every test
-// stand-in hit the same window.
+// stand-in hit the same window. And so is how a shared login of several files
+// is read and written: as ONE login, journaled under the directory's lock
+// ([ReadCredentials], [WriteCredentials]), because the CLI backend's seats and
+// commands and a local box's teardown all write it, and one of them replacing
+// its files a rename at a time is a login half written whenever that writer
+// stops between two of them.
 //
 // Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -417,68 +423,47 @@ func resolve(path string) (string, error) {
 	}
 }
 
-// CopyFileAtomic copies src onto dst through a temp file and a rename, and
-// reports whether it ran.
-//
-// Atomic because the file is usually a credential a live process may be
-// reading: a partial write is a login that parses as corrupt, and both
-// consumers write these while something else could be starting up. The temp
-// file is created in dst's own directory so the rename never crosses a
-// filesystem, and at [FileMode] so the secret is never briefly world-readable.
-//
-// A missing src is not an error — it is the ordinary case of a profile naming
-// a credential file this vendor does not use — and reports false.
-func CopyFileAtomic(src, dst string) (bool, error) {
-	_, copied, err := CopyFileAtomicDigest(src, dst)
-	return copied, err
-}
-
-// CopyFileAtomicDigest is [CopyFileAtomic], reporting as well the SHA-256 of
-// what it copied, in [Digest]'s form — "" where it copied nothing.
-//
-// THE DIGEST IS OF THE VERY BYTES WRITTEN, taken as they are copied from the
-// one descriptor: a digest read separately, before or after, may describe a
-// newer file than the one dst was given. A caller that judges a later write
-// against what it seeded — a local sandbox's teardown, writing back a login
-// only over the one its box was given — would then excuse a write it should
-// have refused.
-func CopyFileAtomicDigest(src, dst string) (string, bool, error) {
-	info, err := os.Stat(src)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", false, nil
-	}
-	if err = os.MkdirAll(filepath.Dir(dst), DirMode); err != nil {
-		return "", false, err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return "", false, err
-	}
-	defer func() { _ = in.Close() }()
-	sum := sha256.New()
-	if err := ReplaceFile(dst, io.TeeReader(in, sum)); err != nil {
-		return "", false, err
-	}
-	return hex.EncodeToString(sum.Sum(nil)), true, nil
-}
-
 // ReplaceFile puts what content yields at dst, through a temp file in dst's
-// own directory and a rename, at [FileMode] — the write half of
-// [CopyFileAtomic], for a caller that has the source open already.
+// own directory and a rename, at [FileMode] — [ReplaceFileIn] over that
+// directory.
 //
-// A caller that opened its source in a particular way — a file in a directory
-// somebody else writes, opened once so that what it compares is what it
-// copies — must not hand this a path to open again, which is why it takes a
-// reader. dst's directory must exist.
+// Atomic because the file is usually a credential or a record a live process
+// may be reading: a partial write is one that parses as corrupt, and every
+// consumer writes these while something else could be starting up.
+//
+// It takes a reader rather than a source path: a caller that opened its
+// source in a particular way — once, so that what it compares is what it
+// writes — must not hand this a path to open again. dst's directory must
+// exist. ONE file: a login of several is [WriteCredentials]'s, because
+// replacing its files one at a time is a login half written whenever the
+// process stops between two of them.
 func ReplaceFile(dst string, content io.Reader) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".crewlet-tmp-*")
+	dir, err := os.OpenRoot(filepath.Dir(dst))
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
+	defer func() { _ = dir.Close() }()
+	return ReplaceFileIn(dir, filepath.Base(dst), content)
+}
+
+// ReplaceFileIn is [ReplaceFile] for name beneath root: the temp file, the
+// rename and every directory between are reached through the root, so no
+// component of name — a link a process that writes the tree put there
+// included — leads the write outside it.
+//
+// The temp file is created in name's own directory so the rename never
+// crosses a filesystem, exclusively and at [FileMode] so a secret is never
+// briefly world-readable, and an exclusive create follows no link at all.
+// name's directory must exist.
+func ReplaceFileIn(root *os.Root, name string, content io.Reader) error {
+	tmpName := filepath.Join(filepath.Dir(name), ".crewlet-tmp-"+rand.Text())
+	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, FileMode)
+	if err != nil {
+		return err
+	}
 	// No-op once the rename has succeeded, and best effort if it did not:
 	// the caller is already returning the failure that matters.
-	defer func() { _ = os.Remove(tmpName) }()
+	defer func() { _ = root.Remove(tmpName) }()
 
 	if err := tmp.Chmod(FileMode); err != nil {
 		_ = tmp.Close()
@@ -498,54 +483,12 @@ func ReplaceFile(dst string, content io.Reader) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, dst)
-}
-
-// FileDigest is the SHA-256 of the regular file at path, in [Digest]'s form,
-// and false where there is nothing there.
-//
-// Used to decide whether a credential actually CHANGED before writing over
-// it. Comparing mtimes would not do: a coding agent rewrites its credential
-// file on every run whether or not the token rotated, so an mtime test would
-// write back constantly and race a concurrent seat.
-//
-// THREE ANSWERS, because a compare-and-swap reads them differently: a digest;
-// no file, which is a login that has been removed; and a file that could not
-// be read, or is not a regular file, which is an ERROR rather than either — it
-// read as "" once, so an unreadable login compared as different from every
-// digest and a write went ahead over it.
-func FileDigest(path string) (string, bool, error) {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", false, fmt.Errorf("hostbox: %s is not a regular file", path)
-	}
-	f, err := os.Open(path) //nolint:gosec // the caller's own file
-	if errors.Is(err, os.ErrNotExist) {
-		// Removed between the two reads, which is what it would have
-		// read a moment later.
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	digest, err := Digest(f)
-	if err != nil {
-		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
-	}
-	return digest, true, nil
+	return root.Rename(tmpName, name)
 }
 
 // Digest is the SHA-256 of what r yields, in lowercase hexadecimal — the form
-// every digest here takes ([FileDigest], [CopyFileAtomicDigest]) — for a
-// caller that has the file open already, and compares the same descriptor it
-// then copies from ([ReplaceFile]).
+// every digest of a login file takes, so a seed recorded by one consumer
+// compares with a file read by another.
 func Digest(r io.Reader) (string, error) {
 	sum := sha256.New()
 	if _, err := io.Copy(sum, r); err != nil {

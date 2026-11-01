@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -1111,7 +1112,7 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
 		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: AnyPort,
-		StoreDir: t.TempDir(), FleetAuth: testFleetAuth(),
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth(),
 	})
 	if err := q.EnsureDomainStream(t.Context(), DomainStream{
 		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},
@@ -1227,16 +1228,16 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 // idlePullBudget is the most one pull of an EMPTY log may allocate, heap
 // bytes, whatever the bounds it carries.
 //
-// 64 KiB: an idle applier pulls twice a second per domain ([statelog.FetchWait])
-// and a node runs three domains, so this is ≤ 384 KiB/s of garbage from a node
-// doing nothing. The pull measures about 6.5 KiB — a subscription, a request, a
-// timer, and the server's side of it in this same process — so the budget is
-// ten times what it needs and still below BOTH of the client library's fetches:
-// the byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an
-// OOM kill for a process running a few hundred of them) and the count-only
-// one's ≈ 172 KiB at the applier's four thousand. A figure that grows with the
-// BATCH a pull may receive, rather than with what it did receive, is the
-// defect, and the second is the fix that would have looked like one.
+// 64 KiB: an idle applier pulls twice a second ([statelog.FetchWait]), so this
+// is ≤ 128 KiB/s of garbage per domain from a node doing nothing. The pull
+// measures about 6.5 KiB — a subscription, a request, a timer, and the
+// server's side of it in this same process — so the budget is ten times what
+// it needs and still below BOTH of the client library's fetches: the
+// byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an OOM
+// kill for a process running a few hundred of them) and the count-only one's
+// ≈ 172 KiB at the applier's four thousand. A figure that grows with the BATCH
+// a pull may receive, rather than with what it did receive, is the defect, and
+// the second is the fix that would have looked like one.
 const idlePullBudget = 64 << 10
 
 // AN IDLE PULL ALLOCATES FOR WHAT IT RECEIVED, never for the batch it was

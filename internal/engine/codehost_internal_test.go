@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -448,7 +449,7 @@ func codeLogDrift(alarms []statelog.Alarm) (string, bool) {
 			continue
 		}
 		for _, d := range alarm.Domains {
-			if d.Domain == (code.Domain{}).Name() {
+			if slices.Contains(d.Domains, (code.Domain{}).Name()) {
 				return d.Detail, true
 			}
 		}

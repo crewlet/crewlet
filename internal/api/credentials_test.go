@@ -197,7 +197,7 @@ func (n *socketNode) tab(t *testing.T, login string, absolute time.Time) signedI
 		Applied: cookieApplied, Generation: 1,
 		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: at},
 		Person: session.PersonRow{Found: true, Epoch: 1, Stage: iam.StageActive,
-			Login: login, Grants: []iam.Grant{iam.GrantTracker}},
+			Login: login, Grants: []iam.Grant{iam.GrantWorklet}},
 	}
 	n.rows.mu.Unlock()
 	cookie := &http.Cookie{Name: session.CookieName(n.b.API.ExternalBase()), Value: bearer}

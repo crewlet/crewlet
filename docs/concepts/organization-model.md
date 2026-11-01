@@ -32,12 +32,23 @@ Organization
     ├── Lead string                         (the HANDLE of the seat leading it)
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
-    │                                       surface, inherited by children)
+    │                                       surface, inherited by children. An
+    │                                       ADDRESS: lowercase letters, digits, `-`
+    │                                       and `_`, up to 64 — `backend`, never
+    │                                       `#backend` or `C_BACKEND`. On Chatlet
+    │                                       the engine opens this room for
+    │                                       the unit that DECLARES it — a child
+    │                                       that only inherits it gets no room of
+    │                                       its own; its seats are in the
+    │                                       parent's, as its subtree. A room
+    │                                       belongs to ONE unit there, so two
+    │                                       units declaring one channel is
+    │                                       refused — an admission rule)
     ├── Project string                     (tracker identity: lead-fallback routing,
     │                                       the project the team files under, and the
     │                                       unit an item filed into that project with
     │                                       no unit of its own belongs to.
-    │                                       VENDOR-NEUTRAL: it names a native project
+    │                                       VENDOR-NEUTRAL: it names a Worklet project
     │                                       or a Jira one, whichever tracker.backend
     │                                       the company runs)
     ├── Space string                       (knowledge identity: where its pages live
@@ -87,19 +98,19 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── TokenBudget TokenCeilings          (this seat's own ceiling per window, on
 │                                       top of the company's; absent = uncapped)
 ├── LLM, LLMReview, LLMSubagent,
-│   LLMAuxiliary, LLMJudge,
-│   LLMSandbox ProviderKeys            (the executor's chain and the per-phase
+│   LLMAuxiliary, LLMJudge ProviderKeys (the executor's chain and the per-phase
 │                                       satellites; see Turn Engine)
 ├── Workers []string                   (the worker templates this seat may use)
 ├── LearningEnabled Toggle             (per-seat override for agent learning)
-├── Sandbox *RoleSandbox               (role.sandbox: the code-sandbox gate)
+├── Sandbox *RoleSandbox               (role.sandbox: what the seat's executor
+│                                       box reads: setup, env, optional_keys, mcp,
+│                                       pause_ttl_seconds, max_turns)
 ├── Placement                          (role.placement: which nodes may run it)
 ├── CodeAccess string                  (role.code.access as written:
 │                                       read_only, review or full_access;
 │                                       empty where the document is silent,
 │                                       which reads as read_only. The one
-│                                       per-seat code tier: a GitHub app's
-│                                       permission set, and the native code
+│                                       per-seat code tier: the native code
 │                                       host's cap on what the chart grants.
 │                                       Agent seats only)
 ├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
@@ -122,7 +133,7 @@ Roles can live in two places:
 
 > Every one of these identities is consulted. The tracker routes an item that names nobody to the lead of the unit that owns the project, and the knowledge base does the same for a page change nobody was mentioned in — whichever backend serves each, which is why the keys name neither. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.scope` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
-> **They also decide who leads what.** On the engine's own tracker and knowledge base, the unit's effective lead leads the project its `project:` names and the page container its `space:` names, and a root seat leads its own — which is what the [authority table](identity-and-access.md#the-authority-table-one-function-decides) asks when a write is a lead's to make: a project's field declarations, re-routing its work, renaming, trashing and restoring a page in the container — each beside the app it belongs to. The two keys are separate relations, asked separately: a unit whose project and space are spelled differently has a lead for each all the same. A `space:` is also what makes a container a place pages can be created at all: a page is created only in a space the company declares — a unit's or a seat's `space:`, `knowledge.root_space`, or the tool-skills container ([Who may write where](knowledge-system.md#who-may-write-where)).
+> **They also decide who leads what.** On Worklet and Doclet, the unit's effective lead leads the project its `project:` names and the page container its `space:` names, and a root seat leads its own; on the engine's own chat it is also who a person's message in the room its `channel:` opens wakes when nobody else was reached, which is what the [authority table](identity-and-access.md#the-authority-table-one-function-decides) asks when a write is a lead's to make: a project's field declarations, re-routing its work, renaming, trashing and restoring a page in the container, each beside the app it belongs to. The two keys are separate relations, asked separately: a unit whose project and space are spelled differently has a lead for each all the same. A `space:` is also what makes a container a place pages can be created at all: a page is created only in a space the company declares: a unit's or a seat's `space:`, `knowledge.root_space`, or the tool-skills container ([Who may write where](knowledge-system.md#who-may-write-where)).
 
 ---
 
@@ -358,7 +369,7 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
-**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A handle never changes in place: a document that gives a seat a different handle removes the old seat and adds a new one. Every write mints the handle a seat leaves out and stores it, so correcting a seat's `name` by editing the stored document — the org builder, `GET` then `PUT /config`, `PATCH /config`, the per-entity routes — keeps its handle. A **file** is minted afresh on every import: correcting a seat's `name` in a file that leaves its `handle` out, and importing it again, replaces the seat with no warning for an agent seat. Declare `handle` on every seat in a file you keep, or start the file from `crewlet config export`, which writes every handle out. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. A human seat somebody holds cannot be removed at all, nor made an agent's, until it is freed: the write is refused `409 seat_held` naming whoever holds it — a person, who is moved to another human seat or removed (a person's seat is never cleared), a service account, which is unbound, or an open invitation, which is cancelled. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A handle never changes in place: a document that gives a seat a different handle removes the old seat and adds a new one. Every write mints the handle a seat leaves out and stores it, so correcting a seat's `name` by editing the stored document — the org builder, `GET` then `PUT /config`, `PATCH /config`, the per-entity routes — keeps its handle. A **file** is minted afresh on every import: correcting a seat's `name` in a file that leaves its `handle` out, and importing it again, replaces the seat with no warning for an agent seat. Declare `handle` on every seat in a file you keep, or start the file from `crewlet config export`, which writes every handle out. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. A removed **human** seat's chat read state — how far its holder had read in each room, what they had muted, their do-not-disturb — is kept for the same 24 hours and then forgotten, so a seat restored within a day finds every room as it was left. A human seat somebody holds cannot be removed at all, nor made an agent's, until it is freed: the write is refused `409 seat_held` naming whoever holds it — a person, who is moved to another human seat or removed (a person's seat is never cleared), a service account, which is unbound, or an open invitation, which is cancelled. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
 ### Handles and keys are unique; names are not
 
@@ -381,8 +392,8 @@ duplicate unit key "platform": 2 units answer to it (unit "Platform" under unit 
 
 Handle uniqueness is a **runnable** rule: two seats on one handle would share one inbox, so a document breaking it is refused everywhere it is read. Unit-key uniqueness is an **admission rule**, as is a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference): authoring hygiene that a company breaking one still runs under, and the part of the rule set a later build may add to or relax. So they are enforced where a document is *submitted* and reported where a revision is *applied* — during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch:
 
-- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document that breaks one, naming the rule — including a write to a company whose stored revision already breaks it and a write that does not touch what breaks it. The write that corrects it is accepted.
-- **Applied with a warning.** A stored revision that breaks one (activated by a newer peer whose rules differ, during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read one as it stands. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
+- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` where no company exists yet, `-import-company` over a different company) all refuse a document that breaks one, naming the rule — including a write to a company whose stored revision already breaks it and a write that does not touch what breaks it. The write that corrects it is accepted.
+- **Applied with a warning.** A stored revision that breaks one (activated by a newer peer whose rules differ, during a rolling upgrade) is applied by every node, one started with `-import-company` naming a file that is that revision included, a node boots on it (with a `-company` file beside it that is that revision, or one the store's own company outranks, too), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision` and its siblings, `crewlet llm status`) read one as it stands. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so a violation can be seen and corrected.
 
 ### A unit's key is its identity
@@ -428,7 +439,7 @@ they are written in. One naming nothing is reported as a
 
 **A new key does not take the old one's work.** Work carries the key it was
 filed under, and nothing rewrites it — see
-[Naming a team](../guides/work-tracker.md#naming-a-team-its-key-or-its-name).
+[Naming a team](../guides/worklet.md#naming-a-team-its-key-or-its-name).
 Nor does a new name re-onboard anybody: onboarding turns on the chain of unit
 keys and handles above a seat (see [Onboarding
 convention](#onboarding-convention)), so relabelling a team moves nobody.
@@ -597,7 +608,6 @@ The engine reports them rather than letting them pass silently. **Each node logs
 | `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
 | `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
 | `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
-| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat's handle is the key | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 
@@ -609,7 +619,7 @@ Each line also carries `epoch`, `revision` and a `detail` sentence saying what t
 
 ## Onboarding convention
 
-Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space, on that backend. On an agent seat's first turn for its current org chain, a dedicated [onboarding pass](turn-engine.md#first-turn-onboarding) runs before the executor, its prompt listing the unit chain (org → ancestor units → own unit) under `## What to do`. The agent reads each `Onboarding` page with its knowledge-base tools — `search_knowledge` on either backend, then `get_page` on the native one or the Confluence server's own page tools on Confluence — activating them from the tools its prompt lists to discover, captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the pass does not run again for that org chain. The executor is never told to onboard and never reaches `mark_onboarded`.
+Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base (its Confluence space, on that backend). On an agent seat's first turn for its current org chain, a dedicated [onboarding pass](turn-engine.md#first-turn-onboarding) runs before the executor, its prompt listing the unit chain (org → ancestor units → own unit) under `## What to do`. The agent reads each `Onboarding` page with its knowledge-base tools (`search_knowledge` on either backend, then `get_page` on Doclet or the Confluence server's own page tools on Confluence), activating them from the tools its prompt lists to discover, captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the pass does not run again for that org chain. The executor is never told to onboard and never reaches `mark_onboarded`.
 
 Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted) — the engine recomputes a chain hash and the prior marker no longer matches. A **rename** is not a structural change: the hash is built from the company name, the keys of the units in the chain and the seat's handle, all of which are fixed, so relabelling a division or a person moves nobody and re-onboards nobody. A unit or seat given a different key or handle is a removal and a creation, and the seat it leaves in the chain onboards as a new one.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 

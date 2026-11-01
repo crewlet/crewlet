@@ -1,0 +1,30 @@
+# A change: the assistant prepares the task and stops for the person's
+# approval. Nothing is filed by the turn itself.
+person:
+  apps: [worklet]
+  acts: [create_work_item]
+page:
+  screen: work-tasks
+  title: Worklet › Tasks
+  params: {}
+  query: {}
+  resources: [{kind: project, id: ENG}]
+  selection: null
+  source_revision: url:3f9c1a0e
+  accepts: []
+question: File a task for Ada to rotate the signing key before Friday.
+# The chart a task's assignee is resolved against: a write names a seat
+# that is on it, by its handle or its name.
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: ada, name: Ada Lovelace, kind: human}
+script:
+  - call: create_task
+    args: {title: Rotate the signing key, assignee: ada, due: eow}
+expect:
+  calls: [create_task]
+  proposals: 1
+  state: waiting_for_approval

@@ -63,7 +63,7 @@ is the wake that would otherwise be a courtesy call after a commit.
 
 A wake whose record is itself a publish — a node's alarm transition, which no
 commit precedes — is derived from the delivery that publish writes:
-[ADR-0065](0065-a-nodes-alarm-transition-is-the-record-its-wake-derives-from.md).
+[ADR-0088](0088-a-nodes-alarm-transition-is-the-record-its-wake-derives-from.md).
 The node's tracker hands each transition to an outbox that publishes it on the
 inbound topic until the broker takes it, and the notify spine's fleet-wide
 consumer group derives the wakes from the delivery, so the durable record is

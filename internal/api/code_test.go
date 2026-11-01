@@ -1227,7 +1227,7 @@ func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
 // under the credential it came through, and the human seat it holds — the one
 // the identity directory binds a token to — or none. A REST caller is a person
 // or a credential, never a seat, so the reader judges what it answers by a
-// person's grant (ADR-0058); and the conversion is the code tools' own
+// person's grant (ADR-0081); and the conversion is the code tools' own
 // (builtin.CodeAskerOf), so a person's REST read and their assistant's code
 // tool ask as one asker.
 //

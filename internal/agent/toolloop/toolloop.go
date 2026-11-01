@@ -1,10 +1,26 @@
 // Package toolloop drives one phase's model-and-tools conversation.
 //
-// It is the innermost loop of the engine: ask the model, run whatever tools it
-// asked for, feed the results back, repeat until it stops asking or the round
-// budget runs out. Everything above it is this loop with a different surface
-// and a different prompt: the executor, the reviewer, the extension judge, a
-// worker.
+// It is the innermost loop of the engine: the model asks for tools, they run,
+// their results go back, until it stops asking or the round budget runs out.
+// Every phase the ENGINE drives is this loop with a different surface and a
+// different prompt: the reviewer, a delegated worker, the onboarding pass and
+// its extension judge, and the Dashboard Assistant's turn. A seat's executor
+// is not one of them — it is its coding CLI's own agentic run, in a box, which
+// reaches the seat's tools over the tool bridge rather than through a loop
+// here.
+//
+// THE CLI DRIVES THE ROUNDS; THE LOOP HOLDS THE PHASE. Every model call is a
+// vendor's coding CLI, which runs its own loop — ask the model, call a tool,
+// ask again — and calls the phase's tools over MCP. [Run] starts CLI runs of
+// the phase's provider, each served the phase's tools by a [dispatcher]
+// (dispatcher.go) that decides every call as it arrives, ends the run when
+// the phase needs it ended, and is told what the CLI's own record shows of
+// each model request; and between runs it does what only the loop can: a
+// person's note, a corrective, a call's result the run ended before. The fold
+// (fold.go) turns each run back into the record the loop kept when it drove
+// each round itself, so nothing downstream can tell the two apart. A round is
+// still one model request. That a phase's tools reach its CLI as one MCP
+// server, and every call passes these gates, is ADR-0049.
 //
 // Seven things here are load-bearing and each replaced an incident:
 //
@@ -12,44 +28,47 @@
 //     names its own scope. Re-reading the caps afterwards to work out which
 //     one said no is a read a peer's spend can invalidate between the refusal
 //     and the report.
-//   - PROGRESS IS PUBLISHED TWICE PER ROUND AND ONCE PER CALL — once the
-//     model has spoken, before its tools run, again BEFORE EACH CALL naming
-//     the call that is about to run, and once they all return — and both the
-//     live update and the durable record are built by ONE function over one
-//     message list. They used to be assembled separately, so the live view
-//     streamed a round's tool calls against an empty response and its prose
-//     appeared only when the phase ended. The per-call frame is what makes a
-//     round's calls visible WHILE they run: they are serial, a sandbox launch
-//     or a slow MCP server takes minutes, and a live view that learned of a
-//     call only once the whole round returned showed a seat doing nothing
-//     for exactly the stretch somebody was watching it.
-//   - THE LOOP IS THE CLOCK. Every round's provider call and every tool call
-//     is timed here, where the call is made, and carried on the record as a
-//     start and a duration. A reader that reconstructs timing from event
-//     arrival subtracts two publishers' clocks and a queue's latency, and a
-//     round's cache tokens exist nowhere else: the completion reports them
-//     and this is the one frame that sees every completion.
-//   - THE SEAT FENCE RUNS AT THE TOP OF EVERY ROUND, before any tokens are
-//     spent and before anything fires, AND BEFORE EACH OF THE ROUND'S TOOL
-//     CALLS, because a round is one model turn but many calls and the calls
-//     are what reach outside the engine. A node whose lease moved stops there
-//     rather than running the rest of the turn beside the seat's new owner.
-//   - A PERSON'S NOTE ENTERS AT THE ROUND BOUNDARY AND NOWHERE ELSE —
-//     immediately after the fence, when every call the previous round made
-//     has its answer, as a user message. Anywhere later it could sit
-//     between a call and its result, which a provider rejects and a model
-//     reads as the tool's output; before the fence it would be read by a
+//   - PROGRESS IS PUBLISHED AS A RUN OPENS, AS EACH RESPONSE IS READ, AND
+//     BEFORE AND AFTER EACH CALL — the model's prose before its tools run,
+//     each call named as it starts — and both the live update and the
+//     durable record are built by ONE function over one message list. They
+//     used to be assembled separately, so the live view streamed a round's
+//     tool calls against an empty response and its prose appeared only when
+//     the phase ended. The per-call frame is what makes a round's calls
+//     visible WHILE they run: a delegated worker or a slow MCP server takes
+//     minutes, and a live view that learned of a call only once it returned
+//     showed a seat doing nothing for exactly the stretch somebody was
+//     watching it.
+//   - THE LOOP IS THE CLOCK. Every model request and every tool call is
+//     timed here — a request from the moment its CLI had everything it needed
+//     to ask to the moment its record was read, a call around the surface —
+//     and carried on the record as a start and a duration. A reader that
+//     reconstructs timing from event arrival subtracts two publishers' clocks
+//     and a queue's latency, and a request's cache tokens exist nowhere else:
+//     the CLI's record reports them and this is the one frame that sees every
+//     request.
+//   - THE SEAT FENCE RUNS BEFORE EVERY RUN, before any tokens are spent and
+//     before anything fires, AND BEFORE AND AFTER EACH TOOL CALL, because a
+//     round is one model request but many calls and the calls are what reach
+//     outside the engine. A node whose lease moved stops there rather than
+//     running the rest of the turn beside the seat's new owner.
+//   - A PERSON'S NOTE ENTERS AT A RUN'S OPENING AND NOWHERE ELSE —
+//     immediately after the fence, as a user message. One that arrives while
+//     a run is going ends the run once the calls of the response it arrived
+//     during have their answers, and the next run reads it. Anywhere else it
+//     could sit between a call and its result, which a provider rejects and
+//     a model reads as the tool's output — and inside a tool's result any
+//     tool's output could imitate one; before the fence it would be read by a
 //     turn that is about to end. See internal/agent/steer.
-//   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A ROUND ENDS
-//     WITHOUT ONE. A loop that declares terminators ([Config.TerminateAfter])
-//     has said how it ends — a successful call to one of them — so a round
-//     of prose there is not a finish: it is a model that wrote its report
-//     where nobody reads it (a submission's arguments typed out as a JSON
-//     block is the measured case). The request never forces a call — some
-//     endpoints ignore a forced tool choice, some models think-then-stop,
-//     and several current ones reject the force outright — so the call is
-//     ENFORCED HERE rather than requested of the provider: a bounded
-//     corrective re-prompt
+//   - A PHASE THAT FINISHES BY A CALL IS ASKED AGAIN WHEN A RUN ENDS WITHOUT
+//     ONE. A loop that declares terminators ([Config.TerminateAfter]) has said
+//     how it ends — a successful call to one of them — so a run that ends in
+//     prose there is not a finish: it is a model that wrote its report where
+//     nobody reads it (a submission's arguments typed out as a JSON block is
+//     the measured case). The request never forces a call — some endpoints
+//     ignore a forced tool choice, some models think-then-stop, and several
+//     current ones reject the force outright — so the call is ENFORCED HERE
+//     rather than requested of the provider: a bounded corrective re-prompt
 //     naming what finishes the phase is the difference between "the model
 //     declined" and "the phase produced nothing and said it was fine".
 //   - A CALL WHOSE ARGUMENTS DID NOT PARSE IS NEVER RUN WITH NONE. It is
@@ -61,16 +80,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MaxFinishingCorrectives bounds the FINISHING correctives: the re-prompts a
@@ -85,13 +108,13 @@ import (
 //
 // Two, and every one of them an IDENTICAL message, which is not the waste it
 // would be elsewhere. In a loop that finishes by a call, a round without the
-// call cannot end the phase except into its caller's rescue — `incomplete` for
-// the executor, a whole extra executor round for the reviewer, an unmarked seat
+// call cannot end the phase except into its caller's rescue — a whole extra
+// executor run for the reviewer, `no_result` for a worker, an unmarked seat
 // that re-runs its onboarding on every turn — so a second send is weighed
 // against that, not against nothing. And it caps there because a model that
 // cannot emit the call in three attempts will not emit it in ten, while each
 // attempt is a full priced round charged like any other. Against the budgets
-// that arm it: the executor's default 24 rounds lose at most 2 to a run of
+// that arm it: onboarding's default 10 rounds lose at most 2 to a run of
 // declines; the reviewer's 4 keep 1 for the submission the corrective asks
 // for; a worker with `max_turns: 1` has no round left to read a corrective at
 // all, and gets none — no corrective is ever sent on a round that has none
@@ -118,7 +141,7 @@ const MaxFinishingCorrectives = 2
 // PER RUN OF EMPTY ROUNDS, like the finishing allowance. Counted for the
 // phase's lifetime instead, this bounds a different quantity — how many times
 // a model may ever stall — and one stall early then disarms the corrective for
-// every round after it. That is measured, not hypothetical: an executor on a
+// every round after it. That is measured, not hypothetical: a seat on a
 // 24-round budget stalled at round 2, filed a work item at round 3, had a
 // submission bounced at round 4, and broke on the stall at round 5 with
 // nineteen rounds unspent — one round before the message it had just said it
@@ -129,24 +152,80 @@ const maxEmptyAnswerRetries = 1
 //
 // An interface rather than a concrete registry because the phases differ in
 // what they expose and the loop must not know which phase it is running: the
-// executor sees the world, the reviewer sees only the tool it submits its
-// decision with, a worker sees a subset of its parent's. It
-// is re-read at the TOP OF EVERY ROUND so a surface mutated mid-loop — a
-// meta-tool activating another tool — is visible on the next provider call
-// rather than the one after.
+// reviewer sees only the tool it submits its decision with, a worker sees a
+// subset of its parent's, onboarding sees the seat's own. Its offer is re-read
+// whenever its [Surface.Revision] moves, so a surface mutated mid-run — a
+// meta-tool activating another tool — is listed to the CLI before its next
+// request, or the run is ended for a CLI that never re-lists.
 type Surface interface {
-	// ToolDefs returns the tools to offer the model this round.
+	// ToolDefs returns the tools to offer the model now.
 	ToolDefs() []llm.ToolDef
 
-	// Execute runs one call. It returns a ToolResult rather than an error
-	// because a failing tool is ORDINARY: its message goes back to the
-	// model, which is expected to react to it. A Go error from this method
-	// means the surface itself broke.
-	Execute(ctx context.Context, call llm.ToolCall) (ToolResult, error)
+	// Revision changes whenever ToolDefs would answer differently — an
+	// activation — so a session re-lists only when something moved, and a
+	// run whose CLI never re-lists is ended after one.
+	Revision() uint64
+
+	// AnnotationsOf is one tool's behavioural hints, which the session
+	// advertises to the CLI beside it: whether a call is read-only decides,
+	// in several CLIs, whether it may run beside another and whether to ask
+	// first.
+	AnnotationsOf(name string) mcp.Annotations
+
+	// Admit fixes one call's place in its run's call log NOW — the order the
+	// repeat count an operation id carries is read in — and returns the call
+	// bound to that place, to be run once.
+	//
+	// AT ADMISSION, NOT AT RETURN, because a CLI makes a response's calls at
+	// once and they return in whatever order their tools finish: a count read
+	// against the order calls return in is one a re-run, making the same
+	// calls, does not reproduce. The loop admits each call under its own
+	// lock, in the order the calls arrive.
+	//
+	// CALLED CONCURRENTLY with the calls it returns, which run side by side:
+	// every call but a terminator or a [Detacher]'s detached one, which runs
+	// alone.
+	Admit(name string, args map[string]any) Admitted
 
 	// Phase names the phase for telemetry.
 	Phase() string
 }
+
+// Detacher is a [Surface] with tools whose work outlives their call and may
+// park the phase ([ToolResult.Suspend]). Such a call runs alone — two run side
+// by side would each start work a parked phase can answer for only one.
+//
+// Optional, like [Refuser]: only a loop that may park ([Config.AllowSuspend])
+// has such a tool — today the Dashboard Assistant's turn, which parks on a
+// change waiting for its person's approval — so every other surface, which
+// would answer false for every name, implements nothing.
+type Detacher interface {
+	// Detached reports whether a call of name may park the phase.
+	Detached(name string) bool
+}
+
+// Refuser is a [Surface] that keeps a record of the calls this loop answers
+// without running them: a call whose arguments did not parse, one the run was
+// no longer taking, one that arrived after the call that parked its phase.
+// Admit never sees such a call, so a surface that records its steps as it runs
+// them would otherwise show a model that asked for something and nothing
+// happened, with no step saying so.
+//
+// Optional: a surface with no record of its own does not implement it, and the
+// loop answers the call exactly as it does for one that does.
+type Refuser interface {
+	// Refused records that call did not run, and why, in the words the
+	// model was answered with.
+	Refused(ctx context.Context, call llm.ToolCall, reason string)
+}
+
+// Admitted is one call a [Surface] admitted, bound to its place in the run's
+// call log: run it once, with the call as the CLI made it.
+//
+// It returns a ToolResult rather than an error because a failing tool is
+// ORDINARY: its message goes back to the model, which is expected to react to
+// it. A Go error means the surface itself broke.
+type Admitted func(ctx context.Context, call llm.ToolCall) (ToolResult, error)
 
 // ToolResult is what one tool call produced.
 type ToolResult struct {
@@ -173,14 +252,11 @@ type ToolResult struct {
 	Cause error
 
 	// Suspend stops the loop with this call UNANSWERED, for a tool whose
-	// work outlives the turn (the detached sandbox). Honoured only when
-	// the caller set AllowSuspend; elsewhere it is logged and ignored,
-	// because a phase that never persists a partial conversation cannot
-	// resume one.
+	// work outlives the turn — a change the Dashboard Assistant proposed,
+	// waiting on its person's approval. Honoured only when the caller set
+	// AllowSuspend; elsewhere the call is refused, because a phase that
+	// never persists a partial conversation cannot resume one.
 	Suspend bool
-
-	// SuspendPayload is handed back to the caller to persist.
-	SuspendPayload map[string]any
 
 	// Origin is where the tool that ANSWERED came from — the registry's
 	// grammar, `builtin` or `mcp:<server>` — and Server the bare MCP server
@@ -218,7 +294,13 @@ type Execution struct {
 	Round int
 	Name  string
 	Args  map[string]any
-	// Output is the tool's own output, already redacted by the surface.
+
+	// CallID is the CLI's own id for the call, where its record or the
+	// call itself named one, and the loop's otherwise — what the
+	// conversation pairs the call's result with.
+	CallID string
+
+	// Output is the tool's own output, as it returned it.
 	Output string
 	Failed bool
 
@@ -227,13 +309,12 @@ type Execution struct {
 	// monotonic clock, so a wall-clock correction mid-call cannot report a
 	// negative or inflated one.
 	//
-	// Measured HERE, around [Surface.Execute], because a round's calls are
-	// SERIAL and the question a reader asks of a slow round is which call
-	// held it: the round's own span covers the provider call only, and the
-	// phase's covers everything. Both are zero on an execution nothing
-	// timed — a call whose arguments did not parse, which is answered
-	// rather than run, and an agent-mode run's bridged calls, which ran
-	// inside somebody else's loop — and zero means "not measured", never
+	// Measured HERE, around the [Admitted] call, because the question a reader
+	// asks of a slow round is which call held it: the round's own span
+	// covers the model's request only, and the phase's covers everything.
+	// Both are zero on an execution nothing timed — a call answered rather
+	// than run: arguments that did not parse, a tool not offered, a call
+	// its run ended before — and zero means "not measured", never
 	// "instant".
 	StartedAt time.Time
 	Duration  time.Duration
@@ -244,26 +325,27 @@ type Execution struct {
 	Server string
 }
 
-// Round is one provider call of the loop: when it was made, how long the model
+// Round is one model request of the loop: when it was made, how long the model
 // took to answer, who answered and what it cost.
 //
 // THE MODEL'S HALF OF A ROUND ONLY. The round's tool calls are timed on their
-// own [Execution] rows, because they are serial and each is its own question
-// ("which call held this round?"); folding them into the round's duration would
-// make a slow model and a slow tool the same number. A round's wall clock is
-// therefore its StartedAt to the end of its last call, and a reader has both
-// halves to hand.
+// own [Execution] rows, because each is its own question ("which call held
+// this round?"); folding them into the round's duration would make a slow
+// model and a slow tool the same number. A round's wall clock is therefore its
+// StartedAt to the end of its last call, and a reader has both halves to hand.
 //
-// Recorded for every round whose completion arrived, including the rounds a
-// corrective re-prompt follows: each is a priced provider call and a reader
-// adding up where the time went needs all of them.
+// Recorded for every request a CLI's record showed, including the runs a
+// corrective re-prompt follows: each is a priced request and a reader adding
+// up where the time went needs all of them. A CLI whose record shows no
+// requests has its whole run recorded as one round, untimed.
 type Round struct {
 	// Round is one-based, on the same scale as [Execution.Round] and
 	// [Narration.Round], so the three lists join on it.
 	Round int
 
-	// StartedAt is when the provider call was made, in UTC, and Duration
-	// how long it took to answer, on the monotonic clock.
+	// StartedAt is when the request was made — when its CLI had everything
+	// it needed to ask — in UTC, and Duration how long it took to answer,
+	// on the monotonic clock.
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -291,6 +373,70 @@ type Round struct {
 	StopReason llm.StopReason
 }
 
+// Invocation is one CLI run of the loop: one process, driving its own loop
+// over the phase's tools, from launch to exit.
+//
+// THE UNIT THE ENGINE OBSERVES FOR EVERY CLI. A [Round] is one model request,
+// which a CLI's own record shows for most CLIs and not for all; a run is what
+// the engine starts and ends itself, so it is on every record whatever the
+// CLI reports.
+type Invocation struct {
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// ProviderKey and Model are the entry and the model that served the
+	// run, where its answer named them.
+	ProviderKey string
+	Model       string
+
+	// Outcome is how the run ended — see [InvocationOutcome].
+	Outcome InvocationOutcome
+
+	// FirstRound and LastRound are the rounds the run made, both inclusive,
+	// on [Round.Round]'s scale; both zero for a run that made no request.
+	// Named rather than left to a reader to place by time, because an
+	// unobserved run's round has no instant of its own — and a phase's runs
+	// are sequential, so a run's rounds are one contiguous stretch.
+	FirstRound, LastRound int
+
+	// RequestsObserved says the CLI's record showed the run's model
+	// requests, each a [Round]. False: the whole run is recorded as one.
+	RequestsObserved bool
+
+	// The run's spend — every request of it, as the backend reported it.
+	InputTokens  int
+	OutputTokens int
+	CacheRead    int
+	CacheWrite   int
+
+	// Calls is how many of the phase's tools the run called.
+	Calls int
+}
+
+// InvocationOutcome is how a CLI run ended.
+type InvocationOutcome string
+
+const (
+	// OutcomeEnd is a run whose model stopped: its last response called
+	// nothing.
+	OutcomeEnd InvocationOutcome = "end"
+	// OutcomeCap is a run its CLI's own turn cap ended.
+	OutcomeCap InvocationOutcome = "cap"
+	// OutcomeStopped is a run the engine ended: the phase finished,
+	// parked, paused, ran out of rounds or was stopped.
+	OutcomeStopped InvocationOutcome = "stopped"
+	// OutcomeFailed is a run that failed — its CLI's error, or no CLI.
+	OutcomeFailed InvocationOutcome = "failed"
+)
+
+// InvocationOutcomes is the closed set, in a fresh slice.
+func InvocationOutcomes() []InvocationOutcome {
+	return []InvocationOutcome{OutcomeEnd, OutcomeCap, OutcomeStopped, OutcomeFailed}
+}
+
+// Valid reports whether o is one of [InvocationOutcomes].
+func (o InvocationOutcome) Valid() bool { return slices.Contains(InvocationOutcomes(), o) }
+
 // RunningCall is the tool call in flight: named on the live view BEFORE the
 // surface runs it and cleared once it returns.
 //
@@ -300,6 +446,10 @@ type Round struct {
 // words and nothing after them for as long as the call took — indistinguishable
 // from a seat that had stalled.
 type RunningCall struct {
+	// ID is the call's id, on the [Execution.CallID] rule — what tells two
+	// calls of one response running side by side apart.
+	ID string
+
 	// Round is the round the call belongs to, on the [Execution.Round]
 	// scale.
 	Round int
@@ -321,6 +471,11 @@ type Steerer interface {
 	// model reads, for the round about to run — one-based, on this
 	// invocation's scale.
 	Drain(round int) []SteerNote
+
+	// Waiting reports a note waiting, without taking it: a run that has
+	// one waiting is ended once its calls in flight are answered, so the
+	// next run reads it.
+	Waiting() bool
 }
 
 // SteerNote is one note, rendered.
@@ -353,11 +508,13 @@ type roundOffsetKey struct{}
 // tool is on the PHASE's scale rather than the invocation's.
 //
 // It exists because a phase can run the loop more than once — an extension
-// continues it, a resumed executor re-enters it — and the loop numbers its own
-// rounds from 1 every time. The records it returns are renumbered by the
-// caller afterwards ([Result] is a value it can shift), but a tool that asks
-// its round mid-call cannot wait for that: a worker spawned in extension round
-// 1 of a twenty-round phase would otherwise nest itself under round 1.
+// continues it, and a corrective the last invocation withheld is read past its
+// budget (internal/agent/runner) — and the loop numbers its own rounds from 1
+// every time. The records it returns are renumbered by the caller afterwards
+// ([Result] is a value it can shift), but a tool that asks its round mid-call
+// cannot wait for that: a call in the first round of an extension continuing
+// a twenty-round phase would be told round 1 while the phase's record states
+// it in round 21.
 func WithRoundOffset(ctx context.Context, prior int) context.Context {
 	if prior <= 0 {
 		return ctx
@@ -365,12 +522,20 @@ func WithRoundOffset(ctx context.Context, prior int) context.Context {
 	return context.WithValue(ctx, roundOffsetKey{}, prior)
 }
 
-// CallRound is the round the calling tool runs in, on the phase's scale, and
-// false outside a tool call this loop made.
+// CallRound is the round the calling tool runs in, on the phase's scale — the
+// one-based scale its records state the call on, which a caller that runs the
+// loop again declares with [WithRoundOffset] — and false outside a tool call
+// this loop made.
 //
-// Read by a tool whose own record has to say which round asked for it — a
-// delegate call's workers nest under the round that spawned them — and never
-// by the loop itself, which knows its round without asking.
+// Read by a tool whose own answer depends on which round asked for it, and
+// never by the loop itself, which knows its round without asking: the
+// assistant's brief turn refuses a read in a round kept for its answer, says
+// so on a read in the last round that may read, and makes a refused answer in
+// the turn's last round final (internal/assistant). A worker spawned by a
+// delegate call is told its parent's round by its caller instead
+// ([subagent.Config]): the delegate tool is served only on an executor run's
+// surface, whose calls arrive over the tool bridge, where no loop is iterating
+// to stamp one.
 func CallRound(ctx context.Context) (int, bool) {
 	round, ok := ctx.Value(roundKey{}).(int)
 	return round, ok
@@ -386,15 +551,15 @@ func withCallRound(ctx context.Context, round int) context.Context {
 type modelKey struct{}
 
 // CallModel is the model the tool call ctx carries was made on: in this loop's
-// own dispatch the ROUND's — the model its completion reported, else the
+// own dispatch the ROUND's — the model the CLI's record named for it, else the
 // provider's configured one, the precedence [Round.Model] records — and over
-// the MCP bridge, where a coding CLI in agent mode makes the call, the model
+// the MCP bridge, where a seat's coding run makes the call, the model
 // the run's launch pointed that CLI at; "" where neither set it, a bridged
 // call whose launch named no model and left the CLI to choose its own.
 //
 // Read by a tool whose write has to say which model made it — a seat's code
 // write names it on its push row — and never by the loop itself. ONE VALUE
-// FOR A RUN WHICHEVER PATH MADE THE CALL: a native round and a bridged call of
+// FOR A RUN WHICHEVER PATH MADE THE CALL: a dispatched round and a bridged call of
 // the same seat set it from the same source of truth for that path, so one
 // run's pushes name one model.
 func CallModel(ctx context.Context) string {
@@ -409,17 +574,6 @@ func CallModel(ctx context.Context) string {
 // call could carry a model the other path never sets.
 func WithCallModel(ctx context.Context, model string) context.Context {
 	return context.WithValue(ctx, modelKey{}, model)
-}
-
-// roundModel is the model a round ran on: the completion's own report where it
-// names one, else the provider's configured identity — the precedence the
-// phase's own model follows, per round, in one place, so the round's record
-// ([Round.Model]) and the model its calls are told ([CallModel]) never differ.
-func roundModel(completion *llm.Completion, provider llm.Provider) string {
-	if completion.Model != "" {
-		return completion.Model
-	}
-	return provider.Model()
 }
 
 // Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
@@ -496,10 +650,13 @@ type BudgetMeter interface {
 	// whether they fitted, in ONE operation against the shared counter.
 	//
 	// Already spent, because the loop charges a round once its reply is
-	// in — a round's size is known no sooner — and before any tool the
-	// round asked for runs. So a refusal decides what FOLLOWS the round:
-	// its tools do not run, and no later model call of the turn is made
-	// ([BudgetMeter.Refused]). It does not undo the round, which the vendor
+	// in — a round's size is known no sooner — as the CLI's record shows
+	// it, which is before any tool the round asked for runs: a call waits
+	// for the record of the request that made it. So a refusal decides
+	// what FOLLOWS the round: its tools do not run, and no later model call
+	// of the turn is made ([BudgetMeter.Refused]). A CLI whose record shows
+	// no requests is charged for its whole run once it is over, its tools
+	// already run, and the refusal stops the run after it. It does not undo the round, which the vendor
 	// has billed, and a meter must record a round it refuses exactly as it
 	// records one it admits: one that dropped it under-stated the company
 	// by the round that crossed the cap, and admitted the next round
@@ -517,8 +674,8 @@ type BudgetMeter interface {
 	// the vendor, then refused, and everything it bought thrown away. That
 	// is the half of a refusal Spend cannot carry, because a refusal is
 	// answered to one caller and a turn makes its calls from several — the
-	// next round of this loop, the round-cap judge, the next phase, a
-	// sibling worker, an agent-mode executor's launch — and before this
+	// next run of this loop, the round-cap judge, the next phase, a sibling
+	// worker, the executor's launch — and before this
 	// each of them paid for one call certain to be refused.
 	//
 	// A TRUE ANSWER IS A REFUSAL, NOT A FORECAST. Every caller asks it
@@ -567,9 +724,9 @@ type BudgetMeter interface {
 // Refusal is the error a meter's standing refusal answers, or nil: nil for a
 // nil meter, and nil while no refusal stands ([BudgetMeter.Refused]).
 //
-// It is the question the loop asks before every round, exported because the
-// loop is not the only frame that calls a model on a turn's meter: the
-// round-cap judge, an agent-mode executor's launch and the engine's auxiliary
+// It is the question the loop asks before every run and every call, exported
+// because the loop is not the only frame that calls a model on a turn's meter:
+// the round-cap judge, the executor's launch and the engine's auxiliary
 // seam before each of the turn's auxiliary calls ask it too, so every call in
 // a turn is stopped by the same answer — and, since a true answer is a
 // refusal of the call the caller was about to make, recorded by the same
@@ -635,6 +792,7 @@ type Progress struct {
 	executions   []Execution
 	narration    []Narration
 	rounds       []Round
+	invocations  []Invocation
 	inputTokens  int
 	outputTokens int
 	cacheRead    int
@@ -663,6 +821,7 @@ func (p *Progress) Snapshot() Result {
 		Executions:   append([]Execution(nil), p.executions...),
 		Narration:    append([]Narration(nil), p.narration...),
 		Rounds:       append([]Round(nil), p.rounds...),
+		Invocations:  append([]Invocation(nil), p.invocations...),
 		RoundsUsed:   p.roundsUsed,
 		MaxRounds:    p.maxRounds,
 		Model:        p.model,
@@ -682,6 +841,7 @@ func (p *Progress) record(res Result) {
 	p.executions = append([]Execution(nil), res.Executions...)
 	p.narration = append([]Narration(nil), res.Narration...)
 	p.rounds = append([]Round(nil), res.Rounds...)
+	p.invocations = append([]Invocation(nil), res.Invocations...)
 	p.inputTokens, p.outputTokens = res.InputTokens, res.OutputTokens
 	p.cacheRead, p.cacheWrite = res.CacheRead, res.CacheWrite
 	p.roundsUsed, p.maxRounds, p.model = res.RoundsUsed, res.MaxRounds, res.Model
@@ -719,7 +879,7 @@ type Result struct {
 	CacheRead  int
 	CacheWrite int
 
-	// Rounds is one entry per provider call, in order: when it was made,
+	// Rounds is one entry per model request, in order: when it was made,
 	// how long it took, who answered and what it cost. See [Round].
 	Rounds []Round
 
@@ -728,21 +888,35 @@ type Result struct {
 	// rather than a second copy of the config beside it.
 	MaxRounds int
 
-	// Running is the tool call in flight, present only on a live snapshot
-	// published while a call runs — see [RunningCall]. Never on a finished
-	// Result or a failure snapshot: a call that has returned is an
-	// Execution, and one that never returned is the failure.
-	Running *RunningCall
+	// RunStartedAt is when the CLI run in flight was started, in UTC — the
+	// [Invocation.StartedAt] it will be recorded with — on a live snapshot
+	// published while one is out, and zero between runs and on a finished
+	// Result. Apart from [Result.RoundStartedAt] because a run is many
+	// rounds: "this run has been going for 6m" and "this request for 40s"
+	// are two different clocks.
+	RunStartedAt time.Time
 
-	// RoundStartedAt is when the latest round's provider call was made, in
-	// UTC, on a live snapshot: the round in flight while the model is still
-	// answering, and the round whose tools are running after it has. What a
-	// live view counts "this round has taken 40s" from. Every round's
-	// opening frame carries it, published the moment the call is made, so
-	// a snapshot whose RoundStartedAt is later than every [Round] in
-	// [Result.Rounds] is a round in flight and one equal to the last is
-	// that round's tools. Zero on a finished Result, whose [Result.Rounds]
-	// carry every start.
+	// Running is the tool calls in flight, in the order they arrived,
+	// present only on a live snapshot published while calls run — see
+	// [RunningCall]. A LIST because a CLI may issue a response's calls at
+	// once. Never on a finished Result or a failure snapshot: a call that
+	// has returned is an Execution, and one that never returned is the
+	// failure.
+	Running []RunningCall
+
+	// Invocations is one entry per CLI run, in order — see [Invocation].
+	Invocations []Invocation
+
+	// RoundStartedAt is when the latest round's request was made, in UTC,
+	// on a live snapshot: the request in flight while the model is still
+	// answering, and the round whose tools are running after it has. What
+	// a live view counts "this round has taken 40s" from. A request is in
+	// flight from the frame published as a run opens or as the last call
+	// of the previous response is answered, and [Result.RoundsUsed] counts
+	// it from there, so a snapshot whose RoundStartedAt is later than every
+	// [Round] in [Result.Rounds] is a request in flight and one equal to
+	// the last is that round's tools. Zero on a finished Result, whose
+	// [Result.Rounds] carry every start.
 	RoundStartedAt time.Time
 
 	// Narration is per-round what Text is in aggregate. Both are published:
@@ -812,12 +986,10 @@ type Result struct {
 
 	// Suspended and its companions are set when a tool suspended the loop.
 	// The pending call is left UNANSWERED in Messages — exactly one
-	// dangling tool call, which is an invariant checked on both serialize
-	// and resume.
+	// dangling tool call, the one its caller's resume answers.
 	Suspended         bool
 	PendingToolCallID string
 	PendingToolName   string
-	SuspendPayload    map[string]any
 }
 
 // partialInterval bounds how often a round in flight republishes.
@@ -859,6 +1031,15 @@ type Config struct {
 	Provider llm.Provider
 	Surface  Surface
 
+	// Host is where this loop's tool sessions are opened — this process's
+	// [toolsession.Host]. Required: every caller of this loop offers tools,
+	// and a CLI reaches them only through a session.
+	Host *toolsession.Host
+
+	// ServerTitle is how the session names itself in a CLI's handshake —
+	// the seat, for the CLI's own logs. Empty takes the phase.
+	ServerTitle string
+
 	// ProviderKey is the providers.llm key Provider was resolved under —
 	// a chain's HEAD. It stands in for the entry that served exactly as
 	// Provider.Model() stands in for the model: until a completion names
@@ -871,7 +1052,7 @@ type Config struct {
 	// the result carries the full conversation.
 	Messages []llm.Message
 
-	// MaxRounds bounds the provider calls. Required and positive.
+	// MaxRounds bounds the model requests. Required and positive.
 	MaxRounds int
 
 	// TerminateAfter names tools that end the loop once they have run
@@ -884,71 +1065,75 @@ type Config struct {
 	// model, and ending the phase there means the retry never happens.
 	//
 	// DECLARING ONE IS DECLARING HOW THE LOOP FINISHES, so it also changes
-	// what a round of prose means. Without terminators, a round with no
-	// tool call is the model's answer and a clean finish. With them, no
-	// such round can be a finish — a successful terminator ends the loop
-	// before the next round opens, so a prose round always comes before
-	// any submission succeeded — and the loop re-prompts with a FINISHING
-	// corrective naming these tools, under [MaxFinishingCorrectives]. It
-	// names the submission rather than the surface, which on the
-	// onboarding pass is a whole catalogue of tools that are not how it
-	// finishes.
+	// what a run that ends in prose means. Without terminators, a run whose
+	// model stopped with no call is the model's answer and a clean finish.
+	// With them, it cannot be — a successful terminator ends the run — and
+	// the loop re-prompts with a FINISHING corrective naming these tools,
+	// under [MaxFinishingCorrectives]. It names the submission rather than
+	// the surface, which on the onboarding pass is a whole catalogue of
+	// tools that are not how it finishes.
 	//
-	// ONLY A TERMINATOR THE ROUND OFFERS COUNTS. One the surface does not
-	// carry this round cannot be called, so a corrective naming it is a
-	// round spent on nothing, and a loop offering none of its terminators
-	// reads prose as its answer exactly as a loop that declared none.
+	// ONLY A TERMINATOR THE SURFACE OFFERS COUNTS. One it does not carry
+	// cannot be called, so a corrective naming it is a run spent on
+	// nothing, and a loop offering none of its terminators reads prose as
+	// its answer exactly as a loop that declared none.
 	TerminateAfter []string
 
 	// CorrectivesSpent is how many finishing correctives the run of
-	// declined rounds this invocation CONTINUES has already been sent — by
-	// an earlier invocation of the same phase, the withheld one its caller
+	// declines this invocation CONTINUES has already been sent — by an
+	// earlier invocation of the same phase, the withheld one its caller
 	// appended included. It seeds the allowance, so a continuation shares
 	// [MaxFinishingCorrectives] with the invocation before it rather than
 	// starting a fresh pair. Zero for every invocation that does not
 	// continue a run of declines.
 	CorrectivesSpent int
 
-	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
-	// it — see ToolResult.Suspend.
+	// AllowSuspend permits a tool to suspend this loop — see
+	// [ToolResult.Suspend]. Only the Dashboard Assistant's turn sets it: no
+	// phase of a seat's turn persists a partial conversation, since the
+	// one that outlives its process, the executor, is its CLI's own run.
 	AllowSuspend bool
 
 	// Budget is the shared counter. Nil disables charging, which is for
 	// tests and for loops the caller has already charged.
 	Budget BudgetMeter
 
-	// Fence is checked at the top of every round, before any tokens are
-	// spent, AND before each of a round's tool calls — because a round is
-	// one model turn but many calls, and the calls are what reach outside
-	// the engine. A non-nil error ends the loop immediately and is
-	// returned unwrapped so the caller can recognise its own sentinel.
+	// Fence is checked before every CLI run and before and after every one
+	// of the phase's tool calls — because the calls are what reach outside
+	// the engine. A non-nil error ends the loop and is returned unwrapped so
+	// the caller can recognise its own sentinel.
 	//
 	// Nil is an open fence. The engine supplies [seat.Host.Fence], which
 	// closes when this node stops holding the seat's grant.
 	Fence func() error
 
-	// PartialInterval bounds how often a round in flight republishes.
+	// PartialInterval bounds how often a response in flight republishes.
 	// Zero takes [partialInterval]; a caller sets it only to make the
 	// coalescing deterministic, which is the one honest reason to vary it.
 	PartialInterval time.Duration
 
-	// StreamPartials asks the provider to stream, so a round's text reaches
-	// OnProgress WHILE it is being written rather than only once it is
-	// finished. Off leaves the provider call unary and unchanged.
-	//
-	// A round used to publish exactly twice — after the model answered, and
-	// after its tools ran — so a phase composing a long reasoning block sat
-	// visibly frozen for the whole provider call. This does not change what
-	// a round MEANS: the partial is a view of a call in progress, and the
-	// authoritative narration still comes from the completed round.
+	// StreamPartials asks the provider to stream, so a response's text
+	// reaches OnProgress WHILE it is being written rather than only once it
+	// is finished. Off leaves the provider's text unstreamed.
 	StreamPartials bool
 
-	// OnProgress receives the live view twice per round and once per call:
-	// once the model has spoken, immediately before each tool call with
-	// that call as [Result.Running], and again once its tools have
-	// returned. Failures are the
-	// caller's business — telemetry must never fail a phase — so this
-	// returns nothing.
+	// OwnPrompt says the loop's system prompt is its whole instruction, so
+	// its runs are sent as calls that replace a vendor harness's own prompt
+	// rather than keep it ([llm.Request.Agent] false). The zero value is a
+	// seat at work, whose runs keep the harness's prompt and add the seat's
+	// after it: every phase of a turn and every worker.
+	//
+	// The Dashboard Assistant sets it. It is not a seat: it acts as a
+	// person, its CLI is run with no tool of its own beside the engine's
+	// server, and the harness's prompt is written for a coding agent at a
+	// terminal whose tools it would describe.
+	OwnPrompt bool
+
+	// OnProgress receives the live view: when a run opens, as each model
+	// response is read, before and after each tool call, and when the run
+	// ends. Failures are the caller's business — telemetry must never fail
+	// a phase — so this returns nothing. It is called from more than one
+	// goroutine (a CLI's calls arrive on their own), never concurrently.
 	OnProgress func(Result)
 
 	// Progress is the failure view. Nil means the caller does not want
@@ -956,15 +1141,12 @@ type Config struct {
 	// default: every phase in the engine passes one.
 	Progress *Progress
 
-	// Steer is the running turn's notes from a person, drained at the top
-	// of every round IMMEDIATELY AFTER THE FENCE and appended as user
-	// messages before the provider call.
-	//
-	// That point and no other. It is the one place in a round where the
-	// conversation is complete — the previous round's calls all have
-	// their answers — so a note can never land between a call and its
-	// result; and it is after the fence, so a turn that is about to end
-	// is not handed an instruction it will never act on.
+	// Steer is the running turn's notes from a person. A note enters the
+	// conversation as a USER message before a run, and nowhere else: one
+	// that arrives while a run is going ends that run once its calls in
+	// flight are answered ([Steerer.Waiting]), and the next run reads it —
+	// never as part of a tool's result, which any tool's output could
+	// imitate.
 	//
 	// Nil is a loop nobody can steer: every sub-agent worker, the
 	// extension judge and the onboarding pass. A worker is a leaf its
@@ -980,6 +1162,10 @@ func (c Config) validate() error {
 	if c.Surface == nil {
 		errs = append(errs, errors.New("toolloop: Surface is required"))
 	}
+	if c.Host == nil {
+		errs = append(errs, errors.New("toolloop: Host is required — a CLI reaches the "+
+			"phase's tools only through a session on it"))
+	}
 	if c.MaxRounds <= 0 {
 		errs = append(errs, fmt.Errorf("toolloop: MaxRounds must be positive, got %d", c.MaxRounds))
 	}
@@ -990,49 +1176,49 @@ func (c Config) validate() error {
 	return errors.Join(errs...)
 }
 
-// Run drives the loop.
+// Run drives the loop: CLI runs of the phase's provider, each calling the
+// phase's tools through one [dispatcher], until the phase finishes, parks,
+// runs out of rounds or is stopped.
 //
 // It returns a Result for every outcome that is not an engine failure —
 // including a suspend and an exhausted round budget, both of which are things
 // the phase did rather than things that went wrong. An error means the
-// provider, the budget or the surface itself failed, and the caller publishes
-// Progress.Snapshot() alongside it.
+// provider, the budget, the fence or the surface itself failed, and the caller
+// publishes Progress.Snapshot() alongside it.
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	d := newDispatcher(ctx, cfg, 0)
 
+	// The loop's record. Written by this goroutine between runs and read by
+	// a frame published from a call's goroutine during one, so every touch
+	// is under rec.
+	var rec sync.Mutex
 	msgs := append([]llm.Message(nil), cfg.Messages...)
 	var execs []Execution
 	var narration []Narration
 	var rounds []Round
+	var invocations []Invocation
 	var inTokens, outTokens, cacheRead, cacheWrite int
 	var model, providerKey string
 	var steers []SteerMark
-	// The latest round's start, for the live view; see Result.RoundStartedAt.
-	var roundStarted time.Time
-	// served distinguishes the model a COMPLETION named from the configured
-	// placeholder a streamed round shows before one exists.
 	var served, keyServed bool
-	terminators := make(map[string]struct{}, len(cfg.TerminateAfter))
-	for _, name := range cfg.TerminateAfter {
-		terminators[name] = struct{}{}
-	}
+	var partial *Partial
+	var runStarted time.Time
+
 	finishingRetries := cfg.CorrectivesSpent
 	emptyRetries := 0
 	emptyAnswers := 0
-	// What ended the loop, where it was not the budget: a terminator that
-	// ran, or a corrective withheld for want of a round. See
-	// [Result.ExhaustedRounds] and [Result.Withheld].
-	terminated := false
+	terminated, exhausted := false, false
 	withheld := ""
 
-	var partial *Partial
 	// state is the loop's record as it stands, the one shape every exit and
 	// every publish is built from — so a field added to the Result cannot
-	// reach the finished record and miss the live one, or the reverse.
-	state := func(used int) Result {
-		return Result{
+	// reach the finished record and miss the live one, or the reverse. On a
+	// live frame it includes what the run in flight has done so far.
+	state := func(live bool) Result {
+		out := Result{
 			Text:         assistantText(msgs),
 			InputTokens:  inTokens,
 			OutputTokens: outTokens,
@@ -1041,551 +1227,350 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			Executions:   append([]Execution(nil), execs...),
 			Narration:    append([]Narration(nil), narration...),
 			Rounds:       append([]Round(nil), rounds...),
-			RoundsUsed:   used,
+			Invocations:  append([]Invocation(nil), invocations...),
+			RoundsUsed:   d.roundsUsed(),
 			MaxRounds:    cfg.MaxRounds,
 			Model:        model,
 			ProviderKey:  providerKey,
 			Messages:     append([]llm.Message(nil), msgs...),
 			Steers:       append([]SteerMark(nil), steers...),
 		}
+		if live {
+			more := d.snapshot()
+			out.Messages = append(out.Messages, more.messages...)
+			out.Text = assistantText(out.Messages)
+			out.Executions = append(out.Executions, more.executions...)
+			out.Narration = append(out.Narration, more.narration...)
+			out.Rounds = append(out.Rounds, more.rounds...)
+			out.Running = d.running()
+			// THE ROUND IN FLIGHT, and when it began: the request a run's
+			// CLI is making while the model answers, or the round whose
+			// calls are running — see [Result.RoundStartedAt].
+			round, started := d.inFlight(time.Now())
+			out.RoundsUsed, out.RoundStartedAt = round, started.UTC()
+		}
+		return out
 	}
-	// publish hands the live view the state, with the call in flight when
-	// one is — see [RunningCall]. Nil clears it, which is what every frame
-	// but the one published immediately before a call does.
-	publish := func(used int, running *RunningCall) {
+	publish := func() {
 		if cfg.Progress == nil && cfg.OnProgress == nil {
 			return
 		}
-		live := state(used)
+		rec.Lock()
+		defer rec.Unlock()
+		live := state(true)
 		if cfg.Progress != nil {
-			// WHAT SERVED, never the placeholder. The live view is shown
-			// the configured identity while the first round is out (see
-			// where it is set below), but this is the record a FAILURE
-			// publishes, and a phase whose every provider refused before
-			// one round came back was served by nobody: naming the head
-			// there would charge it for a call it never answered. Every
-			// round's opening frame reaches here before its call, so the
-			// placeholder would otherwise be on every such record.
+			// WHAT SERVED, never the placeholder: a phase whose every
+			// provider refused before one response came back was served by
+			// nobody, and naming the head on its failure record would
+			// charge it for a call it never answered.
 			recorded := live
-			if len(rounds) == 0 {
+			recorded.Running = nil
+			if len(live.Rounds) == 0 {
 				recorded.Model, recorded.ProviderKey = "", ""
 			}
 			cfg.Progress.record(recorded)
 		}
 		if cfg.OnProgress != nil {
+			// A PARTIAL ENDS WHERE ITS RESPONSE IS READ: from then the
+			// narration is the round's text, and a frame carrying both
+			// shows one round twice.
+			if partial != nil && d.committed(partial.Round) {
+				partial = nil
+			}
 			live.Partial = partial.clone()
-			live.Running = running
-			live.RoundStartedAt = roundStarted
+			live.RunStartedAt = runStarted
 			cfg.OnProgress(live)
 		}
 	}
+	d.onFrame = publish
 
-	roundsUsed := 0
-	// account books one provider call that came back — an answer or a
-	// refusal, both billed — onto the phase's totals and its rounds. ONE
-	// function for both, so a refused round cannot reach the record with a
-	// field the answered one carries missing, or the reverse.
-	account := func(completion *llm.Completion, took time.Duration, stop llm.StopReason) {
-		if !served && completion.Model != "" {
-			// The completion names the model that actually served this
-			// round, which is what the per-model token breakdown is built
-			// from; the provider's own name is its CONFIGURED identity and
-			// only stands in for a backend that filled nothing in.
-			//
-			// It OVERRIDES the placeholder set before the call, and latches
-			// on the first completion that names one — so a streamed round
-			// has something to show while it writes, and the billable fact
-			// still wins the moment it exists.
-			model, served = completion.Model, true
-		}
-		if !keyServed && completion.ProviderKey != "" {
-			// The ENTRY that served, by the model's own precedence and
-			// latched on its own flag: a completion can name a model
-			// with no key (a bare backend) and the configured head then
-			// stays the answer, exactly as the model's placeholder did
-			// before it.
-			providerKey, keyServed = completion.ProviderKey, true
-		}
-		if model == "" {
-			model = cfg.Provider.Model()
-		}
-		inTokens += completion.InputTokens
-		outTokens += completion.OutputTokens
-		cacheRead += completion.CacheRead
-		cacheWrite += completion.CacheWrite
-		// Recorded BEFORE the charge, because the round happened and was
-		// billed by the provider whether or not the company's meter then
-		// admits it — and a refused charge ends the loop, so a round
-		// recorded after it would be the one round missing from the
-		// failure record that explains why it failed.
-		//
-		// The completion's model where it names one, the configured
-		// identity where the backend filled nothing in — the same
-		// precedence the phase's own model follows, per round.
-		rounds = append(rounds, Round{
-			Round: roundsUsed, StartedAt: roundStarted, Duration: took,
-			Model:        roundModel(completion, cfg.Provider),
-			InputTokens:  completion.InputTokens,
-			OutputTokens: completion.OutputTokens,
-			CacheRead:    completion.CacheRead,
-			CacheWrite:   completion.CacheWrite,
-			ToolCalls:    len(completion.ToolCalls),
-			StopReason:   stop,
-		})
-	}
-	for round := range cfg.MaxRounds {
-		roundsUsed = round + 1
-
-		// The fence first, at the cheapest possible point: nothing has
-		// been spent this round and nothing has fired.
+	for {
+		// The fence first, at the cheapest possible point: nothing has been
+		// spent on this run and nothing has fired.
 		if cfg.Fence != nil {
 			if err := cfg.Fence(); err != nil {
 				return nil, err
 			}
 		}
-
-		// A REFUSAL ALREADY CERTAIN ends the loop before the call it would
-		// refuse is made — the first round included, since the refusal may
-		// have been answered to another caller on the turn's meter: an
-		// earlier phase, the round-cap judge, a worker this phase
-		// delegated to. Asked before the notes below are drained, so a
-		// person's note is not marked taken by a round that never runs.
-		// The loop publishes nothing here: no round opened, and the record
-		// the caller reads already holds every round that did.
+		// NO ROUND LEFT: nothing may ask the model again. Before the budget,
+		// because no run is about to be made — a window the last round
+		// filled exactly is a phase that ran out of rounds, not one the
+		// budget refused, and asking [Refusal] would record the refusal of
+		// a run nobody was going to start.
+		if d.roundsUsed() >= cfg.MaxRounds {
+			exhausted = lastAskedForTools(msgs)
+			break
+		}
+		// A REFUSAL ALREADY CERTAIN ends the loop before the run it would
+		// refuse is started — the first included, since the refusal may
+		// have been answered to another caller on the turn's meter.
 		if err := Refusal(ctx, cfg.Budget); err != nil {
 			return nil, err
 		}
-
-		// A PERSON'S NOTES, straight after the fence and before anything
-		// is spent: the round about to run is the first to read them. See
-		// [Config.Steer] for why here and nowhere else.
+		// A PERSON'S NOTES, as user messages, before the run that is the
+		// first to read them.
 		if cfg.Steer != nil {
-			notes := cfg.Steer.Drain(roundsUsed)
-			for _, note := range notes {
+			next := d.roundsUsed() + 1
+			rec.Lock()
+			for _, note := range cfg.Steer.Drain(next) {
 				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: note.Message})
-				steers = append(steers, SteerMark{Round: roundsUsed, ID: note.ID})
+				steers = append(steers, SteerMark{Round: next, ID: note.ID})
 			}
-			// Published with the round's opening frame below, so the live
-			// view shows the note taken while the model is still reading
-			// it, and a round whose provider call then fails still has the
-			// note on the record the caller publishes for it.
+			rec.Unlock()
 		}
+		d.reopen()
 
-		// Re-read every round, so a surface mutated by this round's own
-		// tools is visible on the next call rather than the one after.
-		tools := cfg.Surface.ToolDefs()
-
-		// ONE SPAN PER ROUND, around the provider call only. The round is
-		// the unit whose LATENCY an operator cares about — it is the wait
-		// a seat spends on a model — and it is the one thing no event
-		// records: agent_turn_progress reports the round's content twice
-		// per round, and never how long it took.
-		//
-		// This is also the ONLY layer of the provider stack that is
-		// spanned. Below it sit the fallback chain and each member's
-		// backend, which would nest a span per member tried and tell a
-		// reader nothing they could act on. Which member answered is on
-		// the completion, and reaches the record through the phase event.
-		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
-			attribute.String("crewlet.phase", cfg.Surface.Phase()),
-			attribute.Int("crewlet.round", roundsUsed))
-		// The CONFIGURED identity, as a placeholder, so a streamed round
-		// is not attributed to no model at all. Streaming publishes while
-		// the call is still open, and `model` is only latched from the
-		// completion once it returns — so every frame of a streamed round
-		// reported an empty model, and a running row showed a dash where
-		// its model should be. Overwritten below by the model that
-		// actually served the call, which is the billable fact.
 		if model == "" {
+			// The CONFIGURED identity, as a placeholder until a completion
+			// names the model that served — see [Result.Model].
 			model = cfg.Provider.Model()
 		}
 		if providerKey == "" {
 			providerKey = cfg.ProviderKey
 		}
+		onDelta := streamTo(cfg, &rec, &partial, d, publish)
 
-		// One partial per round, replaced by the round's real narration
-		// the moment the model finishes.
-		var onDelta func(llm.Delta)
-		every := cfg.PartialInterval
-		if every <= 0 {
-			every = partialInterval
-		}
-		if cfg.StreamPartials && cfg.OnProgress != nil {
-			partial = &Partial{Round: roundsUsed}
-			// ZERO, so the FIRST fragment publishes immediately. Seeding
-			// this to now swallows it for a whole interval, which means a
-			// short round shows nothing at all and a long one begins with
-			// a fifth of a second of apparent stillness — the exact
-			// symptom streaming exists to remove.
-			var last time.Time
-			onDelta = func(d llm.Delta) {
-				if d.Restart {
-					// The attempt so far was abandoned. Kept rather than
-					// erased — see [Partial] — and the replacement starts
-					// from empty so two half-answers never concatenate.
-					if partial.Content != "" {
-						partial.Abandoned = append(partial.Abandoned, Narration{
-							Round:   partial.Round,
-							Content: partial.Content,
-						})
-					}
-					partial.Content = ""
-					publish(roundsUsed, nil)
-					last = time.Now()
-					return
-				}
-				partial.Content += d.Content
-				// COALESCED on the clock, not on every fragment. The
-				// socket hub broadcasts one frame per progress event with
-				// no throttling of its own and drops the oldest past 512
-				// queued, so a frame per token would spend a running
-				// seat's whole queue on one paragraph. See partialInterval.
-				//
-				// A tail shorter than one interval is not published, and
-				// nothing is lost by that: the round commits immediately
-				// after and its narration carries the whole text.
-				if time.Since(last) < every {
-					return
-				}
-				last = time.Now()
-				publish(roundsUsed, nil)
-			}
-		}
-
-		// THE ROUND'S CLOCK, around the provider call and nothing else —
-		// the same bracket as its span. Stamped before the call so a
-		// streamed round's frames can say how long it has been writing.
 		began := time.Now()
-		roundStarted = began.UTC()
-		// THE ROUND HAS OPENED, and the live view is told so now rather
-		// than when the model answers. Until this frame the last one
-		// published was the previous round's — its tools returned, its
-		// start still in RoundStartedAt — so for as long as this call ran
-		// (minutes, on a slow model) every reader saw round N-1 as the
-		// round in flight and had no instant for round N at all: a trace
-		// drew the running call from the previous round's start and a
-		// stepper named a round that had already finished. A streamed
-		// round's first fragment would say it too, but only once text
-		// arrives, and a unary one says nothing until it is over.
-		publish(roundsUsed, nil)
-		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
+		rec.Lock()
+		runStarted = began.UTC()
+		rec.Unlock()
+		publish()
+		runCtx, runSpan := tracing.Start(ctx, "agent.toolloop", "llm.run",
+			attribute.String("crewlet.phase", cfg.Surface.Phase()),
+			attribute.Int("crewlet.round", d.roundsUsed()+1))
+		completion, err := cfg.Provider.Complete(runCtx, llm.Request{
 			Messages: msgs,
-			Tools:    tools,
-			// Every caller of this loop is a seat at work — a phase of
-			// its turn or a worker it delegated to — and nothing else is.
-			Agent:   true,
+			Tools:    d,
+			// A seat at work (a phase of its turn or a worker it
+			// delegated to) unless the loop's prompt is its own.
+			Agent:   !cfg.OwnPrompt,
 			OnDelta: onDelta,
 		})
 		took := time.Since(began)
-		if err != nil {
-			tracing.Fail(roundSpan, err)
-			roundSpan.End()
-			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
-		}
-		roundSpan.SetAttributes(
-			attribute.String("crewlet.model", completion.Model),
-			attribute.Int("crewlet.input_tokens", completion.InputTokens),
-			attribute.Int("crewlet.output_tokens", completion.OutputTokens),
-			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
-			attribute.Int("crewlet.cache_write_tokens", completion.CacheWrite),
-			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)),
-			attribute.String("crewlet.stop_reason", string(completion.StopReason)))
-		roundSpan.End()
-		account(completion, took, completion.StopReason)
 
-		// Charge BEFORE running the tools this round asked for. A round
-		// whose spend is refused must not also have fired its side
-		// effects — the refusal is the whole point, and tools are where
-		// the irreversible things happen. The round's own tokens are
-		// spent already, and the meter records them whichever way it
-		// answers (see [BudgetMeter]).
-		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
-			// The round is on the failure record: publish it to the
-			// Progress the caller reads on this path, since it is the
-			// round that was refused.
-			publish(roundsUsed, nil)
-			return nil, err
-		}
-
-		// The turn as the backend recorded it. Built by the completion,
-		// never field by field here, so nothing it carries can miss the
-		// conversation.
-		msgs = append(msgs, completion.Message())
-		// Recorded HERE, beside the message it describes, because this is
-		// the last frame that knows which round the turn belongs to. The
-		// round is `roundsUsed` — ONE-BASED, matching [Execution.Round] — so a
-		// round's narration and the calls it asked for carry the same number
-		// and a reader can put them together without a second rule. (Note it
-		// does NOT match AgentTurnProgress.RoundNum, which is zero-based and
-		// is a different field about a different thing: how many rounds have
-		// happened, not which one this is.)
-		// The round is committed: its narration is authoritative now, and
-		// the partial (with any abandoned attempts) goes. Cleared BEFORE
-		// the publish below so the live view never shows a finished round
-		// and a fragment of the same round at once.
-		partial = nil
-
-		// What this round was, decided once and read twice below: on the
-		// record and by the correctives. See [Narration.Declined].
-		answeredNothing := strings.TrimSpace(completion.Content) == ""
-		// Only a terminator this round OFFERS can finish the phase — see
-		// [Config.TerminateAfter] — so it is what makes prose a decline.
-		owed := offered(cfg.TerminateAfter, tools)
-		declined := len(completion.ToolCalls) == 0 && !answeredNothing && len(owed) > 0
-		if !answeredNothing {
-			narration = append(narration, Narration{
-				Round:    roundsUsed,
-				Content:  strings.TrimSpace(completion.Content),
-				Declined: declined,
+		// The run is over, and an end it reached is taken; then EVERY CALL
+		// OF THE RUN HAS SETTLED before anything is read: a call answered
+		// "still running" goes on after its CLI stopped, and its result is
+		// part of what the next run is handed.
+		d.finish()
+		d.awaitSettled()
+		if completion != nil {
+			// A backend that reported its spend as it went has charged it
+			// through the host; one that reported nothing is charged here,
+			// once, for what its answer says the run cost.
+			d.chargeUnreported(llm.Usage{
+				Input: completion.InputTokens, Output: completion.OutputTokens,
+				CacheRead: completion.CacheRead, CacheWrite: completion.CacheWrite,
 			})
 		}
 
-		// The model has spoken: publish before the tools run, so its prose
-		// reaches the live view now rather than after the slowest tool
-		// returns.
-		publish(roundsUsed, nil)
-
-		if len(completion.ToolCalls) == 0 {
-			// Counted whichever corrective follows, and counted for
-			// rounds that get none: the number a phase record carries
-			// is "rounds that reached nobody", which is the question
-			// agent/turn already asks about a turn.
-			if answeredNothing {
-				emptyAnswers++
+		rec.Lock()
+		if completion != nil {
+			if !served && completion.Model != "" {
+				model, served = completion.Model, true
 			}
-
-			// A CORRECTIVE NOTHING WILL READ IS NOT SENT. On the last
-			// round of this invocation's budget no round follows, so a
-			// corrective appended here would only sit at the end of the
-			// conversation the caller records — a user message the model
-			// never answered, on the phase's record and in any transcript
-			// built from it. A finishing corrective the round earned is
-			// HANDED BACK instead ([Result.Withheld]): whether the phase
-			// may run past this budget is its caller's to decide, and a
-			// caller that may continues the phase with it — while one that
-			// may not ends it here, without its submission, which is what
-			// its rescue path is for, and the round says so on the record
-			// ([Narration.Declined] on the phase's last round).
-			lastRound := roundsUsed == cfg.MaxRounds
-
-			// Which corrective this round earns, and the allowance it
-			// draws on. Chosen first and spent after, so a round that
-			// gets none — the bound reached, or no round left to read
-			// it — spends nothing.
-			var corrective string
-			var allowance *int
-			var bound int
-			switch {
-			case len(owed) > 0:
-				// THE LOOP SAID HOW IT FINISHES, so a round with no call
-				// is not a finish however it reads — see
-				// [Config.TerminateAfter]. This covers the model that
-				// wrote its submission out as text (a fenced JSON block
-				// of the tool's arguments, measured on a cli-agent text
-				// backend) and the one that thought and stopped, so it
-				// wins over the empty-answer corrective below, whose
-				// "write it in the response itself" would steer a
-				// submission phase straight into its rescue. Both
-				// failures draw on one allowance.
-				//
-				// THE CORRECTIVE ROUND FORCES NOTHING EITHER — no request
-				// this loop sends names a tool choice, so the model decides
-				// as it does on every round, and an instruction naming the
-				// tool is exactly this message. The loop is what enforces
-				// the call, by asking again and by never counting prose as
-				// the finish.
-				corrective = finishingCorrective(owed)
-				allowance, bound = &finishingRetries, MaxFinishingCorrectives
-			case answeredNothing:
-				// A ROUND THAT REACHED NOBODY IS NOT A FINISH. No tool
-				// call and no prose is a model that spent its output on
-				// hidden reasoning — the shape the backend hands back for
-				// it (an empty Content), rather than a transport error.
-				// Correcting it is the loop's job and not the provider's:
-				// this is the frame that holds the conversation, so it is
-				// the only one that can ask again without inventing a
-				// second prompt contract the operator cannot see.
-				//
-				// Prose on a loop that declares no terminator matches no
-				// case: it is the model's answer, and a clean finish.
-				corrective = emptyAnswerCorrective
-				allowance, bound = &emptyRetries, maxEmptyAnswerRetries
+			if !keyServed && completion.ProviderKey != "" {
+				providerKey, keyServed = completion.ProviderKey, true
 			}
-			if corrective == "" || *allowance >= bound {
-				break
-			}
-			if lastRound {
-				if allowance == &finishingRetries {
-					withheld = corrective
-				}
-				break
-			}
-			*allowance++
-			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: corrective})
-			continue
 		}
+		runStarted = time.Time{}
+		folded := d.fold(completion, model)
+		msgs = append(msgs, folded.messages...)
+		execs = append(execs, folded.executions...)
+		narration = append(narration, folded.narration...)
+		rounds = append(rounds, folded.rounds...)
+		used := d.takeSpent()
+		inTokens += used.Input
+		outTokens += used.Output
+		cacheRead += used.CacheRead
+		cacheWrite += used.CacheWrite
+		inv := d.invocation(began, took, completion, err, used)
+		invocations = append(invocations, inv)
+		partial = nil
+		st, cutErr := d.current()
+		rec.Unlock()
+		endRunSpan(runSpan, inv, err)
+		publish()
 
-		// A ROUND THAT EMITTED A CALL CLEARS EVERY STALL ALLOWANCE. Each
-		// corrective above bounds a RUN of rounds that produced nothing,
-		// never the phase's lifetime: a model that just asked for a tool
-		// has demonstrated it can, so its next stall is a new stall and
-		// earns its own nudge.
-		//
-		// Cleared on the CALL, not on the call's success. A tool that
-		// returned an error — a submission the engine refused, a write the
-		// vendor rejected — is a round the model has to read and answer,
-		// which is the opposite of a model that has stopped responding.
-		// Gating this on a successful result would withdraw the nudge
-		// exactly where the next round matters most.
-		finishingRetries, emptyRetries = 0, 0
-
-		suspended, pendingID, pendingName, payload, err := runCalls(
-			ctx, cfg, completion.ToolCalls, roundsUsed, roundModel(completion, cfg.Provider), &msgs, &execs,
-			func(running RunningCall) { publish(roundsUsed, &running) })
-		if err != nil {
-			return nil, err
-		}
-
-		// The round's tools have returned: publish again so the live row
-		// fills in rather than waiting for the next model turn. The call
-		// in flight is cleared here, by a frame naming none.
-		publish(roundsUsed, nil)
-
-		if suspended {
-			out := state(roundsUsed)
+		switch st {
+		case stateFinished:
+			terminated = true
+		case stateParked:
+			rec.Lock()
+			out := state(false)
+			rec.Unlock()
 			out.EmptyAnswers = emptyAnswers
 			out.Suspended = true
-			out.PendingToolCallID, out.PendingToolName = pendingID, pendingName
-			out.SuspendPayload = payload
+			out.PendingToolCallID, out.PendingToolName = d.pending()
 			return &out, nil
+		case stateCut:
+			return nil, cutErr
+		case stateExhausted:
+			exhausted = true
+		case stateLocalPark, statePausing, stateRelist:
+			// The run was ended for a reason the next run answers: a
+			// call's result, a person's note, a tool the CLI could not
+			// see. Not a decline, and no corrective.
+			continue
 		}
-
-		if ranTerminator(execs, terminators, roundsUsed) {
-			terminated = true
+		if terminated || exhausted {
 			break
 		}
+		if err != nil {
+			return nil, fmt.Errorf("toolloop: %s: %w", cfg.Surface.Phase(), err)
+		}
+		if completion != nil && completion.StopReason == llm.StopCap {
+			// THE CLI'S OWN TURN CAP stopped its loop with the model still
+			// working — a backstop set past this phase's budget, so it is
+			// the budget's exhaustion by another name.
+			exhausted = true
+			break
+		}
+
+		// THE CLI ENDED ON ITS OWN: its model's last response called
+		// nothing. What that response was decides what follows, exactly as
+		// a round of prose did when the loop drove each round.
+		if folded.called {
+			// A run that called a tool clears every stall allowance —
+			// a model that just asked for a tool has shown it can.
+			finishingRetries, emptyRetries = 0, 0
+		}
+		last := folded.lastText
+		answeredNothing := strings.TrimSpace(last) == ""
+		owed := offered(cfg.TerminateAfter, cfg.Surface.ToolDefs())
+		if answeredNothing {
+			emptyAnswers++
+		} else if len(owed) > 0 {
+			rec.Lock()
+			if n := len(narration); n > 0 {
+				narration[n-1].Declined = true
+			}
+			rec.Unlock()
+		}
+		lastRound := d.roundsUsed() >= cfg.MaxRounds
+
+		var corrective string
+		var allowance *int
+		var bound int
+		switch {
+		case len(owed) > 0:
+			// THE LOOP SAID HOW IT FINISHES, so a run that ended without
+			// the call is not a finish however it reads — see
+			// [Config.TerminateAfter].
+			corrective = finishingCorrective(owed)
+			allowance, bound = &finishingRetries, MaxFinishingCorrectives
+		case answeredNothing:
+			// A RUN THAT REACHED NOBODY IS NOT A FINISH: a model that spent
+			// its output on hidden reasoning and stopped.
+			corrective = emptyAnswerCorrective
+			allowance, bound = &emptyRetries, maxEmptyAnswerRetries
+		}
+		if corrective == "" || *allowance >= bound {
+			break
+		}
+		if lastRound {
+			// A CORRECTIVE NOTHING WILL READ IS NOT SENT — see
+			// [Result.Withheld].
+			if allowance == &finishingRetries {
+				withheld = corrective
+			}
+			break
+		}
+		*allowance++
+		rec.Lock()
+		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: corrective})
+		rec.Unlock()
 	}
 
-	out := state(roundsUsed)
-	out.ExhaustedRounds = roundsUsed == cfg.MaxRounds && lastAskedForTools(msgs) && !terminated
+	rec.Lock()
+	defer rec.Unlock()
+	out := state(false)
+	out.ExhaustedRounds = !terminated && (exhausted ||
+		(d.roundsUsed() >= cfg.MaxRounds && lastAskedForTools(msgs)))
 	out.EmptyAnswers = emptyAnswers
 	out.Withheld = withheld
 	out.CorrectivesSpent = finishingRetries
 	return &out, nil
 }
 
-// runCalls executes one round's tool calls in order, appending a tool message
-// for each. It reports a suspend rather than returning one as an error,
-// because suspending is something the phase DID.
-func runCalls(
-	ctx context.Context,
-	cfg Config,
-	calls []llm.ToolCall,
-	round int,
-	model string,
-	msgs *[]llm.Message,
-	execs *[]Execution,
-	announce func(RunningCall),
-) (suspended bool, pendingID, pendingName string, payload map[string]any, err error) {
-	// Every call this round makes is told which round it is in, on the
-	// phase's scale — see [CallRound] — and which model the round ran on
-	// ([CallModel]), which a seat's code write names on its push.
-	callCtx := WithCallModel(withCallRound(ctx, round), model)
-	for _, call := range calls {
-		// THE FENCE AGAIN, PER CALL. The round check is one per model
-		// turn, and a round is every tool the model asked for in it — a
-		// sandbox launch, a search, three tracker writes and a chat post,
-		// serially, which is minutes. Checking only at the top of the
-		// round would let a node that lost the seat run out the whole of
-		// the round it was already in, and it is the calls, not the model
-		// round, that reach outside the engine.
-		//
-		// Before Execute rather than after, so a closed fence stops the
-		// NEXT call rather than discarding the one that already ran: the
-		// surface has recorded everything up to here, and the caller
-		// reads that record to decide whether this turn may be retried.
-		if cfg.Fence != nil {
-			if err := cfg.Fence(); err != nil {
-				return false, "", "", nil, err
-			}
-		}
-		if call.ArgumentsError != "" {
-			// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN. The
-			// call reaches the surface with no arguments otherwise — a
-			// search over everything, a post with no body — which is a
-			// call the model never made; the model reads why instead,
-			// as a failed result, and calls again. Not announced as
-			// running and not timed, because nothing ran: the row says
-			// so with a zero duration, which means "not measured".
-			out := unparsedArguments(call)
-			*execs = append(*execs, Execution{
-				Round: round, Name: call.Name, Args: call.Arguments,
-				Output: out, Failed: true,
-			})
-			*msgs = append(*msgs, llm.Message{
-				Role: llm.RoleTool, Content: out, ToolCallID: call.ID, Name: call.Name, Failed: true,
-			})
-			continue
-		}
-		// Timed on the monotonic clock and stamped in UTC, and ANNOUNCED
-		// first — after the fence, so a call the fence stops is never
-		// shown as running — because an Execution exists only once the
-		// call has answered, and a serial round's calls take minutes.
-		began := time.Now()
-		startedAt := began.UTC()
-		announce(RunningCall{Round: round, Name: call.Name, Args: call.Arguments, StartedAt: startedAt})
-		res, execErr := cfg.Surface.Execute(callCtx, call)
-		took := time.Since(began)
-		if execErr != nil {
-			return false, "", "", nil, fmt.Errorf(
-				"toolloop: surface failed on %q: %w", call.Name, execErr)
-		}
+// endRunSpan closes a CLI run's `llm.run` span with what the run came to.
+//
+// ONCE EVERY CALL OF THE RUN HAS SETTLED, not when the CLI exits: a call's
+// `tool.call` span is a child of the run's, and one answered "still running"
+// goes on after its CLI stopped. The tokens are the run's whole spend — what
+// the CLI reported request by request and what was charged when it ended —
+// because a span that carried only the final answer's count would show a
+// twenty-request run as one request's worth.
+func endRunSpan(span trace.Span, inv Invocation, err error) {
+	span.SetAttributes(
+		attribute.String("crewlet.model", inv.Model),
+		attribute.Int("crewlet.input_tokens", inv.InputTokens),
+		attribute.Int("crewlet.output_tokens", inv.OutputTokens),
+		attribute.Int("crewlet.cache_read_tokens", inv.CacheRead),
+		attribute.Int("crewlet.cache_write_tokens", inv.CacheWrite),
+		attribute.Int("crewlet.tool_calls", inv.Calls),
+		attribute.String("crewlet.outcome", string(inv.Outcome)))
+	tracing.Fail(span, err)
+	span.End()
+}
 
-		if res.Suspend {
-			if !cfg.AllowSuspend {
-				// A phase that never persists a partial conversation
-				// cannot resume one, so honouring this would strand the
-				// turn with a dangling call nothing will ever answer.
-				// The output still goes back, so the model sees a
-				// refusal rather than silence.
-				res.Suspend = false
-				res.Failed = true
-				res.Output = "This tool cannot suspend in this phase. " + res.Output
-			} else {
-				// The call is left UNANSWERED on purpose: exactly one
-				// dangling tool call is the invariant a resume checks.
-				return true, call.ID, call.Name, res.SuspendPayload, nil
-			}
-		}
-
-		*execs = append(*execs, Execution{
-			Round: round, Name: call.Name, Args: call.Arguments,
-			Output: res.Output, Failed: res.Failed,
-			StartedAt: startedAt, Duration: took,
-			Origin: res.Origin, Server: res.Server,
-		})
-		*msgs = append(*msgs, llm.Message{
-			Role:       llm.RoleTool,
-			Content:    res.Output,
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			// The flag beside the sentence, for a vendor that has one:
-			// see [llm.Message.Failed].
-			Failed: res.Failed,
-		})
+// streamTo is the OnDelta a run streams its text through, or nil where the
+// caller asked for no streaming. One partial per response, numbered by the
+// response it belongs to: the next one the CLI's record has not shown.
+func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, publish func()) func(llm.Delta) {
+	if !cfg.StreamPartials || cfg.OnProgress == nil {
+		return nil
 	}
-	return false, "", "", nil, nil
+	every := cfg.PartialInterval
+	if every <= 0 {
+		every = partialInterval
+	}
+	// ZERO, so the FIRST fragment publishes immediately.
+	var last time.Time
+	return func(delta llm.Delta) {
+		// THE REQUEST THE TEXT BELONGS TO, where the backend named one the
+		// host already knows; else the request in flight.
+		round, known := d.roundOfRequest(delta.Request)
+		if !known {
+			round, _ = d.inFlight(time.Now())
+		}
+		rec.Lock()
+		p := *partial
+		if p == nil || p.Round != round {
+			p = &Partial{Round: round}
+			*partial = p
+		}
+		if delta.Restart {
+			// The attempt so far was abandoned. Kept rather than erased —
+			// see [Partial] — and the replacement starts from empty so two
+			// half-answers never concatenate.
+			if p.Content != "" {
+				p.Abandoned = append(p.Abandoned, Narration{Round: p.Round, Content: p.Content})
+			}
+			p.Content = ""
+			rec.Unlock()
+			publish()
+			last = time.Now()
+			return
+		}
+		p.Content += delta.Content
+		rec.Unlock()
+		// COALESCED on the clock, not on every fragment — see
+		// partialInterval.
+		if time.Since(last) < every {
+			return
+		}
+		last = time.Now()
+		publish()
+	}
 }
 
-// unparsedArguments is the result a call whose arguments did not parse is
-// answered with: what went wrong, and what to do about it, in words a model
-// acts on.
-func unparsedArguments(call llm.ToolCall) string {
-	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
-		"Call it again with its arguments as one complete JSON object.", call.Name, call.ArgumentsError)
-}
-
-func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
+// Charge records tokens a model call has already spent on meter, and answers a
+// refusal as the loop reads one: a [*BudgetError], or the counter's own error
+// when it could not be reached. Exported for a caller that spends tokens
+// outside this loop and must charge them by the same rule: the Dashboard
+// Assistant's deep-work run, whose tokens are spent in a coding CLI's own loop.
+func Charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil
 	}
@@ -1615,27 +1600,6 @@ func budgetError(outcome SpendOutcome) *BudgetError {
 		Scope: scope, Used: outcome.Used, Limit: outcome.Limit,
 		Period: outcome.Period, Window: outcome.Window, ResetsAt: outcome.ResetsAt,
 	}
-}
-
-// ranTerminator reports whether this round ran a tool that ends the loop.
-//
-// A terminator that FAILED does not terminate. Its failure went back to the
-// model, which is expected to fix it and try again — ending the phase there
-// means the retry never happens and the phase finishes having produced
-// nothing, on the one class of failure a model can reliably correct.
-func ranTerminator(execs []Execution, terminators map[string]struct{}, round int) bool {
-	if len(terminators) == 0 {
-		return false
-	}
-	for _, e := range execs {
-		if e.Round != round || e.Failed {
-			continue
-		}
-		if _, ok := terminators[e.Name]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 // lastAskedForTools reports whether the final assistant message was still
@@ -1678,13 +1642,13 @@ func offered(terminators []string, tools []llm.ToolDef) []string {
 // halfway must be sent back to the WORK rather than pushed into submitting a
 // report of work it has not done.
 func finishingCorrective(terminators []string) string {
-	names := make([]string, 0, len(terminators))
+	names := make([]words.Said, 0, len(terminators))
 	for _, name := range terminators {
-		names = append(names, "`"+name+"`")
+		names = append(names, words.Said("`"+name+"`"))
 	}
-	call := names[0]
+	call := string(names[0])
 	if len(names) > 1 {
-		call = "one of " + strings.Join(names, ", ")
+		call = "one of " + words.Or(names)
 	}
 	return "Your last reply ended without calling " + call + ", so this phase has not " +
 		"finished. Nothing written in a reply is read or delivered — a report written " +
@@ -1718,13 +1682,11 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 // not finished, call the tool" — and a model that still does not call writes
 // its report out again, near-verbatim. Joined whole, a phase that kept
 // declining through both finishing correctives handed three copies of one
-// report to whoever reads the text: a rescued executor's to the reviewer as
-// "what the agent produced", a worker's `no_result` prose to its parent. So
-// those later rounds are left out, and the text is what the
-// model answered the task with — the same one closing reply an agent-mode
-// run's text is, so the two runtimes hand a reviewer the same thing. A round
-// that called a tool ends the run, so a model that worked and then stopped
-// again is a new answer, and kept.
+// report to whoever reads the text: a worker's `no_result` prose to its
+// parent, a reviewer's to the record of its verdict. So those later rounds are
+// left out, and the text is what the model answered the task with. A round that called a tool ends the run of
+// declines, so a model that worked and then stopped again is a new answer, and
+// kept.
 //
 // THE FIRST, NOT THE LAST. Every later one is a reply to the corrective rather
 // than to the task — whatever it says, it was written to a different question —

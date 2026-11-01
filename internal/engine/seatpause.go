@@ -39,16 +39,23 @@ import (
 //     parked rather than run, and one that arrives before this node has read
 //     the pauses at all is deferred rather than guessed at.
 //   - SKIP THE SCHEDULE. A paused seat's fires are recorded, not sent.
-//   - STOP THE RUNNING TURN, when the pause asked to. The per-turn fence is
+//   - STOP THE RUNNING WORK, when the pause asked to. The per-turn fence is
 //     the seat's ownership fence composed with this cache: a pause carrying
-//     StopRunning closes it with [turn.ErrStoppedByPerson] at the turn's next
-//     round boundary, and the dispatcher spends the trigger rather than
-//     retrying it. A DETACHED coding run is not fenced — it outlives its turn
-//     by design — but the turn that resumes it is, and ends there; and its
-//     WRITES are refused while the stop stands: its box's pushes by the code
-//     host (host.Runs.Stopped) and its bridged calls of tools not proven
-//     read-only by its bridge session (mcpbridge.Session.Stopped), both
-//     through stoppedBy.
+//     StopRunning closes the running turn with [turn.ErrStoppedByPerson] at
+//     its next round boundary, refuses any executor launch it would make
+//     (the launch asks the same fence before it opens anything and again
+//     once its row exists), and the dispatcher spends the trigger rather
+//     than retrying it. The CODING RUN a turn already launched has no rounds
+//     the engine sees, so this node — where it holds the seat — ENDS it at
+//     once ([Engine.stopSeatRuns]): its box reclaimed, its bridge session
+//     closed, its spend charged, and the turn parked on it closed as stopped.
+//     That is not the fence, which leaves a run alone when its seat merely
+//     moves (see runstop.go). Runs parked on a person's question stay parked
+//     behind the pause. And whatever of a run's is still in flight, its
+//     calls are refused while the stop stands: its box's pushes by the code
+//     host (host.Runs.Stopped, through stoppedBy), and every bridged call by
+//     its bridge session's fence (mcpbridge.Session.Fence, the seat's fence,
+//     which the stop closes through stopFor).
 //
 // # Keyed on the seat's ID
 //
@@ -371,11 +378,17 @@ func (e *Engine) adoptSeatPauses(ctx context.Context, next map[uuid.UUID]coord.S
 	for _, seat := range sortedSeats(slices.Values(lifted)) {
 		e.liftPauseHold(ctx, seat, "the seat was resumed while this node was not listening")
 	}
+	// AND A STOP PLACED WHILE THIS NODE WAS NOT LISTENING ends the runs it
+	// asked to end: a complete answer is the only word this node may ever
+	// get of it. Idempotent, so a stop already carried out costs a listing.
+	for _, seat := range sortedSeats(maps.Keys(next)) {
+		e.stopSeatRuns(ctx, seat, next[seat])
+	}
 	// A COMPLETE ANSWER is the signal for every seat a retried resume was
 	// waiting on the pauses for: one this node had not read at all, and one
 	// lifted while it was not listening. A seat still paused is re-checked
 	// and waits again.
-	e.readmitAnswers(waitPause)
+	e.readmitResumes(waitPause)
 	log.InfoContext(ctx, "seat_pauses_read", "paused", len(next))
 }
 
@@ -401,9 +414,9 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 		// has not applied yet — re-checks every seat waiting on a pause,
 		// which costs one look each, since a seat still paused waits again.
 		if handle, ok := e.seatHandle(u.Seat.String()); ok {
-			e.readmitAnswers(waitPause, handle)
+			e.readmitResumes(waitPause, handle)
 		} else {
-			e.readmitAnswers(waitPause)
+			e.readmitResumes(waitPause)
 		}
 		return
 	}
@@ -419,6 +432,10 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 		"stop_running", u.Pause.StopRunning,
 		"detail", "this seat takes no new work; its mail waits on its inbox until "+
 			"somebody resumes it")
+	// THE STOP, ONCE THE PAUSE IS IN THIS NODE'S COPY: a launch that asks its
+	// fence after its row exists then either sees the pause or left a row
+	// this listing finds ([sandbox.LaunchRequest.Fence]).
+	e.stopSeatRuns(ctx, u.Seat, *u.Pause)
 }
 
 // takePauseHoldLocked takes the hold on one paused seat's inbox. The caller

@@ -25,7 +25,7 @@ import (
 )
 
 // THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
-// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0060). A compaction retires packs — the
+// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0083). A compaction retires packs — the
 // code domain moves their rows into code_packs_retired, the outputs holding
 // every object of them — and each git node's cache learns it from a round: a
 // delta's retired phase, or the retirements a full answer serves above the

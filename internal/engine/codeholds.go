@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE LIVE TURNS' HOLDS: what keeps a seat's scratch repository from the code
@@ -179,7 +180,7 @@ func holdWriter(pending sandbox.PendingStore, turnID string) func(context.Contex
 		held, err := pending.AddCodeHolds(ctx, turnID, keys)
 		switch {
 		case err != nil:
-			return fmt.Errorf("engine: hold %v on run %s: %w", keys, turnID, err)
+			return fmt.Errorf("engine: hold %s on run %s: %w", words.And(keys), turnID, err)
 		case !held:
 			return fmt.Errorf("%w (run %s)", errRunHoldsNothing, turnID)
 		}
@@ -457,12 +458,12 @@ func (r holdsReader) running(ctx context.Context, keys []string) ([]string, erro
 func unheardHolders(ctx, askCtx context.Context, silent []string, budget time.Duration) error {
 	switch {
 	case ctx.Err() != nil:
-		return fmt.Errorf("engine: the read of the running turns' holds ended before the seat holders %v "+
-			"answered: %w", silent, ctx.Err())
+		return fmt.Errorf("engine: the read of the running turns' holds ended before the seat holders %s "+
+			"answered: %w", words.And(silent), ctx.Err())
 	case askCtx.Err() != nil:
-		return fmt.Errorf("engine: the seat holders %v did not answer inside %s for their running turns' "+
-			"holds", silent, budget)
+		return fmt.Errorf("engine: the seat holders %s did not answer inside %s for their running turns' "+
+			"holds", words.And(silent), budget)
 	}
-	return fmt.Errorf("engine: the seat holders %v did not answer for their running turns' holds: the ask "+
-		"ended before %s with no answer from them", silent, budget)
+	return fmt.Errorf("engine: the seat holders %s did not answer for their running turns' holds: the ask "+
+		"ended before %s with no answer from them", words.And(silent), budget)
 }

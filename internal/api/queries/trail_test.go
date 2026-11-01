@@ -130,12 +130,12 @@ func TestTurnsWithoutASeatAreAdmins(t *testing.T) {
 // row names none to them and a phase record's work-item tags — and the
 // `work_item` its own payload states — are withheld, while the rest of the
 // payload, which is the seat's body and theirs to read, reaches them whole;
-// the same lead holding the tracker reads all of it.
+// the same lead holding Worklet reads all of it.
 //
 // Mutation: drop the tracker rule from `turns` or `phases`, or leave the
 // payload's own `work_item` in [maskHistory], and the lead without it is
 // shown the item.
-func TestATrailNamesItsWorkItemsOnlyToTheTracker(t *testing.T) {
+func TestATrailNamesItsWorkItemsOnlyToWorklet(t *testing.T) {
 	t.Parallel()
 	seat := map[string]any{"seat": "eng-payments"}
 	for _, c := range []struct {
@@ -144,7 +144,7 @@ func TestATrailNamesItsWorkItemsOnlyToTheTracker(t *testing.T) {
 		shown   bool
 	}{
 		{"holding no permission", nil, false},
-		{"holding the tracker", []iam.Grant{iam.GrantTracker}, true},
+		{"holding Worklet", []iam.Grant{iam.GrantWorklet}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -199,14 +199,14 @@ func TestATrailNamesItsWorkItemsOnlyToTheTracker(t *testing.T) {
 // AND A TRAIL IS NARROWED TO A WORK ITEM ONLY FOR THE TRACKER: which of an
 // agent's turns were on one item is the tracker's fact (ADR-0033), and a
 // filter by the item would hand back exactly the item the test above withholds
-// from each row. A lead without the tracker is refused naming it — never
+// from each row. A lead without Worklet is refused naming it (never
 // answered the unfiltered page, which is a different question from the one
-// they asked — and the same lead holding the tracker is answered the turns on
+// they asked), and the same lead holding Worklet is answered the turns on
 // that item.
 //
 // Mutation: drop the tracker check on `work_item=` in `turns` and the lead
-// without the tracker is answered their agent's turn on the item.
-func TestATrailIsNarrowedToAWorkItemOnlyForTheTracker(t *testing.T) {
+// without Worklet is answered their agent's turn on the item.
+func TestATrailIsNarrowedToAWorkItemOnlyForWorklet(t *testing.T) {
 	t.Parallel()
 	params := map[string]any{"seat": "eng-payments", "work_item": "native:task-eng-payments"}
 	r := queries.NewRegistry()
@@ -215,19 +215,19 @@ func TestATrailIsNarrowedToAWorkItemOnlyForTheTracker(t *testing.T) {
 	_, err := r.Answer(asSeat(t, "lead"), "turns", params)
 	var refusal *queries.Refusal
 	if !errors.As(err, &refusal) || refusal.Reason != authz.ReasonNoGrant ||
-		!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Fatalf("a lead without the tracker narrowing to a work item = %v, "+
-			"want a refusal naming [tracker]", err)
+		!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Fatalf("a lead without Worklet narrowing to a work item = %v, "+
+			"want a refusal naming [worklet]", err)
 	}
 
-	got, err := r.Answer(asSeat(t, "lead", iam.GrantTracker), "turns", params)
+	got, err := r.Answer(asSeat(t, "lead", iam.GrantWorklet), "turns", params)
 	if err != nil {
-		t.Fatalf("a lead holding the tracker narrowing to a work item: %v", err)
+		t.Fatalf("a lead holding Worklet narrowing to a work item: %v", err)
 	}
 	turns := got.(map[string]any)["turns"].([]store.Turn)
 	if len(turns) != 1 || turns[0].WorkItem == nil ||
 		turns[0].WorkItem.Ref() != "native:task-eng-payments" {
-		t.Errorf("the lead holding the tracker was answered %+v, want the one "+
+		t.Errorf("the lead holding Worklet was answered %+v, want the one "+
 			"turn on native:task-eng-payments", turns)
 	}
 }

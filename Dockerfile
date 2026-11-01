@@ -67,7 +67,7 @@
 # where compiling git took 812 s against 87 s cross-compiled on four vCPUs —
 # and the cross-compiled stage runs beside the runtime stage's emulated
 # apt-get, which the arm64 image pays anyway (RELEASING.md has the minutes).
-FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS git
+FROM --platform=$BUILDPLATFORM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS git
 ARG TARGETARCH
 # The toolchain for the target — gcc where the target is this platform,
 # Debian's cross toolchain where it is not — and the target architecture's
@@ -92,7 +92,7 @@ RUN set -eu; \
 COPY scripts/git-pin.env scripts/git.sh /src/scripts/
 RUN GIT_PIN_TARGET_ARCH="$TARGETARCH" GIT_PIN_PREFIX=/usr/local DESTDIR=/out /src/scripts/git.sh node
 
-FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than
@@ -185,7 +185,7 @@ COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 # every route it will serve 503 `starting`. `node.roles` decides what it then
 # carries: with `ingress`, the whole API (the dashboard, the REST API and
 # every webhook route); without it, only the /health and /ready probes, and a
-# seats node's agent-mode tool bridge. A deployment that sets
+# seats node's executor tool bridge. A deployment that sets
 # `api.public.port` moves the webhook, OTLP and bridge routes to that second
 # listener, which is the operator's to publish beside this one.
 #

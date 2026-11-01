@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,28 +15,77 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
+// listenForBridge binds the listener a node's API — and with it the seat's
+// tool bridge — is served on, for the engine the node is built with to name as
+// the address a box on this host dials ([listenerURL],
+// [engine.Options.BoxHostURL]).
+//
+// BOUND BEFORE THE ENGINE, and held until the server that serves on it: the
+// engine takes the address once, when it builds its bridge
+// ([mcpbridge.Build]), and an httptest server picks its port only when it
+// starts — after the engine that has to name it. A port released in between
+// could be anybody's by the time a box dials it. Every node here serves its
+// bridge, as `crewlet run` does a seats node's: every agent seat's executor is
+// a run in a box that calls the seat's tools back over it, so a node without
+// one launches nothing.
+//
+// THE HOST ADDRESS AND NOT [mcpbridge.BaseURLVar], because that is what
+// `crewlet run` gives a seats node that binds a listener, and every box here
+// is in the `direct` cell: the harness runs the quickstart's shape, a node
+// with no bridge variable at all, rather than a configuration the quickstart
+// never asks for.
+//
+// ON addr, or on a port of the system's choosing where it is empty: a case
+// restarting a node binds the address the node it replaces bound, as a node
+// restarted on its own api.port does — the URL a box was handed addresses
+// that socket and no other.
+func listenForBridge(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", cmp.Or(addr, "127.0.0.1:0"))
+	if err != nil {
+		return nil, fmt.Errorf("binding the bridge's listener: %w", err)
+	}
+	return ln, nil
+}
+
+// listenerURL is where this host dials ln: where a `direct` box dials the
+// bridge served on it, as `crewlet run` derives it for a seats node that binds
+// a listener, and where a box anywhere dials it as the fleet's address.
+func listenerURL(ln net.Listener) string { return "http://" + ln.Addr().String() }
+
+// bridgeListener is [listenForBridge] for a case on the test's own goroutine,
+// closing the listener when the test ends if no server took it over.
+func bridgeListener(t *testing.T, addr string) net.Listener {
+	t.Helper()
+	ln, err := listenForBridge(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
 // serveAPI is the API half of a node, wired to the engine beside it the way
-// cmd/crewlet wires it, served on a test listener and torn down when the test
-// ends. See [wireAPI].
+// cmd/crewlet wires it, served on ln and torn down when the test ends. See
+// [wireAPI].
 //
 // For a case that owns its node for the whole test, on the test's own
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options), listener net.Listener,
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, chatLive *stream.ChatHub,
+	ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend, listener)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, chatLive, ln, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -46,7 +96,7 @@ func serveAPI(
 }
 
 // wireAPI is the API half of a node, wired to the engine beside it the way
-// cmd/crewlet wires it, and served on a test listener.
+// cmd/crewlet wires it, and served on ln ([listenForBridge]).
 //
 // # IT IS A SECOND COPY OF THE COMPOSITION ROOT, and that has a cost
 //
@@ -103,18 +153,19 @@ func serveAPI(
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
 //
-// AND THE ENGINE'S OWN GIT HOST AND THE CODE READS, through [api.EngineCode] —
-// the adapter `crewlet run` hands the API — asked per request, because the
+// AND THE ENGINE'S OWN GIT HOST AND THE CODE READS, through [api.EngineCode],
+// the adapter `crewlet run` hands the API, asked per request, because the
 // code host is built with the native runtime, which a company applied after
 // boot brings up after this wiring ran.
 //
-// SERVED ON listener where the case bound one, and on a fresh loopback port
-// where it is nil: a node that hands its OWN address to what it starts — a
-// coding box's CREWLET_BOX_GIT_URL, read once at boot — must know that address
-// before engine.New runs, which is before this wiring can bind anything.
+// chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine ([newEngine]),
+// and the socket is mounted over it, as `crewlet run` hands its own to
+// serveAPI. It is the process's rather than this surface's — built beside the
+// engine on a node that serves no API as well — so it is neither built nor
+// stopped here: its teardown is the engine's half, after this one.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
-	listener net.Listener,
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
+	chatLive *stream.ChatHub, ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -143,7 +194,7 @@ func wireAPI(
 	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.
-	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := e.NewReconciler(ctx, engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
 		NodeID: nodeID,
 	})
@@ -158,6 +209,7 @@ func wireAPI(
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
+		Node:           nodeID,
 	})
 	if err != nil {
 		return fail("config surface", err)
@@ -171,32 +223,18 @@ func wireAPI(
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-		Identity: keyring,
+		Identity: keyring, Config: configSurface,
 	})
 	if err != nil {
 		return fail("secret surface", err)
 	}
-	status, err := e.IntegrationStore()
+	// THE SETUP SURFACE AS cmd/crewlet BUILDS IT, through the one
+	// constructor both call, so a seam it requires cannot be missed here.
+	installs, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
 	if err != nil {
-		return fail("integration status", err)
+		return fail("slack installs", err)
 	}
-	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: company,
-		Config:  configSurface,
-		Secrets: fleetsecrets.New(backends.Fleet, cipher),
-		Resolve: e.LookupSecret,
-		// WHERE A VENDOR REACHES THIS NODE, from Tier A as cmd/crewlet
-		// reads it, and the key it is read from.
-		WebhookBase:    boot.API.WebhookBase(),
-		WebhookBaseKey: boot.API.WebhookBaseKey(),
-		Passes:         e.SetupRunner(),
-		Probes:         engine.SetupProbes(),
-		Sink:           e.SetupSink,
-		Status:         status,
-		SlackApps:      e.SlackApps,
-		StateCipher:    cipher,
-		StateClaims:    backends.Fleet,
-	})
+	setupSurface, err := api.NewSetupSurface(boot, e, configSurface, cipher, installs)
 	if err != nil {
 		return fail("setup surface", err)
 	}
@@ -231,13 +269,14 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
 		Credentials:  e,
+		ChatLive:     chatLive,
+		Objectives:   e.Objectives(),
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
@@ -278,10 +317,6 @@ func wireAPI(
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
-			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
-			// them.
-			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
-			WorkSearch: searchSource, Files: fileSource,
 			// AND WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY,
 			// through the constructor cmd/crewlet wires it with: nil on a
 			// member in a maintenance mode, which arms no trim.
@@ -313,6 +348,10 @@ func wireAPI(
 		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, through the
 		// adapter `crewlet run` uses, asked per request.
 		Code: api.EngineCode(e),
+		// THE ENGINE'S OWN BRIDGE, as cmd/crewlet hands it: a run's
+		// session lives in the object that opened it, and an executor
+		// launch is refused on a node whose bridge nothing serves.
+		Bridge: e.Bridge(),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,
@@ -330,6 +369,16 @@ func wireAPI(
 	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
 	// absent surface stays absent rather than being mounted over a nil.
 	humans.Mount(&opts)
+	// AND THE NATIVE HALVES, per question, as cmd/crewlet hands them —
+	// through the one constructor, which sets every one or none.
+	api.NativeSources(e).Into(&opts.Sources)
+	// AND SETTINGS › MODELS, through the one constructor cmd/crewlet calls.
+	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, backends.Queue)
+	if err != nil {
+		return fail("model surface", err)
+	}
+	opts.Models = modelSurface
+	api.ModelSources(&opts.Sources, e, cipher)
 	if amend != nil {
 		amend(&opts)
 	}
@@ -370,13 +419,11 @@ func wireAPI(
 		return fail("seed the live projection", err)
 	}
 
+	// ON THE LISTENER THE ENGINE WAS TOLD ABOUT, so the bridge URL its runs
+	// are handed is this server's.
 	srv := httptest.NewUnstartedServer(app)
-	if listener != nil {
-		// The loopback listener NewUnstartedServer bound is released for the
-		// case's own, which httptest documents as the way to serve on one.
-		_ = srv.Listener.Close()
-		srv.Listener = listener
-	}
+	_ = srv.Listener.Close()
+	srv.Listener = ln
 	srv.Start()
 	stops = append(stops, srv.Close)
 

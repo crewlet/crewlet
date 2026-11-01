@@ -161,7 +161,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		// linearizable read behind every other one and write an anchor
 		// row per read into the transaction holding this store's only
 		// writer; and the trim's trimmed record removes anchors, so
-		// arbitrated it would write one of its own (ADR-0050).
+		// arbitrated it would write one of its own (ADR-0073).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -230,12 +230,12 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 // domain writes is a function of the record that wrote it, the sealed ones
 // included, because the sealing happens at the WRITER before publication — a
 // per-node re-encryption would have made this domain's rows legitimately
-// different on every node and its identity claim meaningless, which is exactly
-// why it does not happen. The ledger's `applied_at` is the instant THIS node
-// applied an operation, so the ledger TRAVELS inside a snapshot — an adopter
-// that arrived without its donor's rows would decide again an operation the
-// donor had applied, and in this estate that is a second enrolment, a second
-// grant change, a second bump of somebody's epoch — and stays out of the
+// different on every data node and its identity claim meaningless, which is
+// exactly why it does not happen. The ledger's `applied_at` is the instant THIS
+// node applied an operation, so the ledger TRAVELS inside a snapshot — an
+// adopter that arrived without its donor's rows would decide again an operation
+// the donor had applied, and in this estate that is a second enrolment, a
+// second grant change, a second bump of somebody's epoch — and stays out of the
 // identity claim, which the one per-node column would otherwise trip.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
@@ -285,7 +285,7 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // why this is the longest answer in the file. It does not decide whether this
 // node's copy of the identity estate is judged: every domain's copy is, on its
 // own, and a wrong one goes out of service for that domain's operations alone
-// whatever this answers (ADR-0049).
+// whatever this answers (ADR-0072).
 //
 // The tracker and the knowledge base both say true, and the argument is the
 // same each time: a node behind on them serves a turn from state that is
@@ -318,13 +318,13 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // domain that makes it a real one.
 func (Domain) GatesSeatAdmission() bool { return false }
 
-// ClaimsIdentity reports that every node's Replicated tables must be
+// ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical.
 //
 // TRUE. N copies of one SQL state, derived from one ordered log by one
 // deterministic applier — and the sealed columns do not weaken it, because a
 // person's name and address are sealed by the WRITER before publication rather
-// than by each node on the way in. Every node writes the same ciphertext.
+// than by each node on the way in. Every data node writes the same ciphertext.
 //
 // That is a design constraint rather than an observation: per-node encryption
 // would have made a determinism comparison impossible to write, and a domain
@@ -332,7 +332,7 @@ func (Domain) GatesSeatAdmission() bool { return false }
 // node's applier has diverged.
 //
 // ASSERTED AND NOT VERIFIED, like every other domain's — see
-// [internal/tracker.Domain.ClaimsIdentity] for the checksum nobody builds.
+// [internal/worklet.Domain.ClaimsIdentity] for the checksum nobody builds.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // BarrierTables is the empty set, DECLARED.

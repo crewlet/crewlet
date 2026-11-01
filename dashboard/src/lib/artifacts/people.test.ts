@@ -13,9 +13,9 @@ import {
   selfWords,
   splitOwnSessions,
 } from "./people.ts";
-import type { ArtifactPresenceMember } from "~/protocol/index.ts";
+import type { RoomMember } from "~/protocol/index.ts";
 
-function member(over: Partial<ArtifactPresenceMember>): ArtifactPresenceMember {
+function member(over: Partial<RoomMember>): RoomMember {
   return {
     session: "s-1",
     seat: "maya",

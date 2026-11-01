@@ -1,9 +1,9 @@
 /**
- * Switching Work's scope: All projects, or one project.
+ * Switching Worklet's scope: All projects, or one project.
  *
  * # One panel, opened from the trail or by a key
  *
- * Work's pages end their trail in the scope they show, drawn as the kit's
+ * Worklet's pages end their trail in the scope they show, drawn as the kit's
  * Switcher button ([ScopeSwitcher], which the page header puts in the trail's
  * heading). G then P opens the same panel from anywhere: under that button
  * where the page has one, and centred over the page everywhere else, where
@@ -72,12 +72,10 @@ import { useRecents, type Recent } from "~/lib/recents.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { unfinished } from "~/lib/work.ts";
+import { PROJECT_PAGE, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import type { WorkProjectRow, WorkProjectsAnswer } from "~/protocol/index.ts";
 
-/** The listing's cap: the engine's own page of projects. */
-export const PROJECT_PAGE = 200;
 /** How long typing rests before a search is sent to the engine. */
 const SEARCH_DELAY_MS = 150;
 /** Past this many active projects the panel leads with the ones opened last. */
@@ -123,7 +121,7 @@ export interface PanelInput {
   /** The engine's answer to the query, asked once the unsearched listing was cut short. */
   searched: WorkProjectsAnswer | null;
   query: string;
-  /** Where the reader is, or null away from Work's scope pages. */
+  /** Where the reader is, or null away from Worklet's scope pages. */
   at: ScopeAt | null;
   recents: readonly Recent[];
   /**
@@ -175,7 +173,7 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
       id: "browse",
       label: "Browse all projects",
       icon: <Columns3Glyph size="md" />,
-      href: href(["work"]),
+      href: href(["worklet"]),
       onSelect: act.browse,
     });
   }
@@ -291,7 +289,7 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
           id: "search-tasks",
           label: `Search tasks for “${q}”`,
           icon: <SearchGlyph size="md" />,
-          href: href(["work", "search"], { q }),
+          href: href(["worklet", "search"], { q }),
           onSelect: () => act.searchTasks(q),
         },
       ],
@@ -325,7 +323,9 @@ export function panelOf(input: PanelInput, act: PanelActions): Panel {
 /** The projects this reader opened last, most recent first, by key. */
 function recentProjects(recents: readonly Recent[]): string[] {
   return recents
-    .filter((r) => r.path.length === 2 && r.path[0] === "work" && KEY_SHAPE.test(r.path[1] ?? ""))
+    .filter(
+      (r) => r.path.length === 2 && r.path[0] === "worklet" && KEY_SHAPE.test(r.path[1] ?? ""),
+    )
     .map((r) => r.path[1]!);
 }
 
@@ -334,7 +334,7 @@ interface SwitcherContextValue {
   open: boolean;
   centred: boolean;
   setOpen: (open: boolean) => void;
-  /** Open the panel: under the trail's button on Work's scope pages, centred elsewhere. */
+  /** Open the panel: under the trail's button on Worklet's scope pages, centred elsewhere. */
   openSwitcher: () => void;
   openNewProject: () => void;
   query: string;
@@ -367,8 +367,8 @@ export function useScopeFigures(): ScopeFigures {
   return useContext(SwitcherContext)?.figures ?? {};
 }
 
-/** The New project dialog, out of the Work chunk: a Work form, like New task. */
-const NewProjectDialog = lazyScreen("work", (module) => module.NewProjectDialog);
+/** The New project dialog, out of the Worklet chunk: a Worklet form, like New task. */
+const NewProjectDialog = lazyScreen("worklet", (module) => module.NewProjectDialog);
 
 export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   const route = useRoute();
@@ -377,13 +377,13 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   const newProjectAccess = useConfigWriteAccess();
   // A BROWSER THE ENGINE REFUSED ASKS IT NOTHING, as the palette does not:
   // the listing would wait on a socket nobody dials and draw a panel that
-  // never loads. NOR DOES A READER WITHOUT TRACKER, whose every project the
-  // engine would refuse — the palette offers them no switch to open.
-  const tracker = useViewer().tracker;
-  // AND NONE WHERE THE COMPANY RUNS NO CREWLET WORKS: a hidden Work address
+  // never loads. NOR DOES A READER WITHOUT WORKLET, whose every project the
+  // engine would refuse: the palette offers them no switch to open.
+  const worklet = useViewer().worklet;
+  // AND NONE WHERE THE COMPANY RUNS NO WORKLET: a hidden Worklet address
   // still names a scope, and the projects were asked on it and refused.
   const ask = useServicesAsk();
-  const served = useConnection().accessRefused === null && tracker && ask.tracker;
+  const served = useConnection().accessRefused === null && worklet && ask.tracker;
   const at = useMemo(() => scopeAt(route.path, route.query), [route.path, route.query]);
 
   const [state, setState] = useState({ open: false, centred: false });
@@ -442,19 +442,19 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   }, [route.hash, close]);
 
   const openSwitcher = useCallback(() => {
-    // Every scope's page is in the Work chunk: fetched while the reader looks.
-    preload(["work"]);
+    // Every scope's page is in the Worklet chunk: fetched while the reader looks.
+    preload(["worklet"]);
     setState({ open: true, centred: at === null });
   }, [at]);
-  // G THEN P, from anywhere (`keymap.ts`), where the company runs Crewlet
-  // Works: its projects are what the switcher lists.
+  // G THEN P, from anywhere (`keymap.ts`), where the company runs Worklet:
+  // its projects are what the switcher lists.
   const runs = useServicesRun();
   useKeymap({ project: { run: openSwitcher, when: runs.tracker } });
 
   const setOpen = useCallback(
     (open: boolean) => {
       if (open) {
-        preload(["work"]);
+        preload(["worklet"]);
         setState({ open: true, centred: false });
       } else close();
     },
@@ -474,8 +474,8 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
         const target = switchTarget(at, to, route.query);
         return href(target.path, target.query);
       },
-      browse: () => nav.to(["work"]),
-      searchTasks: (q) => nav.to(["work", "search"], { q }),
+      browse: () => nav.to(["worklet"]),
+      searchTasks: (q) => nav.to(["worklet", "search"], { q }),
       newProject: () => setNewProject(true),
       retry: base.refetch,
     }),
@@ -503,7 +503,7 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   return (
     <SwitcherContext.Provider value={value}>
       {children}
-      {/* CENTRED, for G then P away from Work's scope pages. */}
+      {/* CENTRED, for G then P away from Worklet's scope pages. */}
       <Switcher
         label={LABEL}
         open={state.open && centred}
@@ -527,7 +527,7 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * The trail's last crumb on Work's scope pages: the scope's name, as the
+ * The trail's last crumb on Worklet's scope pages: the scope's name, as the
  * button that switches it, and the panel under it.
  */
 export function ScopeSwitcher({ trigger }: { trigger: Omit<SwitcherTrigger, "title"> }) {
@@ -536,7 +536,7 @@ export function ScopeSwitcher({ trigger }: { trigger: Omit<SwitcherTrigger, "tit
   // button that opens nothing: loud, as `useViewer` is outside its provider.
   if (ctx === null) {
     throw new Error(
-      "ScopeSwitcher outside a ProjectSwitcherProvider: the frame mounts one (app/Shell.tsx), and a suite that draws Work's trail without the frame mounts one around it",
+      "ScopeSwitcher outside a ProjectSwitcherProvider: the frame mounts one (app/Shell.tsx), and a suite that draws Worklet's trail without the frame mounts one around it",
     );
   }
   return (

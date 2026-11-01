@@ -13,12 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE READS OF CHANGES: a listing of them ([ReadChanges]) and one in detail
 // ([ReadChange]), each served inside the one transaction [Reader.Read] hands
 // it, from the rows the records on the change's REPOSITORY'S subject wrote
-// (replicated 0058 and 0066) — and each held to the asker's grant on that
+// (replicated 0081 and 0089) — and each held to the asker's grant on that
 // repository ([JudgeRead]), and to the grant of the seat it reads for, as a
 // read of the repository's own rows is: a change is the repository's
 // contents, and a `visibility: unit` repository's changes are no more a seat
@@ -30,22 +31,22 @@ import (
 // its changes wait on ([ReadQuery.State] says why), and walks ONE index,
 // chosen by its filters in this order ([walkOf]):
 //
-//   - a need of a person: code_mergeability_waits_idx (replicated 0078), the
+//   - a need of a person: code_mergeability_waits_idx (replicated 0101), the
 //     changes whose stored readiness waits on a person, each kept only where
 //     the readiness the read judges still does (conversationread.go);
 //   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
-//     (replicated 0072), the changes whose ask of that reviewer stands —
+//     (replicated 0095), the changes whose ask of that reviewer stands —
 //     the set a reviewer is asked to work through, newest change first
 //     (conversationread.go);
 //   - a work item named: code_changes_work_idx (recreated in its order by
-//     replicated 0069), the item's changes — the narrowest set a listing
+//     replicated 0092), the item's changes — the narrowest set a listing
 //     names, and still paged, since a recurring item gathers a change every
 //     time it is worked;
 //   - an owner and a state — or a need of a fix, an owner's in one live
 //     state (conversationread.go): code_changes_owner_idx, the owner's
 //     changes in that state;
 //   - a repository and a state: code_changes_repo_state_idx (replicated
-//     0069), the repository's changes in that state;
+//     0092), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //
@@ -741,7 +742,7 @@ func (q ReadQuery) validateChanges() error {
 			"or what its changes wait on, which the indexes it walks are each led by — no index holds every "+
 			"change the company has, and an owner's changes are kept by state")
 	case q.State != "" && !q.State.Valid():
-		return refused("state", fmt.Sprintf("%q is not one of %v", q.State, ChangeStates()))
+		return refused("state", fmt.Sprintf("%q is not one of %s", q.State, words.Or(ChangeStates())))
 	case q.Owner != "" && !org.ValidHandle(q.Owner):
 		return refused("owner", fmt.Sprintf("%q is not a seat's handle: a change's owner is a seat, or the "+
 			"human seat a person holds", q.Owner))
@@ -749,7 +750,7 @@ func (q ReadQuery) validateChanges() error {
 		return refused("reviewer", fmt.Sprintf("%q is not a seat's handle: a reviewer is a seat, or the "+
 			"human seat a person holds", q.Reviewer))
 	case q.Needs != "" && !q.Needs.Valid():
-		return refused("needs", fmt.Sprintf("%q is not one of %v", q.Needs, Needs()))
+		return refused("needs", fmt.Sprintf("%q is not one of %s", q.Needs, words.Or(Needs())))
 	case q.Needs != "" && q.State != "" && !q.State.Live():
 		return refused("state", fmt.Sprintf("needs=%s lists live changes, and a %s change waits on nobody",
 			q.Needs, q.State))
@@ -795,16 +796,16 @@ func cutWork(ref string) (types.WorkBackend, string, string) {
 // its first run — and held by plan_test.go to the seek each is written for.
 const (
 	// changesRepoStateKey is code_changes_repo_state_idx, (repo_id, state,
-	// number) (replicated 0069).
+	// number) (replicated 0092).
 	changesRepoStateKey = "code_changes_repo_state_idx"
 	// changesStateKey is code_changes_state_idx, (state, opened_position,
-	// id) (replicated 0058 and 0066).
+	// id) (replicated 0081 and 0089).
 	changesStateKey = "code_changes_state_idx"
 	// changesOwnerKey is code_changes_owner_idx, (owner, state,
-	// opened_position, id) (replicated 0058 and 0066).
+	// opened_position, id) (replicated 0081 and 0089).
 	changesOwnerKey = "code_changes_owner_idx"
 	// changesWorkKey is code_changes_work_idx, (work_backend, work_id,
-	// opened_position, id) WHERE work_id != '' (replicated 0069).
+	// opened_position, id) WHERE work_id != '' (replicated 0092).
 	changesWorkKey = "code_changes_work_idx"
 )
 

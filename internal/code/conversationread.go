@@ -19,7 +19,7 @@ import (
 // change's conversation a `change` read pages ([ReadQuery.Part]) — its
 // reviewers, its comments, its reviews and its findings — each served inside
 // the one transaction [Reader.Read] hands it, from the rows the records on the
-// change's own subject wrote (replicated 0072 and 0073), and held to the grant
+// change's own subject wrote (replicated 0095 and 0096), and held to the grant
 // on the change's repository as every read of a change is (changeread.go).
 //
 // # Who a change waits on
@@ -60,7 +60,7 @@ import (
 // be), listed once, by the first.
 //
 // What waits on A PERSON, needs=person, walks code_mergeability_waits_idx
-// (replicated 0078): the changes whose STORED readiness — the answer the last
+// (replicated 0101): the changes whose STORED readiness — the answer the last
 // mergeability record judged and stored (mergeability.go) — waits on one,
 // newest change first by its id, their rows by their keys beside them; and
 // keeps those whose readiness the read judges itself, in its own snapshot
@@ -601,7 +601,7 @@ func (f FindingRow) Cursor() string { return f.ID }
 // planner.go says — held by plan_test.go to the seek each is written for.
 const (
 	// reviewerAsksKey is code_reviewers_reviewer_idx, (reviewer, state,
-	// change_id) (replicated 0072): a reviewer's asks by whether they stand,
+	// change_id) (replicated 0095): a reviewer's asks by whether they stand,
 	// newest change first.
 	reviewerAsksKey = "code_reviewers_reviewer_idx"
 	// reviewersKey is code_reviewers' PRIMARY KEY index, (change_id,
@@ -612,7 +612,7 @@ const (
 	// of that reviewer on every change, read to find the one.
 	reviewersKey = "sqlite_autoindex_code_reviewers_1"
 	// waitsKey is code_mergeability_waits_idx, (waits_person, change_id)
-	// WHERE waits_person = 1 (replicated 0078): the changes whose stored
+	// WHERE waits_person = 1 (replicated 0101): the changes whose stored
 	// readiness waits on a person, newest change first.
 	waitsKey = "code_mergeability_waits_idx"
 )
@@ -688,7 +688,7 @@ const (
 // listing, what a seat's or a person's "reviews given" reads — newest first,
 // after the review a cursor names, across every change of every repository
 // the asker may read: one range of code_reviews_reviewer_idx (replicated
-// 0090), the changes the page names read by their keys in one statement, and
+// 0113), the changes the page names read by their keys in one statement, and
 // their repositories judged once a page against the grant ([listedReposAmong]),
 // so a review of a change on a repository the asker may not read is left out
 // as a listing of changes leaves the change out. A page READS its limit of
@@ -791,7 +791,7 @@ func (q ReadQuery) validateReviews() error {
 }
 
 // reviewsGivenKey is code_reviews_reviewer_idx, (reviewer, position)
-// (replicated 0090): one reviewer's reviews in the order their records landed
+// (replicated 0113): one reviewer's reviews in the order their records landed
 // — a GUARD as planner.go says, held by plan_test.go to its seek.
 const reviewsGivenKey = "code_reviews_reviewer_idx"
 

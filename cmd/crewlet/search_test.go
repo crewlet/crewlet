@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE EVALUATION NAMES WHICH FIRST STAGE FAILED, because the two failures have
@@ -47,20 +51,20 @@ func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 				"BELOW THE FLOOR THROUGH THE INDEX in all", "-probes",
 				"re-measures it every 24h0m0s and retrains it",
 				"scan recall  0.9900 with 0 head miss(es)"},
-			absent: []string{"raise BinaryOversample"},
+			absent: []string{"Raise BinaryOversample"},
 		},
 		{
 			name: "the index fails and so does the scan",
 			report: search.EvalReport{Stage1: probed, Recall: 0.90, Floor: 0.98,
 				ScanRecall: 0.95},
-			want:   []string{"raise BinaryOversample"},
+			want:   []string{"Raise BinaryOversample"},
 			absent: []string{"THROUGH THE INDEX"},
 		},
 		{
 			name: "the scan passes but drops a head document",
 			report: search.EvalReport{Stage1: probed, Recall: 0.90, Floor: 0.98,
 				ScanRecall: 0.99, ScanHeadMisses: 1},
-			want:   []string{"raise BinaryOversample"},
+			want:   []string{"Raise BinaryOversample"},
 			absent: []string{"THROUGH THE INDEX"},
 		},
 		{
@@ -69,13 +73,13 @@ func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 				ScanRecall: 0.99, Shapes: []search.ShapeReport{pages(0.95, 1, 2)}},
 			want: []string{"BELOW THE FLOOR THROUGH THE INDEX in source:page",
 				"narrowed     source:page"},
-			absent: []string{"raise BinaryOversample", "recovers the exact"},
+			absent: []string{"Raise BinaryOversample", "recovers the exact"},
 		},
 		{
 			name: "a narrowed shape the scan fails too",
 			report: search.EvalReport{Stage1: probed, Recall: 0.99, Floor: 0.98,
 				ScanRecall: 0.99, Shapes: []search.ShapeReport{pages(0.95, 0.96, 0)}},
-			want:   []string{"BELOW THE FLOOR in source:page — raise BinaryOversample"},
+			want:   []string{"BELOW THE FLOOR in source:page. Raise BinaryOversample"},
 			absent: []string{"THROUGH THE INDEX"},
 		},
 		{
@@ -83,7 +87,7 @@ func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 			report: search.EvalReport{Stage1: search.Stage1Report{
 				Method: search.Stage1Scan, Why: search.ScanUnindexed},
 				Recall: 0.90, Floor: 0.98, ScanRecall: 0.90},
-			want:   []string{"the full scan — the corpus has no index yet", "raise BinaryOversample"},
+			want:   []string{"the full scan: the corpus has no index yet", "Raise BinaryOversample"},
 			absent: []string{"THROUGH THE INDEX", "scan recall"},
 		},
 		{
@@ -264,5 +268,48 @@ func TestANegativeWindowIsRefused(t *testing.T) {
 	err := runSearchEval([]string{"-store", t.TempDir() + "/absent.db", "-window", "-1"}, &out, &errs)
 	if err == nil || !strings.Contains(err.Error(), "-window -1") {
 		t.Fatalf("a negative window answered %v, want a refusal naming -window", err)
+	}
+}
+
+// A STORE THAT IS NOT THERE IS REFUSED, NOT CREATED.
+//
+// Opening a path that holds nothing made an empty replicated estate there and
+// migrated it, so a mistyped -store measured a corpus of nothing — a report
+// that reads as a company with no vectors — and left a database behind.
+func TestAStoreThatIsNotThereIsRefusedRatherThanCreated(t *testing.T) {
+	t.Parallel()
+	absent := filepath.Join(t.TempDir(), "absent.db")
+	var out, errs bytes.Buffer
+	err := runSearchEval([]string{"-store", absent}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), absent) {
+		t.Fatalf("a missing store answered %v, want a refusal naming it", err)
+	}
+	if _, statErr := os.Stat(absent); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the measurement created %s: %v", absent, statErr)
+	}
+}
+
+// A RUNNING ENGINE'S ESTATE IS ANSWERED WITH THE WAY AROUND IT: a backup's
+// copy, which no engine holds. The store's own refusal says only that the
+// file is open somewhere else.
+func TestAHeldStoreNamesABackupsCopy(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "store-replicated.db")
+	db, err := store.OpenEstate(t.Context(), store.EstateReplicated, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	holdTheStore(t, path, store.EstateReplicated)
+
+	var out, errs bytes.Buffer
+	err = runSearchEval([]string{"-store", path}, &out, &errs)
+	if !errors.Is(err, store.ErrLocked) {
+		t.Fatalf("a held estate answered %v, want the lock", err)
+	}
+	if !strings.Contains(err.Error(), "crewlet backup") {
+		t.Errorf("the refusal does not name the way around the lock: %v", err)
 	}
 }

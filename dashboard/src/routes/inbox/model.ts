@@ -19,8 +19,8 @@
  * opened: a filter bar is read every time, and these are opened rarely.
  *
  * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
- * (`inbox`): the tracker's notices and the code host's, interleaved by when
- * each happened, each source read under its own permission. A tracker notice
+ * (`inbox`): Worklet's notices and the code host's, interleaved by when
+ * each happened, each source read under its own permission. A Worklet notice
  * is a `notice` row as it always was, its own shape in the composed notice's
  * `extra`; a code notice is a `change` row. Each domain keeps the marks over
  * its own notices on its own log, so a row is marked through its own source's
@@ -31,29 +31,40 @@
  * Needs you its notices ride on it rather than being listed again under
  * Updates, and answering it marks them read, so an answered question does not
  * come back as an update.
+ *
+ * AND ONE QUESTION IS ONE ROW, open or answered: a question answered on this
+ * visit stays in Needs you and is not listed under Answered as well, and one
+ * the engine lists as answered while its open row is still read leaves Needs
+ * you ([pairAnswered]).
  */
 
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { companyZone } from "~/lib/range.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import {
   ENGINE_SENTENCES,
   authorOf,
+  decisionTexts,
   nameAuthor,
   noticeItem,
   turnItem,
   type ItemRef,
 } from "~/lib/work.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import type { OrgIndex } from "~/lib/seats.ts";
+import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
 import type {
+  AgentRow,
+  AnsweredDecision,
+  AnsweredDecisionsAnswer,
+  AnsweredWorkAsk,
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
@@ -72,7 +83,16 @@ export type InboxRow =
     }
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
-  | { kind: "change"; key: string; at: string; notice: CodeInboxNotice };
+  | { kind: "change"; key: string; at: string; notice: CodeInboxNotice }
+  /**
+   * An ask put to the reader and closed in the last week, or a coding run's
+   * question they answered in it, from `answered_decisions`. An ask is keyed
+   * as its open row was ([subjectKey]), so the open row in the address names
+   * the same ask before and after its answer; a run's question by its turn
+   * and the launch that asked ([answeredRows]), since one turn's run can ask
+   * again.
+   */
+  | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
 
 /** A row a reader marks: an update from either source. */
 export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" }>;
@@ -84,10 +104,103 @@ export function isNoticeRow(row: InboxRow): row is NoticeRow {
 
 /**
  * A code notice's row key: the record id behind a prefix of its own, so a
- * code record and a tracker record can never name one row in the URL.
+ * code record and a Worklet record can never name one row in the URL.
  */
 export function changeRowKey(recordId: string): string {
   return `change:${recordId}`;
+}
+
+/** One record the Inbox shows, as the assistant's page context names it. */
+export interface InboxResource {
+  kind: "task" | "run" | "seat";
+  id: string;
+}
+
+/** The row the reader opened, as the assistant's selection names it: its record and what it is. */
+export interface InboxSelection extends InboxResource {
+  noun: "decision" | "update" | "agent" | "run";
+}
+
+/** A task as the Inbox addresses it: its key, or its id where another task claimed the key. */
+function taskId(ref: ItemRef): string | undefined {
+  return (ref.key_collision ? ref.id : ref.key) || ref.id || undefined;
+}
+
+/**
+ * The row the reader opened, for the assistant's page context, or null for
+ * none: an ask (open or answered) and a parked coding run's question are
+ * decisions, an update is the task it is about, a stopped seat is that
+ * agent. So "Brief me on this decision" briefs that row and not the Inbox.
+ *
+ * ONLY A ROW THE READER OPENED, never the one the pane opens for them on
+ * arrival: arriving, the Inbox is what they asked about.
+ */
+export function inboxSelection(row: InboxRow | null): InboxSelection | null {
+  const of = (kind: InboxResource["kind"], id: string | undefined, noun: InboxSelection["noun"]) =>
+    id ? { kind, id, noun } : null;
+  if (row === null) return null;
+  switch (row.kind) {
+    case "decision": {
+      const s = row.subject;
+      if (s.kind === "ask") return of("task", taskId(s.ask), "decision");
+      if (s.kind === "run") return of("run", s.run.turn_id, "decision");
+      return of("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined, "agent");
+    }
+    case "condition":
+      if (row.item.subject === "seat") return of("seat", row.item.who, "agent");
+      if (row.item.subject === "run" && row.item.id.startsWith("sandbox-")) {
+        return of("run", row.item.id.slice("sandbox-".length), "run");
+      }
+      return null;
+    case "notice":
+      return of("task", taskId(noticeItem(row.notice)), "update");
+    case "change":
+      // A CODE NOTICE NAMES NO RECORD the page context reads: its change's
+      // own page is where what was said on it lives.
+      return null;
+    case "answered":
+      return "run" in row.answered
+        ? of("run", row.answered.run.turn_id, "decision")
+        : of("task", taskId(row.answered.ask), "decision");
+  }
+}
+
+/**
+ * The records Needs you is about, for the assistant's page context: the task
+ * each question was asked on, each coding run waiting on an answer, and each
+ * seat stopped, paused or out of budget, each once, in the list's order.
+ *
+ * THE INBOX THE PERSON SEES IS THIS LIST, built here from the roster, the runs
+ * and the questions, and no route answers it whole. Without it a person asking
+ * "why did my agents stop" from this screen was told their inbox was empty,
+ * because the assistant read the task notices behind Updates and nothing else.
+ * Naming the records lets it read each one where it lives.
+ */
+export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
+  const out: InboxResource[] = [];
+  const seen = new Set<string>();
+  const add = (kind: InboxResource["kind"], id: string | undefined) => {
+    if (!id || seen.has(`${kind}:${id}`)) return;
+    seen.add(`${kind}:${id}`);
+    out.push({ kind, id });
+  };
+  for (const row of needs) {
+    if (row.kind === "decision") {
+      const s = row.subject;
+      if (s.kind === "ask") add("task", s.ask.key_collision ? s.ask.id : s.ask.key);
+      else if (s.kind === "run") add("run", s.run.turn_id);
+      else add("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined);
+    } else if (row.kind === "condition" && row.item.subject === "seat") {
+      add("seat", row.item.who);
+    } else if (
+      row.kind === "condition" &&
+      row.item.subject === "run" &&
+      row.item.id.startsWith("sandbox-")
+    ) {
+      add("run", row.item.id.slice("sandbox-".length));
+    }
+  }
+  return out;
 }
 
 /** The two groups the list always draws. */
@@ -135,7 +248,7 @@ export function inboxRows(input: {
 
 /**
  * Notices as rows, for Updates and for the Snoozed and Earlier links, in the
- * order the engine composed them: a tracker notice as a `notice` row, a code
+ * order the engine composed them: a Worklet notice as a `notice` row, a code
  * notice as a `change` row.
  */
 export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
@@ -190,7 +303,7 @@ export interface ReadThrough {
  * among its notices LOADED, as `<stream>@<generation>:<sequence>`.
  *
  * ONE POSITION PER SOURCE, because each domain counts its own log: a
- * position on the tracker's log says nothing about the code log's, so the
+ * position on Worklet's log says nothing about the code log's, so the
  * gesture is two writes, each through its own source's newest notice.
  *
  * THE NEWEST LOADED, never "everything": a notice that arrived after this
@@ -277,6 +390,11 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       break;
     case "condition":
       return whoOf(index, row.item.who);
+    case "answered":
+      return whoOf(
+        index,
+        "run" in row.answered ? row.answered.run.agent_handle : row.answered.ask.asked_by,
+      );
     case "notice": {
       const n = row.notice;
       if (n.actor_kind === "system") return null;
@@ -328,6 +446,11 @@ export function rowItem(row: InboxRow): ItemRef | null {
       break;
     case "condition":
       return null;
+    case "answered": {
+      if (!("run" in row.answered)) return row.answered.ask;
+      const ref = row.answered.run.work_item;
+      return ref ? turnItem(ref) : null;
+    }
     case "notice": {
       const item = noticeItem(row.notice);
       return item.id || item.key ? item : null;
@@ -355,6 +478,8 @@ export function rowKey(row: InboxRow): string {
       break;
     case "condition":
       return "";
+    case "answered":
+      return "run" in row.answered ? (row.answered.run.work_item?.key ?? "") : row.answered.ask.key;
     case "notice":
       return row.notice.subject_key ?? "";
     case "change":
@@ -386,22 +511,12 @@ export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: 
 export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
   const said = plainText(notice.excerpt ?? "");
   if (!ENGINE_SENTENCES.has(notice.kind)) return said;
-  return nameAuthor(said, authorOf(notice), (h) => index.byHandle.get(h)?.name ?? h);
+  return nameAuthor(said, authorOf(notice), nameOfIn(index));
 }
 
 /** A sentence's first letter in capitals: a reason's words as a heading. */
 function capital(s: string): string {
   return s ? s[0]!.toUpperCase() + s.slice(1) : s;
-}
-
-/**
- * The first sentence of a text, or its first line where no sentence ends in
- * it: what fits a heading of what a longer text says.
- */
-export function firstSentence(text: string): string {
-  const line = firstLine(text);
-  const end = /^(.+?[.?!])(?:\s|$)/.exec(line);
-  return end ? end[1]! : line;
 }
 
 /** What a change of each kind did, for a notice whose reason does not say it. */
@@ -460,6 +575,30 @@ export function noticeNote(notice: WorkInboxNotice, until: (at: string) => strin
 /** A free-text ask's question is its first line, and the rest its context. */
 export function askQuestion(ask: WorkAskRow): string {
   return ask.decision?.question || firstLine(ask.body) || ask.title;
+}
+
+/**
+ * Every text of an ask a reader reads as one message: its question, its
+ * context, the asker's reasoning and each option. A bare `#11` in any of them
+ * is placed by what the others name (`TokenScope`).
+ */
+export function askTexts(ask: WorkAskRow): string[] {
+  return [askQuestion(ask), askContext(ask), ...decisionTexts(ask.decision)].filter(
+    (text) => text.trim() !== "",
+  );
+}
+
+/**
+ * What an answered question asked, as its row and its pane head it: an ask's
+ * question, or a coding run's, whole (`RunQuestion`).
+ */
+export function answeredQuestion(answered: AnsweredDecision): string {
+  return "run" in answered ? answered.run.question.trim() : askQuestion(answered.ask);
+}
+
+/** Every text of an answered question a reader reads as one message ([askTexts]). */
+export function answeredTexts(answered: AnsweredDecision): string[] {
+  return "run" in answered ? runAskTexts(answered.run) : askTexts(answered.ask);
 }
 
 /** What an ask says beside its question: the body, or what follows its first line. */
@@ -658,4 +797,187 @@ function atNine(c: Civil, tz: string): string {
   const wall = Date.UTC(c.y, c.m - 1, c.d, 9, 0, 0);
   const guess = zoneOffset(wall, tz);
   return new Date(wall - zoneOffset(wall - guess, tz)).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// What was answered
+// ---------------------------------------------------------------------------
+
+/** What `answered_decisions` lists, as rows, newest closing first. */
+export function answeredRows(answer: AnsweredDecisionsAnswer | null | undefined): InboxRow[] {
+  return (answer?.items ?? []).map((answered) => ({
+    kind: "answered",
+    key:
+      "run" in answered
+        ? runQuestionKey(answered.run.turn_id, answered.run.launch_id)
+        : subjectKey({ kind: "ask", at: answered.ask.asked_at, ask: answered.ask }),
+    at: answered.at,
+    answered,
+  }));
+}
+
+/**
+ * One coding run's question: its turn and the launch that asked it. A turn's
+ * run that asks again does so under a new launch, so the turn alone (the open
+ * row's key, [subjectKey]) names whichever question it is parked on now.
+ */
+function runQuestionKey(turn: string, launch: string | undefined): string {
+  return `run:${turn}:${launch ?? ""}`;
+}
+
+/**
+ * The question a row asks or answered, the same for an open row and for the
+ * answered row it becomes, or null for a row that is not a question.
+ */
+export function questionOf(row: InboxRow): string | null {
+  if (row.kind === "answered") return row.key;
+  if (row.kind !== "decision") return null;
+  switch (row.subject.kind) {
+    case "ask":
+      return row.key;
+    case "run":
+      return runQuestionKey(row.subject.run.turn_id, row.subject.run.launch_id);
+    case "seat":
+      return null;
+  }
+}
+
+/**
+ * A row answered on this visit, as the lists place it: HELD where it stands
+ * (an answer the engine accepted and has not settled), or MOVED to Answered,
+ * settled for good, with the order it moved in on this visit (higher is
+ * newer).
+ */
+export type SettledRow = { row: InboxRow } & (
+  { moved?: false | undefined } | { moved: true; order: number }
+);
+
+/**
+ * Needs you and Answered with each question in one of them, never both.
+ *
+ * A QUESTION ANSWERED ON THIS VISIT AND SETTLED (`settled`, by its row's key,
+ * `moved`) leaves Needs you for the head of Answered, newest move first: as
+ * the row that was answered until the engine lists the question as answered,
+ * and as the engine's row from then on, which reads it as answered rather
+ * than as the open question it was. One HELD where it stands (an answer the
+ * engine accepted and has not settled) stays in Needs you, and is not under
+ * Answered either.
+ * ANY OTHER question Answered lists has left Needs you: the two reads are
+ * asked apart, and the open one can still list a question the person answered
+ * a moment ago in another tab, which they must not see as waiting.
+ */
+export function pairAnswered(
+  needs: readonly InboxRow[],
+  answered: readonly InboxRow[],
+  settled: ReadonlyMap<string, SettledRow>,
+): { needs: InboxRow[]; answered: InboxRow[] } {
+  const moved = [...settled.values()]
+    .flatMap((s) => (s.moved ? [s] : []))
+    .sort((a, b) => b.order - a.order)
+    .map((s) => s.row);
+  const movedKeys = new Set(moved.map((r) => r.key));
+  const here = new Set([...needs.filter((r) => settled.has(r.key)), ...moved].map(questionOf));
+  const listed = new Map(answered.map((r) => [questionOf(r), r]));
+  const closed = answered.filter((r) => !here.has(questionOf(r)));
+  const gone = new Set(closed.map(questionOf));
+  return {
+    needs: needs.filter(
+      (r) => !movedKeys.has(r.key) && (settled.has(r.key) || !gone.has(questionOf(r))),
+    ),
+    answered: [...moved.map((r) => listed.get(questionOf(r)) ?? r), ...closed],
+  };
+}
+
+/**
+ * An answer as the row and the pane say it: who closed the ask, the verb, and
+ * what they said. "You" for the reader, by name for anybody else, since a
+ * colleague may answer a question put to you.
+ *
+ * A CHOICE CAN CARRY WORDS of its own (a choice with a note), on a work
+ * item's answer and a run's alike, and those words are the answer's `body`:
+ * the record holds the option's label there only where nothing else was
+ * written. Read as the label alone, they were dropped, and the person read
+ * back an answer shorter than the one they gave.
+ */
+export interface AnswerWords {
+  who: string;
+  /** "chose", "replied", or "closed it without an answer". */
+  verb: string;
+  /** The option's label or the words, empty for a resolution. */
+  said: string;
+  /** The words written beside a choice, or "" where none were. */
+  note: string;
+  kind: "choice" | "reply" | "resolved";
+  /** The chosen option was the asker's recommendation. */
+  recommended: boolean;
+}
+
+export function answerWords(
+  answered: AnsweredDecision,
+  reader: string,
+  index: OrgIndex,
+): AnswerWords {
+  const a = answered.answer;
+  const who = a.by === reader ? "You" : (whoOf(index, a.by, a.by_kind)?.name ?? a.by);
+  if (a.resolved) {
+    return {
+      who,
+      verb: "closed it without an answer",
+      said: "",
+      note: "",
+      kind: "resolved",
+      recommended: false,
+    };
+  }
+  const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
+  const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
+  if (option) {
+    const body = a.body.trim();
+    return {
+      who,
+      verb: "chose",
+      said: option.label,
+      note: body === option.label.trim() ? "" : body,
+      kind: "choice",
+      recommended: decision?.recommended === option.id,
+    };
+  }
+  return { who, verb: "replied", said: a.body, note: "", kind: "reply", recommended: false };
+}
+
+/**
+ * How far the asker has got with an answer.
+ *
+ * `acted` is the tracker's fact (`followed_up`, the asker's first record on the
+ * task since); the rest is the asker's seat as the overview pushes it now: on
+ * a turn on this task, held by a pause or a stop, or free and not on it yet.
+ * Null where the asker is a person, whose next step is theirs to report, or a
+ * seat the roster no longer holds.
+ */
+export type FollowThrough =
+  | { state: "acted"; at: string }
+  | { state: "acting"; at?: string }
+  | { state: "waiting" }
+  | { state: "held"; reason: "paused" | "stopped" };
+
+export function followThrough(
+  answered: AnsweredWorkAsk,
+  seat: AgentRow | undefined,
+): FollowThrough | null {
+  const f = answered.followed_up;
+  if (f) return { state: "acted", at: f.at };
+  if (!seat) return null;
+  const on = seat.turn?.work_item;
+  if (
+    seat.activity === "working" &&
+    on &&
+    (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
+  ) {
+    return seat.turn?.started_at
+      ? { state: "acting", at: seat.turn.started_at }
+      : { state: "acting" };
+  }
+  if (seat.paused) return { state: "held", reason: "paused" };
+  if (seat.activity === "stopped") return { state: "held", reason: "stopped" };
+  return { state: "waiting" };
 }

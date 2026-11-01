@@ -12,12 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
-// A REUSED BOX IS GIVEN ONLY THE REPOSITORIES IT LACKS. A second run_sandbox
-// call in one turn reattaches to the first call's box, whose checkout holds the
-// agent's work: each clone step's own guard skips a repository already checked
-// out, so web is not cloned again and the agent's file in it survives, api —
-// which the first call did not name — is cloned, and the operator's setup is
-// not applied twice. On the direct cell, where the steps run for real, against
+// A REUSED BOX IS GIVEN ONLY THE REPOSITORIES IT LACKS. A job that continues
+// its turn's run reattaches to the box the job before it left, whose checkout
+// holds the agent's work: each clone step's own guard skips a repository
+// already checked out, so web is not cloned again and the agent's file in it
+// survives, api — which the first job was not given — is cloned, and the
+// operator's setup is not applied twice. On the direct cell, where the steps run for real, against
 // a stand-in git that clones by making the directory.
 //
 // Mutation: guard the clone step on a directory the clone does not make (or
@@ -60,7 +60,8 @@ exit 0`)
 	}
 
 	second := withRepos(t, launchReq("t1"), granted("web", webRepoID), granted("api", apiRepoID))
-	second.Spec.Env, second.Setup, second.ReuseBox = env, operator, res.SandboxID
+	second.Spec.Env, second.Setup = env, operator
+	resumeInItsBox(t, rig)
 	again, err := rig.launchVia(t.Context(), manager, second)
 	if err != nil {
 		t.Fatalf("the second launch: %v", err)

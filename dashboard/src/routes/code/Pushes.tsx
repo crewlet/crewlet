@@ -18,12 +18,12 @@
  *
  * A page boundary is not a window, so a history that fills its page offers
  * Load older and holds the pages it has, discarding them together when the
- * repository changes. And from the press of Load older the first page is HELD
- * STILL — no poll, no read on the tab's return or the socket's — because the
- * cursor was minted from its last row: read again under newer pushes, it
- * would push that row out, and the pushes between the two pages would belong
- * to neither. The pager is the one every paged history shares
- * (`lib/usePaged.ts`).
+ * repository changes. The first page stays live while the reader pages back,
+ * and the cursor was minted from its last row: read again under newer pushes,
+ * it pushes that row off its foot, and the pushes between the two pages would
+ * belong to neither — so the pager, the one every paged history shares
+ * (`lib/usePaged.ts`), reads the pushes between and joins the pages before the
+ * history is drawn again.
  *
  * # A push is drawn in brief, and read whole on demand
  *
@@ -79,7 +79,7 @@ import {
 import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import {
   queryErrorCode,
@@ -92,9 +92,9 @@ import { spellPosition } from "~/protocol/session.ts";
 import { REPO_PARAM } from "./paths.ts";
 
 /**
- * How often the newest page is read again while nothing older is held: a
- * MINUTE, the cadence this dashboard reads the other change log nothing
- * pushes to it at (Work's History). The code log has no push to the
+ * How often the newest page is read again: a MINUTE, the cadence this
+ * dashboard reads the other change log nothing pushes to it at (Worklet's
+ * History). The code log has no push to the
  * dashboard, so another person's push reaches the open history by this read
  * or not at all.
  */
@@ -167,16 +167,13 @@ export function PushHistory({ repo }: { repo: string }) {
   // IN BRIEF, every page of it: see the file's doc.
   const params = useMemo(() => ({ name: repo, brief: true }), [repo]);
   // ANOTHER REPOSITORY IS ANOTHER HISTORY: its first page is never followed by
-  // the last one's second, and the first page is held still from the press of
-  // Load older (see the file's doc).
-  const hold = usePageHold<CodePushesAnswer>(params);
+  // the last one's second (see the file's doc).
   const first = useCodeQuery("code_pushes", params, {
     pollMs: PUSHES_POLL_MS,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_pushes", { ...params, cursor }),
     pushesOf,
     pushIdOf,
@@ -288,7 +285,7 @@ export function PushHistory({ repo }: { repo: string }) {
                 <Button
                   size="small"
                   variant="secondary"
-                  onClick={paged.older}
+                  onClick={paged.next}
                   disabled={paged.paging}
                   loading={paged.paging}
                 >
@@ -302,9 +299,6 @@ export function PushHistory({ repo }: { repo: string }) {
               {rows.length > 0 && (
                 <span className="t-caption">{plural(rows.length, "push", "pushes")} listed</span>
               )}
-              {/* SAID ONLY ONCE IT IS TRUE: until then the first page is read
-                  again every minute. */}
-              {paged.held && <span className="t-caption">Paused while you page back.</span>}
             </div>
           )}
         </>

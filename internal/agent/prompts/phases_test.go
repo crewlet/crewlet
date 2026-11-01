@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 // -- Onboarding ----------------------------------------------------------
 
 // The one-time pass points at the team's knowledge-base tools by capability,
-// not by product and not by tool name: on the native backend they are
+// not by product and not by tool name: on Doclet they are
 // first-party tools to activate, on Confluence an MCP server's, and the same
 // header has to read correctly on either. It once said they were always MCP
 // tools, which on the default backend sent every seat to list a server for a
@@ -152,6 +153,63 @@ func TestPhaseUserMessageReadsChronologically(t *testing.T) {
 	if !strings.HasPrefix(msg, ConversationHistoryHeader) {
 		t.Error("conversation history must lead the message")
 	}
+}
+
+// A NOTE THE TURN HAS READ IS IN THE BRIEF, after everything the turn already
+// had, each its own section. A run is a fresh session with nowhere else to
+// read it, so without this a turn sent back after a person corrected it
+// launches its next run on the task as it was before the correction.
+func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
+	t.Parallel()
+	first := SteerMessage("founder", "post to #staging, not #general")
+	second := SteerMessage("founder", "and tag the release")
+	msg := BuildPhaseUserMessage(UserMessage{
+		TaskDescription: "THE-ASK",
+		PriorWork:       "PRIOR-WORK",
+		Steered:         []string{first, second},
+	})
+	order(t, msg.Text, "THE-ASK", "PRIOR-WORK", "post to #staging", "tag the release")
+	if !msg.Valid() {
+		t.Fatalf("the outline does not tile the brief: %+v", msg.Sections)
+	}
+	var keys []string
+	for _, s := range msg.Sections {
+		keys = append(keys, s.Key)
+	}
+	if want := []string{"task", "prior_work", "steered_1", "steered_2"}; !slices.Equal(keys, want) {
+		t.Errorf("sections = %v, want %v", keys, want)
+	}
+	if none := BuildPhaseUserMessage(UserMessage{TaskDescription: "THE-ASK"}).Text; strings.Contains(none, "A note from") {
+		t.Errorf("a brief with no note read carries one:\n%s", none)
+	}
+}
+
+// A NOTE READS THE SAME WHEREVER IT LANDS. It reaches a model at the opening of
+// a run of the engine's loop, in a coding run's brief, and inside a coding run
+// where its CLI places a hook's context — so it names who sent it and through
+// what, says it arrived while the work was under way and is the later word, and
+// says nothing about where it arrived, which would be false in every place but
+// one. The note itself is last and verbatim.
+func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
+	t.Parallel()
+	msg := SteerMessage("ada", "  post to #staging, not #general  ")
+	contains(t, msg,
+		"## A note from ada, sent while this turn was running",
+		"ada sent this through Crewlet while the work was under way",
+		"the note is the later word",
+		"What has already been done stays unless the note says otherwise.")
+	if !strings.HasSuffix(msg, "\n\npost to #staging, not #general") {
+		t.Errorf("the note is not last and verbatim:\n%s", msg)
+	}
+	for _, where := range []string{"between rounds", "round", "tool result", "hook"} {
+		if strings.Contains(strings.ToLower(msg), where) {
+			t.Errorf("the message says where it arrived (%q), which is false in every "+
+				"place but one:\n%s", where, msg)
+		}
+	}
+	anonymous := SteerMessage(" ", "x")
+	contains(t, anonymous, "## A note from a person who runs this company",
+		"\nA person who runs this company sent this through Crewlet")
 }
 
 func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {

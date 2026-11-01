@@ -13,12 +13,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/code/host"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -30,6 +30,7 @@ import (
 const healthToolsCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -99,66 +100,65 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	}
 }
 
-// shownTools is the tools handle's executor sends its model on the first round
-// of a turn c builds over reg, the model answering nothing back.
+// shownTools is the tools handle's executor run is handed on the first round
+// of a turn c builds over reg, the run launching nothing.
 func shownTools(t *testing.T, c *Company, handle string, reg *tools.Registry) []string {
 	t.Helper()
 	names, _ := shownExecutor(t, c, handle, reg)
 	return names
 }
 
-// shownExecutor is [shownTools] and the text of every message the executor's
-// first round sends with them — its prompt — the model answering nothing back.
+// shownExecutor is [shownTools] and everything the executor's first run is
+// launched with beside them — its standing instructions and its brief — the
+// run launching nothing.
+//
+// THE SURFACE THE LAUNCH IS HANDED, since the executor is its coding CLI's own
+// run: the bridge serves that surface and nothing else, so what is active on
+// it is exactly what the run may call.
 func shownExecutor(t *testing.T, c *Company, handle string, reg *tools.Registry) ([]string, string) {
 	t.Helper()
-	sent := &toolRecorder{}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: sent}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
 	if err != nil {
 		t.Fatalf("phase registry: %v", err)
 	}
 	c.Models = models
+	sent := &surfaceRecorder{}
 	r, err := c.RunnerFor(t.Context(), handle, reg, RunnerInput{Task: "look at the fleet",
-		Reply: turn.NoReply()})
+		Reply: turn.NoReply(), Launcher: sent, Sessions: testSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor(%s): %v", handle, err)
 	}
-	// The turn fails, its model refusing every call: only what it was shown
-	// is under test.
+	// The launch is refused: only what the run was handed is under test.
 	_, _, _ = r.Execute(t.Context(), 1, "", nil)
 	return sent.first()
 }
 
-// toolRecorder is a model that records the tool names and the message text of
-// the first request it is sent and refuses every request.
-type toolRecorder struct {
+// surfaceRecorder is an executor launcher that records the tool names and the
+// prompt of the first run it is handed and launches nothing.
+type surfaceRecorder struct {
 	mu     sync.Mutex
 	names  []string
-	prompt strings.Builder
+	prompt string
 	seen   bool
 }
 
-func (*toolRecorder) Model() string { return "recorder" }
-
-func (s *toolRecorder) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+func (s *surfaceRecorder) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.seen {
 		s.seen = true
-		for _, def := range req.Tools {
-			s.names = append(s.names, def.Name)
+		if req.Surface != nil {
+			s.names = req.Surface.Active()
 		}
-		for _, m := range req.Messages {
-			s.prompt.WriteString(m.Content)
-			s.prompt.WriteString("\n")
-		}
+		s.prompt = req.System + "\n" + req.Brief + "\n"
 	}
-	return nil, errors.New("the recorder answers nothing")
+	return runner.Launched{}, errors.New("the recorder launches nothing")
 }
 
-func (s *toolRecorder) first() ([]string, string) {
+func (s *surfaceRecorder) first() ([]string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.names), s.prompt.String()
+	return slices.Clone(s.names), s.prompt
 }
 
 // idleGitNodes is a status scatter no case calls.

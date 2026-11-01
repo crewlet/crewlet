@@ -5,11 +5,11 @@
  * # The engine's listing, a page at a time
  *
  * `code_repos` answers the repositories by name, each held to the reader's
- * grant on it: a person reads every repository (ADR-0058), and a seat what its
+ * grant on it: a person reads every repository (ADR-0081), and a seat what its
  * place in the chart relates it to. A page is what the engine SCANNED, not
  * what it kept, so it can be shorter than its limit — or empty with a cursor —
- * and the list pages until no cursor comes back, its first page held still
- * from the press of Load more (`lib/usePaged.ts`). The order is the engine's,
+ * and the list pages until no cursor comes back, each page joined to the one
+ * before it (`lib/usePaged.ts`). The order is the engine's,
  * by name, and the grid draws it as given: a head that sorted the pages
  * loaded would answer a different question under the same arrow.
  *
@@ -53,15 +53,15 @@ import { fmtBytes, fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
 import { repoHref } from "./paths.ts";
 
 /**
- * How often the listing's first page is read again while it is open and
- * nothing past it is loaded: a MINUTE, the cadence a directory nothing pushes
- * is polled at here (Work's Projects). A
+ * How often the listing's first page is read again while it is open: a
+ * MINUTE, the cadence a directory nothing pushes is polled at here (Worklet's
+ * Projects). A
  * repository's own rows move at an activation and its counts at every push,
  * and the code log has no push to the dashboard, so another person's push
  * reaches the open listing by this read or not at all.
@@ -82,18 +82,16 @@ export function Repositories() {
   // entry rather than adding one.
   const [status, setStatus] = useParam("status", "", "filter");
   const params = useMemo(() => (status ? { status } : {}), [status]);
-  // THE FIRST PAGE IS HELD from the press of Load more (`lib/usePaged.ts`):
-  // the cursor is the last name it scanned, and a repository declared,
-  // restored or moved into the filter while it was read again would push that
-  // name out of both pages.
-  const hold = usePageHold<CodeReposAnswer>(params);
+  // THE FIRST PAGE STAYS LIVE past Load more, and the pager joins it to the
+  // pages after it (`lib/usePaged.ts`): the cursor is the last name it
+  // scanned, and a repository declared, restored or moved into the filter
+  // while it was read again pushes that name off its foot.
   const first = useCodeQuery("code_repos", params, {
     pollMs: REPOS_POLL_MS,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_repos", { ...params, cursor }),
     (answer: CodeReposAnswer) => answer.repos ?? [],
     (repo: CodeRepoSummary) => repo.id,
@@ -156,15 +154,9 @@ export function Repositories() {
           // THE ENGINE'S ORDER, by name, over the whole set.
           serverSorted
           rowHref={(r) => repoHref(r.name)}
-          onLoadMore={paged.more ? paged.older : undefined}
+          onLoadMore={paged.more ? paged.next : undefined}
           loadedNote={
-            paged.more || paged.held
-              ? `${plural(rows.length, "repository", "repositories")} loaded${
-                  // SAID ONLY ONCE IT IS TRUE: until then the first page is
-                  // read again every minute.
-                  paged.held ? ", paused while more are loaded" : ""
-                }`
-              : undefined
+            paged.more ? `${plural(rows.length, "repository", "repositories")} loaded` : undefined
           }
           aria-label="Repositories"
           columns={[
@@ -202,7 +194,7 @@ export function Repositories() {
               shrink: true,
               drop: 2,
               // WHICH SEATS: a person reads every repository whatever this
-              // says (ADR-0058), and the title says so.
+              // says (ADR-0081), and the title says so.
               cell: (r) => (
                 <span title="Which seats read it. Every person reads every repository.">
                   <TableTextCell>

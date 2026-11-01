@@ -1,0 +1,489 @@
+package worklet
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
+)
+
+// The metadata keys the prompt reads back.
+//
+// NAMED CONSTANTS because the parser writes them and the prompt reads them,
+// and a typo in either is a field that silently renders empty — which looks
+// exactly like a change that had nothing to say.
+const (
+	MetaTaskKey = "item_key"
+	MetaTaskID  = "item_id"
+
+	// MetaKeyCollision is "true" when [MetaTaskKey] opens ANOTHER task —
+	// one that claimed the key first — so the task is reached by
+	// [MetaTaskID] alone. Absent otherwise. Read through [metaAddress].
+	MetaKeyCollision = "item_key_collision"
+	MetaProject      = "project"
+	MetaStatus       = "status"
+	MetaAssignee     = "assignee"
+	MetaRecordID     = "change_id"
+	MetaChangeKind   = "change_kind"
+	MetaTitle        = "title"
+	MetaExcerpt      = "excerpt"
+	MetaLate         = "late"
+
+	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
+	// line per value delta and one `field: added …; removed …` line per set
+	// the record carries, written by [changedText].
+	//
+	// RENDERED AT THE PARSE rather than carried typed, because the spine's
+	// envelope is a string map and this is the only side of the boundary
+	// where [Notify.Fields] still exists: a prompt is handed a
+	// [notify.Inbound] and has no route back to the record. Prose in
+	// metadata is what [MetaExcerpt] already is.
+	MetaDeltas = "deltas"
+
+	// MetaObject and MetaObjectID are WHAT the change was about, and they
+	// exist because one of the two routable kinds is not a task. The
+	// prompt keys its opener on the object rather than on the change kind:
+	// "somebody wrote your priority list" is a different sentence from "a
+	// task you are assigned to", and a builder that had only the kind
+	// would have to infer the noun from a switch that grows with every
+	// kind.
+	MetaObject   = "object"
+	MetaObjectID = "object_id"
+
+	// MetaVia is WHY this seat is being told, and it is not decoration:
+	// "you were mentioned" and "you are watching this" ask for different
+	// things, and the prompt renders them as an ask and as news.
+	MetaVia = "routed_via"
+
+	// MetaCommentID is the comment the change carried — for an ask, the
+	// id the answer names in `answers`, which is what lets the prompt
+	// write the answering call out whole rather than leaving the seat to
+	// find the id in a thread read.
+	MetaCommentID = "comment_id"
+
+	// MetaDecision is the [Decision] a new ask carries, as JSON: the
+	// question, the options and what the asker recommends. JSON rather
+	// than flattened keys because the spine's envelope is a string map
+	// and a decision is a structure, and the prompt is its one reader.
+	MetaDecision = "decision"
+
+	// MetaChoice, MetaQuestion and MetaInform are the [AnsweredDecision]
+	// an answer closed: the option it chose (a [DecisionOption] as JSON,
+	// absent for an answer in prose), the question it answered, and the
+	// channel the asker said it would report the outcome in (an [Inform]
+	// as JSON). They are what the asker's wake renders — which choice was
+	// made by its label, and where it promised to say so.
+	MetaChoice   = "choice"
+	MetaQuestion = "question"
+	MetaInform   = "inform"
+)
+
+// Parser turns a mutation record into the notifications it implies.
+//
+// It implements [notify.Parser]. EVERYTHING IT NEEDS IS IN THE PAYLOAD: the
+// record carries its own routing snapshot, so the node that wins a delivery
+// routes without reading rows it may be behind on.
+//
+// # What it adds to [Candidates], which does the actual deciding
+//
+// Three things, and only three: it turns a decoded record into the candidate
+// set, it asks the party registry whether each handle is still a seat, and it
+// renders what survives as the spine's own shape. Every rule about WHO lives
+// where it can be exercised without a registry, a webhook or an organization:
+// the eighteen reasons and their precedence in recipients.go, the mute in the
+// snapshot wake.go forms, and the rule the reasons are applied by — one reason
+// per handle, the fallback chain, the post-filter — in internal/routing, which
+// every native domain shares.
+type Parser struct {
+	logger *slog.Logger
+}
+
+// ParserOptions configure a parser.
+type ParserOptions struct {
+	// Logger is where the parser reports. Nil is the package's own
+	// component logger, never silence.
+	Logger *slog.Logger
+}
+
+// NewParser builds the tracker's inbound parser.
+func NewParser(opts ParserOptions) *Parser {
+	logger := opts.Logger
+	if logger == nil {
+		logger = log
+	}
+	return &Parser{logger: logger}
+}
+
+// Source is the integration name, matching the delivery's own.
+func (p *Parser) Source() string { return Source }
+
+// Parse reports which seats a record concerns.
+func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
+	record, err := recordFromBody(w.Body)
+	if err != nil {
+		return nil, err
+	}
+	if record.Notify == nil {
+		// A RECORD NOBODY ANNOUNCED reaching the parser at all means the
+		// feed's own decision was bypassed — a replayed body, a test, a
+		// second producer. Answering "nobody" rather than erroring keeps
+		// the two layers independent: the feed decides what to relay and
+		// this decides who it is for, and neither depends on the other
+		// having decided the same way.
+		return nil, nil
+	}
+	if !record.Subject.Kind.Routable() {
+		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its
+		// own surface rather than woken into somebody's inbox, and a
+		// counter or an alias has no audience at all. See
+		// [ObjectKind.Routable] for why the set is closed rather than a
+		// negative test.
+		return nil, nil
+	}
+
+	base := p.inbound(record)
+	// FROM THE RECORD, exactly as the applier reads it, so the wake and the
+	// notification rows can never disagree about who a change concerns.
+	candidates := Candidates(record.Notify)
+	// THE AUTHOR IS THE ONE NAME TO LEAVE OUT: a person bound to a seat
+	// writes AS that seat (iam.ActorFor), so the handle their own gestures
+	// land on — the watch a create leaves, the watch a comment leaves — is
+	// the author the record already carries.
+	routed := Route(candidates, registryHas(reg), record.Actor)
+	if len(routed) == 0 {
+		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",
+			"task", record.Notify.Snapshot.Key, "kind", string(record.Notify.Kind))
+		return nil, nil
+	}
+
+	out := make([]notify.Routed, 0, len(routed))
+	for _, c := range routed {
+		inbound := base
+		inbound.Metadata = withVia(base.Metadata, string(c.Reason))
+		// PER RECIPIENT, because the promise was the asker's alone: the
+		// same answer reaches the item's watchers under their own reasons
+		// and obliges none of them to post anywhere.
+		inbound.Owes = Owes(inbound.Metadata)
+		out = append(out, notify.Routed{
+			Inbound: inbound,
+			To:      notify.Recipient{Handle: c.Handle},
+			// DERIVED, so a redelivery is recognisable as one. The
+			// feed's claim is the first dedupe layer and it FAILS OPEN
+			// — a coordination store that cannot be reached must not
+			// stop notifications — so this is what catches what slips
+			// through, in the inbox and in the completion ledger.
+			WakeID: changefeed.WakeID(record.OpID, c.Handle),
+			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
+			// of this wake carries — see [notify.Routed.WakeAt].
+			WakeAt: record.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// registryHas narrows the party registry to the one question routing asks.
+//
+// A HANDLE THAT IS NO LONGER A SEAT is somebody who left — a changed handle
+// included, which is a removed seat (ADR-0013). It is dropped rather than
+// routed, because a notification addressed to nobody is one nothing reports.
+// A nil registry admits everybody, which is the honest answer for a deployment
+// with no organization loaded yet.
+func registryHas(reg *notify.Registry) func(string) bool {
+	if reg == nil {
+		return nil
+	}
+	return func(handle string) bool {
+		_, ok := reg.ByHandle(handle)
+		return ok
+	}
+}
+
+// inbound is the notification every recipient's copy is made from.
+//
+// # Why the task id is the SNAPSHOT's and not the subject's
+//
+// One of the two routable kinds is not a task, and on it the subject's id is a
+// person's handle. Writing that into `item_id` would hand the prompt a pointer
+// that `get_work_item` cannot resolve — and the prompt would render a "read
+// this task first" block naming something that is not a task, which costs the
+// seat a round and a failed tool call to discover.
+//
+// So the task fields come from the SNAPSHOT, which carries a task only when
+// the wake is genuinely about one: a `prioritised` wake names the task that
+// reached the top of somebody's list, and a person's own bookkeeping names
+// none.
+func (p *Parser) inbound(record MutationRecord) notify.Inbound {
+	snapshot := record.Notify.Snapshot
+	metadata := map[string]string{
+		// WHO MADE THE CHANGE, under the one actor key every parser
+		// stamps ([notify.ActorField]), so the spine's self-action guard
+		// covers this source as it covers every other — the second face of
+		// the rule [Route] already applies here, and one that agrees with
+		// it by asking the same reason ([Prompt.WakesActor]).
+		notify.ActorField: record.Actor,
+		MetaTaskKey:       snapshot.Key,
+		MetaTaskID:        snapshot.TaskID(record.Subject),
+		MetaProject:       snapshot.Project,
+		MetaStatus:        string(snapshot.Status),
+		MetaAssignee:      snapshot.Assignee,
+		MetaRecordID:      record.OpID,
+		MetaChangeKind:    string(record.Notify.Kind),
+		MetaTitle:         snapshot.Title,
+		MetaObject:        string(record.Subject.Kind),
+		MetaObjectID:      record.Subject.ID,
+	}
+	if record.Notify.Excerpt != "" {
+		metadata[MetaExcerpt] = record.Notify.Excerpt
+	}
+	// WHAT MOVED, not only that something did. The record has carried
+	// these deltas since the first wake and nothing rendered them, so a
+	// seat woken by a status change was told "The status changed by ada."
+	// and had to spend a tool round to learn what it changed TO — and the
+	// side it moved FROM is not on the task at all, so that round could
+	// never recover it.
+	if text := changedText(record.Notify.Fields, record.Notify.FieldsOmitted); text != "" {
+		metadata[MetaDeltas] = text
+	}
+	if record.Notify.CommentID != "" {
+		metadata[MetaCommentID] = record.Notify.CommentID
+	}
+	if decision := askedDecision(record); decision != nil {
+		metadata[MetaDecision] = jsonText(decision)
+	}
+	if answered := record.Notify.Answered; answered != nil {
+		if answered.Question != "" {
+			metadata[MetaQuestion] = answered.Question
+		}
+		if answered.Choice != nil {
+			metadata[MetaChoice] = jsonText(answered.Choice)
+		}
+		if answered.Inform != nil {
+			metadata[MetaInform] = jsonText(answered.Inform)
+		}
+	}
+	if record.Notify.Late {
+		// THE FLAG A READER NEEDS to understand why they are hearing
+		// about something that happened hours ago: it is a repair, not
+		// the change itself.
+		metadata[MetaLate] = "true"
+	}
+	if snapshot.KeyCollision && metadata[MetaTaskID] != "" {
+		// THE KEY IS NOT THIS TASK'S ADDRESS: it opens the task that
+		// claimed it first, and the prompt has to send the seat to the id
+		// instead. Only beside an id, which is the address it stands in
+		// for — a flag with no id to go to would leave the prompt nothing
+		// to name.
+		metadata[MetaKeyCollision] = "true"
+	}
+	body, source := wakeBody(record)
+	if body != "" {
+		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts
+		// it in (ADR-0040): every word of a change's text is its author's
+		// — their comment, the description they filed, the reason they
+		// gave — and the record states the kind of author they are, which
+		// is what names them when the roster no longer holds the handle.
+		metadata[notify.BodySourceField] = string(source)
+		metadata[notify.BodyAuthorField] = record.Actor
+		metadata[notify.BodyAuthorKindField] = string(record.ActorKind)
+	}
+	return notify.Inbound{
+		Source:    Source,
+		EventType: string(record.Notify.Kind),
+		Sender:    record.Actor,
+		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
+		Body:      body,
+		Metadata:  metadata,
+		// AND WHO THE SENDER IS, by the record's own kind: the actor is a
+		// seat's handle, a credential's login or a node's name, and only the
+		// kind tells a turn this wakes whether a colleague is asking or
+		// nobody is (notify.FirstPartyWriter).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor),
+	}
+}
+
+// wakeBody is what a woken seat reads of a change: the WHOLE text the card's
+// excerpt was cut from, wherever the record carries it.
+//
+// The card excerpt is a preview for a list of notices, cut at [MaxExcerpt] and
+// marked, and it points at the whole. The wake prompt is not a list: it is the
+// one message a seat ACTS on, and a comment cut at six hundred bytes there is
+// a comment that ended there — the seat answers the first paragraph of a
+// review and never reads the "but" in the second. The record already carries
+// the comment, or the created task, whole in its payload, so the prompt is
+// given that.
+//
+// RECOGNISED BY DERIVATION, never guessed: the whole text is used exactly when
+// the record's excerpt is what [excerptOf] makes of it. An excerpt somebody
+// stated — a hand-off's reason, a purge's line — is not derived from the
+// payload, does not match, and is shown as the text it is.
+//
+// AND WHAT IT IS, which only this derivation knows: the comment the excerpt was
+// cut from, the description a new task was filed with, or — an excerpt nothing
+// in the payload explains — a note its author wrote about the change, which is
+// the label its fence carries ([provenance.SourceChangeNote]).
+func wakeBody(record MutationRecord) (string, provenance.Source) {
+	excerpt := record.Notify.Excerpt
+	if excerpt == "" {
+		return "", ""
+	}
+	var carried struct {
+		Comment *Comment `json:"comment"`
+		Body    string   `json:"body"`
+	}
+	if json.Unmarshal(record.Mutation, &carried) != nil {
+		return excerpt, ExcerptSource(record.Notify.Kind)
+	}
+	type candidate struct {
+		text   string
+		source provenance.Source
+	}
+	candidates := []candidate{}
+	if c := carried.Comment; c != nil {
+		body := strings.TrimSpace(c.Body)
+		if answered := record.Notify.Answered; answered != nil && answered.Choice != nil {
+			body = choiceExcerpt(answered.Choice.Label, body)
+		}
+		candidates = append(candidates, candidate{body, provenance.SourceWorkComment})
+	}
+	if record.Notify.Kind == ChangeCreated {
+		candidates = append(candidates, candidate{
+			strings.TrimSpace(carried.Body), provenance.SourceWorkDescription,
+		})
+	}
+	for _, whole := range candidates {
+		if whole.text != "" && excerptOf(whole.text) == excerpt {
+			return whole.text, whole.source
+		}
+	}
+	return excerpt, ExcerptSource(record.Notify.Kind)
+}
+
+// ExcerptSource is what a change's excerpt is, by the kind of change that
+// carried it: the cut of a comment on a comment's change, of a description on
+// a create, and otherwise the note its author wrote about the change (a
+// hand-off's reason, a purge's line, a re-prioritisation's line).
+//
+// ONE RULE for every reader of an excerpt — the wake whose payload does not
+// explain its excerpt, and the activity feed, a task's history and a person's
+// inbox, which hold the excerpt and never the payload — so a change's text is
+// labelled the same wherever a seat reads it.
+func ExcerptSource(kind ChangeKind) provenance.Source {
+	switch kind {
+	case ChangeComment, ChangeCommentEdited:
+		return provenance.SourceWorkComment
+	case ChangeCreated:
+		return provenance.SourceWorkDescription
+	}
+	return provenance.SourceChangeNote
+}
+
+// askedDecision is the decision a record's NEW ask carries, or nil.
+//
+// READ FROM THE RECORD'S OWN PAYLOAD, where the comment travels whole: a
+// patch's `comment`, or the question a create was filed as ([TaskCreate]) —
+// both under the same key, which is why one shape decodes either. Only on the
+// kinds that WRITE an ask: an edit re-sends the whole comment, decision
+// included, and a wake rendering the options again would ask the question
+// twice.
+func askedDecision(record MutationRecord) *decision.Decision {
+	switch record.Notify.Kind {
+	case ChangeComment, ChangeCreated:
+	default:
+		return nil
+	}
+	var carried struct {
+		Comment *Comment `json:"comment"`
+	}
+	if json.Unmarshal(record.Mutation, &carried) != nil || carried.Comment == nil ||
+		carried.Comment.Ask == "" {
+		return nil
+	}
+	return carried.Comment.Decision
+}
+
+// jsonText is a value as the compact JSON a metadata string carries. Every
+// value handed here is one of this package's own plain structs, which cannot
+// fail to encode.
+func jsonText(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// subjectLine is the one line a recipient sees before they read anything.
+//
+// IT NAMES THE OBJECT, because a line that said "a task" for a person's own
+// priority list would be the first false sentence a recipient reads — and the
+// subject is also what a digest coalesces on, so a wrong noun there is wrong
+// in every summary too.
+//
+// AND IT NAMES THE TASK BY ITS ADDRESS ([Snapshot.Address]) — the id where
+// another task claimed its key first — because it is the first reference the
+// seat is shown, under **Task:**, and a key there is one a seat types into
+// get_work_item and lands on the claimant with.
+func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
+	key := snapshot.Address(subject)
+	if key == "" {
+		key = objectLabel(subject)
+	}
+	if snapshot.Title == "" {
+		return fmt.Sprintf("%s: %s", key, kind)
+	}
+	return fmt.Sprintf("%s %s: %s", key, kind, snapshot.Title)
+}
+
+// objectLabel is what a non-task subject is CALLED in one line.
+//
+// What it is FOR rather than its id: a recipient reading
+// "alice: prioritised" learns nothing they can act on.
+func objectLabel(subject Subject) string {
+	if subject.Kind == KindPerson {
+		return "your priorities"
+	}
+	return "a task"
+}
+
+// withVia copies the metadata with this recipient's own reason on it.
+//
+// A COPY, because every recipient of one record gets a different reason and
+// they share the map otherwise — writing in place would give all of them
+// whichever one was rendered last.
+func withVia(base map[string]string, via string) map[string]string {
+	out := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		out[k] = v
+	}
+	out[MetaVia] = via
+	return out
+}
+
+// recordFromBody reads the record back out of a delivery.
+//
+// THROUGH JSON AND THEN THE RECORD'S OWN DECODER. The body arrives as a map
+// because that is what every other parser's webhook carries, and re-marshalling
+// it is what lets the record's own two-pass decode run — which is what makes a
+// body relayed by a build that did not understand every field still yield
+// everything the writer wrote.
+func recordFromBody(body map[string]any) (MutationRecord, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return MutationRecord{}, fmt.Errorf("worklet: render a delivery back "+
+			"into a record: %w", err)
+	}
+	record, err := Decode(raw)
+	if err != nil {
+		return MutationRecord{}, fmt.Errorf("worklet: read the record out of a "+
+			"delivery: %w", err)
+	}
+	return record, nil
+}

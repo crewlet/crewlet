@@ -158,7 +158,7 @@ func (e *Engine) SkillsContainer(c *Company) string {
 
 // skillsContainer is [Engine.SkillsContainer] read off the CURRENT epoch.
 //
-// The form the long-lived, per-NODE consumers take — the native searcher and
+// The form the long-lived, per-NODE consumers take: Doclet's searcher and
 // the page change feed. Neither is rebuilt by an apply (both follow the pages
 // log, which a company revision does not change), so each has to read the key
 // at the moment it uses it or hold a stale one for the life of the process.

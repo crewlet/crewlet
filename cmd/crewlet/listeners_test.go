@@ -15,11 +15,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // answer is one request's status and its JSON error code, retried while the
@@ -202,7 +210,7 @@ func TestTheArtifactListenerIsBoundBeforeTheBoot(t *testing.T) {
 			asked = append(asked, a)
 			return bindReserved(ctx, a)
 		}
-		listeners, err := bindListeners(t.Context(), boot, "node-0", false, bind, log)
+		listeners, err := bindListeners(t.Context(), boot, "node-0", bind, log)
 		if err != nil {
 			t.Fatalf("%s: bindListeners: %v", tc.name, err)
 		}
@@ -307,62 +315,138 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 	}
 }
 
-// THE BRIDGE IS A PUBLIC ROUTE ON EVERY NODE. A seats node without ingress
-// serves its probes on api.port and its tool bridge beside them, so with
-// api.public set it binds that address for the bridge alone and api.port
-// carries the probes alone — one file for every role, and one bridge address
-// rule across the fleet.
-func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
+// A SEATS NODE SERVES ITS OWN BOXES THEIR TOOLS ON LOOPBACK, WITH NO FLEET
+// ADDRESS. A node without the ingress role binds api.port for its probes, and
+// a `direct` box is a process of its host: so the node hands that box its own
+// listener on loopback, builds its bridge from that address alone, and serves
+// the bridge's route there, beside the probes. Before, it derived no address
+// and mounted no route, so a seat pool with no CREWLET_MCP_BRIDGE_URL — a
+// satellite on a private host, a Kubernetes seat pool with no route in —
+// refused every executor launch. It still binds no public listener, whatever
+// the shared file says: the network reaches its probes alone (internal/api's
+// Probes holds the off-host half).
+//
+// Mutation: derive no address on a node without ingress and the engine builds
+// no bridge; mount no route on the probe surface and the box's connect meets a
+// 404; leave the bridge off the surface and the stop waits out a held poll.
+func TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback(t *testing.T) {
 	t.Parallel()
-	var logged bytes.Buffer
+	var logged lockedLog
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	publicPort := reservePort(t)
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"),
-		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
-	})
-	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, reservePort(t))
-	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
+	port := reservePort(t)
+	boot := bootstrapFor(t, port)
+	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
 	boot.Node.Roles = []string{"seats"}
-
-	surface, err := serveNodeLogged(t, boot, e, log)
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// BOUND FIRST, as runEngine binds: the engine is built from the address
+	// the bind derived.
+	listeners, err := bindListeners(t.Context(), boot, nodeID, bindReserved, log)
+	if err != nil {
+		t.Fatalf("bindListeners: %v", err)
+	}
+	host := "http://127.0.0.1:" + strconv.Itoa(port)
+	if got := listeners.boxHostURL(boot, nodeID); got != host {
+		listeners.close(context.Background(), log)
+		t.Fatalf("a seats node's direct boxes dial %q, want its own listener %q", got, host)
+	}
+	// AND NO FLEET ADDRESS: an environment that names none.
+	e := testEngineWith(t, engine.Options{
+		BoxHostURL: listeners.boxHostURL(boot, nodeID), Environment: config.MapSource{},
+	})
+	bridge := e.Bridge()
+	if bridge == nil {
+		listeners.close(context.Background(), log)
+		t.Fatal("a seats node with its own listener built no bridge, so every launch is refused")
+	}
+	if got := bridge.Reaches(true); got != host {
+		t.Errorf("a direct box is handed %q, want the node's own listener", got)
+	}
+	if got := bridge.Reaches(false); got != "" {
+		t.Errorf("a box off the host is handed %q, with no fleet address set", got)
+	}
+	// THE PROCESS'S CHAT HUB, as `crewlet run` attaches it beside the engine
+	// on every node, a seats node serving no API included.
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+	surface, err := serveBound(t, boot, e, reconcilerFor(t, boot, e), chatLive, listeners, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	if surface == nil {
-		t.Fatalf("a seats node with a bridge bound nothing:\n%s", logged.String())
+		t.Fatalf("a seats node bound nothing:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.public != nil {
+		t.Error("a seats node bound a public listener; only an ingress node serves the network the bridge")
+	}
+	if surface.bridge != bridge {
+		t.Error("the surface holds no bridge, so its stop waits out every held poll for notes")
+	}
+	if !strings.Contains(logged.String(), "box_host_url="+host) {
+		t.Errorf("the node did not say where its own boxes dial it:\n%s", logged.String())
+	}
 
-	public := "http://127.0.0.1:" + strconv.Itoa(publicPort)
-	if status, _ := answer(t, http.MethodPost, public+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusUnauthorized {
-		t.Errorf("POST %snot-a-token on the public listener = %d, want the bridge's own 401",
-			mcpbridge.PathPrefix, status)
+	// THE BOX'S OWN SESSION, opened as a launch opens it for a direct box,
+	// reached on loopback at the address the box is handed.
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
+	url := bridge.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Dev", OnHost: true,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat,
+				Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}),
+	})
+	if !strings.HasPrefix(url, host+mcpbridge.PathPrefix) {
+		t.Fatalf("the session was minted at %q, want the node's own listener", url)
 	}
-	if status, _ := answer(t, http.MethodGet, public+"/health"); status == http.StatusOK {
-		t.Error("GET /health answered on the public listener; the probes stay on api.port")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "claude", Version: "test"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: url, HTTPClient: httpxtest.Pool(t)}, nil)
+	if err != nil {
+		t.Fatalf("a direct box could not reach its tools on its node's own listener: %v", err)
 	}
-	private := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
-	if status, _ := answer(t, http.MethodGet, private+"/health"); status != http.StatusOK {
+	t.Cleanup(func() { _ = session.Close() })
+	if _, err := session.ListTools(ctx, nil); err != nil {
+		t.Errorf("the box's tools/list over its node's own listener: %v", err)
+	}
+	// A TOKEN THE FLEET DID NOT SIGN is refused there, before anything runs.
+	if status, code := answer(t, http.MethodPost, host+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusUnauthorized ||
+		code != string(httpjson.CodeInvalidToken) {
+		t.Errorf("POST %snot-a-token on api.port = %d %q, want the bridge's 401",
+			mcpbridge.PathPrefix, status, code)
+	}
+	if status, _ := answer(t, http.MethodGet, host+"/health"); status != http.StatusOK {
 		t.Errorf("GET /health on api.port = %d, want the liveness probe's 200", status)
 	}
-	// The guard exempts the bridge's prefix wholesale, so a 404 here is the
-	// router finding no bridge on api.port, where a mounted one answers 401.
-	if status, _ := answer(t, http.MethodPost, private+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusNotFound {
-		t.Errorf("POST %snot-a-token on api.port = %d, want 404: the bridge is "+
-			"served on the public listener only", mcpbridge.PathPrefix, status)
-	}
-	if !strings.Contains(logged.String(), "public_addr=127.0.0.1:"+strconv.Itoa(publicPort)) {
-		t.Errorf("the node did not name the bridge's public listener:\n%s", logged.String())
-	}
+}
+
+// lockedLog is a log destination the node's own goroutines may write while a
+// case reads it.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // api.port 0 IS STILL THE HARD OFF SWITCH on a node without ingress, whatever
 // the shared file says about api.public: the satellite the deployment guide
-// starts with `-api-port 0` binds no tool bridge on the public port either, so
-// a second process on the host keeps that port for the ingress node.
+// starts with `-api-port 0` binds nothing, so a second process on the host
+// keeps every port for the ingress node.
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
 	publicPort := reservePort(t)
@@ -378,13 +462,14 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	// NOTHING BOUND AT ALL, asked of the one path every listener is opened
 	// through rather than of the public port after the fact — which this
 	// case holds itself, so nothing else can be listening there either.
-	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), true, bindNothing(t),
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindNothing(t),
 		logging.Get("test"))
 	if err != nil || listeners != nil {
 		listeners.close(context.Background(), logging.Get("test"))
 		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, nil, listeners,
+		engine.DeepHost{}, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -501,7 +586,7 @@ func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
 	}}
 	stopped := make(chan struct{})
 	go func() {
-		shutdown(context.Background(), &recordingEngine{step: step}, surface, log)
+		shutdown(context.Background(), &recordingEngine{step: step}, surface, teardownHub{&teardown{}}, log)
 		close(stopped)
 	}()
 
@@ -534,7 +619,7 @@ func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
 	}
 }
 
-// recordingEngine is a [drainer] that records each half of its stop.
+// recordingEngine is a [drainingEngine] that records each half of its stop.
 type recordingEngine struct{ step func(string) }
 
 func (e *recordingEngine) Drain(context.Context) { e.step("drain") }
@@ -592,5 +677,219 @@ func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 	}
 	if logged.String() != "" {
 		t.Errorf("stopping a listener logged a failure:\n%s", logged.String())
+	}
+}
+
+// A HELD POLL FOR A RUN'S NOTES DOES NOT SPEND THE LISTENER'S GRACE. A coding
+// CLI's poll is held for longer than the grace while no note waits
+// (internal/api/mcpbridge), so a stop that left it to the listener would spend
+// the whole grace on a request with nothing to answer and log the cut; the
+// surface releases every held poll before it closes a listener — as a 503 the
+// CLI pauses on, never an empty answer it would ask again at once — and the
+// CLI polls again wherever the seat goes next.
+//
+// Mutation: drop the bridge's shutdown from the surface's stop, and this stop
+// takes the whole grace.
+func TestAHeldNotePollDoesNotSpendTheListenersGrace(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	log := logging.Get("test")
+	bridge := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://x"})
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
+	publicServer, publicAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", mux, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := &quietInbox{reached: make(chan struct{})}
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
+	url := bridge.Open(ctx, &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Dev", Steer: inbox,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat,
+				Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}),
+	})
+	if url == "" {
+		t.Fatal("no endpoint was minted")
+	}
+	token := url[strings.LastIndex(url, "/")+1:]
+	polled := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+			"http://"+publicAddr+mcpbridge.PathPrefix+token+"/steer/notes", nil)
+		res, doErr := httpxtest.Pool(t).Do(req)
+		if doErr != nil {
+			polled <- 0
+			return
+		}
+		_ = res.Body.Close()
+		polled <- res.StatusCode
+	}()
+	select {
+	case <-inbox.reached:
+	case <-time.After(apiShutdownGrace):
+		t.Fatal("the poll never reached the run's inbox")
+	}
+	surface := &httpSurface{public: publicServer, bridge: bridge}
+	began := time.Now()
+	surface.stop(context.Background(), log)
+	if took := time.Since(began); took >= apiShutdownGrace/2 {
+		t.Errorf("the surface took %s to stop with a poll held, against a grace of %s", took, apiShutdownGrace)
+	}
+	if status := <-polled; status != http.StatusServiceUnavailable {
+		t.Errorf("the held poll was answered %d, want 503: a refusal its poller pauses on", status)
+	}
+}
+
+// quietInbox is a run's inbox with no note for ever, saying when it is first
+// polled.
+type quietInbox struct {
+	once    sync.Once
+	reached chan struct{}
+}
+
+func (*quietInbox) Take(context.Context, string) string { return "" }
+
+func (i *quietInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
+	i.once.Do(func() { close(i.reached) })
+	return nil, nil
+}
+
+func (*quietInbox) Read(context.Context, []string) error { return nil }
+
+func (*quietInbox) Close() {}
+
+// A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK, ON EVERY NODE
+// THAT RUNS SEATS. The `direct` cell's run is a process of this host, so the
+// node's own socket is an address it can always reach, and that is what lets
+// the quickstart's company — one node, one direct cell, no
+// CREWLET_MCP_BRIDGE_URL — and a seat pool with no fleet address run their
+// first turn. The listener is the one the box's routes are served on:
+// api.public where an ingress node binds one, api.port otherwise — which a
+// node without the ingress role serves its own host alone, beside its probes.
+// Only a node running seats launches a box, so an ingress node with no seat
+// derives none.
+//
+// Mutation: derive from api.port whatever the public listener, and the public
+// row dials a port the bridge is not served on; derive none on a node without
+// ingress, and the seat pool's row refuses every launch.
+func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		roles  []string
+		public bool
+		want   string // "api", "public" or ""
+	}{
+		{"an ingress seats node on api.port", []string{"data", "ingress", "seats", "workers"}, false, "api"},
+		{"an ingress seats node with a public listener", []string{"data", "ingress", "seats", "workers"}, true, "public"},
+		{"a seats node without ingress", []string{"data", "seats", "workers"}, false, "api"},
+		{"a seat pool with a public listener in its file", []string{"seats"}, true, "api"},
+		{"an ingress node that runs no seat", []string{"data", "ingress", "workers"}, false, ""},
+		{"a node without ingress that runs no seat", []string{"data", "workers"}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := bootstrapFor(t, reservePort(t))
+			boot.Node.Roles = tc.roles
+			if tc.public {
+				boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
+			}
+			listeners, err := bindListeners(t.Context(), boot, "node-0", bindReserved,
+				logging.Get("test"))
+			if err != nil {
+				t.Fatalf("bindListeners: %v", err)
+			}
+			t.Cleanup(func() { listeners.close(context.Background(), logging.Get("test")) })
+			want := ""
+			switch tc.want {
+			case "api":
+				want = "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+			case "public":
+				want = "http://127.0.0.1:" + strconv.Itoa(boot.API.Public.Port)
+			}
+			if got := listeners.boxHostURL(boot, "node-0"); got != want {
+				t.Errorf("a direct box dials %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A NODE WITHOUT INGRESS HANDS ITS BOXES ITS LISTENER ONLY WHERE LOOPBACK
+// REACHES IT. Such a node serves its boxes' routes to this host's loopback
+// alone, so the address it derives has to be one a call from the host arrives
+// on from loopback: a listener on every interface or on a loopback address.
+// One bound to a single address that is not loopback is dialled at that
+// address, and the call arrives from it — refused as from off the host — so
+// such a node derives none, and its direct boxes dial the fleet's address. An
+// ingress node serves the routes to anyone, so its single address is dialled
+// as it is.
+//
+// Mutation: derive on every bind for a node without ingress and the private
+// address row hands a box an address every call to which is refused.
+func TestANodeWithoutIngressHandsItsBoxesOnlyAListenerLoopbackReaches(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		ingress bool
+		addr    net.Addr
+		want    string
+	}{
+		{"every IPv4 interface", false, &net.TCPAddr{IP: net.IPv4zero, Port: 8001}, "http://127.0.0.1:8001"},
+		{"every IPv6 interface", false, &net.TCPAddr{IP: net.IPv6unspecified, Port: 8001}, "http://127.0.0.1:8001"},
+		{"IPv4 loopback", false, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8001}, "http://127.0.0.1:8001"},
+		{"IPv6 loopback", false, &net.TCPAddr{IP: net.IPv6loopback, Port: 8001}, "http://[::1]:8001"},
+		{"one private address", false, &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 8001}, ""},
+		{"one private address, ingress", true, &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 8001}, "http://10.0.0.5:8001"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := bootstrapFor(t, 8001)
+			boot.Node.Roles = []string{"data", "seats"}
+			if tc.ingress {
+				boot.Node.Roles = append(boot.Node.Roles, "ingress")
+			}
+			listeners := &nodeListeners{api: &apiListener{socket: boundAt{addr: tc.addr}}}
+			if got := listeners.boxHostURL(boot, "node-0"); got != tc.want {
+				t.Errorf("a direct box dials %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// boundAt is a socket that says it is bound at addr, for a case about what a
+// node derives from where it bound rather than about the bind.
+type boundAt struct {
+	net.Listener
+	addr net.Addr
+}
+
+func (b boundAt) Addr() net.Addr { return b.addr }
+
+// LOOPBACK FOR A LISTENER ON EVERY INTERFACE, ITS OWN ADDRESS OTHERWISE. A
+// socket bound to every interface answers on loopback, which no network
+// policy between the host and itself can refuse; one bound to a single
+// address answers only there, so loopback would be refused.
+func TestALoopbackURLIsWhereThisHostDialsTheSocket(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		addr net.Addr
+		want string
+	}{
+		{"every IPv4 interface", &net.TCPAddr{IP: net.IPv4zero, Port: 8080}, "http://127.0.0.1:8080"},
+		{"every IPv6 interface", &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}, "http://127.0.0.1:8080"},
+		{"no address at all", &net.TCPAddr{Port: 8080}, "http://127.0.0.1:8080"},
+		{"one private address", &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 8080}, "http://10.0.0.5:8080"},
+		{"IPv6 loopback", &net.TCPAddr{IP: net.IPv6loopback, Port: 8080}, "http://[::1]:8080"},
+		{"not TCP", &net.UnixAddr{Name: "/run/crewlet.sock", Net: "unix"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := loopbackURL(tc.addr); got != tc.want {
+				t.Errorf("loopbackURL(%v) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
 	}
 }

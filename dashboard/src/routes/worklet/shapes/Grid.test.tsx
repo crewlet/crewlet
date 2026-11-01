@@ -1,0 +1,454 @@
+/**
+ * How the tracker's one grid draws a PERSON, on both of its column sets.
+ *
+ * The rule is `docs/reference/dashboard-design.md`'s "A person in a grid cell
+ * is a resolved name": the org chart's name, the handle only where the chart
+ * has none, and the kind marked only where it is not the ordinary one. Three
+ * cells here draw a person — the list's assignee, the table's assignee and a
+ * trash listing's `removed_by` — and each had its own spelling of the last
+ * clause, which is exactly the drift that let one of them mark every row.
+ *
+ * MOUNTED ON `WorkGrid` DIRECTLY rather than through the screen, because the
+ * rule belongs to the column sets: reached through `ItemsView` these cases
+ * would also be asserting a view strip, a scope segment and two queries, and
+ * would go red for reasons that have nothing to do with how a seat is drawn.
+ */
+
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+
+import { WorkGrid } from "./Grid.tsx";
+import { Router } from "~/app/router.tsx";
+import type { RowChrome } from "~/components/work.tsx";
+import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
+
+// THE TRASH COLUMN'S RESTORE IS A WRITE CONTROL, and asks who is reading and
+// whether the socket is up before it says whether it can act. These cases are
+// about the column's other cells, so it reads as an anonymous, connected tab.
+vi.mock("~/lib/viewer.ts", () => ({
+  useViewer: () => ({
+    login: "",
+    grants: [],
+    admin: false,
+    worklet: false,
+    doclet: false,
+    chatlet: false,
+    handle: "",
+    owner: "",
+    name: "",
+    acts: [],
+    kind: "",
+    unbound: false,
+    anonymous: true,
+    loading: false,
+    asking: false,
+    configWriter: true,
+    configManagedBy: [],
+    chatVendors: [],
+  }),
+}));
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  // NO ORG: which services the company runs is not known, so none is hidden.
+  return {
+    ...actual,
+    useConnection: () => ({ connected: true, accessRefused: null }),
+    useOrg: () => null,
+  };
+});
+
+afterEach(() => {
+  cleanup();
+  location.hash = "#/";
+});
+
+const NOW = Date.parse("2031-04-16T12:00:00Z");
+
+const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
+  id: "t-1",
+  key: "ENG-9",
+  project: "ENG",
+  title: "the wrong subtree",
+  type: "task",
+  status: "todo",
+  updated: "2031-04-16T09:00:00Z",
+  version: 1,
+  ...over,
+});
+
+/**
+ * The chart, as the screen hands it down: a handle in, a name and a kind out.
+ *
+ * `iris` is the HUMAN seat and `ada` the agent, and `departed` is in neither —
+ * a handle the chart no longer holds, which is a third answer rather than a
+ * missing one.
+ */
+const chrome: RowChrome = {
+  seatName: (handle) =>
+    handle === "ada" ? "Ada Okonkwo" : handle === "iris" ? "Iris Chen" : handle,
+  seatKind: (handle) => (handle === "ada" ? "agent" : handle === "iris" ? "human" : undefined),
+};
+
+/** The one identity badge a single-row grid drew. */
+function badge(container: HTMLElement): HTMLElement {
+  const marks = container.querySelectorAll(".crewlet-avatar");
+  if (marks.length !== 1) throw new Error(`expected one identity badge, drew ${marks.length}`);
+  return marks[0] as HTMLElement;
+}
+
+/** Which outline the kit drew the badge in: a person's circle or an agent's squircle. */
+function outline(container: HTMLElement): "human" | "agent" {
+  const mark = badge(container);
+  const human = mark.classList.contains("crewlet-avatar--human");
+  const agent = mark.classList.contains("crewlet-avatar--agent");
+  if (human === agent)
+    throw new Error(`the badge is drawn as both kinds or neither: ${mark.className}`);
+  return human ? "human" : "agent";
+}
+
+const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => ({
+  id: "h-1",
+  log_seq: 9,
+  log_stream: "CREWLET_WORK_LOG",
+  log_generation: 1,
+  at: "2031-04-15T00:00:00Z",
+  effective_at: "2031-04-15T00:00:00Z",
+  kind: "removed",
+  actor: "ada",
+  actor_kind: "agent",
+  subject_kind: "task",
+  subject_id: "t-1",
+  subject_key: "ENG-9",
+  notified: false,
+  ...over,
+});
+
+/** The `removed_by` cell: the seat link's own container, and nothing else. */
+function whoCell(): HTMLElement {
+  const link = screen.getByTitle("@ada").closest(".crewlet-table-cell__entity");
+  const cell = link?.parentElement;
+  if (!cell) throw new Error("the removed_by cell drew no seat");
+  return cell;
+}
+
+function mount(
+  shape: "list" | "table",
+  rows: WorkSummary[],
+  removals?: Map<string, WorkActivityRecord>,
+  onOpen: (row: WorkSummary) => void = () => {},
+) {
+  return render(
+    <Router>
+      <WorkGrid
+        shape={shape}
+        rows={rows}
+        groups={[]}
+        axis=""
+        chrome={chrome}
+        now={NOW}
+        workspace={false}
+        hrefOf={(r) => `#/worklet/${r.key}`}
+        onOpen={onOpen}
+        onOverflow={() => {}}
+        overflowHref={() => "#/worklet"}
+        removals={removals}
+        sort=""
+        defaultSort="rank"
+        onSort={() => {}}
+      />
+    </Router>,
+  );
+}
+
+// THE CHART'S NAME, NOT THE HANDLE. A handle is the database's word for a
+// person and every surface in this product resolves it — so the table's
+// assignee column, which is the one a reader came to the table FOR, prints
+// what the chart calls them and links to their seat.
+test("the table's assignee is the resolved name, linking to the seat", () => {
+  mount("table", [row({ assignee: "ada" })]);
+  const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
+  expect(link).toBeTruthy();
+  expect(link.getAttribute("href")).toBe("#/company/org/seats/ada");
+  // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
+  // types into a filter, so resolving the name must not destroy it.
+  expect(link.getAttribute("title")).toBe("@ada");
+  expect(screen.queryByText("ada")).toBeNull();
+});
+
+// A HANDLE THE CHART HAS NO SEAT FOR IS STILL A PERSON. A task filed by a seat
+// the company has since removed names a handle nothing resolves, and the cell
+// draws the handle rather than a blank: "somebody the chart no longer has" is
+// a fact, and an empty cell reads as "nobody holds this", which is a different
+// one the same column already has its own mark for.
+test("a handle the chart cannot resolve is drawn as the handle", () => {
+  mount("table", [row({ assignee: "departed" })]);
+  expect(screen.getByText("departed")).toBeTruthy();
+});
+
+// AND NOBODY IS A STATE, not a blank. An unassigned item routes to the
+// project's lead, and a project with no lead routes to nobody at all.
+test("an unassigned row says nobody holds it", () => {
+  const { container } = mount("table", [row({})]);
+  const marks = [...container.querySelectorAll(".crewlet-empty-value")].filter((el) =>
+    (el.textContent ?? "").includes("Nobody holds this"),
+  );
+  expect(marks.length).toBe(1);
+});
+
+// THE LIST DRAWS THE BADGE ALONE, and the badge still carries the resolved
+// name — the compact row spends its width on the title, so the name is the
+// avatar's identity rather than a second column of it. Drawn from the HANDLE
+// the initials would be "d" for every seat whose handle starts with one.
+test("the list's assignee resolves the name even where it prints no name", () => {
+  const { container } = mount("list", [row({ assignee: "ada" })]);
+  const titled = container.querySelector('[title="Ada Okonkwo"]');
+  expect(titled).toBeTruthy();
+});
+
+// A REMOVAL BY AN AGENT WEARS NO KIND TAG, and this is the case the column
+// existed to separate from. `agent` is `worklet.AuthorAgent`, one of the four
+// the engine mints (`agent`/`human`/`operator`/`system`) — there is no `seat`
+// among them, so the word this cell used to check against matched nothing and
+// the tag was drawn on EVERY row of the trash, which separates nothing.
+test("an ordinary agent removal draws the name and no kind tag", () => {
+  const removals = new Map([["t-1", removal()]]);
+  mount("table", [row({})], removals);
+  expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.queryByText("agent")).toBeNull();
+  // SCOPED TO THE CELL, because the row carries a status badge that is a tag
+  // too: a container-wide "no tag" would go red for the status and green for
+  // a kind tag that had simply moved.
+  expect(whoCell().querySelector(".crewlet-tag")).toBeNull();
+});
+
+// AND A REMOVAL BY ANYTHING ELSE SAYS WHICH. An assistant removing a subtree
+// and a person removing one task look identical without it, which is the
+// question a trash screen is opened with.
+test("an operator's removal is marked as one, beside the name", () => {
+  const removals = new Map([["t-1", removal({ actor: "ada", actor_kind: "operator" })]]);
+  mount("table", [row({})], removals);
+  expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.getByText("operator")).toBeTruthy();
+});
+
+// AND A PERSON BOUND TO A SEAT IS NAMED AS THE SEAT, as the change log names
+// the same removal: they write AS the seat (`iam.ActorFor`), and the
+// credential they wrote through is the audit trail's half, never their name.
+test("a removal a bound person made names the seat they write as, not the credential", () => {
+  const removals = new Map([
+    ["t-1", removal({ actor: "ada", actor_kind: "human", operator_id: "pat:t-1" })],
+  ]);
+  mount("table", [row({})], removals);
+  expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.queryByText("pat:t-1")).toBeNull();
+});
+
+// ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
+// variant an identity badge has and it is STRUCTURAL — who holds the seat — so
+// it cannot depend on which set is drawing. It did: `linkedSeat` took a kind and
+// the compact `Assignee` had no way to be handed one, so the same person was
+// drawn two ways on one grid.
+test("a human seat is drawn as a person on both column sets", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "iris" })]);
+    expect(outline(container)).toBe("human");
+    cleanup();
+  }
+});
+
+// AND AN AGENT AS AN AGENT, on both.
+test("an agent seat is drawn as an agent on either column set", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "ada" })]);
+    expect(outline(container)).toBe("agent");
+    cleanup();
+  }
+});
+
+// A HANDLE THE CHART DOES NOT HOLD is a seat that was renamed or removed. It
+// takes the kit's default outline, never a person's circle: a person is always
+// declared, and a circle would claim the chart said something it did not.
+test("a handle the chart does not hold is never drawn as a person", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ assignee: "departed" })]);
+    expect(outline(container)).toBe("agent");
+    cleanup();
+  }
+});
+
+// A ROW IS A REAL ANCHOR, so ⌘-click and middle-click open the item's own
+// page. A plain click opens the PEEK instead, because the list is the place
+// the reader is — and it is the one gesture that has to call
+// `preventDefault`, or the click pushes `peek=` and then follows the href,
+// destroying the panel it just opened. The board card and the Projects
+// directory both went through `peekRow` for exactly that; this grid passed a
+// bare handler beside its `rowHref` and navigated away on every plain click,
+// on BOTH column sets.
+test("a plain click on a row peeks and a modified click follows the link", () => {
+  for (const shape of ["list", "table"] as const) {
+    const onOpen = vi.fn();
+    const { container } = mount(shape, [row({})], undefined, onOpen);
+    const anchor = container.querySelector("a.crewlet-data-grid__row-link") as HTMLAnchorElement;
+    expect(anchor).toBeTruthy();
+    expect(anchor.getAttribute("href")).toBe("#/worklet/ENG-9");
+
+    const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor.dispatchEvent(plain);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(plain.defaultPrevented).toBe(true);
+
+    // AND A MODIFIED CLICK IS LEFT ALONE, or the affordance is a lie: the row
+    // looks like a link, so every way a browser opens one elsewhere has to
+    // keep working.
+    const meta = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+    anchor.dispatchEvent(meta);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(meta.defaultPrevented).toBe(false);
+    cleanup();
+  }
+});
+
+// THE HEADS ORDER THE ROWS, from the order in force: the view's default is
+// drawn on its own head, a press writes the reader's choice, and a step back to
+// the default is no key at all. A column the engine cannot order by is not a
+// button.
+test("the heads sort from the order in force, and only where the engine can order", () => {
+  for (const shape of ["list", "table"] as const) {
+    const onSort = vi.fn();
+    const props = { sort: "", defaultSort: "-updated", onSort };
+    const draw = (sort: string) => (
+      <Router>
+        <WorkGrid
+          shape={shape}
+          rows={[row({})]}
+          groups={[]}
+          axis=""
+          chrome={chrome}
+          now={NOW}
+          workspace
+          hrefOf={(r) => `#/worklet/${r.key}`}
+          onOpen={() => {}}
+          onOverflow={() => {}}
+          overflowHref={() => "#/worklet"}
+          {...props}
+          sort={sort}
+        />
+      </Router>
+    );
+    const { rerender } = render(draw(""));
+    const head = (name: string) =>
+      screen.getAllByRole("columnheader").find((h) => h.textContent?.startsWith(name));
+    expect(head("Updated")?.getAttribute("aria-sort")).toBe("descending");
+    // THE DEFAULT'S OWN HEAD TURNS ASCENDING rather than "back to the default".
+    screen.getByRole("button", { name: "Updated" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("updated");
+    screen.getByRole("button", { name: "Title" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("title");
+    rerender(draw("-title"));
+    expect(head("Title")?.getAttribute("aria-sort")).toBe("descending");
+    screen.getByRole("button", { name: "Title" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("");
+    // NO ORDER OVER A KEY OR A STATUS WORD: those heads are not buttons.
+    expect(screen.queryByRole("button", { name: "Key" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+    cleanup();
+  }
+});
+
+// EACH COLUMN HAS ONE EDGE, shared by its head and its values: marks are
+// centred in their own track, times and dates end on the right, words start
+// on the left. The owner saw Updated ragged, Due off its head and the marks
+// scattered between them.
+test("every column's head and values share one edge, in both sets", () => {
+  const edge = (el: Element) =>
+    ["right", "center"].find((a) => el.className.includes(`--${a}`)) ?? "left";
+  const expected: Record<"list" | "table", Record<string, string>> = {
+    list: {
+      Priority: "center",
+      Key: "left",
+      Status: "left",
+      Title: "left",
+      Due: "right",
+      Type: "center",
+      Assignee: "center",
+      Updated: "right",
+    },
+    table: {
+      Key: "left",
+      Type: "center",
+      Title: "left",
+      Status: "left",
+      Due: "right",
+      Updated: "right",
+    },
+  };
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ due: "2031-04-20" })]);
+    const heads = screen.getAllByRole("columnheader");
+    let checked = 0;
+    const cells = [
+      ...container.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ];
+    heads.forEach((head, i) => {
+      const name = head.getAttribute("title") || head.textContent?.trim() || "";
+      const want = expected[shape][name];
+      if (want === undefined) return;
+      checked += 1;
+      expect(`${shape} ${name} head ${edge(head)}`).toBe(`${shape} ${name} head ${want}`);
+      expect(`${shape} ${name} cell ${edge(cells[i]!)}`).toBe(`${shape} ${name} cell ${want}`);
+    });
+    // EVERY NAMED COLUMN WAS FOUND, so a renamed head cannot pass by omission.
+    expect(checked).toBe(Object.keys(expected[shape]).length);
+    cleanup();
+  }
+});
+
+// THE TRASH'S `removed_by` IS THE THIRD CELL ON THIS GRID THAT DRAWS A PERSON,
+// and it reads the same resolver: somebody who emptied a subtree is drawn the
+// way they are drawn on the row above.
+test("a human removal is drawn as a person in the trash column", () => {
+  const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
+  const { container } = mount("table", [row({})], removals);
+  expect(outline(container)).toBe("human");
+});
+
+// BESIDE A PEEK AT 1280 THE LIST IS ABOUT 450PX, and with every column kept
+// the title was 70px of "Which regi…". The title takes a floor in both sets;
+// what gives way instead is the grid's to decide (`DataGrid.test.tsx`).
+test("the title keeps a floor and the key and the status are drawn whole, in both sets", () => {
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row()]);
+    const template =
+      container.querySelector<HTMLElement>(".crewlet-data-grid")?.style.gridTemplateColumns ?? "";
+    expect(template, shape).toMatch(/minmax\(16rem, 1fr\)/);
+    // And neither the key nor the status word is ever cut to fit.
+    expect(template.match(/max-content/g)?.length ?? 0, shape).toBe(2);
+    cleanup();
+  }
+});
+
+// ON A PHONE THE LIST IS TWO LINES A TASK — the key and the title, then the
+// marks — and the table keeps the labelled card, whose question is a field at a
+// time. The lead is exactly what the task IS; a status or an assignee leading
+// would push the title onto the second line.
+test("the list is compact on a phone with its key and title leading, the table is labelled", () => {
+  const list = mount("list", [row({ assignee: "iris" })]);
+  const wrap = list.container.querySelector(".crewlet-data-grid")!;
+  expect(wrap.getAttribute("data-phone-rows")).toBe("compact");
+  const leads = [
+    ...wrap.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell[data-lead]"),
+  ];
+  expect(leads.map((c) => c.getAttribute("data-label"))).toEqual(["Key", "Title"]);
+  // AND ITS LINE OF FACTS LEAVES OUT WHEN IT LAST MOVED — the one fact that
+  // wrapped a third line — and nothing else.
+  const omitted = [
+    ...wrap.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell[data-phone-omit]"),
+  ];
+  expect(omitted.map((c) => c.getAttribute("data-label"))).toEqual(["Updated"]);
+  cleanup();
+  const table = mount("table", [row()]);
+  expect(table.container.querySelector(".crewlet-data-grid")!.hasAttribute("data-phone-rows")).toBe(
+    false,
+  );
+});

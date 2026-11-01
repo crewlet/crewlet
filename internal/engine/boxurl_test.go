@@ -11,13 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A BOX URL THAT IS SET AND UNUSABLE REFUSES THE BOOT, naming the variable,
@@ -26,7 +23,7 @@ import (
 // The URLs a box dials back to the engine were handed on as they were: a
 // telemetry receiver URL with no scheme minted every run an endpoint its
 // exporter could not use, and a bridge URL with none mounted a bridge whose
-// every minted endpoint failed, so every agent-mode run's tool calls failed —
+// every minted endpoint failed, so every executor's tool calls failed —
 // each silently, inside a box the engine never hears from again; and the code
 // host's base is every run's clone and push. And the refusal never repeats
 // the value: its user information is a credential.
@@ -117,7 +114,7 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			if receiver == nil {
 				t.Fatalf("%s=%s built no receiver", sandbox.OtelReceiverURLVar, tc.value)
 			}
-			if got := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", time.Minute); !strings.HasPrefix(got, want+"/otlp/") {
+			if got := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false, time.Minute); !strings.HasPrefix(got, want+"/otlp/") {
 				t.Errorf("a run's OTLP endpoint is %q, want it under %q", got, want+"/otlp/")
 			}
 
@@ -125,26 +122,10 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			if bridge == nil {
 				t.Fatalf("%s=%s built no bridge", mcpbridge.BaseURLVar, tc.value)
 			}
-			// Mounted, as the API this process serves would: a bridge
-			// with no listener mints nothing.
-			bridge.Handler()
-			// BOUND TO THE RUN'S SEAT, as every launch binds it: the bridge
-			// acts as that seat on every call, so it refuses a session whose
-			// surface names none and mints no endpoint for it.
-			dev := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
-			endpoint := bridge.Open(&mcpbridge.Session{
-				RunID: "run-1", Handle: "dev", Role: "Dev",
-				Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-					ForTurn(&turnctx.Turn{RunID: "run-1", Seat: dev,
-						Org: &org.Organization{Name: "Acme", Roles: []*org.Role{dev}}}),
-				// A STOP CHECK, as every launch gives its session: the
-				// bridge opens none without one. Nobody stopped this seat.
-				Stopped: func(context.Context, string) (string, error) { return "", nil },
-			})
-			t.Cleanup(func() { bridge.Close("run-1") })
-			if !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix) {
-				t.Errorf("a run's bridge endpoint is %q, want it under %q",
-					endpoint, want+mcpbridge.PathPrefix)
+			// THE BASE EVERY RUN'S ENDPOINT IS MINTED UNDER, for a box that is
+			// not on this node's own host: the value as the operator wrote it.
+			if got := bridge.Reaches(false); got != want {
+				t.Errorf("a run's bridge endpoints are minted under %q, want %q", got, want)
 			}
 		})
 	}

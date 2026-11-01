@@ -49,9 +49,9 @@
 // `node.n3@8 pending=0`; n0, n2 and n4 — all three live throughout — arrived
 // after the marker at revisions 353 to 355. Every membership read is a listing
 // (seat placement divides by ListLive(ClassNode)), so a miss is a live node
-// that looks gone; and the
-// trim takes a MINIMUM across the positions rows every node heartbeats, so a
-// missed row raises the floor and deletes log records that node still needs.
+// that looks gone; and the trim takes a MINIMUM across the positions rows
+// every data node heartbeats, so a missed row raises the floor and deletes log
+// records that node still needs.
 //
 // The one exact "the cursor is at the tail" fact is the consumer's own store
 // EOF, and the broker does not hand it to a pass that could use it: a push
@@ -672,6 +672,20 @@ func leaderInfo(ctx context.Context, js jetstream.JetStream, stream string) (*je
 	}, nil)
 }
 
+// errUndecodableHeaders is a message the leader holds whose headers do not
+// decode, so nothing can say whether it is a value or a marker.
+//
+// A FACT ABOUT THE STORED MESSAGE, not about the read: the leader answered,
+// and will answer the same bytes until the key is written again. No writer in
+// this engine stores one — the client encodes every header it sends — so it is
+// a message published raw by something else, or corrupted. Every read that
+// meets one still answers it as unknown, which is right wherever a key's value
+// is a fact the caller must have; the custody claim alone tells it apart,
+// because for it a record nothing can read is a definite answer about one
+// batch ([coord.ErrCustodyUndecidable]), and read as an outage it would stop
+// every batch the keeper settles after it.
+var errUndecodableHeaders = errors.New("the leader holds a message whose headers do not decode")
+
 // errIndexLeaderless is a key index a member answered from its own copy while
 // its group had no leader.
 var errIndexLeaderless = errors.New("the key index was answered while the " +
@@ -823,14 +837,15 @@ func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // client's own rule (nats.go jetstream/kv.go get), because an entry this read
 // decoded differently from the pass's would list a key the pass would have
 // dropped or drop one it would have listed. The KV-Operation values are the
-// KV protocol's (ADR-8), which neither library exports as constants.
+// KV protocol's (ADR-8), which neither library exports as constants. Headers
+// that do not decode are [errUndecodableHeaders].
 func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if len(raw) == 0 {
 		return jetstream.KeyValuePut, nil
 	}
 	hdr, err := nats.DecodeHeadersMsg(raw)
 	if err != nil {
-		return 0, fmt.Errorf("decode the leader's message headers: %w", err)
+		return 0, fmt.Errorf("%w: %w", errUndecodableHeaders, err)
 	}
 	if op := hdr.Get(server.KVOperation); op != "" {
 		switch op {

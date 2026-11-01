@@ -174,7 +174,7 @@ function useOwnerName(): (owner: CodeOwner) => string {
       : (unitByKey(index, owner.ref)?.name ?? owner.ref);
 }
 
-/** Which seats read a repository, in words. Every person reads every repository (ADR-0058). */
+/** Which seats read a repository, in words. Every person reads every repository (ADR-0081). */
 function readByWord(visibility: string): string {
   return visibility === "unit" ? "Its owner's seats" : "Every seat";
 }
@@ -353,7 +353,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          A tool made this repository, and the code tools’ lifecycle requests change its settings —{" "}
+          A tool made this repository, and the code tools’ lifecycle requests change its settings:{" "}
           <span className="mono">code_update_repo</span> and{" "}
           <span className="mono">code_protect_branch</span>, which a seat or your assistant calls.
         </Callout>

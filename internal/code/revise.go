@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REVISION'S FACTS, RECORDED: what one revision of a live change is against
@@ -421,7 +422,7 @@ func (r *Revise) validFields() error {
 		field := fmt.Sprintf("revise.requested_owners[%d]", i)
 		switch {
 		case !o.Kind.Valid():
-			return badField(field+".kind", "%q is not one of %v", o.Kind, OwnerKinds())
+			return badField(field+".kind", "%q is not one of %s", o.Kind, words.Or(OwnerKinds()))
 		case strings.TrimSpace(o.Ref) == "":
 			return badField(field+".ref", "a path owner names a unit or a seat")
 		case i > 0 && compareOwners(r.RequestedOwners[i-1], o) >= 0:

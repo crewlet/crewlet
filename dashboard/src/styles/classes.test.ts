@@ -589,8 +589,8 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-app-shell__sheet",
-    why: "uilet's AppShell writes it on the floating sheet. styles/frame.css makes it a two-column grid while a peek is open and the frame has room for one (data-peek=\"column\", which the shell decides from app/layout.ts's peekColumnMin), so the detail rail is a column of the sheet rather than of whichever screen opened it. Another rule about OUR composition of the package's component.",
+    name: "crewlet-peek-rail__body",
+    why: "uilet's PeekRail writes it on the peek's own scroller, a size container of its own. styles/frame.css declares the record ceiling and the grid's sticky offset on it beside `main`, because a custom property resolves where it is declared and a record inside a peek is bounded by what the peek shows. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -704,16 +704,6 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-tabs--pill",
     why: "uilet's Tabs writes it for its default variant. styles/screens.css bounds it at its container and makes it scroll, which the package already does for its underline row and not for this one: `.crewlet-tabs` is `display: inline-flex` and the pill variant is `width: fit-content`, and neither caps — a flex row of nowrap labels has a min-content width equal to the sum of them. Measured on the tracker at 390px, the view switcher stood 497px wide and took the document to 642, so the reader dragged the whole page to reach a tab past the edge. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-property-list",
-    why: "uilet's PropertyList writes it. styles/screens.css pulls an inline picker's ghost trigger (`.cell-edit`) inside a properties rail's value back by its own padding, so Status, Priority, Type and Labels start on the column Assignee and Due start on rather than ten pixels right of it. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-description-list__detail",
-    why: "uilet's DescriptionList, which PropertyList draws each section with, writes it. styles/screens.css pulls an inline picker's ghost trigger (`.cell-edit`) inside a properties rail's value back by its own padding, so Status, Priority, Type and Labels start on the column Assignee and Due start on rather than ten pixels right of it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
 ];
@@ -962,12 +952,19 @@ describe("every class the dashboard names", () => {
 // arrives with the screen's chunk rather than in the first paint: `create.css`,
 // the create pages', `charter.css`, the Principles editor's, `brand.css`, the
 // brand's (Company › Brand, a kit's view and its gallery cover),
-// `folders.css`, the folders' (their tiles, dialogs, row and fact), and
-// `diff.css`, the one diff's, which every screen drawing a diff reaches
-// through `components/DiffView.tsx`. Each is appended after the entry's
-// sheets, so each of its rules must select a class of the screen it arrives
-// with, or a tie it wins would change other screens from the moment a reader
-// first opened that one.
+// `folders.css`, the folders' (their tiles, dialogs, row and fact),
+// `models.css`, Settings › Models' (its list, model page, wizard and By job),
+// `integrations.css`, Company › Integrations' (the directory's detail, an
+// app's tabs, its setup form and disconnect dialog), `access.css`, the
+// agents' access table an integration's Agents tab and an agent's Access tab
+// share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
+// panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
+// `chatlet-panes.css`, Chatlet's panes, dialogs and views, and `diff.css`,
+// the one diff's, which every screen drawing a diff reaches through
+// `components/DiffView.tsx`. Each is appended after the entry's sheets, so
+// each of its rules must select a class of the screen it arrives with, or a
+// tie it wins would change other screens from the moment a reader first
+// opened that one.
 const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> = {
   "create.css": {
     importer: "routes/artifacts/new/CreateShell.tsx",
@@ -980,6 +977,30 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "brand.css": {
     importer: "routes/brand/BrandPreview.tsx",
     owns: /\.(?:brand-[a-z-]+|artifacts-preview-brand)\b/,
+  },
+  "models.css": {
+    importer: "routes/settings/models/Models.tsx",
+    owns: /\.models-[a-z_-]+\b/,
+  },
+  "integrations.css": {
+    importer: "routes/settings/integrations/parts.tsx",
+    owns: /\.int-[a-z0-9-]+\b/,
+  },
+  "access.css": {
+    importer: "routes/settings/integrations/access/AgentsAccess.tsx",
+    owns: /\.agent-access(?:-[a-z-]+)?\b/,
+  },
+  "chatlet-frame.css": {
+    importer: "routes/chatlet/Chat.tsx",
+    owns: /\.chat-[a-z_-]+\b/,
+  },
+  "chatlet-room.css": {
+    importer: "routes/chatlet/Room.tsx",
+    owns: /\.chat-[a-z-]+\b/,
+  },
+  "chatlet-panes.css": {
+    importer: "routes/chatlet/Pane.tsx",
+    owns: /\.chat-[a-z_-]+\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",

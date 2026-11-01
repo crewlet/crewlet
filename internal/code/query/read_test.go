@@ -753,7 +753,7 @@ func TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill(t *testing.T) {
 	}
 }
 
-// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0059). A git node that has
+// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0082). A git node that has
 // never held a repository, asked a read that is NOT its walk's effective
 // home's, answers ErrGitUnready{not_held} at once and starts nothing — no
 // round, no GET of the object store — because a round, once begun, runs on
@@ -840,7 +840,7 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 }
 
 // A UNIT REPOSITORY REFUSES A SEAT OUTSIDE IT, on the chart of the node that
-// answers (ADR-0058): a seat of another unit is refused naming the
+// answers (ADR-0081): a seat of another unit is refused naming the
 // visibility, and nothing of the repository is read for it; a seat of the
 // owning unit, its lead and a person are served; a handle the chart holds no
 // seat for stands nowhere.

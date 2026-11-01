@@ -217,6 +217,9 @@ func TestASentinelWithNoLettersIsRefused(t *testing.T) {
 		{"an empty auth marker",
 			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: ""}} },
 			"auth_markers[0].sentinel is empty"},
+		{"an auth marker meaning nothing the API words",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: "Not logged in", Meaning: "expired"}} },
+			"auth_markers[0].meaning"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -560,6 +563,83 @@ func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
 	}
 }
 
+// NO SHIPPED AGENT FILE TELLS ITS CLI IT IS A TEXT MODEL BEHIND THE ENGINE'S
+// LOOP. That was true when the engine parsed tool calls out of a CLI's prose;
+// every CLI now drives its own loop and calls the seat's tools as the crewlet
+// MCP server, and a vendor that shows its model an agent's description shows
+// it a claim that no longer holds.
+func TestNoAgentFileCallsItsCLIATextModel(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		for _, ch := range p.channels() {
+			if ch.File != nil && strings.Contains(ch.File.Template, "text model") {
+				t.Errorf("%s's %s file says its CLI is a text model: %q", name, ch.field, ch.File.Template)
+			}
+		}
+	}
+}
+
+// A KEY HOME'S OWN SETTINGS ARE HELD TO A SEED'S RULES, in the one scope they
+// are written to. One at a seed_files path is that file's content in a key
+// home, written in its place; any other is a file of its own, and a second
+// write of one file, a file where a login lives, an empty one or one meant for
+// the call's working directory — which is written per call and knows nothing
+// of how the call signs in — is refused where the profile loads.
+func TestAKeyHomesOwnSettingsAreHeldToASeedsRules(t *testing.T) {
+	t.Parallel()
+	key := func(files ...map[string]any) map[string]any {
+		var out []any
+		for _, f := range files {
+			out = append(out, f)
+		}
+		return map[string]any{"key_seed_files": out}
+	}
+	file := func(path, content string) map[string]any { return map[string]any{"path": path, "content": content} }
+	for name, tc := range map[string]struct {
+		overrides map[string]any
+		says      string // "": loads
+	}{
+		"the settings a seed writes, in a key home": {
+			overrides: key(file(".gemini/settings.json", "{}")),
+		},
+		"a file of a key home's own": {
+			overrides: key(file(".gemini/key.json", "{}")),
+		},
+		"one meant for the call's directory": {
+			overrides: key(map[string]any{"path": ".gemini/settings.json", "in": "work", "content": "{}"}),
+			says:      `key_seed_files[0].in is "work"`,
+		},
+		"an empty one": {
+			overrides: key(file(".gemini/settings.json", "")),
+			says:      "key_seed_files[0].content is empty",
+		},
+		"one outside the home": {
+			overrides: key(file("../settings.json", "{}")),
+			says:      `key_seed_files[0].path "../settings.json" must be relative`,
+		},
+		"two of one file": {
+			overrides: key(file(".gemini/settings.json", "{}"), file(".gemini/settings.json", "{}")),
+			says:      `key_seed_files[1].path ".gemini/settings.json" is the file seed_files[0].path names too`,
+		},
+		"one where the login lives": {
+			overrides: key(file(".gemini/oauth_creds.json", "{}")),
+			says:      `key_seed_files[0].path ".gemini/oauth_creds.json" is the file credential_paths[0] names too`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load("gemini-cli", tc.overrides)
+			switch {
+			case tc.says == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case tc.says != "" && (err == nil || !strings.Contains(err.Error(), tc.says)):
+				t.Errorf("err = %v, want one saying %q", err, tc.says)
+			}
+		})
+	}
+}
+
 // EVERY SHIPPED PROFILE LOADS ON EVERY PLATFORM A RELEASE RUNS ON, not only on
 // the one the suite happens to run on: a platform section is merged in before
 // the profile is validated, so one that broke a rule would otherwise reach
@@ -678,6 +758,30 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
 			!strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
+		}
+	}
+}
+
+// WHAT A REFUSED SIGN-IN MEANT is read off the CLI's own words, first marker
+// first: Claude Code says "Not logged in" of a token it never used (one with a
+// space inside), and ends a revoked token's report in the same "Please run
+// /login" clause, which must not read as unused.
+func TestAnAuthFailureSaysWhatItMeant(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for said, want := range map[string]AuthMeaning{
+		"Not logged in · Please run /login":                                     AuthUnread,
+		"OAuth token has been revoked · Please run /login":                      AuthRefused,
+		"Failed to authenticate. API Error: 401 OAuth access token is invalid.": AuthRefused,
+		"Login expired · Please run /login":                                     AuthRefused,
+		"Invalid API key · Fix external API key":                                AuthRefused,
+		"a sentence no marker names":                                            AuthRefused,
+	} {
+		if got := p.AuthMeaning(said); got != want {
+			t.Errorf("AuthMeaning(%q) = %q, want %q", said, got, want)
 		}
 	}
 }

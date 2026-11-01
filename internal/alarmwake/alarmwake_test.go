@@ -192,7 +192,8 @@ func TestAnAlarmWakeSendsItsSeatToTheFleetsCurrentState(t *testing.T) {
 	t.Parallel()
 	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	trim := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the tracker log's trim is held",
-		Domains: []statelog.AlarmDomain{{Domain: "tracker", Detail: "held 3h"}, {Domain: "pages", Detail: "held 2h"}}}
+		Domains: []statelog.AlarmDomain{{Domains: []string{"tracker"}, Detail: "held 3h"},
+			{Domains: []string{"pages"}, Detail: "held 2h"}}}
 	seen := transitions(t, "node-b", &clock, []statelog.Alarm{trim}, nil, []statelog.Alarm{trim})
 	byChange := map[statelog.TransitionChange]statelog.AlarmTransition{}
 	for _, tr := range seen {

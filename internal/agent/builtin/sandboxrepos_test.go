@@ -78,7 +78,7 @@ func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 	woken.Senders = []types.CanonicalIdentity{{}}
 	_, err = codeDeps(stranger).ResolveRunRepos(t.Context(), woken,
 		[]builtin.RepoRequest{{Repo: "site", Access: "read"}}, maintains)
-	var refused *builtin.RefusedLaunch
+	var refused *builtin.RefusedCheckout
 	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden {
 		t.Fatalf("a turn a stranger woke answered %v, want a forbidden refusal", err)
 	}
@@ -135,7 +135,7 @@ func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
 	}
 
 	_, err := resolve(t, "agent-ceo", builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"})
-	var refused *builtin.RefusedLaunch
+	var refused *builtin.RefusedCheckout
 	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
 		!strings.Contains(refused.Result.Output, "this work is for the seat whose ask started its turn") {
 		t.Fatalf("a colleague who reads site asked for a write of main: %v, want a forbidden refusal naming "+
@@ -286,7 +286,7 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 			t.Parallel()
 			_, err := codeDeps(tc.host).ResolveRunRepos(t.Context(), launchTurn(t), []builtin.RepoRequest{tc.req},
 				maintains)
-			var refused *builtin.RefusedLaunch
+			var refused *builtin.RefusedCheckout
 			if !errors.As(err, &refused) || !strings.Contains(refused.Result.Output, tc.says) ||
 				(tc.refusal != "" && tools.RefusalOf(refused.Result) != tc.refusal) {
 				t.Fatalf("ResolveRunRepos = %v, want a %s refusal saying %q", err, tc.refusal, tc.says)
@@ -341,7 +341,7 @@ func TestALaunchResolvesARunsAskToOpenAChange(t *testing.T) {
 			t.Parallel()
 			_, err := codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), launchTurn(t),
 				[]builtin.RepoRequest{tc.req}, tc.grant)
-			var refused *builtin.RefusedLaunch
+			var refused *builtin.RefusedCheckout
 			if !errors.As(err, &refused) || !strings.Contains(refused.Result.Output, tc.says) {
 				t.Fatalf("ResolveRunRepos = %v, want a refusal saying %q", err, tc.says)
 			}

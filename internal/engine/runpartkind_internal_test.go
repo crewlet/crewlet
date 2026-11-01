@@ -12,17 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// EVERY PART OF A RUN'S ACCOUNT IS CONDENSED AS WHAT IT IS. A question
-// rewritten as though it were a report keeps findings and loses the options a
-// person has to choose between, and an unknown kind is refused outright — so
-// each part names a kind of its own, and one the compactor has instructions
-// for.
+// EVERY PART OF A RUN'S ACCOUNT IS CONDENSED AS WHAT IT IS. A failure
+// rewritten as though it were a report keeps findings and loses the cause a
+// reader needs, and an unknown kind is refused outright, so each part names a
+// kind of its own, and one the compactor has instructions for.
 func TestEveryRunPartIsCondensedAsWhatItIs(t *testing.T) {
 	t.Parallel()
 	want := map[sandbox.RunPart]compact.Kind{
-		sandbox.PartReport:   compact.KindReport,
-		sandbox.PartFailure:  compact.KindToolError,
-		sandbox.PartQuestion: compact.KindQuestion,
+		sandbox.PartReport:  compact.KindReport,
+		sandbox.PartFailure: compact.KindToolError,
 	}
 	for _, part := range sandbox.RunParts {
 		kind := runPartKind(part)

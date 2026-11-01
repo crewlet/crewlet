@@ -1,0 +1,30 @@
+-- An episode keeps WHO WROTE what its turn was asked, beside the ask.
+--
+-- WHAT WAS WRONG. Node migration 0042 stored the ask so the episode's vector
+-- could be made again, and the ask is, on most turns, somebody else's words: a
+-- chat message, a comment, a colleague's question. The turn read those words
+-- fenced, labelled with who wrote them and how far to rely on them (ADR-0040),
+-- and the label was gone the moment the turn ended — so every reader of a past
+-- ask (the turn-start "## Similar prior work" block, the episode summary's
+-- model, `query_episodes`) handed a model a stranger's words from a month ago
+-- as bare text in the seat's own memory, which is the voice it trusts most. A
+-- stand-in label would have been a guess: "external, nobody named" for a
+-- colleague's question, or a colleague's for a stranger's message.
+--
+-- WHAT IT HOLDS. The label the turn's ask was read under, as the turn's record
+-- carried it (`turn_completed.ask_provenance`, or the interactions' labels
+-- merged): `provenance.Label` as JSON — the surface, the trust its writers
+-- earned from this seat, every writer once. '' for an ask that holds nobody's
+-- words but the company's or the seat's own (a schedule's task), for a turn
+-- that was asked nothing, and for a compacted row, which keeps no ask. Every
+-- reader fences a past ask under it, or neutralises one with none.
+--
+-- NOT BACKFILLED: the event log a backfill would read keeps thirty days of this
+-- node's own turns and none of a seat hydrated from a peer, and no build ever
+-- shipped rows without it.
+--
+-- WHO HAS TO AGREE ON IT: whichever node holds the seat, like the row — the
+-- episode is a seat's memory and rides the seat's compacted memory changelog
+-- (internal/learning/memsync), which carries columns by name, this one with the
+-- ask it labels.
+ALTER TABLE episodes ADD COLUMN ask_provenance TEXT NOT NULL DEFAULT '';

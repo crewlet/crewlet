@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -18,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -38,33 +36,32 @@ import (
 // runner cannot be built at all.
 func starting(t *testing.T, models *phase.Registry) (*Engine, *pub) {
 	t.Helper()
-	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
+	// THE SEAT'S TEXT PHASES ON "only", its executor on the runner entry
+	// the case's models carry ([runnable]).
+	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only", runnerKey}}
 	p := &pub{}
 	// A COORDINATION STORE, as every engine `crewlet run` builds has one
 	// (local coordination is an in-memory fleet): a turn whose identity
 	// carries no start — these cases' literal run ids carry none — rebases
 	// there (rebase.go), and an engine with nowhere to record that refuses
 	// the turn rather than guess.
-	e := &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}}
+	e := withSessions(t, &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Models: models,
 		Tools:  tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	return e, p
 }
 
-// refusingModels is the seat's one model, which no case reaches.
+// refusingModels is the seat's one model, which no case reaches, and the
+// runner entry its executor launches on.
 func refusingModels(t *testing.T) *phase.Registry {
 	t.Helper()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
-	return models
+	return runnable(t, []phase.Entry{{Key: "only", Provider: refusingProvider{}}})
 }
 
 // published is the capture's events, in the order they were published.
@@ -324,12 +321,7 @@ func (b *begins) begin(context.Context) error {
 func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
-	state, err := execstate.Encode(execstate.State{
-		Messages: []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID: "call-1", Name: builtin.RunSandboxTool,
-		}}}},
-		PendingCallID: "call-1", PendingCallName: builtin.RunSandboxTool,
-	})
+	state, err := execstate.Encode(execstate.State{Version: execstate.Version, Round: 1})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -338,8 +330,8 @@ func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
 		Run: sandbox.PendingRun{
 			TurnID: "run-4", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test", DelegationDepth: 3,
+			ExecuteState: state,
 		},
-		State:  state,
 		Answer: "use main",
 		Begin:  b.begin,
 	})

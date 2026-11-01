@@ -7,7 +7,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The project tools: where work is filed, and what each project expects of it.
@@ -34,23 +35,23 @@ import (
 
 // ProjectReader is the tracker read side these tools need.
 type ProjectReader interface {
-	Projects(ctx context.Context, q tracker.ProjectQuery) (
-		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
-		tracker.ProjectDetail, error)
+	Projects(ctx context.Context, q worklet.ProjectQuery) (
+		worklet.ProjectListing, error)
+	Project(ctx context.Context, q worklet.ProjectDetailQuery) (
+		worklet.ProjectDetail, error)
 }
 
 type listProjects struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*listProjects)(nil)
 
-func (t *listProjects) Name() string { return tracker.ListProjectsTool }
+func (t *listProjects) Name() string { return worklet.ListProjectsTool }
 
 func (t *listProjects) Description() string {
 	return "The projects this company files work into, with how much work " +
 		"each holds — waiting (todo), started (active), done and closed — " +
 		"who leads it and when it is meant to be finished. " +
-		"create_work_item refuses a project that is not here."
+		worklet.CreateWorkItemTool + " refuses a project that is not here."
 }
 
 func (t *listProjects) Parameters() map[string]any {
@@ -69,7 +70,7 @@ func (t *listProjects) Parameters() map[string]any {
 			},
 			"archived": map[string]any{
 				"type": "string",
-				"enum": tracker.ArchivedModeNames(),
+				"enum": worklet.ArchivedModeNames(),
 				"description": "Which set: `false` for the live projects, " +
 					"`only` for the retired ones alone, `true` for both. " +
 					"Default `false` — no new work is filed into a retired " +
@@ -86,9 +87,9 @@ func (t *listProjects) Parameters() map[string]any {
 					"the page is taken, so `-active` is the most started work " +
 					"anywhere rather than the most of one page, and `target` " +
 					"the soonest target date (projects with none last). One of " +
-					strings.Join(tracker.ProjectSortNames(), ", ") +
+					words.Or(worklet.ProjectSortNames()) +
 					", each optionally with a leading `-` for descending. " +
-					"Default " + string(tracker.ProjectSortKey) + ".",
+					"Default " + string(worklet.ProjectSortKey) + ".",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -110,19 +111,20 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE IDENTITY CHECK IS ON A READ TOO, exactly as it is on
 	// get_work_catalogue beside it: outside a turn a seat's registry has
 	// no seat, and a tool that answered anyway would answer as nobody.
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.ListProjectsTool), nil
+		return notInATurn(worklet.ListProjectsTool), nil
 	}
 	reader, ok := t.deps.Reader.(ProjectReader)
 	if !ok || t.deps.Reader == nil {
-		return unconfigured(tracker.ListProjectsTool), nil
+		return unconfigured(worklet.ListProjectsTool), nil
 	}
 	// THE SAME GRAMMAR THE SCREEN'S `archived=` AND `sort=` ARE, parsed by
-	// the one function that owns them — see [tracker.ParseProjectQuery]. A
+	// the one function that owns them (see [worklet.ParseProjectQuery]). A
 	// model that spelled one wrong is told what is accepted rather than
 	// quietly answered about a different set.
-	q, err := tracker.ParseProjectQuery(tracker.MapParams(args))
+	q, err := worklet.ParseProjectQuery(worklet.MapParams(args))
 	if err != nil {
 		// CLIPPED, because the refusal quotes the model's OWN argument
 		// back at it and a smuggled newline breaks the render — see
@@ -135,9 +137,9 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// REFUSES a tool answer past [ToolAnswerBytes] rather than cutting it,
 	// so the tracker's screen-sized cap reached a model as advice to narrow
 	// and no projects at all. A page with `total` beside it is the honest
-	// answer — see [tracker.MaxProjectsPerToolAnswer].
-	if q.Limit <= 0 || q.Limit > tracker.MaxProjectsPerToolAnswer {
-		q.Limit = tracker.MaxProjectsPerToolAnswer
+	// answer (see [worklet.MaxProjectsPerToolAnswer]).
+	if q.Limit <= 0 || q.Limit > worklet.MaxProjectsPerToolAnswer {
+		q.Limit = worklet.MaxProjectsPerToolAnswer
 	}
 	q.Units = t.deps.Units
 	// THE SEAT'S OWN LEVEL, like every other read here — see
@@ -145,16 +147,24 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	q.Level = seatReadLevel
 	listing, err := reader.Projects(ctx, q)
 	if err != nil {
-		return readFailure(ctx, tracker.ListProjectsTool, err), nil
+		return readFailure(ctx, worklet.ListProjectsTool, err), nil
 	}
-	return jsonResult(listing)
+	// A PROJECT'S NAME AND PURPOSE are words whoever set them wrote, and
+	// the row records who changed the project last rather than who wrote
+	// either (ADR-0040).
+	read := newForeignRead(turn, actor.Handle)
+	if len(listing.Projects) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, worklet.ListProjectsTool, listing,
+		"Ask for fewer with `limit`, or narrow with `unit` or `archived`.")
 }
 
 type describeProject struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*describeProject)(nil)
 
-func (t *describeProject) Name() string { return tracker.DescribeProjectTool }
+func (t *describeProject) Name() string { return worklet.DescribeProjectTool }
 
 func (t *describeProject) Description() string {
 	return "Everything one project expects of the work filed into it: the six " +
@@ -172,7 +182,7 @@ func (t *describeProject) Parameters() map[string]any {
 		"properties": map[string]any{
 			"project": map[string]any{
 				"type": "string",
-				"description": "The project key, as list_projects reports it. " +
+				"description": "The project key, as " + worklet.ListProjectsTool + " reports it. " +
 					"Omit for your own.",
 			},
 			"for_type": map[string]any{
@@ -195,11 +205,11 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.DescribeProjectTool), nil
+		return notInATurn(worklet.DescribeProjectTool), nil
 	}
 	reader, ok := t.deps.Reader.(ProjectReader)
 	if !ok || t.deps.Reader == nil {
-		return unconfigured(tracker.DescribeProjectTool), nil
+		return unconfigured(worklet.DescribeProjectTool), nil
 	}
 	project := strings.TrimSpace(argString(args, "project"))
 	if project == "" {
@@ -209,28 +219,35 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if project == "" {
 		return failed("Name a project — this seat's unit owns none, so there " +
-			"is no default to fall back on. list_projects reports the keys."), nil
+			"is no default to fall back on. " + worklet.ListProjectsTool + " reports the keys."), nil
 	}
-	detail, err := reader.Project(ctx, tracker.ProjectDetailQuery{
+	detail, err := reader.Project(ctx, worklet.ProjectDetailQuery{
 		Project: project,
 		ForType: strings.TrimSpace(argString(args, "for_type")),
 		Units:   t.deps.Units,
 		Level:   seatReadLevel,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrNoProject):
+	case errors.Is(err, worklet.ErrNoProject):
 		// THE READER'S OWN SENTENCE, which names the nearest keys. This
 		// used to go through [readFailure], which told a model that
 		// typed a key wrong that the tracker could not be read and that
 		// it must not conclude the project does not exist — the one
 		// conclusion it needed to draw.
 		return refusedBy(tools.RefusalNotFound, err, clip(err.Error())), nil
-	case errors.Is(err, tracker.ErrNoType):
+	case errors.Is(err, worklet.ErrNoType):
 		// A `for_type` THE PROJECT DOES NOT FILE is the argument to
 		// change, and the reader's sentence names the types it does.
 		return refusedBy(tools.RefusalInvalid, err, clip(err.Error())), nil
 	case err != nil:
-		return readFailure(ctx, tracker.DescribeProjectTool, err), nil
+		return readFailure(ctx, worklet.DescribeProjectTool, err), nil
 	}
-	return jsonResult(detail)
+	// ITS NAME, ITS PURPOSE AND ITS OWN STATUSES AND LABELS are words
+	// whoever set its policy wrote, which the project records no writer of
+	// (ADR-0040); the catalogue's types and fields beside them are the
+	// company's own configuration and are only neutralised.
+	read := newForeignRead(turn, actor.Handle)
+	namesBy(read)
+	return read.answer(ctx, worklet.DescribeProjectTool, detail,
+		"Narrow it with `for_type`.")
 }

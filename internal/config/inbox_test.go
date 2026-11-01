@@ -61,27 +61,27 @@ func TestTheInboxHorizonIsTheCompanys(t *testing.T) {
 
 // THE TRACKER'S OLD BLOCK IS AN UNKNOWN KEY, refused like any other.
 //
-// `tracker.native` held only the inbox horizon, and it is gone with it rather
+// `tracker.worklet` held only the inbox horizon, and it is gone with it rather
 // than kept as a second spelling: no release ever read it, so nothing written
 // for one exists to be honoured. A document still carrying it is refused at its
-// own line as an ordinary key that is not a setting — not one of the keys a
-// release did ship and removed, whose refusals name a replacement — because
+// own line as an ordinary key that is not a setting (not one of the keys a
+// release did ship and removed, whose refusals name a replacement), because
 // accepting and ignoring it would run a company on a horizon its author did not
 // choose.
 //
 // Mutation: keep the block on the tracker, or decode the company without
 // unknown keys refused, and the document is accepted.
-func TestTheTrackerNativeBlockIsAnUnknownKey(t *testing.T) {
+func TestTheTrackerWorkletBlockIsAnUnknownKey(t *testing.T) {
 	t.Parallel()
-	_, err := config.ParseCompany([]byte("name: Acme\ntracker:\n  native:\n" +
+	_, err := config.ParseCompany([]byte("name: Acme\ntracker:\n  worklet:\n" +
 		"    inbox_retention_days: 90\n"))
 	var f *config.Fault
 	if !errors.Is(err, config.ErrUnknownField) || !errors.As(err, &f) {
-		t.Fatalf("tracker.native was answered %v, want an unknown key", err)
+		t.Fatalf("tracker.worklet was answered %v, want an unknown key", err)
 	}
-	if f.Line != 3 || !strings.Contains(f.Detail, `"native"`) ||
+	if f.Line != 3 || !strings.Contains(f.Detail, `"worklet"`) ||
 		!strings.Contains(f.Detail, "Check the spelling") {
-		t.Errorf("tracker.native was refused at line %d saying %q, want line 3 and "+
+		t.Errorf("tracker.worklet was refused at line %d saying %q, want line 3 and "+
 			"the ordinary refusal of a key that is not a setting", f.Line, f.Detail)
 	}
 }

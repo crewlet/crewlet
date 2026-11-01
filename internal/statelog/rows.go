@@ -163,7 +163,7 @@ type Snap struct {
 	// EXPECTATION, and the only thing an expectation is ever formed
 	// from. A zero anchor means this node has consumed nothing on this
 	// subject in this generation — or the trim removed its anchor
-	// because the log holds none of its records (ADR-0050) — which is a
+	// because the log holds none of its records (ADR-0073) — which is a
 	// probe rather than a licence to publish at zero.
 	Anchor Position
 

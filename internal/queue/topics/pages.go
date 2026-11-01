@@ -28,7 +28,7 @@ const (
 
 // The object kinds are NOT constants here, for the reason the tracker's are
 // not: a kind is one bare word, and this package's own marker guard matches a
-// dotless constant by shape. The kinds are a typed enum in internal/pages,
+// dotless constant by shape. The kinds are a typed enum in internal/doclet,
 // which is the package that switches on them; what lives here is the GRAMMAR
 // they are composed into, which is the half two processes have to agree about.
 

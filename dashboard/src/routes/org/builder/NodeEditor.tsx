@@ -57,6 +57,7 @@ import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/Confi
 import { useQuery } from "~/lib/useQuery.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { handleLabel } from "~/lib/seats.ts";
+import { sandboxWords } from "~/routes/agents/seat/profile.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
 import { TOOL_TONE, toolRollup } from "~/lib/toolState.ts";
@@ -1370,11 +1371,14 @@ function SeatEditor({
           content: (
             <>
               {/* OPTIONAL, AND SAID SO: a person who works only through the
-                  dashboard has no chat account to declare, and the engine
-                  warns rather than refuses a human seat with none. */}
+                  dashboard has no other system's account to declare, and the
+                  engine admits a human seat with none — warning only where it
+                  costs something, on a company talking on Mattermost or
+                  Slack. Not "how agents mention them": on the engine's own
+                  chat an agent mentions a person by their seat. */}
               <EditorSection
                 title="Contact identities"
-                hint={`How agents mention and reach the person, and how their activity is attributed. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
+                hint={`The accounts other systems know the person by (a chat vendor's, a code host's or the tracker's), so agents there can reach them and their activity there is attributed to them. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
               >
                 {errorFor(["contact"]) && (
                   <Callout variant="danger" role="alert">
@@ -1883,7 +1887,7 @@ function ModelSection({
                 ? `Tried in this order: ${chain.join(", then ")}.`
                 : unpinned
                   ? `Empty runs on ${unpinned}, the default.`
-                  : "No model provider yet. Add one in the configuration."
+                  : "No model provider yet. Add one under Settings, Models."
             }
             error={withProblems(chainError)}
           >
@@ -2237,12 +2241,13 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
     });
   }
   if (isRecord(data.sandbox)) {
-    const enabled = data.sandbox.enabled === true ? "Enabled" : "Not enabled";
-    const runIn = typeof data.sandbox.run_in === "string" ? `, runs in ${data.sandbox.run_in}` : "";
+    // THE SEAT PAGE'S WORDS: what the seat's own block sets for the box its
+    // executor runs in. Where that box is belongs to the model entry that
+    // launches the run, not to this block.
     facts.push({
       key: "sandbox",
-      label: "Sandbox",
-      value: `${enabled}${runIn}`,
+      label: "Executor box",
+      value: sandboxWords(data),
       reason: "Edit in the configuration file.",
     });
   }

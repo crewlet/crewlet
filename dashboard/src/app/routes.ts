@@ -60,12 +60,44 @@ export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
  */
 export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
- * A knowledge container key: whatever the engine keeps, which is UPPERCASED on
- * every path that writes one (`pages.Store` uppercases the key a page is
+ * The places under `#/chatlet` that are not a room, each a reserved word. A
+ * room is addressed by its uuid ([ID_SHAPE]), so no word here can ever be
+ * read as a room, and no room can be shadowed by one.
+ */
+export const CHAT_VIEWS = [
+  "activity",
+  "threads",
+  "drafts",
+  "saved",
+  "search",
+  "browse",
+  "new",
+] as const;
+export type ChatView = (typeof CHAT_VIEWS)[number];
+
+/**
+ * A view's screen: the chat row's section, named `chatlet-{view}` as every
+ * other section's screen is named after its row, so the assistant's page
+ * context and link table, the lazy chunks and the trail name it one way.
+ */
+export type ChatViewScreen = `chatlet-${ChatView}`;
+
+/** The screen a view is drawn as. */
+export function chatViewScreen(view: ChatView): ChatViewScreen {
+  return `chatlet-${view}`;
+}
+
+/** The view a screen draws, or null for a screen that is no Chatlet view. */
+export function chatViewOf(screen: string): ChatView | null {
+  return CHAT_VIEWS.find((view) => screen === `chatlet-${view}`) ?? null;
+}
+/**
+ * A Doclet container key: whatever the engine keeps, which is UPPERCASED on
+ * every path that writes one (`doclet.Store` uppercases the key a page is
  * created in and the key `EnsureContainer` makes), so it never holds a
  * lowercase letter. Looser than [KEY_SHAPE] on purpose — a unit's `space:` may
  * carry a dash or start with a digit — and exactly as strict where it matters:
- * every reserved segment is lowercase, so `#/knowledge/skills` can never be
+ * every reserved segment is lowercase, so `#/doclet/skills` can never be
  * read as a container called `skills`.
  */
 export const CONTAINER_SHAPE = /^[^a-z]+$/;
@@ -176,6 +208,9 @@ export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
  */
 export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
 
+/** Settings › Models, where a model is added, signed in and tested: the page a screen sends a reader to give the company a model. */
+export const MODELS_PATH: readonly string[] = ["settings", "models"];
+
 /**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
@@ -204,11 +239,11 @@ export type FramedScreen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
-  | { screen: "work-projects" }
-  | { screen: "work-tasks" }
-  | { screen: "work-views"; id?: string }
-  | { screen: "work-history" }
-  | { screen: "work-search" }
+  | { screen: "worklet-projects" }
+  | { screen: "worklet-tasks" }
+  | { screen: "worklet-views"; id?: string }
+  | { screen: "worklet-history" }
+  | { screen: "worklet-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
   | { screen: "code-changes" }
@@ -229,6 +264,13 @@ export type FramedScreen =
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
   | { screen: "budgets" }
+  /**
+   * A room by its id, or neither: the bare `#/chatlet`, which the screen
+   * replaces with the place it means (Activity, its landing).
+   */
+  | { screen: "chatlet"; id?: string }
+  /** One of the views beside the rooms. */
+  | { screen: ChatViewScreen }
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
@@ -237,7 +279,7 @@ export type FramedScreen =
   | { screen: "trace"; id: string }
   | { screen: "events" }
   | { screen: "event"; id: string }
-  | { screen: "knowledge" }
+  | { screen: "doclet" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
   | { screen: "new-page" }
@@ -288,7 +330,7 @@ export interface Unresolved {
   resolved: false;
   /** The workspace the head names, or "" when it names none. */
   workspace: Workspace | "";
-  /** What was asked for, in words: `“views/x/y” under Work`. */
+  /** What was asked for, in words: `“views/x/y” under Worklet`. */
   what: string;
   /** Why there is nothing here, where the product knows. */
   hint?: string;
@@ -323,7 +365,7 @@ export function resolve(path: string[]): Route {
   });
   // THE ROW THE ADDRESS IS IN, by the longest prefix it owns (`nav.ts`), so a
   // page nothing resolves under Company is Not Found under the row a reader
-  // was in: `#/company/org/x` under the Org chart, not under Overview.
+  // was in: `#/company/org/x` under the Org chart, not under Principles.
   const under = (label: string) => `“${rest.join("/")}” under ${label}`;
   switch (head) {
     case "home":
@@ -340,14 +382,16 @@ export function resolve(path: string[]): Route {
     }
     case "company":
       return company(rest, screen, under);
-    case "work":
-      return work(rest, screen, under);
+    case "worklet":
+      return worklet(rest, screen, under);
     case "code":
       return code(rest, screen, under);
+    case "chatlet":
+      return chatlet(rest, screen, under);
     case "live":
       return live(rest, screen, under);
-    case "knowledge":
-      return knowledge(rest, screen, under);
+    case "doclet":
+      return doclet(rest, screen, under);
     case "artifacts":
       return artifactsRoute(rest, screen, under);
     case "settings":
@@ -384,26 +428,30 @@ function signIn(route: FramelessRoute, rest: string[]): Route {
 }
 type Under = (label: string) => string;
 
-function work(rest: string[], screen: Make, under: Under): Route {
+function worklet(rest: string[], screen: Make, under: Under): Route {
   const [first, second] = rest;
-  // WORK OPENS ON ITS PROJECTS: the landing is All projects' first lens, and
-  // the company's task list is the lens beside it.
-  if (first === undefined) return screen({ screen: "work-projects" });
+  // WORKLET OPENS ON ITS PROJECTS: the landing is All projects' first lens,
+  // and the company's task list is the lens beside it.
+  if (first === undefined) return screen({ screen: "worklet-projects" });
   if (first === "views") {
-    if (rest.length > 2) return missing("work", under("Work"));
-    return screen(second ? { screen: "work-views", id: second } : { screen: "work-views" });
+    if (rest.length > 2) return missing("worklet", under("Worklet"));
+    return screen(second ? { screen: "worklet-views", id: second } : { screen: "worklet-views" });
   }
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
   // its own route, and a change is a record on the item it changed.
   if (first === "tasks" || first === "history" || first === "search") {
-    if (rest.length > 1) return missing("work", under("Work"));
+    if (rest.length > 1) return missing("worklet", under("Worklet"));
     return screen({
       screen:
-        first === "tasks" ? "work-tasks" : first === "history" ? "work-history" : "work-search",
+        first === "tasks"
+          ? "worklet-tasks"
+          : first === "history"
+            ? "worklet-history"
+            : "worklet-search",
     });
   }
-  if (rest.length > 1) return missing("work", under("Work"));
+  if (rest.length > 1) return missing("worklet", under("Worklet"));
   // A PROJECT OR AN ITEM, decided by the SHAPE of the key rather than by a
   // lookup, so the route resolves before any answer arrives. A key or an id
   // BOTH resolve to an item, because the reader has whichever they were shown.
@@ -411,16 +459,16 @@ function work(rest: string[], screen: Make, under: Under): Route {
   if (ITEM_KEY_SHAPE.test(first) || ID_SHAPE.test(first)) {
     return screen({ screen: "item", id: first });
   }
-  // AND ANYTHING ELSE IS NOTHING HERE. Read as an item id, a word — a reserved
-  // one for a section Work does not have (`turns`), or one for a section still
-  // to come — asked the tracker for an item called that and drew its refusal
+  // AND ANYTHING ELSE IS NOTHING HERE. Read as an item id, a word (a reserved
+  // one for a section Worklet does not have, `turns`, or one for a section
+  // still to come) asked Worklet for an item called that and drew its refusal
   // under a trail naming a page that does not exist.
-  return missing("work", under("Work"));
+  return missing("worklet", under("Worklet"));
 }
 
 /**
  * Code's sections, each a list that takes no tail: the company's changes, at
- * the bare `#/code` — the row's landing, as Work's projects are at `#/work` —
+ * the bare `#/code` — the row's landing, as Worklet's projects are at `#/worklet` —
  * the repositories the engine hosts, and one repository's pushes, which
  * `repo=` names rather than a segment, since a section is a path and the
  * repository is what it is narrowed to. Under Repositories, each repository's
@@ -533,6 +581,36 @@ function org(rest: string[], screen: Make, under: Under): Route {
   }
 }
 
+function chatlet(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  // THE BARE ADDRESS RESOLVES, and the screen says it again as the place it
+  // means, by replace: Activity, or New message to the seat a `dm=` names.
+  if (first === undefined) return screen({ screen: "chatlet" });
+  // THE VIEWS THAT ARE NOT A ROOM are reserved words ([CHAT_VIEWS]), and a
+  // tail under one is nothing: no view has an object of its own to address.
+  const view = CHAT_VIEWS.find((name) => name === first);
+  if (view) {
+    if (tail.length) return missing("chatlet", under("Chatlet"));
+    return screen({ screen: chatViewScreen(view) });
+  }
+  // THE ROOM IS THE ONLY THING UNDER `chatlet` WITH AN ID — the uuid the engine
+  // minted for it, a direct conversation's derived from who is in it — and
+  // never its NAME. A name is what a person types, so `#/chatlet/general` is the
+  // address somebody guesses, and read as a room it would ask the engine for
+  // one under an id nobody minted. The thread is deliberately NOT a segment
+  // either: it is `?thread=` on the room you are already in, because a thread
+  // is one level deep and has no life away from its room. Both guesses get the
+  // sentence that says how a room and a thread are reached.
+  if (tail.length || !ID_SHAPE.test(first)) {
+    return missing(
+      "chatlet",
+      under("Chatlet"),
+      "a room is opened from your rooms, a mention or a search, and a thread from its room",
+    );
+  }
+  return screen({ screen: "chatlet", id: first });
+}
+
 function live(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "live" });
@@ -561,20 +639,16 @@ function live(rest: string[], screen: Make, under: Under): Route {
   }
 }
 
-function knowledge(rest: string[], screen: Make, under: Under): Route {
+function doclet(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "knowledge" });
+  if (first === undefined) return screen({ screen: "doclet" });
   // ONE ADDRESS PER PAGE, BY ITS ID. A page was addressed by its container
   // and title, and a title changes on rename — so every link anybody had
   // copied broke the day somebody fixed a heading.
   if (first === "pages") {
     const [id] = tail;
     if (tail.length !== 1 || id === undefined || !ID_SHAPE.test(id)) {
-      return missing(
-        "knowledge",
-        under("Knowledge"),
-        "a page is opened from a search or its container",
-      );
+      return missing("doclet", under("Doclet"), "a page is opened from a search or its container");
     }
     return screen({ screen: "page", id });
   }
@@ -588,14 +662,14 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
   if (first === "diaries") {
     if (tail.length === 0) return screen({ screen: "diaries" });
     if (tail.length === 1 && tail[0]) return screen({ screen: "diary", handle: tail[0] });
-    return missing("knowledge", under("Knowledge"), "a diary is opened from the diaries list");
+    return missing("doclet", under("Doclet"), "a diary is opened from the diaries list");
   }
   // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
   // reserved word or nothing, and never a container the engine could have
-  // minted — so a knowledge section that has not landed yet answers Not Found
+  // minted, so a Doclet section that has not landed yet answers Not Found
   // rather than a container screen asking the engine for a key it cannot hold.
   if (reserved(first) || tail.length > 0 || !CONTAINER_SHAPE.test(first)) {
-    return missing("knowledge", under("Knowledge"));
+    return missing("doclet", under("Doclet"));
   }
   return screen({ screen: "container", key: first });
 }
@@ -658,13 +732,13 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
 
 /**
  * Settings' sections. The bare `#/settings` names none of them: the Settings
- * row lands on its first section, Models & keys, and an address is one page.
+ * row lands on its first section, Models, and an address is one page.
  */
 function settings(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   const none = () => missing("settings", under("Settings"));
   if (first === undefined) {
-    return missing("settings", "Settings itself", "Settings opens on Models & keys");
+    return missing("settings", "Settings itself", "Settings opens on Models");
   }
   // THE SECTIONS THAT TAKE NO TAIL: every row they list has a page of its
   // own somewhere else, or none.

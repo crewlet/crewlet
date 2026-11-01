@@ -3,6 +3,12 @@
 // thrashing, and the engine grants more rounds or falls through to the rescue
 // path.
 //
+// ONE PHASE REACHES IT: onboarding, the only engine-driven phase with a
+// ceiling above its round budget. The executor is its coding CLI's own run,
+// bounded by the run's own turn cap rather than by engine rounds; the reviewer
+// runs on a fixed budget with no ceiling, and a worker's loop has no
+// extension.
+//
 // THE ARITHMETIC IS SEPARATED FROM THE JUDGE. How many rounds a decision is
 // worth — clamped by the step size, by the headroom under the phase ceiling,
 // and by a judge that says extend while asking for nothing — is pure policy,
@@ -17,6 +23,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Decision is the judge's answer.
@@ -115,6 +123,12 @@ type Request struct {
 	// RemainingUnderCeiling is what is left for the whole phase across all
 	// extensions.
 	RemainingUnderCeiling int
+
+	// Boundary is the token the turn's fences carry ([turnctx.Turn.Boundary]):
+	// the turn's ask ([Request.Task]) fences the words somebody else wrote
+	// under it, and a judge reads them under a token of its own call instead
+	// ([LLMJudge.Decide]), so nothing it could echo is one of the turn's.
+	Boundary provenance.Boundary
 }
 
 // Judge is the model-facing half.
@@ -200,36 +214,26 @@ func (p Policy) Grant(d Decision, used int) int {
 }
 
 // FinishHint is the closing line of the nudge, and it is phase-specific
-// because the phases END differently.
+// because the phases END differently: onboarding exits by calling
+// `mark_onboarded`, and a phase told the wrong way to finish spends its
+// granted rounds trying to leave through a door it does not have, which is
+// the exact failure the extension was granted to avoid.
 //
-// The executor exits by calling `submit_work`, the reviewer by calling
-// `submit_review`, onboarding by calling `mark_onboarded`. A phase told the
-// wrong way to finish spends its granted rounds trying to leave through a door
-// it does not have, which is the exact failure the extension was granted to
-// avoid.
+// NOT A FALLBACK CASE, and the difference is not cosmetic. Told to stop
+// calling tools, an extended onboarding pass never reaches mark_onboarded —
+// so the marker is never stamped, the seat stays un-onboarded, and the pass
+// re-runs on every turn that seat ever takes. A silent, permanent, per-turn
+// cost, caused by one missing case.
 //
-// ONBOARDING IS NOT A FALLBACK CASE, and the difference is not cosmetic. Told
-// to stop calling tools, an extended onboarding pass never reaches
-// mark_onboarded — so the marker is never stamped, the seat stays
-// un-onboarded, and the pass re-runs on every turn that seat ever takes. A
-// silent, permanent, per-turn cost, caused by one missing case.
-//
-// THOSE THREE ARE EVERY PHASE A NUDGE CAN REACH: the runner's phase loop is
-// the one caller, and it runs nothing else. Any other phase answers "" — a
-// worker in particular runs its own loop with no extension, and the hint this
-// once gave it ("stop calling tools and return a plain-text summary") was the
-// opposite of its contract, which is to finish by calling `submit_result`.
+// ONBOARDING IS EVERY PHASE A NUDGE CAN REACH (see the package doc). Any
+// other phase answers "" — a worker in particular runs its own loop with no
+// extension, and the hint this once gave it ("stop calling tools and return a
+// plain-text summary") was the opposite of its contract, which is to finish
+// by calling `submit_result`. A hint for a phase no nudge reaches is a
+// sentence nothing tests against a run.
 func FinishHint(ph phase.Phase) string {
-	switch ph {
-	case phase.Execute:
-		return "If you cannot finish in this window, call `submit_work` with " +
-			"whatever you have — reporting honestly what is done and what is " +
-			"outstanding is better than being cut off mid-round."
-	case phase.Review:
-		return "If you cannot finish in this window, call `submit_review` with " +
-			"the decision the evidence supports so far."
-	case phase.Onboarding:
-		return "If you cannot finish in this window, call `mark_onboarded` " +
+	if ph == phase.Onboarding {
+		return "If you cannot finish in this window, call `" + toolname.MarkOnboarded + "` " +
 			"anyway after persisting what you have read — an onboarding pass " +
 			"that never marks itself done runs again on every turn you take."
 	}
@@ -237,7 +241,13 @@ func FinishHint(ph phase.Phase) string {
 }
 
 // Nudge is the message handed to a phase that has been granted more rounds.
-func Nudge(ph phase.Phase, granted int, reason string) string {
+//
+// THE REASON IS DEFUSED under b, the turn's token (ADR-0040): it is a model's
+// sentence about a phase judged against the turn's ask, which carries other
+// people's words, and it is written into the seat's own conversation, where
+// nothing it echoes may open or close one of the turn's fences.
+func Nudge(b provenance.Boundary, ph phase.Phase, granted int, reason string) string {
+	reason = provenance.Neutralise(b, reason)
 	if reason == "" {
 		reason = "(none)"
 	}

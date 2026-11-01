@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -45,9 +47,9 @@ type Company struct {
 	// ("next Friday") or an all-day date resolves to; and the wall clock a
 	// schedule that names no zone of its own fires on. One clock, and a
 	// top-level field rather than a setting of any one subsystem, because
-	// the three this replaced — the native tracker's own clock, the
-	// scheduler's default zone and the UTC every other day boundary
-	// assumed — disagreed about where one company's day began (ADR-0018).
+	// the three this replaced (Worklet's own clock, the scheduler's
+	// default zone and the UTC every other day boundary assumed) disagreed
+	// about where one company's day began (ADR-0018).
 	//
 	// A clock for AUTHORED INSTANTS AND CALENDAR BOUNDARIES only: no
 	// duration is measured against it, because a duration measured on a
@@ -67,6 +69,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
+
 	// Code is the engine's own git host: whether this company hosts its
 	// repositories in the engine, and the limits a push is held to. See
 	// [Code].
@@ -79,6 +84,10 @@ type Company struct {
 	// every domain that keeps one writes to the people its changes
 	// concern. See [Inbox].
 	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
+
+	// Assistant is whether the Dashboard Assistant runs for this company,
+	// on which models, and the bounds of one turn. See [Assistant].
+	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
 
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
@@ -166,6 +175,12 @@ type Company struct {
 
 	// Units are the hierarchy, nesting to any depth.
 	Units []Unit `yaml:"units,omitempty" json:"units,omitempty" desc:"The org hierarchy; units nest to any depth."`
+
+	// SeatAccessMigrated are the integrations whose agent seats state their
+	// access per seat ([Company.SeatAccessMigratedFor]). Written by the
+	// engine's migration onto per-seat access, one integration at a time;
+	// the access pass for an integration not listed acts on no seat.
+	SeatAccessMigrated []string `yaml:"seat_access_migrated,omitempty" json:"seat_access_migrated,omitempty" desc:"Integrations whose agent seats state their access per seat. Written by the engine's migration."`
 }
 
 // coalesceWindowMax bounds the inbox linger. See the field's own comment:
@@ -272,23 +287,29 @@ func (c *Company) ValidateRunnable() error {
 // within one list, a code access tier or a GitHub App on a human seat
 // ([Company.validateHumanSeatCode]), the health grant on a human seat
 // ([Company.validateHumanSeatGrants]), an avatar the dashboard cannot draw or
-// one on a human seat ([Company.validateAvatars]), a providers.llm entry's
-// credential configured where its CLI never reads it
+// one on a human seat ([Company.validateAvatars]), a providers.llm key outside
+// its grammar or sharing another's credential bundle variable
+// ([Company.validateLLMKeys]), a providers.llm entry's credential configured
+// where its CLI never reads it or handed over under a variable name no store
+// can hold
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
-// CLI that reads one ([LLMProvider.validateModel]), a seat whose code work
-// hands a providers.llm entry to another CLI's coding agent
-// ([Company.validateSandboxCodingAgents]), a sandbox gate saying what nothing
-// reads ([Company.validateSandboxGates]), a setup step writing a file a box
-// it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
-// `optional_keys` entry leaving nothing out ([Company.validateRunOptionalKeys]),
-// a variable the engine sets in a box itself written into one of the envs a
-// box's is made of, a check's secrets among them
-// ([Company.validateReservedSandboxEnv]), the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
+// CLI that reads one ([LLMProvider.validateModel]), a setup step writing a
+// file a box it reaches refuses ([Company.validateSetupFileHomes]), an
+// executor box's `optional_keys` entry leaving nothing out
+// ([Company.validateRunOptionalKeys]), a variable the engine sets in a box
+// itself written into one of the envs a box's is made of, a check's secrets
+// among them ([Company.validateReservedSandboxEnv]), two units declaring one
+// channel on Chatlet ([Company.validateUnitRooms]),
+// and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key — and the code host's two policy bounds: at most
-// [CodeMaxRepos] repositories, and a retention of at most
+// handle nor a key. And the `assistant:` block ([Company.validateAssistant]),
+// whose chain is held to its rules again wherever it is handed out, and the
+// per-seat access rules ([Company.validateSeatAccess]): every seat block says
+// whether it is on, holds access the vendor offers within the company's reach,
+// and writes no credential the engine manages. And the code host's two policy
+// bounds: at most [CodeMaxRepos] repositories, and a retention of at most
 // [CodeMaxDeletedRetentionDays] (see [Code.validateAdmission]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
@@ -301,9 +322,9 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateHumanSeatGrants(),
 		c.validateAvatars(),
-		c.validateLLMCredentials(), c.validateLLMModels(),
-		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateFileRules(),
+		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
+		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateUnitRooms(),
+		c.validateFileRules(), c.validateAssistant(), c.validateSeatAccess(),
 		c.Code.validateAdmission(field("code")))
 }
 
@@ -325,9 +346,8 @@ func (c *Company) validateUnitIDs() error {
 // A person acts on every code host as their own identity — a bound token on
 // the engine's own, their login, `contact.github_login`, on GitHub — so both
 // are agent settings. A seat's `code.access` is how much of a repository the
-// seat may do, which caps nothing for a person: the native grant gives a
-// person maintain through their token, and GitHub's tokens are minted only
-// for a seat's app. A seat's `integrations.github` is the bot identity an
+// seat may do on the native host, which caps nothing for a person: the native
+// grant gives a person maintain through their token. A seat's `integrations.github` is the bot identity an
 // agent acts as, and every engine path that creates, installs or reconciles
 // an app skips a human seat. Either block therefore reads as a working
 // setting and does nothing, which is the silence the org model's human-seat
@@ -351,8 +371,8 @@ func (c *Company) validateHumanSeatCode() error {
 		if !role.Code.IsZero() {
 			p.add(at(path, "code"), ErrConflict,
 				"a human seat has no code access tier: a person acts on every "+
-					"code host as their own identity — their bound token on "+
-					"the engine's own, contact.github_login on GitHub — so a "+
+					"code host as their own identity (their bound token on "+
+					"the engine's own, contact.github_login on GitHub), so a "+
 					"tier here would cap nothing. Remove this block, or make "+
 					"the seat an agent seat")
 		}
@@ -559,7 +579,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not an agent seat in this company. An alert naming no "+
 					"owner wakes this handle, and one that resolves to nothing "+
-					"— or to a human seat, which is dropped as a self-action — "+
+					"(or to a human seat, which is dropped as a self-action) "+
 					"is coverage that is not there. The agent seats are: %s",
 				fallback, strings.Join(handles, ", "))
 		}
@@ -576,7 +596,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
 					"`api.external_url` in the OPERATOR's own Tier A file, "+
-					"which is where this deployment's address belongs — one "+
+					"which is where this deployment's address belongs: one "+
 					"company document then runs at staging's address and at "+
 					"production's without carrying either. Set it there and "+
 					"delete this line",
@@ -617,9 +637,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.Code.validate(field("code"), o))
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
+	p.wrap(c.validateExecutors())
+	p.wrap(c.validateExecutorFloor())
 	p.wrap(c.validateSandboxPlacement())
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
@@ -636,15 +659,15 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			// tools silently vanish from every prompt.
 			p.add(at(path, "name"), ErrConflict, "duplicate MCP server name %q", name)
 		}
-		if name == BridgeServerName {
+		if name == ToolServerName {
 			// The same collision one layer out: the engine writes the
-			// seat's tool bridge into every agent-mode box under this
-			// name, and a company server called the same is overwritten
-			// there — its tools gone from the run with nothing saying
-			// why. See [BridgeServerName].
+			// seat's tool bridge into every executor box under this name,
+			// and a company server called the same is overwritten there —
+			// its tools gone from the run with nothing saying why. See
+			// [ToolServerName].
 			p.add(at(path, "name"), ErrConflict,
 				"%q is reserved for the seat's own tool bridge, which every "+
-					"agent-mode box sees under that name; a server called the "+
+					"executor box sees under that name; a server called the "+
 					"same would be replaced by it in the box. Rename the server",
 				name)
 		}
@@ -658,6 +681,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Inbox.validate(field("inbox")))
+	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
 	// runtime fields, schedules with no runner) are the org model's, and
@@ -701,11 +725,11 @@ func (c *Company) validateKnowledgeBackend() error {
 
 	if b := c.Knowledge.Backend; b != "" && !b.Valid() {
 		p.add(field("knowledge.backend"), ErrShape,
-			"knowledge.backend must be native, confluence or none")
+			"knowledge.backend must be doclet, confluence or none")
 	}
 	if b := c.Tracker.Backend; b != "" && !b.Valid() {
 		p.add(field("tracker.backend"), ErrShape,
-			"tracker.backend must be native, jira or none")
+			"tracker.backend must be worklet, jira or none")
 	}
 
 	// A BACKEND AND ITS VENDOR TOGETHER IS THE MIRROR THE DOCTRINE FORBIDS.
@@ -714,21 +738,19 @@ func (c *Company) validateKnowledgeBackend() error {
 	// which is precisely the cache with no invalidation story that the
 	// no-task-engine decision was written against. Refused at the authored
 	// path so the message names what to delete.
-	if c.Knowledge.Backend == KnowledgeNative && c.Integrations.Confluence != nil {
+	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
-			"a native knowledge base and integrations.confluence cannot both run: "+
-				"pages would live in two places and nothing would keep them in "+
-				"step. Remove one")
+			"Doclet and integrations.confluence can't both run, because "+
+				"pages would be split between them. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"knowledge.backend: confluence needs integrations.confluence")
 	}
-	if c.Tracker.Backend == TrackerNative && c.Integrations.Jira != nil {
+	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
-			"a native tracker and integrations.jira cannot both run: work would "+
-				"be filed in two places and a unit's project key would name two "+
-				"trackers. Remove one")
+			"Worklet and integrations.jira can't both run, because work "+
+				"would be split between them. Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
 		p.add(field("tracker.backend"), ErrConflict,
@@ -743,21 +765,18 @@ func (c *Company) validateKnowledgeBackend() error {
 				"a read scope needs a knowledge backend")
 		}
 		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
-		// the only thing there is: the engine's own tracker is a corpus
-		// too, and a company that keeps its knowledge in Confluence's
-		// competitor's head and its work here is entitled to semantic
-		// recall over the work.
+		// the only thing there is: Worklet is a corpus too, and a company
+		// that keeps its knowledge in Confluence's competitor's head and its
+		// work here is entitled to semantic recall over the work.
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
-			c.TrackerBackendFor() != TrackerNative {
+			c.TrackerBackendFor() != TrackerWorklet {
 			p.add(field("knowledge.vectors"), ErrConflict,
-				"vectors need a knowledge backend or a native tracker — with "+
-					"neither there is no corpus to embed")
+				"vectors need a knowledge backend or Worklet to search")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
 		p.add(field("knowledge.vectors"), ErrConflict,
-			"vector recall needs providers.embeddings — there is nothing to "+
-				"compute an embedding with")
+			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
 }
@@ -771,9 +790,9 @@ func (c *Company) validateKnowledgeBackend() error {
 // scope is how an agent ends up unable to read the page it was told to
 // follow.
 //
-// Empty is unscoped. On the native backend that means the whole company,
-// because the engine IS the boundary — every reader is a seat of one company
-// and there is no second account to launder a read through. On Confluence it
+// Empty is unscoped. On Doclet that means the whole company, because the
+// engine IS the boundary: every reader is a seat of one company and there is
+// no second account to launder a read through. On Confluence it
 // means whatever the asking seat's own account can read, which is why a
 // credential-less seat searching unscoped there gets nothing: an unscoped
 // query on a shared admin token would show one seat pages its own user never
@@ -783,13 +802,13 @@ type Knowledge struct {
 	//
 	// Empty DERIVES from what the company connected: one that declares
 	// integrations.confluence gets `confluence`, and one that declares
-	// nothing gets `native`, so a quickstart company has a wiki without
+	// nothing gets `doclet`, so a quickstart company has a wiki without
 	// asking for one. Connecting Confluence already says where the pages
-	// live — a native knowledge base beside it is refused, as two places
-	// pages live with nothing keeping them in step — so requiring
-	// `backend: confluence` as well would be a second spelling of one
-	// decision, with a refusal for the company that wrote only the first.
-	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|confluence|none" desc:"Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence."`
+	// live (Doclet beside it is refused, as two places pages live with
+	// nothing keeping them in step), so requiring `backend: confluence` as
+	// well would be a second spelling of one decision, with a refusal for
+	// the company that wrote only the first.
+	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=doclet|confluence|none" desc:"Which knowledge base: doclet, confluence, or none. Empty derives from integrations.confluence."`
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
@@ -813,8 +832,8 @@ type Knowledge struct {
 	// at the top of the chain exactly where a new seat starts reading.
 	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
 
-	// Vectors adds semantic recall to the knowledge search and the
-	// tracker's item search.
+	// Vectors adds semantic recall to the knowledge search and Worklet's
+	// item search.
 	//
 	// A POINTER because the zero value is a real setting and the absent
 	// value is a different one: unset DERIVES from whether the company
@@ -831,11 +850,11 @@ type KnowledgeBackend string
 
 // The knowledge backends.
 const (
-	// KnowledgeNative is the engine's own knowledge base: the state log's
-	// pages domain. Every change is one record on the pages log, applied
-	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/pages.
-	KnowledgeNative KnowledgeBackend = "native"
+	// KnowledgeDoclet is Doclet, the engine's own knowledge base: the state
+	// log's pages domain. Every change is one record on the pages log,
+	// applied into the replicated estate every data node holds, and a node
+	// without `data` reads it through the estate router. See internal/doclet.
+	KnowledgeDoclet KnowledgeBackend = "doclet"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
 	KnowledgeConfluence KnowledgeBackend = "confluence"
@@ -848,7 +867,7 @@ const (
 // KnowledgeBackends is every knowledge backend, in the order the docs name
 // them: the closed set the schema offers, the validator accepts and the org
 // projection's `services.knowledge` carries, so each of those reads one list.
-var KnowledgeBackends = []KnowledgeBackend{KnowledgeNative, KnowledgeConfluence, KnowledgeNone}
+var KnowledgeBackends = []KnowledgeBackend{KnowledgeDoclet, KnowledgeConfluence, KnowledgeNone}
 
 // Valid reports whether b is a backend this build serves.
 func (b KnowledgeBackend) Valid() bool { return slices.Contains(KnowledgeBackends, b) }
@@ -856,28 +875,28 @@ func (b KnowledgeBackend) Valid() bool { return slices.Contains(KnowledgeBackend
 // Tracker is which work tracker the company runs.
 //
 // SEPARATE FROM THE KNOWLEDGE AXIS, because they are two products with
-// separate routing and separate lead maps: a company running a native tracker
-// against a Confluence wiki, or Jira against native pages, is an ordinary
-// arrangement rather than a mixture to refuse.
+// separate routing and separate lead maps: a company running Worklet against
+// a Confluence wiki, or Jira against Doclet, is an ordinary arrangement rather
+// than a mixture to refuse.
 type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
-	// when integrations.jira is declared, `native` otherwise.
-	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|jira|none" desc:"Which work tracker: native, jira, or none. Empty derives from integrations.jira."`
+	// when integrations.jira is declared, `worklet` otherwise.
+	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=worklet|jira|none" desc:"Which work tracker: worklet, jira, or none. Empty derives from integrations.jira."`
 }
 
 // Inbox is the founder's policy over a person's inbox: the notices every
-// domain that keeps one — the native tracker — writes to each person its
+// domain that keeps one (Worklet and the code host) writes to each person its
 // changes concern.
 //
 // # Why at the top of the company, and not under the tracker
 //
-// A person's inbox is not one domain's. The tracker's notices are one source
+// A person's inbox is not one domain's. Worklet's notices are one source
 // of it, and every domain whose changes are a person's news keeps its own
 // under the same rules (internal/inbox) — so a horizon held by one domain's
 // block left every other source's notices with a horizon of their own, or of
 // nobody's, and one person's inbox aging out on as many clocks as it has
 // sources. It is the split ADR-0018 ended for the company's clock, which also
-// started as the tracker's own setting; the tracker's block keeps nothing of
+// started as the tracker's own setting; the `tracker:` block keeps nothing of
 // a person's inbox at all.
 type Inbox struct {
 	// RetentionDays is how long a person's inbox keeps a notice.
@@ -925,9 +944,10 @@ func (i Inbox) validate(path Path) error {
 	var p problems
 	if d := i.RetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
 		p.add(at(path, "retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d — below a month an inbox stops being one, and "+
-				"past ten years it is a second copy of the history it points at",
-			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+			"%d is outside %d..%d. Under a month, notices are gone before "+
+				"people see them, and past ten years they only repeat the "+
+				"history they point at", d, MinInboxRetentionDays,
+			MaxInboxRetentionDays)
 	}
 	return p.err()
 }
@@ -937,11 +957,11 @@ type TrackerBackend string
 
 // The trackers.
 const (
-	// TrackerNative is the engine's own work tracker: the state log's
-	// first domain. Every change is one record on the tracker log, applied
-	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/tracker.
-	TrackerNative TrackerBackend = "native"
+	// TrackerWorklet is Worklet, the engine's own work tracker: the state
+	// log's first domain. Every change is one record on the tracker log,
+	// applied into the replicated estate every data node holds, and a node
+	// without `data` reads it through the estate router. See internal/worklet.
+	TrackerWorklet TrackerBackend = "worklet"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's
 	// own tools and never mirrors.
@@ -956,7 +976,7 @@ const (
 
 // TrackerBackends is every tracker, in the order the docs name them, read on
 // [KnowledgeBackends]' terms.
-var TrackerBackends = []TrackerBackend{TrackerNative, TrackerJira, TrackerNone}
+var TrackerBackends = []TrackerBackend{TrackerWorklet, TrackerJira, TrackerNone}
 
 // Valid reports whether b is a tracker this build serves.
 func (b TrackerBackend) Valid() bool { return slices.Contains(TrackerBackends, b) }
@@ -1030,7 +1050,7 @@ func (c *Company) KnowledgeBackendFor() KnowledgeBackend {
 	if c.Integrations.Confluence != nil {
 		return KnowledgeConfluence
 	}
-	return KnowledgeNative
+	return KnowledgeDoclet
 }
 
 // TrackerBackendFor resolves the tracker, deriving an empty one.
@@ -1041,7 +1061,7 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 	if c.Integrations.Jira != nil {
 		return TrackerJira
 	}
-	return TrackerNative
+	return TrackerWorklet
 }
 
 // VectorsEnabled reports whether the corpus is embedded and searched by
@@ -1065,11 +1085,19 @@ func (c *Company) VectorsEnabled() bool {
 // NOTHING still runs, and from inside resolution a name that misses and a name
 // that was never written are the same absence.
 //
-// Applied to EVERY seat in the document, at any depth. Nearly all of a real
-// company's roles live inside units, which nest arbitrarily — so a rule that
-// walked the root `roles:` list alone left the typo invisible exactly where
-// it is most likely to be written. The walk is [Company.EachRole] rather than
-// a loop here, so the next whole-document rule about seats inherits it.
+// Applied to EVERY seat in the document, at any depth, and to every field each
+// writes: the fields are [Company.ProviderReferences]'s, so the rule, a
+// removal and the account of who uses an entry read one list. Each typo is
+// reported at the field the operator typed it in. Validating the RESOLVED
+// chain instead would hide half of them: the flat field wins over the
+// mapping, so a typo inside `llm.review` under a role that also sets
+// `llm_review` never appears in the resolved value at all, and it is still a
+// typo, still in the file, and still what the operator will edit next.
+//
+// NOT THE ASSISTANT'S FIELDS: its chain is held by [Company.validateAssistant]
+// at admission and again wherever it is handed out ([Company.AssistantChain]),
+// because nothing about running a seat depends on it, and this is a runnable
+// rule.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
 // documented authoring state (an org chart written before the credentials
@@ -1084,40 +1112,18 @@ func (c *Company) validateProviderKeys() error {
 		return nil
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
-
-	for role, path := range c.EachRole() {
-		// Both written surfaces are checked, and each is reported at the
-		// path the operator typed. Validating the RESOLVED chain instead
-		// would hide half of them: the flat field wins over the mapping,
-		// so a typo inside `llm.review` under a role that also sets
-		// `llm_review` never appears in the resolved value at all — and it
-		// is still a typo, still in the file, and still what the operator
-		// will edit next.
-		for _, field := range []struct {
-			path Path
-			keys ProviderKeys
-		}{
-			{at(path, "llm"), role.LLM.Default},
-			{at(at(path, "llm"), "review"), role.LLM.Review},
-			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
-			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
-			{at(at(path, "llm"), "judge"), role.LLM.Judge},
-			{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
-			{at(path, "llm_review"), role.LLMReview},
-			{at(path, "llm_subagent"), role.LLMSubagent},
-			{at(path, "llm_auxiliary"), role.LLMAuxiliary},
-			{at(path, "llm_judge"), role.LLMJudge},
-			{at(path, "llm_sandbox"), role.LLMSandbox},
-		} {
-			for _, key := range field.keys {
-				if _, ok := c.Providers.LLM[key]; !ok {
-					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider: providers.llm has %s. "+
-							"A key that misses is not an error at run time: the seat "+
-							"falls back to another model and bills against it, so this "+
-							"is the only place the typo can be seen",
-						key, strings.Join(known, ", "))
-				}
+	for _, ref := range c.providerReferences() {
+		if ref.Job == JobAssistant || ref.Job == JobDeepWork {
+			continue
+		}
+		for _, key := range ref.Chain {
+			if _, ok := c.Providers.LLM[key]; !ok {
+				p.add(ref.Segments, ErrUnknownValue,
+					"%q is not a configured provider. Use one of providers.llm's: %s. "+
+						"A key that misses is not an error at run time: the seat "+
+						"falls back to another model and bills against it, so this "+
+						"is the only place the typo can be seen",
+					key, words.Or(known))
 			}
 		}
 	}
@@ -1163,14 +1169,18 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
 	}
+	// A CHAT VENDOR IS DECLARED WHERE [chatVendors] SAYS, which is the one
+	// statement of it the chat backend is derived from too: Slack counts on
+	// a seat's own app as well as on the org block.
+	if vendor, ok := chatVendorNamed(surface); ok {
+		return vendor.declaredAt(c) != ""
+	}
 	in := c.Integrations
 	switch surface {
 	case "jira":
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
-	case "mattermost":
-		return in.Mattermost != nil
 	case "github":
 		return in.GitHub != nil
 	case "gitlab":
@@ -1179,16 +1189,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Datadog != nil
 	case "atlassian":
 		return in.Atlassian != nil
-	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes
@@ -1213,10 +1213,10 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // the end on every launch because a callback has no way to say "found it".
 //
 // EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
-// looked up by name at launch, and a lookup that stopped at the top level
-// answered nil for every seat in a unit — so run_sandbox refused each of them
-// with "this seat's sandbox is not enabled" on a seat whose block said
-// otherwise. One walker, so the two can never disagree about which seats exist.
+// looked up by handle at every executor launch, and a lookup that stopped at
+// the top level answered nil for every seat in a unit — so each of them ran
+// its box without the setup, env and tool servers its block declared. One
+// walker, so the two can never disagree about which seats exist.
 func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
@@ -1244,20 +1244,21 @@ func (c *Company) EachRole() iter.Seq2[*Role, Path] {
 	}
 }
 
-// SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
-// to the path of the first thing that named it.
+// SandboxPlacements is every cell an executor run could ACTUALLY land in,
+// each mapped to the path of the first thing that named it.
 //
 // ONE COMPUTATION, TWO CALLERS, and they have to agree or the company is
 // refused for a rule the engine then breaks anyway. Validation requires a
 // container image only where a container is reached; the engine builds a
 // backend only for what is reached. Built eagerly from the catalogue instead,
-// the engine constructed a container backend for a company whose seats all run
+// the engine constructed a container backend for a company whose runs all go
 // direct — and failed the apply demanding an image the validator had just
 // refused as a field nothing would read.
 //
 // The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: it is where a
-// seat that names nothing goes, including a seat added later by a founder
-// editing Tier B live, so a company must be able to run it before one exists.
+// run on an entry that names no cell goes, including an entry a founder
+// points a seat at later, editing Tier B live, so a company must be able to
+// run it before one does.
 //
 // AND EVERY CELL A CHECK MAY RUN IN, on a company hosting code
 // ([Company.checkPlacements]): a check's box is made from this same catalogue,
@@ -1284,33 +1285,34 @@ func (c *Company) seatPlacements() map[Placement]string {
 	if run := catalogue.RunIn(); run != "" {
 		reached[run] = catalogue.runInAt()
 	}
-	// EVERY BOX A SEAT RUNS IN, placed as the engine places it
-	// ([Company.SeatBoxes]): the run_sandbox box an enabled gate offers, and
-	// the box an agent-mode executor runs in, which its entry places
-	// whatever the seat's gate says. Walked as two lists — every enabled
-	// gate, then every agent-mode entry — this counted a gate's cell for an
-	// agent-mode seat, which is never offered run_sandbox: a company was
-	// refused for want of an image no box would run, and the engine built
-	// that backend for nobody. And the entry's walk is what a cell an
-	// entry names was once missing from: an entry naming `e2b` in a
-	// company whose seats all ran direct validated cleanly and failed at
-	// the seat's first turn, every turn, with the manager's "no backend
-	// for e2b".
+	// EVERY BOX AN EXECUTOR CAN LAUNCH IN, placed as the engine places it
+	// ([Company.SeatBoxes]): one per cell among the runner-capable members
+	// of every agent seat's executor chain, not the head's alone. A launch
+	// falls back to the chain's next member when the first is sitting out
+	// on its node, and that member is placed by its own `run_in` — so a
+	// cell only a fallback member names, counted for the head alone, would
+	// have no backend built, and the very launch the fallback exists for
+	// would fail with the manager's "no backend for e2b".
 	//
-	// A box that names no cell falls to the default, which is reached
-	// already; the path kept for a cell is the first thing that named it.
+	// A box whose entry names no cell is in the default's, which is reached
+	// already; so every other cell is one an entry's `run_in` named, and the
+	// path kept for it is the first such entry.
 	for box := range c.SeatBoxes() {
-		if box.Cell == "" || !box.Cell.NeedsBackend() {
+		if box.Cell == "" {
 			continue
 		}
 		if _, seen := reached[box.Cell]; seen {
 			continue
 		}
-		where := at(box.At, "sandbox.run_in")
-		if box.Executor != "" {
-			where = at(entryPath(box.Executor), "run_in")
+		reached[box.Cell] = at(entryPath(box.Executor), "run_in").String()
+	}
+	// DEEP WORK'S CELL, where the catalogue serves it: the engine host is
+	// the engine's own confined cell (internal/engine), never the
+	// catalogue's unconfined direct one.
+	if cell, ok := c.DeepWorkPlacement(); ok && cell != PlacementDirect {
+		if _, seen := reached[cell]; !seen {
+			reached[cell] = "assistant.deep_work.llm"
 		}
-		reached[box.Cell] = where.String()
 	}
 	return reached
 }
@@ -1375,7 +1377,7 @@ func (c *Company) CheckCell(named Placement) (Placement, string) {
 		cells[i] = p.cell
 	}
 	return "", fmt.Sprintf("the check names run_in %s, which the company does not allow a check (it allows "+
-		"%v: code.checks.allow_run_in, else the one cell code.checks.run_in resolves to)", named, cells)
+		"%s: code.checks.allow_run_in, else the one cell code.checks.run_in resolves to)", named, words.And(cells))
 }
 
 // checkPlacement is one cell a check may run in, with the path of the first
@@ -1416,369 +1418,320 @@ func (c *Company) checkPlacements() []checkPlacement {
 	return []checkPlacement{{cell: run, at: at}}
 }
 
-// agentModeExecutorKeys are the providers.llm entries some seat's EXECUTOR
-// resolves to that run in agent mode, in key order.
+// executorSeat is one agent seat with an executor to run, and the chain that
+// executor resolves to.
+type executorSeat struct {
+	role *Role
+	path Path
+	// chain is every member of the seat's executor chain, configured keys
+	// only, in the order a launch tries them.
+	chain []string
+	// own reports a chain read off the seat's own `llm`, where false is the
+	// company's fallback entry a seat naming no configured key falls to.
+	own bool
+	// named reports that the seat's `llm` names keys at all — configured or
+	// not. A seat that named only keys the company lacks falls to the
+	// fallback entry too (own is false), but its `llm` is a typo
+	// [Company.validateProviderKeys] refuses where it is written, not a
+	// seat that named nothing.
+	named bool
+}
+
+// executorSeats yields every agent seat with the executor chain it resolves
+// to, in [Company.EachRole]'s order — resolved by [phase.Resolve] over the
+// seat as the engine builds it, from the company's providers in declaration
+// order, which is the very call the engine's phase registry resolves a
+// launch's chain through. ONE RESOLUTION, so the seats validation refuses
+// and the chain a launch walks cannot disagree; a second copy of the rule
+// here was once held to the registry by a test that never called it.
 //
-// ONLY ENTRIES A SEAT REACHES, resolved as the phase registry resolves them
-// (see [Company.ExecutorProvider]): an agent-mode entry nobody's executor
-// runs on launches nothing, so the cell it names is not reached and the
-// backend behind it is not built — the same rule every gate here follows. It
-// is validated the day a seat points at it, like a seat added later.
-//
-// Sorted, so a message naming "the first seat" or a backend built in this
-// order is the same on every run of the same config.
-func (c *Company) agentModeExecutorKeys() []string {
-	fallback, ok := c.executorFallback()
-	if !ok {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	for role := range c.EachRole() {
-		key, entry, resolved := c.executorProvider(role, fallback)
-		if !resolved || !entry.AgentMode() {
-			continue
+// A HUMAN SEAT IS SKIPPED. It is addressable and never spawned, so it runs no
+// phase — and resolved, its empty `llm` falls to the company's fallback entry,
+// which would then count as reached by a seat that never runs: a company was
+// refused for a box its founder's seat would never open. NOTHING is yielded
+// for a company with no providers.llm, which is valid — an org chart written
+// before its credentials — and runs no executor at all.
+func (c *Company) executorSeats() iter.Seq[executorSeat] {
+	return func(yield func(executorSeat) bool) {
+		order := c.Providers.ProviderOrder()
+		if len(order) == 0 {
+			return
 		}
-		seen[key] = struct{}{}
+		for role, path := range c.EachRole() {
+			if role.Kind == org.KindHuman {
+				continue
+			}
+			own := slices.ContainsFunc(role.LLM.Default, func(key string) bool {
+				_, ok := c.Providers.LLM[key]
+				return ok
+			})
+			chain := phase.Resolve(role.Seat(), phase.Execute, order)
+			if !yield(executorSeat{role: role, path: path, chain: chain, own: own,
+				named: len(role.LLM.Default) > 0}) {
+				return
+			}
+		}
+	}
+}
+
+// ExecutorSeatsOn is the handles of the agent seats whose executor chain holds
+// key, in [Company.EachRole]'s order: the seats `crewlet llm doctor` reports
+// an entry as launching for.
+//
+// OFF [Company.executorSeats], the one resolution validation and a launch
+// share, so the doctor cannot name a seat the engine never launches on the
+// entry nor miss one it does. A chain holding key as a member that cannot run
+// an executor still names the seat: the doctor says why that member is
+// skipped at launch and what it serves instead.
+func (c *Company) ExecutorSeatsOn(key string) []string {
+	var out []string
+	for seat := range c.executorSeats() {
+		if slices.Contains(seat.chain, key) {
+			out = append(out, seat.role.Seat().Handle())
+		}
+	}
+	return out
+}
+
+// runners is the members of chain that can run an executor, in chain order:
+// the ones a launch may pick ([LLMProvider.runsExecutor]).
+func (c *Company) runners(chain []string) []string {
+	var out []string
+	for _, key := range chain {
+		entry := c.Providers.LLM[key]
+		if entry.runsExecutor() {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// executorKeys are the providers.llm entries an executor launch can land on,
+// in key order: every runner-capable member of every agent seat's executor
+// chain.
+//
+// ONLY ENTRIES A SEAT REACHES: an entry no executor chain holds launches
+// nothing, so the cell it names is not reached and the backend behind it is
+// not built. It is validated the day a seat points at it, like a seat added
+// later. Sorted, so a message naming the first entry, or a backend built in
+// this order, is the same on every run of the same config.
+func (c *Company) executorKeys() []string {
+	seen := map[string]struct{}{}
+	for seat := range c.executorSeats() {
+		for _, key := range c.runners(seat.chain) {
+			seen[key] = struct{}{}
+		}
 	}
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
-// on, resolved exactly as the phase registry resolves it: the seat's own `llm`
-// keys, then the entry called "default", then the first provider in
-// declaration order.
-//
-// A SECOND RESOLUTION OF THE SAME QUESTION, and normally that is the mistake
-// this codebase spends most of its rules on — but the registry's needs a
-// BUILT provider per key, which exists only once a company is constructed, and
-// this has to answer during validation, where the answer's whole value is
-// catching the mistake before anything is built. The two are held together by
-// a test that walks the same fallbacks. What must never happen is this one
-// growing a rule the registry does not have.
-//
-// The second return is false when there is no executor to resolve: a company
-// that configures no provider at all (a valid company, which the engine runs
-// with no model registry and this must not crash on), or a HUMAN SEAT. A human seat is
-// addressable and never spawned — it runs no phase, and `llm` is one of the
-// fields [org.Role.Validate] refuses on one — so resolving it would answer
-// with whatever entry happens to be declared first and call that entry
-// reached. It is the fallback below that makes this more than a theoretical
-// tidiness: a company whose first-declared entry was an agent-mode CLI was
-// refused for a box its founder's seat would never run in.
-func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
-	fallback, ok := c.executorFallback()
-	if !ok {
-		return "", LLMProvider{}, false
+// describeChain renders chain as an operator reads it: each entry's path and
+// the CLI it drives.
+func (c *Company) describeChain(chain []string) string {
+	parts := make([]string, len(chain))
+	for i, key := range chain {
+		entry := c.Providers.LLM[key]
+		parts[i] = fmt.Sprintf("providers.llm.%s (%s)", key, entry.AgentName())
 	}
-	return c.executorProvider(role, fallback)
+	return strings.Join(parts, ", ")
 }
 
-// executorFallback is the entry a seat that names none runs on: the one
-// called "default", else the first declared. SEAT-INDEPENDENT, and resolved
-// once by a caller walking every seat — [Providers.ProviderOrder] allocates,
-// and it was allocating per seat to answer a question no seat can change.
+// validateExecutors refuses an agent seat whose executor chain has no member
+// that can run it.
 //
-// False when the company configures no provider at all.
-func (c *Company) executorFallback() (string, bool) {
-	if _, ok := c.Providers.LLM["default"]; ok {
-		return "default", true
-	}
-	order := c.Providers.ProviderOrder()
-	if len(order) == 0 {
-		return "", false
-	}
-	return order[0], true
-}
-
-// executorProvider is [Company.ExecutorProvider] over a resolved fallback.
-// ONE resolution rule, reachable two ways — what must never happen is this
-// growing a rule the phase registry does not have.
-func (c *Company) executorProvider(role *Role, fallback string) (string, LLMProvider, bool) {
-	if role.Kind == org.KindHuman {
-		return "", LLMProvider{}, false
-	}
-	for _, key := range role.LLM.Default {
-		if entry, ok := c.Providers.LLM[key]; ok {
-			return key, entry, true
-		}
-	}
-	return fallback, c.Providers.LLM[fallback], true
-}
-
-// SandboxProvider is the providers.llm entry a seat's CODE WORK — a
-// run_sandbox launch — runs on, resolved exactly as the phase registry
-// resolves its sandbox phase: the seat's llm_sandbox keys when it names any,
-// else its `llm` keys, the first the company configures; then the entry
-// called "default", then the first declared.
+// Every agent seat's executor is its coding CLI's own agentic run, and only a
+// CLI with an in-box runner can be one ([CodingAgents]). A launch walks the
+// seat's chain for its first such member that is not sitting out and skips
+// the rest, so a chain with NONE never launches: the seat is placed, takes
+// its work, and fails every turn at launch. RUNNABLE for that reason — no
+// turn of that seat runs — where a chain that merely carries a non-runner
+// beside a runner is valid and only advised about
+// ([Company.executorWarnings]).
 //
-// The same second resolution [Company.ExecutorProvider] is, for the same
-// reason — validation must answer before anything is built — and held to the
-// registry by the same kind of test. False for a human seat and for a company
-// with no provider.
-func (c *Company) SandboxProvider(role *Role) (string, LLMProvider, bool) {
-	fallback, ok := c.executorFallback()
-	if !ok {
-		return "", LLMProvider{}, false
-	}
-	return c.sandboxProvider(role, fallback)
-}
-
-// sandboxProvider is [Company.SandboxProvider] over a resolved fallback.
-func (c *Company) sandboxProvider(role *Role, fallback string) (string, LLMProvider, bool) {
-	if role.Kind == org.KindHuman {
-		return "", LLMProvider{}, false
-	}
-	// The sandbox phase's own keys, from either spelling — the flat
-	// llm_sandbox wins over the mapping form's `sandbox`, as it does on the
-	// org role the registry reads. Only when it names NONE does it fall to
-	// the seat's `llm`: a seat that names keys none of which exist falls
-	// to the company's fallback, not to its own model.
-	keys := role.LLMSandbox
-	if len(keys) == 0 {
-		keys = role.LLM.Sandbox
-	}
-	if len(keys) == 0 {
-		keys = role.LLM.Default
-	}
-	for _, key := range keys {
-		if entry, ok := c.Providers.LLM[key]; ok {
-			return key, entry, true
-		}
-	}
-	return fallback, c.Providers.LLM[fallback], true
-}
-
-// codingAgent is the runner a seat's code work is driven by: its own
-// coding_agent, then the catalogue's default, then Claude Code — the order
-// the sandbox manager resolves it in at launch.
-func (c *Company) codingAgent(gate *RoleSandbox) CodingAgent {
-	if gate.CodingAgent != "" {
-		return gate.CodingAgent
-	}
-	if s := c.Providers.Sandbox; s != nil && s.DefaultCodingAgent != "" {
-		return s.DefaultCodingAgent
-	}
-	return CodingAgentClaudeCode
-}
-
-// validateSandboxCodingAgents refuses a seat whose code work would hand a
-// providers.llm entry to ANOTHER CLI's coding agent.
-//
-// An entry's model is written in its own CLI's grammar and its
-// sign-in is that CLI's, so a different runner can read neither: Claude Code
-// was handed `--model openrouter/anthropic/claude-sonnet-5` from an OpenCode
-// entry, and OpenCode `anthropic/sonnet` from a Claude Code one. The launch
-// refuses such a run; this says so on the write instead of at the seat's
-// first coding call.
-//
-// ADMISSION rather than runnable: the company runs, and only that seat's
-// run_sandbox launches are refused, each with this same remedy. `self` is
-// exempt — its code work rides the executor's own run, which is always its
-// entry's own CLI.
-func (c *Company) validateSandboxCodingAgents() error {
-	fallback, ok := c.executorFallback()
-	if !ok || !c.Providers.Sandbox.Enabled() {
-		return nil
-	}
+// Reported where the remedy is written. A chain read off the seat's own `llm`
+// is refused there. A seat naming no configured key runs on the company's
+// fallback entry (the one called "default", else the first declared), which
+// is ONE entry for every such seat, so it is refused once, at that entry's
+// `agent`, naming the first seat that falls to it and how many more. Both
+// remedies are named because both are real: the entry can move to a CLI
+// that runs, or the seat's `llm` can point at one that does — and the other
+// CLI stays the seat's reviewer, workers or side passes through llm_review,
+// llm_subagent, llm_auxiliary or llm_judge, which any CLI can serve.
+func (c *Company) validateExecutors() error {
 	var p problems
-	for role, path := range c.EachRole() {
-		gate := role.Sandbox
-		if gate == nil || !gate.Enabled || gate.RunIn == PlacementSelf {
+	type fallen struct {
+		first string
+		more  int
+	}
+	fallback := map[string]*fallen{}
+	var fallbackOrder []string
+	for seat := range c.executorSeats() {
+		if len(c.runners(seat.chain)) > 0 {
 			continue
 		}
-		if _, executor, resolved := c.executorProvider(role, fallback); resolved && executor.AgentMode() {
-			// Never offered run_sandbox, so it has no code work to hand
-			// anybody: its one run is its executor's, on that entry's
-			// own CLI.
+		if seat.own {
+			p.add(at(seat.path, "llm"), ErrConflict,
+				"this seat's executor chain is %s, and no member of it can run the "+
+					"executor: a seat's executor is its coding CLI's own run, which "+
+					"only %s have. Point `llm` at an entry with agent: claude-code or "+
+					"opencode (and keep these entries for the reviewer, workers and "+
+					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
+					"llm_judge), or move one of them to claude-code or opencode",
+				c.describeChain(seat.chain), words.And(CodingAgents))
 			continue
 		}
-		key, entry, resolved := c.sandboxProvider(role, fallback)
-		if !resolved {
+		if seat.named {
+			// ITS OWN `llm` IS THE FAULT, refused where it is written: every
+			// key it names is one the company lacks
+			// ([Company.validateProviderKeys]). Counted here too, it was
+			// reported a second time as a seat that "names no `llm`" —
+			// contradicting the refusal beside it, and sending the author to
+			// an entry the seat never asked for. Fixing the typo puts the
+			// seat on its own chain, which this rule then judges.
 			continue
 		}
-		runner := c.codingAgent(gate)
-		cli := entry.AgentName()
-		if cli == string(runner) {
+		key := seat.chain[0]
+		handle := seat.role.Seat().Handle()
+		if f := fallback[key]; f != nil {
+			f.more++
 			continue
 		}
-		p.add(at(path, "llm_sandbox"), ErrConflict, "%s", CodingAgentMismatch(string(runner), key, cli))
+		fallback[key] = &fallen{first: handle}
+		fallbackOrder = append(fallbackOrder, key)
+	}
+	for _, key := range fallbackOrder {
+		f, entry := fallback[key], c.Providers.LLM[key]
+		which := `the one called "default"`
+		if key != "default" {
+			which = `the first one declared, as no entry is called "default"`
+		}
+		seats := fmt.Sprintf("seat %q names no `llm` and falls to it", f.first)
+		switch {
+		case f.more == 1:
+			seats += ", and 1 more seat does too"
+		case f.more > 1:
+			seats += fmt.Sprintf(", and %d more seats do too", f.more)
+		}
+		p.add(at(entryPath(key), "agent"), ErrConflict,
+			"a seat that names no `llm` runs its executor on this entry, %s, and it "+
+				"drives %s, which cannot run an executor: a seat's executor is its "+
+				"coding CLI's own run, which only %s have. %s. Move this entry to "+
+				"claude-code or opencode, or point those seats' `llm` at an entry "+
+				"that drives one",
+			which, entry.AgentName(), words.And(CodingAgents), seats)
 	}
 	return p.err()
 }
 
-// CodingAgentMismatch is the one sentence for a coding run whose runner is not
-// the CLI its providers.llm entry drives, shared by the config rule and the
-// engine's launch refusal so the write and the run say the same thing.
-func CodingAgentMismatch(runner, key, cli string) string {
-	remedy := fmt.Sprintf("point role.llm_sandbox at an entry with agent: %s", runner)
-	if slices.Contains(CodingAgents, CodingAgent(cli)) {
-		remedy += fmt.Sprintf(", or set role.sandbox.coding_agent: %s", cli)
-	}
-	return fmt.Sprintf("this seat's code work runs the %s coding agent on providers.llm.%s, "+
-		"an entry driving %s: that entry's model is written for %s and its "+
-		"sign-in is %s's, so %s can read neither. To fix it, %s",
-		runner, key, cli, cli, cli, runner, remedy)
-}
-
-// validateSandboxGates refuses what a seat's sandbox gate says that nothing
-// will read, which turns on how the seat's executor runs — so it is asked
-// here, beside the providers, and not of the gate alone.
+// executorWarnings is one advisory per agent seat whose executor chain holds
+// a member that can never run it beside one that can.
 //
-// A seat whose executor runs in AGENT MODE is never offered run_sandbox (the
-// runner's offersSandbox): it already holds a shell, and its one box is the
-// executor's, placed by that entry's `run_in`. So its gate's `run_in`
-// places nothing — `self`, which says exactly that, or nothing at all — and
-// its `coding_agent` drives nothing, the run being the entry's own CLI. Each
-// was accepted and read as a working choice, and a `run_in: container` made
-// the company demand an image for a box nothing would run. What that box DOES
-// read off the gate — its setup, env and mcp, pause_ttl_seconds and
-// max_turns — it reads whether or not the gate says `enabled`.
-//
-// Every other seat's gate is read only when it is enabled, so one that is off
-// with provisioning under it is an operator who configured a sandbox and will
-// watch nothing happen. That rule sat on the gate itself, which cannot see the
-// executor, and so refused an agent-mode seat whose box reads exactly that
-// provisioning on every turn, with a remedy — remove the block — that would
-// have taken steps out of the box.
-//
-// ADMISSION, not runnable: either way the company runs, and only what the
-// gate says goes unread.
-func (c *Company) validateSandboxGates() error {
-	fallback, hasExecutor := c.executorFallback()
-	var p problems
-	for role, path := range c.EachRole() {
-		gate := role.Sandbox
-		if gate == nil {
+// A WARNING AND NOT A RULE, because the chain is valid: a launch skips the
+// member and runs on the rest, and the member still serves every text phase
+// that falls back to `llm` — the reviewer, workers, side passes and
+// onboarding — which any CLI can. What the author should still know is that
+// the executor never falls back to it, so a chain written as "Claude, then
+// Codex when Claude's plan is spent" falls back to nothing. AT THE SEAT'S
+// `llm`, which is where either reading is written.
+func (c *Company) executorWarnings() []Warning {
+	var out []Warning
+	for seat := range c.executorSeats() {
+		runners := c.runners(seat.chain)
+		if len(runners) == 0 || len(runners) == len(seat.chain) {
 			continue
 		}
-		where := at(path, "sandbox")
-		if hasExecutor {
-			key, entry, resolved := c.executorProvider(role, fallback)
-			if resolved && entry.AgentMode() {
-				if gate.RunIn != "" && gate.RunIn != PlacementSelf {
-					p.add(at(where, "run_in"), ErrConflict,
-						"this seat's executor runs in agent mode on providers.llm.%s, "+
-							"which places the one box it works in (its run_in, else "+
-							"providers.sandbox.default_run_in), and such a seat is never "+
-							"offered run_sandbox, so %q here places nothing. Write `self` "+
-							"or leave it out, and name the cell on providers.llm.%s.run_in",
-						key, gate.RunIn, key)
-				}
-				if gate.CodingAgent != "" && string(gate.CodingAgent) != entry.AgentName() {
-					p.add(at(where, "coding_agent"), ErrConflict,
-						"this seat's executor runs in agent mode on providers.llm.%s, "+
-							"which is %s's own run, and such a seat is never offered "+
-							"run_sandbox, so %q here drives nothing. Leave it out",
-						key, entry.AgentName(), gate.CodingAgent)
-				}
-				continue
+		var skipped []string
+		for _, key := range seat.chain {
+			if !slices.Contains(runners, key) {
+				skipped = append(skipped, key)
 			}
 		}
-		if !gate.Enabled && (len(gate.Setup) > 0 || len(gate.Env) > 0 ||
-			len(gate.MCP.Servers) > 0 || gate.RunIn != "") {
-			p.add(at(where, "enabled"), ErrConflict,
-				"this seat's sandbox is configured but not enabled, so none of "+
-					"it is read. Set enabled: true, or remove the block")
-		}
+		handle := seat.role.Seat().Handle()
+		w := advisory(at(seat.path, "llm"), fmt.Sprintf("%s's executor never runs on "+
+			"%s: a seat's executor is its coding CLI's own run, which only %s have, "+
+			"so a launch skips it and runs on %s alone. That is fine if it is there "+
+			"for the reviewer, workers and side passes, which fall back to `llm`; "+
+			"otherwise take it out",
+			handle, c.describeChain(skipped), words.And(CodingAgents), c.describeChain(runners)))
+		w.Seat = handle
+		out = append(out, w)
 	}
-	return p.err()
+	return out
 }
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and
-// the seats: which cells a company actually reaches, and whether the blocks
-// configuring them are there.
+// the seats: whether the catalogue is there, which cells a company actually
+// reaches, and whether the blocks configuring them are.
 //
 // Neither half can hold it alone. providers.sandbox is validated without the
 // roles, so it cannot know that `run_in: container` is reached and an image is
-// needed; a role is validated without the providers, so it cannot know that
+// needed; an entry is validated without the catalogue, so it cannot know that
 // the cell it names is not configured. Both failures are silent at run time —
-// the seat is offered the tool and the first coding run dies inside a turn.
+// the seat takes its work and the launch dies inside a turn, every turn.
 func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
-	fallback, hasExecutor := c.executorFallback()
 
-	for role, path := range c.EachRole() {
-		gate := role.Sandbox
-		if gate == nil || !gate.Enabled {
-			continue
-		}
-		if hasExecutor {
-			if _, entry, resolved := c.executorProvider(role, fallback); resolved && entry.AgentMode() {
-				// AN AGENT-MODE SEAT'S GATE PLACES NOTHING: such a seat
-				// is never offered run_sandbox, and its one box is its
-				// executor's, placed by the entry and asked these same
-				// questions in the loop below. What its gate's run_in
-				// may say is an admission rule of its own
-				// ([Company.validateSandboxGates]).
+	// A CHECK'S CELLS FIRST, because they are asked of every catalogue,
+	// an absent one included: a company hosting code with checks and no
+	// agent seat returns below before a seat's questions, and its checks
+	// would otherwise name a box that can never be made and say nothing.
+	p.wrap(c.validateCheckPlacement())
+
+	if catalogue == nil {
+		// EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so a company with
+		// one to run and a model to run it on cannot run without the
+		// catalogue: every such seat would take its work and fail every
+		// turn at launch. ONE refusal, at the block that is missing,
+		// naming the first such seat — a problem per seat would bury the
+		// one edit to make under the seats that need it.
+		//
+		// Not asked of a company with no providers.llm: that is an org
+		// chart written before its credentials, which runs and holds
+		// every seat's work until a revision adds a model, and the
+		// catalogue with it. Asked only of an ABSENT block: a present one
+		// that configures nothing is refused at this same path by its own
+		// rule.
+		first, more := "", 0
+		for seat := range c.executorSeats() {
+			if first == "" {
+				first = seat.role.Seat().Handle()
 				continue
 			}
+			more++
 		}
-		where := at(at(path, "sandbox"), "run_in")
-		if !catalogue.Enabled() {
-			p.add(at(at(path, "sandbox"), "enabled"), ErrMissing,
-				"this seat runs code, but the company configures no sandbox. "+
-					"Add providers.sandbox, or turn the seat's gate off: an "+
-					"enabled gate with no catalogue offers the seat nothing and "+
-					"says so nowhere")
-			continue
-		}
-		run := gate.RunIn
-		if run == PlacementSelf {
-			// CODE WORK INSIDE THE EXECUTOR'S OWN RUN, which only exists
-			// when that executor is a coding CLI in agent mode — and an
-			// agent-mode seat was passed over above. On any other runtime
-			// the seat has no shell of its own, so `self` would read as a
-			// working choice and turn code work off — a seat that plans
-			// around a sandbox it is never offered, with nothing anywhere
-			// saying why.
-			if key, _, resolved := c.ExecutorProvider(role); resolved {
-				p.add(where, ErrConflict,
-					"`self` means code work rides this seat's own executor run, "+
-						"which only a coding CLI in agent mode has. This seat's "+
-						"executor is providers.llm.%s. Set `mode: agent` on a "+
-						"providers.llm entry and point the seat at it, or name a "+
-						"cell the catalogue configures (%s)",
-					key, names(catalogue.available()))
+		if first != "" {
+			seats := fmt.Sprintf("seat %q has one", first)
+			switch {
+			case more == 1:
+				seats += ", and 1 more seat does too"
+			case more > 1:
+				seats += fmt.Sprintf(", and %d more seats do too", more)
 			}
-			continue
+			p.add(field("providers.sandbox"), ErrMissing,
+				"every agent seat's executor runs as its coding CLI's own run, in a "+
+					"box this block configures, and this company configures none: %s. "+
+					"Add providers.sandbox: `local: {}` with `default_run_in: direct` "+
+					"runs it on this host as the engine's user, `e2b:` in a remote box",
+				seats)
 		}
-		if run == "" {
-			run = catalogue.RunIn()
-		}
-		switch {
-		case run == "":
-			p.add(where, ErrMissing,
-				"this seat runs code and the catalogue offers more than one "+
-					"place to do it (%s), so it has to name one: or "+
-					"providers.sandbox.default_run_in has to",
-				names(catalogue.available()))
-		case !slices.Contains(Placements, run):
-			// Spelling is the role's own rule; it already reported.
-		case !catalogue.Configured(run):
-			p.add(where, ErrConflict,
-				"%q needs the %s backend configured under providers.sandbox "+
-					"(this catalogue has %s)",
-				run, run.backend(), names(catalogue.available()))
-		}
+		return p.err()
+	}
+	if !catalogue.Enabled() {
+		// Refused by the block's own rule, at this same path.
+		return p.err()
 	}
 
-	// THE SAME THREE QUESTIONS FOR AN AGENT-MODE EXECUTOR, whose run is
-	// placed by its entry rather than by a gate: is there a catalogue at
-	// all, is the cell it names configured, and does a silent entry have a
-	// default to fall to. Each was unasked, and each failed at the seat's
-	// first turn — every turn — with a launch error naming a backend no
-	// field in the file appeared to be missing.
-	for _, key := range c.agentModeExecutorKeys() {
+	// THE SAME QUESTIONS FOR EVERY ENTRY A LAUNCH CAN LAND ON — every
+	// runner-capable member of every executor chain, the head and each
+	// fallback alike: is the cell it names configured, and does an entry
+	// that names none have a default to fall to. Each was unasked once, and
+	// each failed at the seat's first turn — every turn — with a launch
+	// error naming a backend no field in the file appeared to lack.
+	keys := c.executorKeys()
+	for _, key := range keys {
 		entry := c.Providers.LLM[key]
 		where := at(entryPath(key), "run_in")
-		if !catalogue.Enabled() {
-			p.add(at(entryPath(key), "mode"), ErrMissing,
-				"agent mode runs the executor in a box, and this company "+
-					"configures no sandbox. Add providers.sandbox, or set "+
-					"`mode: text` to keep the CLI a subprocess of the engine")
-			continue
-		}
 		run := entry.RunIn
 		if run == "" {
 			run = catalogue.RunIn()
@@ -1786,48 +1739,48 @@ func (c *Company) validateSandboxPlacement() error {
 		switch {
 		case run == "":
 			p.add(where, ErrMissing,
-				"agent mode runs the executor in a box and the catalogue "+
-					"offers more than one place to do it (%s), so this entry "+
-					"has to name one: or providers.sandbox.default_run_in has to",
-				names(catalogue.available()))
-		case !slices.Contains(BackendPlacements(), run):
+				"a seat's executor launches on this entry, in a box, and the "+
+					"catalogue offers more than one place to run one (%s), so this "+
+					"entry has to name one: or providers.sandbox.default_run_in has to",
+				words.And(catalogue.available()))
+		case !slices.Contains(Placements, run):
 			// Spelling is the entry's own rule; it already reported.
 		case !catalogue.Configured(run):
 			p.add(where, ErrConflict,
 				"%q needs the %s backend configured under providers.sandbox "+
 					"(this catalogue has %s)",
-				run, run.backend(), names(catalogue.available()))
+				run, run.backend(), words.And(catalogue.available()))
 		}
 	}
 
-	p.wrap(c.validateCheckPlacement())
-
 	reached := c.SandboxPlacements()
-	if catalogue.Enabled() && len(reached) == 0 {
+	if len(reached) == 0 && len(keys) == 0 {
 		// A CATALOGUE NOTHING CAN RUN. The engine builds a backend only
 		// for a cell something reaches, so zero reached cells means no
-		// manager, no runtime and `run_sandbox` registered for nobody: a
-		// block that reads as configuration and configures nothing, which
-		// is the reason an empty block is refused too.
+		// manager and no runtime: a block that reads as configuration and
+		// configures nothing, which is the reason an empty block is
+		// refused too.
 		//
 		// It is only reachable on an AMBIGUOUS catalogue: any catalogue
-		// that resolves a default reaches that default, precisely so a seat
-		// added later has somewhere to go. So the remedy is the default —
-		// or a seat, which is the other thing that would reach a cell.
+		// that resolves a default reaches that default, precisely so a
+		// seat added later has somewhere to go. And only with no entry a
+		// launch can land on, because each of those that names no cell is
+		// refused above, with this same default as one of its remedies —
+		// a second refusal here would say the one mistake twice.
 		p.add(at(field("providers.sandbox"), "default_run_in"), ErrMissing,
-			"this catalogue configures more than one place to run code (%s) and "+
-				"nothing names one, so no backend is built and no seat can run "+
-				"code here. Name the default, give a seat `run_in`, or remove "+
-				"the block",
-			names(catalogue.available()))
+			"this catalogue configures more than one place to run an executor (%s) "+
+				"and nothing names one, so no backend is built and a seat added later "+
+				"has nowhere to run. Name the default, or remove the block while no "+
+				"agent seat runs on a model",
+			words.And(catalogue.available()))
 	}
 	if local := catalogue.localBlock(); local != nil {
 		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and
 		// only the walk above knows that. Required unconditionally it would
 		// refuse a perfectly good direct-only company; unchecked, a seat's
-		// first coding run fails at container create, minutes into a turn.
-		// What it must hold is what runs in it: a seat's box runs the coding
-		// agent, a check's box the repository's own command with git.
+		// first launch fails at container create, minutes into a turn.
+		// What it must hold is what runs in it: a seat's box runs its coding
+		// CLI, a check's box the repository's own command with git.
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
 			holding := "with the coding-agent CLI installed"
 			if _, bySeat := c.seatPlacements()[PlacementContainer]; !bySeat {
@@ -1842,8 +1795,10 @@ func (c *Company) validateSandboxPlacement() error {
 					continue
 				}
 				p.add(at(field("providers.sandbox.local"), unread.field), ErrConflict,
-					"only a container box reads this, and no seat or check runs in one. "+
-						"Give a seat `run_in: container` or let code.checks run in one, or remove the field")
+					"only a container box reads this, and no executor or check runs in one. "+
+						"Give an entry a seat runs on `run_in: container` (or make it "+
+						"providers.sandbox.default_run_in), let code.checks run in one, "+
+						"or remove the field")
 			}
 		}
 	}
@@ -1879,7 +1834,7 @@ func (c *Company) validateCheckPlacement() error {
 		case !catalogue.Configured(cell):
 			p.add(where, ErrConflict,
 				"%q needs the %s backend configured under providers.sandbox (this catalogue has %s)",
-				cell, cell.backend(), names(catalogue.available()))
+				cell, cell.backend(), words.Or(catalogue.available()))
 		}
 	}
 	if checks.RunIn != "" {

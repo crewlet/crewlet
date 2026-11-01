@@ -80,7 +80,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       env: {%s: "x"}
 `, "roles[0].sandbox.env.%s"},
 		{"a seat's setup step", `
@@ -92,7 +91,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       setup:
         - name: tools
           env: {%s: "x"}
@@ -147,7 +145,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       env: {GITLAB_TOKEN: "x", CREWLET_GIT_PROXY: "y", GIT_CONFIG_COUNT: "0"}
 code:
   native: true
@@ -157,29 +154,32 @@ code:
 }
 
 // directCompany is a company hosting code (or not) whose catalogue is the
-// local backend, a seat placed by run (its own run_in, or the default's), and
-// an agent-mode executor's entry where entryRunIn is not "-".
-func directCompany(native bool, defaultRunIn, seatRunIn string) string {
+// local backend and whose one agent seat's executor launches on
+// providers.llm.main, placed by that entry's own run_in where entryRunIn is
+// not empty, else by the catalogue's default.
+func directCompany(native bool, defaultRunIn, entryRunIn string) string {
 	// THE IMAGE ONLY WHERE A CONTAINER BOX IS REACHED: a document naming one
 	// nothing reads is refused.
+	reached := entryRunIn
+	if reached == "" {
+		reached = defaultRunIn
+	}
 	local := "    local: {}\n"
-	if defaultRunIn == "container" || seatRunIn == "container" {
+	if reached == "container" {
 		local = "    local: {image: \"ghcr.io/example/coder:1\"}\n"
 	}
 	doc := "\nname: Acme\nproviders:\n  sandbox:\n" + local
 	if defaultRunIn != "" {
 		doc += "    default_run_in: " + defaultRunIn + "\n"
 	}
+	doc += "  llm:\n    main:\n      model: sonnet\n"
+	if entryRunIn != "" {
+		doc += "      run_in: " + entryRunIn + "\n"
+	}
 	doc += `roles:
   - name: Dev
     handle: dev
-    sandbox:
-      enabled: true
-`
-	if seatRunIn != "" {
-		doc += "      run_in: " + seatRunIn + "\n"
-	}
-	doc += `units:
+units:
   - name: Engineering
     id: eng
 `
@@ -210,34 +210,34 @@ func directWarnings(c *Company) []Warning {
 // A DIRECT SEAT IN A COMPANY THAT HOSTS CODE IS WARNED, whatever its
 // repositories' visibility: a `direct` box runs as the engine's user, so it
 // reads every repository a git node caches and the keyring that mints any live
-// run's token — at the seat's run_in where it names the cell, and once at the
-// default for the seats that take it. No warning where the company hosts no
-// code, nor for a `container` seat.
+// run's token — at the launching providers.llm entry's run_in where it names
+// the cell (a seat names none of its own), and once at the default for the
+// entries that take it. No warning where the company hosts no code, nor for a
+// `container` entry.
 //
 // Mutation: drop the code.native term → the company hosting no code warns,
 // red.
 func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name               string
-		native             bool
-		defaultRun, seatIn string
-		at                 string // "" is no warning
-		seat               string
+		name                string
+		native              bool
+		defaultRun, entryIn string
+		at                  string // "" is no warning
 	}{
-		{"a seat naming direct", true, "container", "direct", "roles[0].sandbox.run_in", "dev"},
-		{"a seat inheriting direct", true, "direct", "", "providers.sandbox.default_run_in", ""},
-		{"a company hosting no code", false, "direct", "direct", "", ""},
-		{"a container seat", true, "direct", "container", "", ""},
+		{"an entry naming direct", true, "", "direct", "providers.llm.main.run_in"},
+		{"an entry inheriting direct", true, "direct", "", "providers.sandbox.default_run_in"},
+		{"a company hosting no code", false, "", "direct", ""},
+		{"a container entry", true, "", "container", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := directWarnings(mustCompany(t, directCompany(tc.native, tc.defaultRun, tc.seatIn)))
+			got := directWarnings(mustCompany(t, directCompany(tc.native, tc.defaultRun, tc.entryIn)))
 			switch {
 			case tc.at == "" && len(got) != 0:
 				t.Fatalf("warned %+v", got)
-			case tc.at != "" && (len(got) != 1 || got[0].Path != tc.at || got[0].Seat != tc.seat):
-				t.Fatalf("warnings %+v, want one at %s for seat %q", got, tc.at, tc.seat)
+			case tc.at != "" && (len(got) != 1 || got[0].Path != tc.at):
+				t.Fatalf("warnings %+v, want one at %s", got, tc.at)
 			case tc.at != "":
 				for _, says := range []string{"Tier A keyring", "ANY live coding run", "`visibility: unit`",
 					"run it in `container` or `e2b`"} {

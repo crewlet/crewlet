@@ -1,10 +1,13 @@
 package estate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"maps"
 	"math"
 	"reflect"
@@ -17,16 +20,19 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The streams of the tracker's, the knowledge base's and the code host's logs,
@@ -49,12 +55,12 @@ type fakeNode struct {
 	floors    []statelog.Position
 	actors    []Actor
 	opIDs     []string
-	created   []tracker.Task
-	patches   []tracker.TaskPatch
-	turns     []tracker.TurnRecord
+	created   []worklet.Task
+	patches   []worklet.TaskPatch
+	turns     []worklet.TurnRecord
 	keys      []string
 	queries   []knowledge.Query
-	units     tracker.Units
+	units     worklet.Units
 	notReady  bool
 	behind    bool
 	abandoned bool
@@ -159,6 +165,9 @@ type fakeNode struct {
 	// earlier ones, holding whatever slot it was answered through.
 	holdProposals chan struct{}
 	proposing     atomic.Int32
+	// rooms is this node's chat, nil for a company whose chat is not the
+	// engine's own — see chat_test.go.
+	rooms *chatDesk
 }
 
 func (f *fakeNode) note(op string) {
@@ -185,27 +194,27 @@ func (f *fakeNode) set(change func(*fakeNode)) {
 	change(f)
 }
 
-func (f *fakeNode) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (f *fakeNode) Tasks(ctx context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	f.note("tasks")
 	if q.Units != f.units {
-		return tracker.Answer{}, errors.New("the serving node's chart was not attached")
+		return worklet.Answer{}, errors.New("the serving node's chart was not attached")
 	}
 	if f.failWith != nil {
-		return tracker.Answer{}, f.failWith
+		return worklet.Answer{}, f.failWith
 	}
 	f.mu.Lock()
 	read := f.levelRead
 	f.mu.Unlock()
 	if read != nil {
 		if err := read(ctx); err != nil {
-			return tracker.Answer{}, err
+			return worklet.Answer{}, err
 		}
 	}
-	return tracker.Answer{TotalHint: 7}, nil
+	return worklet.Answer{TotalHint: 7}, nil
 }
 
-func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (f *fakeNode) CreateTask(_ context.Context, opID string, task worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	f.note("create")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
@@ -213,9 +222,9 @@ func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
 	unvouched, refusal := f.unvouched, f.refusal
 	f.mu.Unlock()
 	if refusal != nil {
-		return tracker.WriteResult{}, refusal
+		return worklet.WriteResult{}, refusal
 	}
-	out := tracker.WriteResult{Key: task.Project + "-1"}
+	out := worklet.WriteResult{Key: task.Project + "-1"}
 	out.Result = statelog.Result{Outcome: statelog.OutcomeApplied, Position: f.written, OpID: opID}
 	if unvouched {
 		out.Result = statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID, Unvouched: true}
@@ -224,35 +233,29 @@ func (f *fakeNode) CreateTask(_ context.Context, opID string, task tracker.Task,
 }
 
 func (f *fakeNode) RecordTurn(_ context.Context, opID string,
-	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	turn worklet.TurnRecord) (worklet.WriteResult, error) {
 	f.note("record_turn")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
 	f.turns = append(f.turns, turn)
 	f.mu.Unlock()
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
-	patch tracker.TaskPatch, _ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
+	patch worklet.TaskPatch, _ worklet.ChangeKind, _ *worklet.Notify) (worklet.WriteResult, error) {
 	f.note("update")
 	f.mu.Lock()
 	f.patches = append(f.patches, patch)
 	f.mu.Unlock()
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
-func (f *fakeNode) Comment(_ context.Context, actor pages.Actor, _ string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	f.note("comment")
-	// THE TURN'S KEY FIRST, the order the pages store derives a comment's
-	// id in.
-	if in.TurnKey != "" {
-		f.keyed(in.TurnKey)
-	} else {
-		f.keyed(actor.OpKey)
-	}
-	return pages.Comment{Body: in.Body}, pages.Written{}, nil
+	f.keyed(actor.OpKey)
+	return doclet.Comment{Body: in.Body}, doclet.Written{}, nil
 }
 
 func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Result, error) {
@@ -261,7 +264,7 @@ func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Resul
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
 	return knowledge.Result{
-		Hits: []knowledge.Hit{{Title: "found on " + f.name}},
+		Hits: []knowledge.Hit{{Title: "found on " + f.name, Provenance: hitLabel}},
 		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword,
 			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true}},
 	}, nil
@@ -388,6 +391,19 @@ func (f fakeUsage) RepoReadsElided(context.Context, usage.RepoReadsQuery) (int64
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
+	b := f.halves()
+	f.mu.Lock()
+	rooms := f.rooms
+	f.mu.Unlock()
+	if rooms != nil {
+		b.Chat, b.ChatWriter, b.ChatSearch = rooms, rooms, rooms
+	}
+	return b
+}
+
+// halves is this node's tracker, knowledge base and identity directory, and
+// the gates every operation passes.
+func (f *fakeNode) halves() Backend {
 	var half CodeServer = f
 	f.mu.Lock()
 	if f.codeHalf != nil {
@@ -666,10 +682,10 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 	})
 }
 
-type namedChart struct{ tracker.Units }
+type namedChart struct{ worklet.Units }
 
 // chartOf is a chart value distinguishable per node, compared by identity.
-func chartOf(string) tracker.Units { return &namedChart{} }
+func chartOf(string) worklet.Units { return &namedChart{} }
 
 // first is the node r asks first, which is the rendezvous winner among the
 // nodes the placement names.
@@ -693,7 +709,7 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 	return nil
 }
 
-var swe = Actor{Handle: "swe", Kind: tracker.AuthorAgent}
+var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent}
 
 // A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
 // attached — the asking node's chart cannot cross a wire, and
@@ -701,7 +717,7 @@ var swe = Actor{Handle: "swe", Kind: tracker.AuthorAgent}
 func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	answer, err := f.client.Work().Tasks(t.Context(), tracker.Query{Units: chartOf("mine")}, time.Now())
+	answer, err := f.client.Work().Tasks(t.Context(), worklet.Query{Units: chartOf("mine")}, time.Now())
 	if err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
@@ -715,10 +731,10 @@ func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 func TestAServingNodesErrorKeepsItsIdentity(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	f.nodes["data-a"].failWith = errors.Join(errors.New("while reading"), tracker.ErrNoTask)
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	if !errors.Is(err, tracker.ErrNoTask) {
-		t.Fatalf("err = %v, want tracker.ErrNoTask through the wire", err)
+	f.nodes["data-a"].failWith = errors.Join(errors.New("while reading"), worklet.ErrNoTask)
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	if !errors.Is(err, worklet.ErrNoTask) {
+		t.Fatalf("err = %v, want worklet.ErrNoTask through the wire", err)
 	}
 }
 
@@ -736,7 +752,7 @@ func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 		f := newFleet(t, "data-a", "data-b")
 		_, first := f.first(t, f.client)
 		first.set(func(n *fakeNode) { n.failWith = behind })
-		answer, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		answer, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		if err != nil || answer.TotalHint != 7 {
 			t.Fatalf("a read the first node refused as behind = (%+v, %v), want the peer's answer", answer, err)
 		}
@@ -750,7 +766,7 @@ func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 		for _, n := range f.nodes {
 			n.set(func(n *fakeNode) { n.failWith = behind })
 		}
-		_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		var refused *statelog.Refused
 		if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind || refused.RetryAfter != behind.RetryAfter {
 			t.Fatalf("a read every node refused as behind = %v, want that refusal with its hint", err)
@@ -763,7 +779,7 @@ func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 		first.set(func(n *fakeNode) {
 			n.failWith = &statelog.Refused{Code: statelog.RefuseLogFull, Level: statelog.ReadLinearizable}
 		})
-		_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		var refused *statelog.Refused
 		if !errors.As(err, &refused) || refused.Code != statelog.RefuseLogFull {
 			t.Fatalf("a read refused log_full = %v, want that refusal", err)
@@ -777,7 +793,7 @@ func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 		t.Parallel()
 		f := newFleet(t, "data-b")
 		local := &fakeNode{name: "data-a", units: chartOf("data-a"), failWith: behind}
-		answer, err := f.router(t, "data-a", local).Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		answer, err := f.router(t, "data-a", local).Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		if err != nil || answer.TotalHint != 7 {
 			t.Fatalf("a read this node's own copy refused as behind = (%+v, %v), want data-b's answer",
 				answer, err)
@@ -793,7 +809,7 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	firstName, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a read with a live second node failed: %v", err)
 	}
 	if next, _ := f.first(t, f.client); next == firstName {
@@ -846,7 +862,7 @@ func TestACallerThatStopsWaitingSuspectsNoNode(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := f.client.Work().Tasks(ctx, tracker.Query{}, time.Now())
+				_, err := f.client.Work().Tasks(ctx, worklet.Query{}, time.Now())
 				done <- err
 			}()
 			if err := whileHeld(t, first, done, func() { tc.stop(cancel) }); err == nil {
@@ -922,7 +938,7 @@ func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				_, err := r.WriterAs(swe).CreateTask(ctx, "op-silent", tracker.Task{Project: "ENG"}, nil)
+				_, err := r.WriterAs(swe).CreateTask(ctx, "op-silent", worklet.Task{Project: "ENG"}, nil)
 				done <- err
 			}()
 			if err := whileHeld(t, first, done, func() { clock.Add(int64(tc.silent)) }); err == nil {
@@ -1015,7 +1031,7 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 
 	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
-	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "data-a: data-a has not applied") {
 		t.Fatalf("a read of a node behind its floor, at the shortest read attempt a router "+
@@ -1054,7 +1070,7 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 	f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
 
 	begun := time.Now()
-	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	waited := time.Since(begun)
 	var refusal *statelog.Refused
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
@@ -1115,7 +1131,7 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	first.set(func(n *fakeNode) { n.hang = hang })
 
 	begun := time.Now()
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a read with a live second node failed: %v", err)
 	}
 	waited := time.Since(begun)
@@ -1168,7 +1184,7 @@ func TestAnUnknownPlacementIsNotAnEmptyFleet(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	f.placement.set(func(p *fakePlacement) { p.err = errors.New("the leases could not be listed") })
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) {
 		t.Fatalf("an unknown placement answered %v, want the placement's own error", err)
@@ -1188,8 +1204,8 @@ func TestANodeThatRanNothingIsPassedOverForEveryClass(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.notReady = true })
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
-		pages.NewComment{Body: "hi"}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1",
+		doclet.NewComment{Body: "hi"}); err != nil {
 		t.Fatalf("a page write with a serving second node failed: %v", err)
 	}
 	if first.askedFor("comment") {
@@ -1204,7 +1220,7 @@ func TestAnUnansweredPageWriteIsUnknownAndNotRepeated(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	_, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1", pages.NewComment{Body: "hi"})
+	_, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1", doclet.NewComment{Body: "hi"})
 	if !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("err = %v, want ErrOutcomeUnknown", err)
 	}
@@ -1222,7 +1238,7 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
 	written, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-7",
-		tracker.Task{Project: "ENG"}, nil)
+		worklet.Task{Project: "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1238,6 +1254,142 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	}
 }
 
+// A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
+//
+// Every holder was asked under the same operation, none ran it, and at least
+// one never answered — so that one may have run it. "No data node could serve it" is the claim that
+// nothing ran, and a caller told that writes again, under a FRESH id where it
+// minted none, which is a second write: a purge appended twice, a task filed
+// twice. A READ nobody answered is still unserved, since a read ran nothing
+// that matters; and a write every node REFUSED is unserved too, since a node
+// that answered "I did not run it" did not.
+func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	for _, node := range f.nodes {
+		node.set(func(n *fakeNode) { n.silent = true })
+	}
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-9",
+		worklet.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+		t.Fatalf("a write no node answered = %v, want ErrOutcomeUnknown and not "+
+			"ErrUnserved", err)
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the unknown write %q does not name %s, which it was sent to", err, name)
+		}
+	}
+
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read no node answered = %v, want ErrUnserved", err)
+	}
+
+	refusing := newFleet(t, "data-a", "data-b")
+	for _, node := range refusing.nodes {
+		node.set(func(n *fakeNode) { n.outOfService = true })
+	}
+	_, err = refusing.client.WriterAs(swe).CreateTask(t.Context(), "op-10",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
+	}
+
+	// ONE SILENT NODE IS ENOUGH: the other answering that it did not run
+	// the write says nothing about the one that never answered.
+	mixed := newFleet(t, "data-a", "data-b")
+	silentName, silent := mixed.first(t, mixed.client)
+	silent.set(func(n *fakeNode) { n.silent = true })
+	for name, node := range mixed.nodes {
+		if name != silentName {
+			node.set(func(n *fakeNode) { n.outOfService = true })
+		}
+	}
+	_, err = mixed.client.WriterAs(swe).CreateTask(t.Context(), "op-13",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) ||
+		!strings.Contains(err.Error(), silentName) {
+		t.Errorf("a write one node never answered and the other refused = %v, want "+
+			"ErrOutcomeUnknown naming %s", err, silentName)
+	}
+
+	// AND A WRITE WHOSE CALLER STOPPED LISTENING: the request was sent, and
+	// the caller's context ending says nothing about whether it ran.
+	wedged := newFleet(t, "data-a")
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	// PRODUCTION'S WRITE ATTEMPT (a minute) outlasts the caller's deadline,
+	// so what ends the wait is the caller.
+	wedged.nodes["data-a"].set(func(n *fakeNode) { n.hang = hang })
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	_, err = wedged.client.WriterAs(swe).CreateTask(ctx, "op-12",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a write whose caller's deadline ended while a node held it = %v, "+
+			"want ErrOutcomeUnknown carrying the deadline", err)
+	}
+}
+
+// A WRITE STOPPED BEFORE ITS NEXT ASK IS STILL ONE A SILENT NODE MAY HAVE RUN.
+//
+// A request that cannot be made at all ends the walk — no other node would
+// fare better — but a node the write was already sent to, and never heard
+// from, may have committed it. So the walk's answer is unknown, carrying what
+// stopped it, rather than the bare failure of the ask that came after: told
+// that, a caller sees a refusal and writes again under a fresh id.
+func TestAWriteWhoseNextAskFailsAfterASilentNodeIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	firstName, first := f.first(t, f.client)
+	first.set(func(n *fakeNode) { n.silent = true })
+	broken := errors.New("the queue went down between two asks")
+	// THE SHORTEST ATTEMPTS A ROUTER IS BUILT WITH, so the silent node is
+	// given up on quickly.
+	timing := Production()
+	timing.ReadAttempt = minReadAttempt + 100*time.Millisecond
+	timing.WriteAttempt = minWriteAttempt + 100*time.Millisecond
+	r, err := NewRouter(RouterOptions{Self: "agent-1", Placement: f.placement, Git: f.git,
+		Session: NewSession(), Envelopes: fleetEnvelopes, Timing: timing,
+		Queue: &failingAfter{Asker: f.start(t), first: Subject(firstName), err: broken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = r.WriterAs(swe).CreateTask(t.Context(), "op-11", worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, broken) {
+		t.Fatalf("a write sent to a silent node and then stopped = %v, want "+
+			"ErrOutcomeUnknown carrying what stopped it", err)
+	}
+	if !strings.Contains(err.Error(), firstName) {
+		t.Errorf("the unknown write %q does not name %s, which it was sent to", err, firstName)
+	}
+
+	// A READ STOPPED THE SAME WAY RAN NOTHING THAT MATTERS: the failure as
+	// it is.
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.Is(err, broken) ||
+		errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read stopped by its next ask = %v, want the ask's own failure", err)
+	}
+}
+
+// failingAfter asks the node on first through the fleet, and refuses every
+// other ask as one that could not be made at all.
+type failingAfter struct {
+	Asker
+	first string
+	err   error
+}
+
+func (a *failingAfter) Ask(ctx context.Context, subject string, request []byte,
+	want int) ([][]byte, error) {
+	if subject != a.first {
+		return nil, a.err
+	}
+	return a.Asker.Ask(ctx, subject, request, want)
+}
+
 // A WRITE'S POSITION IS THE NEXT REQUEST'S FLOOR, on whichever node answers
 // it — on the log of the operation's own domain, and on no other: a floor on
 // another domain's log, or on a stream no domain logs to, is never waited for.
@@ -1247,11 +1399,11 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	node := f.nodes["data-a"]
 	node.written = statelog.Position{Stream: trackerStream, Generation: 1, Seq: 99}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-1",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if len(node.floors) != 1 || node.floors[0] != node.written {
@@ -1260,7 +1412,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	// ANOTHER DOMAIN'S LOG: a page write does not depend on the tracker's
 	// rows, so it carries no floor on its log.
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 	if len(node.floors) != 0 {
@@ -1271,7 +1423,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	// operation is about.
 	f.client.Observe(statelog.Position{Stream: "CREWLET_OTHER_LOG", Generation: 1, Seq: 3})
 	node.set(func(n *fakeNode) { n.floors = nil })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	for _, at := range node.floors {
@@ -1294,11 +1446,11 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	node.set(func(n *fakeNode) { n.behindOn = pagesStream })
 	f.client.Observe(statelog.Position{Stream: pagesStream, Generation: 1, Seq: 9})
 
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a tracker read behind a pages floor = %v, want it answered", err)
 	}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-1",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a tracker write behind a pages floor = %v, want it written", err)
 	}
 	node.mu.Lock()
@@ -1318,7 +1470,7 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	// The holder's floor wait ends a reply's margin inside its asker's
 	// attempt (statelog.WithReplyMargin), so it says it is behind while the
 	// asker is still listening.
-	_, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
+	_, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
 		node.askedFor("comment") {
@@ -1335,7 +1487,7 @@ func TestEveryDataNodeBehindTheFloorIsAnUnservedEstate(t *testing.T) {
 	f := newFleet(t, "data-a")
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.HasPrefix(unserved.Detail, "data-a: ") {
 		t.Fatalf("err = %v, want ErrUnserved naming data-a", err)
@@ -1353,7 +1505,7 @@ func TestAFloorNoNodeCanReachIsForgotten(t *testing.T) {
 	f := newFleet(t, "data-a")
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.abandoned = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if floors := f.client.Session().Floors([]string{trackerStream}); len(floors) != 0 {
@@ -1389,9 +1541,9 @@ func TestTheSessionForgetsOnlyTheFloorItWasTold(t *testing.T) {
 func TestAPatchsGesturesCross(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	patch := tracker.TaskPatch{
-		Watch:  &tracker.WatchIntent{Handle: "ana", Watch: true},
-		Relate: &tracker.RelationIntent{},
+	patch := worklet.TaskPatch{
+		Watch:  &worklet.WatchIntent{Handle: "ana", Watch: true},
+		Relate: &worklet.RelationIntent{},
 	}
 	if _, err := f.client.WriterAs(swe).
 		UpdateTask(t.Context(), "op", "ENG-1", "ENG", 0, patch, "", nil); err != nil {
@@ -1412,12 +1564,34 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 	f := newFleet(t, "data-a")
 	local := &fakeNode{name: "data-self", units: chartOf("self")}
 	for _, r := range []*Router{f.client, f.router(t, "data-self", local)} {
-		if _, err := r.WriterAs(Actor{}).CreateTask(t.Context(), "op", tracker.Task{}, nil); err == nil {
+		if _, err := r.WriterAs(Actor{}).CreateTask(t.Context(), "op", worklet.Task{}, nil); err == nil {
 			t.Fatal("a write naming nobody was run")
 		}
 	}
 	if f.nodes["data-a"].askedFor("create") || local.askedFor("create") {
 		t.Error("a serving node ran it")
+	}
+}
+
+// hitLabel is the provenance every fake node's hit carries: one no zero value
+// or default could stand in for, so a label lost on the wire cannot pass.
+var hitLabel = provenance.Label{Source: provenance.SourcePageBody, Trust: provenance.TrustColleague,
+	Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+
+// A HIT'S PROVENANCE CROSSES WITH IT. The backend that found a page is the only
+// one that knows who can write there (ADR-0040), and the node rendering the
+// hit into a seat's prompt is, on a node without data, never that backend: a
+// label left behind would reach the seat as the zero label's `external`, or a
+// colleague's page as nothing at all.
+func TestAKnowledgeHitsLabelCrossesTheWire(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 1 {
+		t.Fatalf("search = %+v, want the data node's hit", got)
+	}
+	if !reflect.DeepEqual(got.Hits[0].Provenance, hitLabel) {
+		t.Fatalf("the hit arrived labelled %+v, want %+v", got.Hits[0].Provenance, hitLabel)
 	}
 }
 
@@ -1464,7 +1638,7 @@ func TestAKnowledgeSearchKeepsItsExclusionAndTakesTheServersScope(t *testing.T) 
 func TestNoServingNodeSaysSo(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) {
 		t.Fatalf("err = %v, want ErrUnserved", err)
@@ -1488,7 +1662,7 @@ func TestAnUnservedWalkSaysWhetherANodeWentSilent(t *testing.T) {
 			f := newFleet(t, "data-a", "data-b")
 			f.nodes["data-a"].set(func(n *fakeNode) { n.outOfService = true })
 			f.nodes["data-b"].set(func(n *fakeNode) { n.outOfService, n.silent = !tc.silent, tc.silent })
-			_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+			_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 			var unserved *ErrUnserved
 			if !errors.As(err, &unserved) {
 				t.Fatalf("err = %v, want ErrUnserved", err)
@@ -1513,10 +1687,10 @@ func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
 	f := newFleet(t, "data-a", "data-b")
 	_, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
-	turn := tracker.TurnRecord{
+	turn := worklet.TurnRecord{
 		Task: "task-1", Seat: "swe", TurnID: "run-1", Outcome: "delivered",
 		Phases: []string{"execute"},
-		Spend: tracker.TurnSpend{Turns: 1, Rounds: 2, Input: 900, Output: 100,
+		Spend: worklet.TurnSpend{Turns: 1, Rounds: 2, Input: 900, Output: 100,
 			CacheRead: 400, WallMs: 3100},
 	}
 	if _, err := f.client.WriterAs(swe).RecordTurn(t.Context(), "op-turn", turn); err != nil {
@@ -1544,7 +1718,7 @@ func TestADataNodeAnswersItself(t *testing.T) {
 	f := newFleet(t, "data-a")
 	local := &fakeNode{name: "data-self", units: chartOf("self")}
 	r := f.router(t, "data-self", local)
-	answer, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	answer, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	if err != nil || answer.TotalHint != 7 {
 		t.Fatalf("tasks = (%+v, %v)", answer, err)
 	}
@@ -1573,7 +1747,7 @@ func TestALocalReadWaitsForTheNodesOwnFloor(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		done <- err
 	}()
 	select {
@@ -1602,7 +1776,7 @@ func TestALocalCopyBehindItsFloorAsksAnotherHolder(t *testing.T) {
 	r := f.router(t, "data-self", local)
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 42}
 	r.Observe(floor)
-	answer, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	answer, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	if err != nil || answer.TotalHint != 7 {
 		t.Fatalf("tasks = (%+v, %v)", answer, err)
 	}
@@ -1635,7 +1809,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	first.set(func(n *fakeNode) { n.notReady = true })
 
 	// A HOLDER WHOSE COPY DOES NOT LAG IS PREFERRED.
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks with one copy lagging: %v", err)
 	}
 	if first.askedFor("tasks") || !second.askedFor("tasks") {
@@ -1649,7 +1823,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 9}
 	f.client.Observe(floor)
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks with every copy lagging: %v", err)
 	}
 	for _, n := range f.nodes {
@@ -1661,11 +1835,11 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		}
 	}
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-lag",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a tracker write with every copy lagging: %v", err)
 	}
-	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
-		pages.NewComment{Body: "hi"}); err != nil {
+	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1",
+		doclet.NewComment{Body: "hi"}); err != nil {
 		t.Fatalf("a page write with every copy lagging: %v", err)
 	}
 
@@ -1673,11 +1847,11 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	// answered, not refused as though nobody held the estate.
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	alone := newFleet(t).router(t, "data-self", local)
-	if _, err := alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := alone.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("the only copy, lagging, refused its own seat's read: %v", err)
 	}
 	if _, err := alone.WriterAs(swe).CreateTask(t.Context(), "op-own",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("the only copy, lagging, refused its own seat's write: %v", err)
 	}
 
@@ -1685,7 +1859,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	peered := newFleet(t, "data-a")
 	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	r := peered.router(t, "data-self", own)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if own.askedFor("tasks") || !peered.nodes["data-a"].askedFor("tasks") {
@@ -1710,12 +1884,12 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	assigned := tracker.Task{Project: "ENG",
+	assigned := worklet.Task{Project: "ENG",
 		Fields: map[string]json.RawMessage{"owner": json.RawMessage(`"swe"`)}}
 	decided := func(n *fakeNode) bool {
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		return slices.ContainsFunc(n.created, func(task tracker.Task) bool {
+		return slices.ContainsFunc(n.created, func(task worklet.Task) bool {
 			return string(task.Fields["owner"]) == `"swe"`
 		})
 	}
@@ -1740,7 +1914,7 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 	}, {
 		name: "a read", op: "tasks",
 		run: func(r *Router) error {
-			_, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now())
+			_, err := r.Work().Tasks(ctx, worklet.Query{}, time.Now())
 			return err
 		},
 		ran: func(n *fakeNode) bool { return n.askedFor("tasks") },
@@ -1829,8 +2003,8 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 	second := pinged.other(first)
 	first.set(func(n *fakeNode) { n.behindConfig = true })
 	second.set(func(n *fakeNode) { n.notAdmitting = true })
-	if served, _, err := pinged.client.Serves(ctx); err != nil || !served {
-		t.Fatalf("admission through a node behind the configuration = (%v, %v), want "+
+	if served, err := pinged.client.Serves(ctx); err != nil || !served.Tracker {
+		t.Fatalf("admission through a node behind the configuration = (%+v, %v), want "+
 			"admitted", served, err)
 	}
 	if second.askedFor("admits") {
@@ -1863,7 +2037,7 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 	behindConfig := func(n *fakeNode) { n.behindConfig = true }
 	read := func(t *testing.T, r *Router) {
 		t.Helper()
-		if _, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now()); err != nil {
+		if _, err := r.Work().Tasks(ctx, worklet.Query{}, time.Now()); err != nil {
 			t.Fatalf("a read with the data nodes behind the configuration: %v", err)
 		}
 	}
@@ -1958,8 +2132,8 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 	first.set(behindConfig)
 	read(t, pinged.client)
 	second.set(func(n *fakeNode) { n.notAdmitting, n.asked = true, nil })
-	if served, _, err := pinged.client.Serves(ctx); err != nil || !served {
-		t.Fatalf("admission through a node the router remembers behind = (%v, %v), want "+
+	if served, err := pinged.client.Serves(ctx); err != nil || !served.Tracker {
+		t.Fatalf("admission through a node the router remembers behind = (%+v, %v), want "+
 			"admitted", served, err)
 	}
 	if second.askedFor("admits") {
@@ -2007,7 +2181,7 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 	}
 	read := func(t *testing.T, r *Router) {
 		t.Helper()
-		if _, err := r.Work().Tasks(ctx, tracker.Query{}, time.Now()); err != nil {
+		if _, err := r.Work().Tasks(ctx, worklet.Query{}, time.Now()); err != nil {
 			t.Fatalf("a read with no data node in good standing: %v", err)
 		}
 	}
@@ -2145,7 +2319,7 @@ func TestASearchThatReachedNothingSaysItDidNotRun(t *testing.T) {
 	}
 	// AND THE ITEM SEARCH IS AN ERROR, never an empty list.
 	if answer, err := f.client.Work().Search(t.Context(),
-		tracker.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
+		worklet.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
 		t.Fatalf("an item search nothing answered = %+v, want its error", answer)
 	}
 }
@@ -2208,7 +2382,7 @@ func TestASearchThatFailsNamesItsOperation(t *testing.T) {
 	f.placement.set(func(p *fakePlacement) {
 		p.err = errors.New("the presence view answers unknown")
 	})
-	_, err := f.client.Work().Search(t.Context(), tracker.SearchQuery{Text: "deploys", Limit: 5})
+	_, err := f.client.Work().Search(t.Context(), worklet.SearchQuery{Text: "deploys", Limit: 5})
 	const want = "estate: tracker.search: read who holds the estate: the presence view answers unknown"
 	if err == nil || err.Error() != want {
 		t.Errorf("a search the placement could not route = %v, want %q", err, want)
@@ -2232,7 +2406,7 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 	r := f.router(t, "data-self", own)
 	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 4}
 	r.Observe(floor)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("a lagging copy of its own refused this node's read: %v", err)
 	}
 	own.mu.Lock()
@@ -2243,14 +2417,14 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 			"to the node's floor", own.asked, own.floors)
 	}
 	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-blind",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("a lagging copy of its own refused this node's write: %v", err)
 	}
 
 	// A COPY OUT OF SERVICE is no node to ask at all, and the answer is the
 	// placement's own reason — never "nobody serves it".
 	own.set(func(n *fakeNode) { n.outOfService = true })
-	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) ||
 		!strings.Contains(err.Error(), "the presence view answers unknown") {
@@ -2269,7 +2443,7 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 	f := newFleet(t, "data-a")
 	peer := f.nodes["data-a"]
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	if !peer.askedFor("tasks") || peer.askedFor("admits") {
@@ -2279,7 +2453,7 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := newFleet(t).router(t, "data-self", local)
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks on this node's own copy: %v", err)
 	}
 	if !local.askedFor("tasks") || local.askedFor("admits") {
@@ -2287,8 +2461,8 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 			"question", local.asked)
 	}
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
-	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
-		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	if served, err := r.Serves(t.Context()); err != nil || served.Tracker {
+		t.Fatalf("a copy that admits no seat was admitted (%+v, %v)", served, err)
 	}
 }
 
@@ -2339,7 +2513,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	}
 }
 
-// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0049.
+// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0072.
 //
 // A router on a node without data, between a peer whose tracker copy is out
 // of service and one whose knowledge base is, alternates tracker and
@@ -2366,7 +2540,7 @@ func TestEachDomainSettlesOnANodeWhoseCopyOfItServes(t *testing.T) {
 	}
 	work := func() {
 		t.Helper()
-		if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 			t.Fatalf("tasks: %v", err)
 		}
 	}
@@ -2428,7 +2602,7 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	winnerName, winner := f.first(t, r)
 	runnerUp := f.other(winner)
 	read := func() error {
-		_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 		return err
 	}
 
@@ -2474,7 +2648,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	r := f.router(t, "data-self", local)
 	_, first := f.first(t, r)
 	first.set(func(n *fakeNode) { n.outOfService = true })
-	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-9", tracker.Task{Project: "ENG"}, nil)
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-9", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Key != "ENG-1" {
 		t.Fatalf("create = (%+v, %v)", written, err)
 	}
@@ -2492,7 +2666,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	}
 }
 
-// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0049.
+// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0072.
 //
 // A node whose tracker copy is wrong sends its seats' tracker calls to a peer
 // and still answers their knowledge-base calls from its own pages, and a peer
@@ -2507,7 +2681,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		outOfServiceOn: map[string]bool{trackerDomain: true}}
 	r := f.router(t, "data-self", local)
 
-	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-t", tracker.Task{Project: "ENG"}, nil)
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-t", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Key != "ENG-1" {
 		t.Fatalf("create = (%+v, %v)", written, err)
 	}
@@ -2557,7 +2731,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	solo := newFleet(t)
 	alone := solo.router(t, "data-self", &fakeNode{name: "data-self", units: chartOf("self"),
 		outOfServiceOn: map[string]bool{trackerDomain: true}})
-	_, err = alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err = alone.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) ||
 		!strings.Contains(unserved.Detail, "data-self: "+outOfService("data-self", trackerDomain)) {
@@ -2566,7 +2740,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	}
 }
 
-// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0049.
+// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0072.
 // The links are derived from the pages' AND the tasks' bodies and named from
 // both domains' rows, so a node whose tracker copy is out of service runs none
 // of them though its knowledge base serves: its own router asks a peer, and a
@@ -2609,7 +2783,7 @@ func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	}
 }
 
-// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0049. The usage domain's
+// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0072. The usage domain's
 // reads cross like every other domain's: a node whose usage copy is out of
 // service answers its operator's spend and activity screens from a peer's
 // copy, while its tracker reads are still its own; and every one of the
@@ -2630,7 +2804,7 @@ func TestAWrongUsageCopyAnswersNoSpendScreen(t *testing.T) {
 	if local.askedFor("usage.spend") {
 		t.Fatal("a usage copy out of service answered a spend read")
 	}
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil ||
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil ||
 		!local.askedFor("tasks") {
 		t.Fatalf("a wrong usage copy moved the tracker's reads off this node (%v)", err)
 	}
@@ -2924,7 +3098,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 	first.set(func(n *fakeNode) { n.unvouched = true })
 	second := f.other(first)
 
-	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-u", tracker.Task{Project: "ENG"}, nil)
+	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-u", worklet.Task{Project: "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -2940,7 +3114,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 
 	// NOBODY VOUCHES: the answer is the unknown, never an unserved estate.
 	second.set(func(n *fakeNode) { n.unvouched = true })
-	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", tracker.Task{Project: "ENG"}, nil)
+	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Outcome != statelog.OutcomeUnknown || !written.Unvouched {
 		t.Fatalf("with no holder vouching the write answered (%+v, %v), want the unvouched unknown",
 			written.Result, err)
@@ -2959,7 +3133,7 @@ func TestARefusalOfAnotherNodesCopyIsFinal(t *testing.T) {
 		n.refusal = &statelog.Unavailable{Reason: statelog.ReasonEvicted, OpID: "op-c",
 			CopyWriter: "data-z"}
 	})
-	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-c", tracker.Task{Project: "ENG"}, nil)
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-c", worklet.Task{Project: "ENG"}, nil)
 	var refusal *statelog.Unavailable
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted ||
 		refusal.CopyWriter != "data-z" {
@@ -2979,20 +3153,20 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	peer := f.nodes["data-a"]
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := f.router(t, "data-self", local)
-	trackerServed, _, err := r.Serves(t.Context())
-	if err != nil || trackerServed {
-		t.Fatalf("a node whose own copy admits no seat was admitted (%v, %v)", trackerServed, err)
+	served, err := r.Serves(t.Context())
+	if err != nil || served.Tracker {
+		t.Fatalf("a node whose own copy admits no seat was admitted (%+v, %v)", served, err)
 	}
 	if peer.askedFor("admits") {
 		t.Fatal("a peer was asked for a node whose own copy serves")
 	}
 
 	// A WRONG COPY OF A DOMAIN NO SEAT DEPENDS ON IS NOT THE SEAT'S COPY:
-	// admission stays here, and a peer is not asked (ADR-0049).
+	// admission stays here, and a peer is not asked (ADR-0072).
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{"vectors": true} })
-	if trackerServed, _, err = r.Serves(t.Context()); err != nil || trackerServed {
+	if served, err = r.Serves(t.Context()); err != nil || served.Tracker {
 		t.Fatalf("a node whose own seat copy admits no seat was admitted on a peer's "+
-			"word over a fault in a domain no seat depends on (%v, %v)", trackerServed, err)
+			"word over a fault in a domain no seat depends on (%+v, %v)", served, err)
 	}
 	if peer.askedFor("admits") {
 		t.Fatal("a peer was asked for a node whose seat copy serves")
@@ -3000,15 +3174,15 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 
 	// A SEAT COPY OUT OF SERVICE is asked of a data node whose copy serves.
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{SeatCopy: true} })
-	trackerServed, _, err = r.Serves(t.Context())
-	if err != nil || !trackerServed {
-		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)
+	served, err = r.Serves(t.Context())
+	if err != nil || !served.Tracker {
+		t.Fatalf("a node served by a peer was not admitted (%+v, %v)", served, err)
 	}
 
 	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
 	// that ran nothing.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if trackerServed, _, err = f.client.Serves(t.Context()); trackerServed {
+	if served, err = f.client.Serves(t.Context()); served.Tracker {
 		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
@@ -3026,7 +3200,7 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 		"no arguments":    nil,
 	} {
 		rep := askSigned(t, f.start(t), "data-a", request{Op: "estate.ping", Args: args})
-		var answer served
+		var answer Served
 		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
 			!answer.Tracker {
 			t.Fatalf("%s: the ping was answered %+v, want the admission answer", name, rep)
@@ -3059,8 +3233,8 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	begun := time.Now()
 	done := make(chan answer, 1)
 	go func() {
-		served, _, err := r.Serves(t.Context())
-		done <- answer{served, err}
+		served, err := r.Serves(t.Context())
+		done <- answer{served.Tracker, err}
 	}()
 	select {
 	case got := <-done:
@@ -3437,7 +3611,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 
 // THE CODE HOST'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
 // names the code domain, so the code copy's own verdict decides whether a
-// node answers it (ADR-0049), and a request carries this node's floor on the
+// node answers it (ADR-0072), and a request carries this node's floor on the
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
@@ -3529,5 +3703,41 @@ func TestAKeyedOpAsksItsOwnCopyWhenThePlacementCannotSay(t *testing.T) {
 	if err != nil || got.OpID != "data-self" || len(local.proposalsTo("repo-blind")) != 1 {
 		t.Fatalf("propose with the placement unknown = (%+v, %v), want this node's own committer's "+
 			"answer", got, err)
+	}
+}
+
+// A DATA NODE'S REFUSAL IS NAMED IN THE ASKING NODE'S LOG. Handed back as the
+// asking node's own answer, it is told to a person as "the node answering this"
+// with the advice that the logs name it — and the error a surface logs carries
+// the refusal and no node, since the wire carries none. So the router names the
+// node it asked, at the level a surface logs the condition: WARN for one no
+// wait clears.
+//
+// Not parallel: it installs the process's log sink.
+//
+// Mutation: drop the line from settle and the log names nobody.
+func TestADataNodesRefusalIsNamedInTheAskingNodesLog(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].failWith = &statelog.Refused{Code: statelog.RefuseDeferred,
+		Level: statelog.ReadLinearizable, Detail: "a record at 3:4182 this build cannot decode"}
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("err = %v, want data-a's deferred refusal", err)
+	}
+	var line string
+	for l := range strings.Lines(out.String()) {
+		if strings.Contains(l, "estate_peer_refused") {
+			line = l
+		}
+	}
+	if line == "" || !strings.Contains(line, "node=data-a") ||
+		!strings.Contains(line, "WARN") || !strings.Contains(line, "3:4182") {
+		t.Fatalf("the asking node's log does not name the node that refused at "+
+			"WARN with its detail:\n%s", out.String())
 	}
 }

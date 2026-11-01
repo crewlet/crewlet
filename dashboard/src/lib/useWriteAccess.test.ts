@@ -10,10 +10,12 @@ import {
   WRITE_REASONS,
   configGuardedReason,
   configWriteAccess,
+  directSeatAccess,
   linkOf,
   mayChangeConfig,
   messageSeatAccess,
   orgWriteAccess,
+  OWN_SEAT_DIRECT,
   OWN_SEAT_MESSAGE,
   SERVICE_OFF_REASONS,
   writeAccess,
@@ -26,14 +28,15 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { ServicesRun } from "./services.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY: ServicesRun = { tracker: true, knowledge: true, code: true };
+const EVERY: ServicesRun = { tracker: true, knowledge: true, chat: true, code: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["tracker", "knowledge"],
+  grants: ["worklet", "doclet"],
   admin: false,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
+  chatlet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -46,6 +49,9 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 /** Signed in, and the directory binds them to no seat. */
@@ -80,36 +86,80 @@ test.each([
 });
 
 // THE APP FIRST, WHERE THE READER LACKS IT: a change the engine does not offer
-// a reader who holds no Tracker is said as the access to ask an admin for —
+// a reader who holds no Worklet is said as the access to ask an admin for,
 // while one it does offer them without it (answering an ask they were asked)
 // is never held for it, and a change that is no app's still says it is not
 // served. Mutation: drop the app's arm and the first reads `not_served`.
 test("a change in an app the reader lacks names that app", () => {
-  const noTracker: ViewerState = { ...BOUND, grants: ["knowledge"], tracker: false, acts: [] };
-  expect(writeAccess("update_work_item", noTracker, "open", EVERY)).toEqual({
+  const noWorklet: ViewerState = { ...BOUND, grants: ["doclet"], worklet: false, acts: [] };
+  expect(writeAccess("update_work_item", noWorklet, "open", EVERY)).toEqual({
     can: false,
     block: "no_access",
-    reason: "This change needs Tracker access. An admin can give it to you.",
+    reason: "This change needs Worklet access. An admin can give it to you.",
   });
   expect(
     writeAccess(
       "comment_on_work_item",
-      { ...noTracker, acts: ["comment_on_work_item"] },
+      { ...noWorklet, acts: ["comment_on_work_item"] },
       "open",
       EVERY,
     ),
   ).toMatchObject({ can: true });
-  expect(writeAccess("pause_seat", noTracker, "open", EVERY)).toMatchObject({
+  expect(writeAccess("pause_seat", noWorklet, "open", EVERY)).toMatchObject({
     block: "not_served",
   });
   expect(
     writeAccess(
       "write_page",
-      { ...BOUND, grants: ["tracker"], knowledge: false, acts: [] },
+      { ...BOUND, grants: ["worklet"], doclet: false, acts: [] },
       "open",
       EVERY,
     ),
-  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
+  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Doclet access") });
+  // AND CHATLET'S, whose every gesture is the Chatlet app's — a person's read
+  // cursor included, which lands in no log and is held by its app all the
+  // same.
+  for (const tool of ["post_message", "mark_chat_read"] as const) {
+    expect(writeAccess(tool, { ...BOUND, acts: [] }, "open", EVERY), tool).toEqual({
+      can: false,
+      block: "no_access",
+      reason: "This change needs Chatlet access. An admin can give it to you.",
+    });
+  }
+  expect(
+    writeAccess(
+      "post_message",
+      { ...BOUND, grants: ["chatlet"], chatlet: true, acts: [] },
+      "open",
+      EVERY,
+    ),
+  ).toMatchObject({ block: "not_served" });
+});
+
+// A CHANGE THAT NEEDS AN APP AND LANDS IN NO LOG. `answer_knowledge` spends a
+// model call and writes nothing a question reads, and it is either of the two
+// apps it answers from: a reader holding neither is told either would do,
+// where reading the app off the log the write lands in told them the engine
+// does not make the change. The CONTROL is a reader holding one app, whom the
+// app does not hold — what holds them is the engine's own list. Mutation: read
+// the app off `domain` again and the first reads `not_served`.
+test("a change several apps open names each of them to a reader holding none", () => {
+  const none: ViewerState = {
+    ...BOUND,
+    grants: [],
+    worklet: false,
+    doclet: false,
+    chatlet: false,
+    acts: [],
+  };
+  expect(writeAccess("answer_knowledge", none, "open", EVERY)).toEqual({
+    can: false,
+    block: "no_access",
+    reason: "This change needs Worklet or Doclet access. An admin can give it to you.",
+  });
+  expect(
+    writeAccess("answer_knowledge", { ...none, grants: ["doclet"], doclet: true }, "open", EVERY),
+  ).toMatchObject({ block: "not_served" });
 });
 
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
@@ -195,18 +245,18 @@ test("messaging your own seat is held after everything a person can clear", () =
 
 // A CHANGE INTO A SERVICE THE COMPANY DOES NOT RUN IS HELD, with the sentence
 // that says so, ahead of any access the reader could be given: no grant gives
-// a task anywhere to land where the company runs no Crewlet Works. A change
+// a task anywhere to land where the company runs no Worklet. A change
 // that is no service's is not held for it. Mutation: drop the service arm and
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
   const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
-  const jira: ServicesRun = { tracker: false, knowledge: true, code: true };
+  const jira: ServicesRun = { tracker: false, knowledge: true, chat: true, code: true };
   expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
     can: false,
     block: "held",
     reason: SERVICE_OFF_REASONS.tracker,
   });
-  const confluence: ServicesRun = { tracker: true, knowledge: false, code: true };
+  const confluence: ServicesRun = { tracker: true, knowledge: false, chat: true, code: true };
   expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
     can: false,
     block: "held",
@@ -217,6 +267,48 @@ test("a change into a service the company does not run is held, and says why", (
   expect(writeAccess("create_work_item", acting, "offline", jira)).toMatchObject({
     block: "offline",
   });
+});
+
+// A DIRECT MESSAGE IS OFFERED ONLY WHERE A ROOM CAN BE, and held as Message
+// is otherwise. The company has to run Chatlet and the reader hold Chatlet,
+// and then it is open_dm's own access, held last on the reader's own seat.
+// Mutation: offer it on a company not running Chatlet, or to a reader
+// without Chatlet, and a null row goes red; drop the own-seat hold and the held
+// row does.
+test("a direct message is offered only where Chatlet runs, and held on your own seat", () => {
+  const reader: ViewerState = {
+    ...BOUND,
+    grants: ["chatlet"],
+    chatlet: true,
+    acts: ["open_dm"],
+  };
+  const can = writeAccess("open_dm", reader, "open", EVERY);
+  expect(can.can).toBe(true);
+  expect(directSeatAccess(can, reader, "swe", EVERY)).toBe(can);
+  expect(directSeatAccess(can, reader, "jane", EVERY)).toEqual({
+    can: false,
+    block: "held",
+    reason: OWN_SEAT_DIRECT,
+  });
+  const offline = writeAccess("open_dm", reader, "offline", EVERY);
+  expect(directSeatAccess(offline, reader, "jane", EVERY)).toBe(offline);
+  expect(directSeatAccess(can, reader, "swe", { ...EVERY, chat: false })).toBeNull();
+  expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe", EVERY)).toBeNull();
+});
+
+// A CHANGE INTO A ROOM IS HELD WHERE THE COMPANY RUNS NO CHATLET, ahead of
+// any access the reader could be given, as a task is where it runs no
+// Worklet. Mutation: drop the chat arm of `actionService` and the first reads
+// `can: true`.
+test("a change into a room is held where the company runs no Chatlet", () => {
+  const acting = { ...BOUND, grants: ["chatlet"], chatlet: true, acts: ["post_message"] };
+  const slack: ServicesRun = { tracker: true, knowledge: true, chat: false, code: true };
+  expect(writeAccess("post_message", acting, "open", slack)).toEqual({
+    can: false,
+    block: "held",
+    reason: SERVICE_OFF_REASONS.chat,
+  });
+  expect(writeAccess("post_message", acting, "open", EVERY).can).toBe(true);
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
@@ -261,7 +353,7 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(viewer({ unbound: true }), "open")).toEqual({ can: true });
     expect(
       configWriteAccess(
-        viewer({ grants: ["tracker", "knowledge"], handle: "jane", owner: "jane", unbound: false }),
+        viewer({ grants: ["worklet", "doclet"], handle: "jane", owner: "jane", unbound: false }),
         "open",
       ),
     ).toEqual({
@@ -302,7 +394,7 @@ describe("changing the company's configuration", () => {
     });
     // The grant ranks first: a reader who could not write anyway is told
     // what they lack, which is the thing they can clear.
-    expect(configWriteAccess({ ...managed, grants: ["tracker"] }, "open")).toMatchObject({
+    expect(configWriteAccess({ ...managed, grants: ["worklet"] }, "open")).toMatchObject({
       block: "no_grant",
     });
     expect(
@@ -317,7 +409,7 @@ describe("changing the company's configuration", () => {
   // and ignores what only this moment decides — the socket, a screen's hold.
   test("whether the reader may change the configuration at all is the grant and the writers", () => {
     expect(mayChangeConfig(viewer({}))).toBe(true);
-    expect(mayChangeConfig(viewer({ grants: ["tracker", "knowledge"] }))).toBe(false);
+    expect(mayChangeConfig(viewer({ grants: ["worklet", "doclet"] }))).toBe(false);
     expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
       false,
     );
@@ -335,7 +427,7 @@ describe("changing one part of the org chart", () => {
     login: "cto.person",
     handle: "cto",
     owner: "cto",
-    grants: ["tracker"],
+    grants: ["worklet"],
   };
   const scope = leadScope(CHART_ORG, "cto");
 

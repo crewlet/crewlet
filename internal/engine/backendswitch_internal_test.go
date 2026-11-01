@@ -24,8 +24,8 @@ tracker:
   backend: none
 `
 
-// WHICH CHOICES WAIT FOR A RESTART: a half moving to or from native, and
-// nothing else.
+// WHICH CHOICES WAIT FOR A RESTART: a half moving to or from the engine's own
+// — Worklet, Doclet, Chatlet or the code host — and nothing else.
 //
 // The runtime is built around whether each half is the engine's own, so that
 // is the one change it cannot take live. Moving between two vendors is not one
@@ -33,7 +33,8 @@ tracker:
 // line for it would tell an operator to restart a fleet for nothing.
 func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 	t.Parallel()
-	native := builtWith{tracker: config.TrackerNative, knowledge: config.KnowledgeNative}
+	native := builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
+		chat: config.ChatChatlet}
 	jira := &config.Company{
 		Tracker:      config.Tracker{Backend: config.TrackerJira},
 		Integrations: config.Integrations{Jira: &config.Jira{}},
@@ -44,41 +45,56 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 		activated *config.Company
 		want      []backendSwitch
 	}{{
-		name: "native tracker to jira", built: native, activated: jira,
+		name: "worklet to jira", built: native, activated: jira,
 		want: []backendSwitch{{
-			Field: "tracker.backend", Half: "tracker",
-			Running: "native", Activated: "jira", Holds: true,
+			Field: "tracker.backend", Half: "Worklet",
+			Running: "worklet", Activated: "jira", Holds: true,
 		}},
 	}, {
 		// VENDOR TO VENDOR, which the runtime was never built around.
-		name:      "jira to none",
-		built:     builtWith{tracker: config.TrackerJira, knowledge: config.KnowledgeNative},
+		name: "jira to none",
+		built: builtWith{tracker: config.TrackerJira, knowledge: config.KnowledgeDoclet,
+			chat: config.ChatChatlet},
 		activated: &config.Company{Tracker: config.Tracker{Backend: config.TrackerNone}},
 	}, {
 		// AN UNSET BACKEND IS ITS DERIVED ONE: no Confluence declared, so
-		// the knowledge base is the engine's own, which a runtime built on
-		// Confluence does not hold.
-		name:      "confluence to a derived native",
-		built:     builtWith{tracker: config.TrackerNative, knowledge: config.KnowledgeConfluence},
+		// the knowledge base is Doclet, which a runtime built on Confluence
+		// does not hold.
+		name: "confluence to a derived doclet",
+		built: builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeConfluence,
+			chat: config.ChatChatlet},
 		activated: &config.Company{},
 		want: []backendSwitch{{
-			Field: "knowledge.backend", Half: "knowledge base",
-			Running: "confluence", Activated: "native", Holds: false,
+			Field: "knowledge.backend", Half: "Doclet",
+			Running: "confluence", Activated: "doclet", Holds: false,
 		}},
 	}, {
-		name: "both halves, tracker first",
+		name: "three halves, tracker first",
 		built: builtWith{
-			tracker: config.TrackerNone, knowledge: config.KnowledgeNative,
+			tracker: config.TrackerNone, knowledge: config.KnowledgeDoclet,
+			chat: config.ChatNone,
 		},
 		activated: &config.Company{
 			Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
 		},
 		want: []backendSwitch{{
-			Field: "tracker.backend", Half: "tracker",
-			Running: "none", Activated: "native", Holds: false,
+			Field: "tracker.backend", Half: "Worklet",
+			Running: "none", Activated: "worklet", Holds: false,
 		}, {
-			Field: "knowledge.backend", Half: "knowledge base",
-			Running: "native", Activated: "none", Holds: true,
+			Field: "knowledge.backend", Half: "Doclet",
+			Running: "doclet", Activated: "none", Holds: true,
+		}, {
+			Field: "chat.backend", Half: "Chatlet",
+			Running: "none", Activated: "chatlet", Holds: false,
+		}},
+	}, {
+		// CHATLET TURNED OFF: the runtime keeps its rooms' reader and
+		// writer until a restart.
+		name: "chatlet to none", built: native,
+		activated: &config.Company{Chat: config.Chat{Backend: config.ChatNone}},
+		want: []backendSwitch{{
+			Field: "chat.backend", Half: "Chatlet",
+			Running: "chatlet", Activated: "none", Holds: true,
 		}},
 	}, {
 		// THE CODE HOST TURNED ON: its one field is already whether the
@@ -86,27 +102,29 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 		name: "the code host turned on", built: native,
 		activated: &config.Company{Code: config.Code{Native: true}},
 		want: []backendSwitch{{
-			Field: "code.native", Half: "code host",
+			Field: "code.native", Half: "the code host",
 			Running: "false", Activated: "true", Holds: false,
 		}},
 	}, {
 		name: "the code host turned off, after the other halves",
 		built: builtWith{
-			tracker: config.TrackerNative, knowledge: config.KnowledgeConfluence, code: true,
+			tracker: config.TrackerWorklet, knowledge: config.KnowledgeConfluence,
+			chat: config.ChatChatlet, code: true,
 		},
 		activated: &config.Company{},
 		want: []backendSwitch{{
-			Field: "knowledge.backend", Half: "knowledge base",
-			Running: "confluence", Activated: "native", Holds: false,
+			Field: "knowledge.backend", Half: "Doclet",
+			Running: "confluence", Activated: "doclet", Holds: false,
 		}, {
-			Field: "code.native", Half: "code host",
+			Field: "code.native", Half: "the code host",
 			Running: "true", Activated: "false", Holds: true,
 		}},
 	}, {
 		name: "built as activated", built: native, activated: &config.Company{},
 	}, {
-		name:      "built as activated, hosting code",
-		built:     builtWith{tracker: config.TrackerNative, knowledge: config.KnowledgeNative, code: true},
+		name: "built as activated, hosting code",
+		built: builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
+			chat: config.ChatChatlet, code: true},
 		activated: &config.Company{Code: config.Code{Native: true}},
 	}}
 	for _, tc := range cases {
@@ -125,17 +143,18 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 // an operator reading why their revision did nothing.
 func TestTheRestartLineSaysWhatTheNodeServesMeanwhile(t *testing.T) {
 	t.Parallel()
-	kept := backendSwitch{Field: "tracker.backend", Half: "tracker",
-		Running: "native", Activated: "jira", Holds: true}.detail()
-	if !strings.Contains(kept, "keeps serving it") || !strings.Contains(kept, "tracker.backend: jira") {
+	kept := backendSwitch{Field: "tracker.backend", Half: "Worklet",
+		Running: "worklet", Activated: "jira", Holds: true}.detail()
+	if !strings.Contains(kept, "keeps serving it") || !strings.Contains(kept, "tracker.backend: jira") ||
+		!strings.Contains(kept, "built with Worklet (tracker.backend: worklet)") {
 		t.Errorf("a half turned off reads %q: it must say the node keeps serving "+
 			"it and name what the revision asked for", kept)
 	}
-	lacking := backendSwitch{Field: "knowledge.backend", Half: "knowledge base",
-		Running: "confluence", Activated: "native", Holds: false}.detail()
+	lacking := backendSwitch{Field: "knowledge.backend", Half: "Doclet",
+		Running: "confluence", Activated: "doclet", Holds: false}.detail()
 	if !strings.Contains(lacking, "cannot serve it") ||
 		!strings.Contains(lacking, "knowledge.backend: confluence") ||
-		!strings.Contains(lacking, "knowledge.backend: native") {
+		!strings.Contains(lacking, "knowledge.backend: doclet") {
 		t.Errorf("a half turned on reads %q: it must say the node cannot serve it, "+
 			"what it was built with and what the revision asked for", lacking)
 	}
@@ -145,8 +164,8 @@ func TestTheRestartLineSaysWhatTheNodeServesMeanwhile(t *testing.T) {
 // activation, on the node it does not take effect on.
 //
 // The runtime is built once per process, so such a revision activated cleanly,
-// reported ok on every node, and changed nothing: a node went on serving the
-// native tracker's tools after a revision turned it off, with nothing anywhere
+// reported ok on every node, and changed nothing: a node went on serving
+// Worklet's tools after a revision turned it off, with nothing anywhere
 // saying why. Said at EVERY activation that still asks for the switch — a
 // re-activation of the same document is the operator asking again, and it is
 // still not served — and at none once a revision agrees with the runtime.
@@ -168,8 +187,8 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
 	booted := parseCompany(t, nativeCleanupCompany)
-	if booted.TrackerBackendFor() != config.TrackerNative {
-		t.Fatalf("the premise: the node boots on tracker.backend %q, want native",
+	if booted.TrackerBackendFor() != config.TrackerWorklet {
+		t.Fatalf("the premise: the node boots on tracker.backend %q, want worklet",
 			booted.TrackerBackendFor())
 	}
 	back, err := OpenBackends(t.Context(), &b, booted, nil)
@@ -195,11 +214,11 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 	apply(restartLineTrackerNone, at)
 	lines := restartLines(t, logs)
 	if len(lines) != 1 {
-		t.Fatalf("a revision turning the native tracker off said %d restart lines, "+
+		t.Fatalf("a revision turning Worklet off said %d restart lines, "+
 			"want exactly 1: %v", len(lines), lines)
 	}
 	for key, want := range map[string]string{
-		"field": "tracker.backend", "running": "native", "activated": "none",
+		"field": "tracker.backend", "running": "worklet", "activated": "none",
 	} {
 		if got := lines[0][key]; got != want {
 			t.Errorf("the restart line's %s = %v, want %q", key, got, want)
@@ -243,13 +262,13 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 	}
 }
 
-// restartLineVendorsOnly is [nativeCleanupCompany] on no native half at all:
-// a company whose tracker and knowledge base both live elsewhere.
+// restartLineVendorsOnly is [nativeCleanupCompany] on neither Worklet nor
+// Doclet: a company whose tracker and knowledge base both live elsewhere.
 const restartLineVendorsOnly = restartLineTrackerNone + `knowledge:
   backend: none
 `
 
-// restartLineTrackerOnly turns the engine's own tracker on and nothing else.
+// restartLineTrackerOnly turns Worklet on and nothing else.
 const restartLineTrackerOnly = nativeCleanupCompany + `knowledge:
   backend: none
 `
@@ -280,9 +299,9 @@ func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
 		running, activated string
 	}{
 		{"a first company on the vendors", restartLineVendorsOnly, restartLineTrackerOnly,
-			"none", "native"},
-		{"a first company on the native tracker", restartLineTrackerOnly, restartLineVendorsOnly,
-			"native", "none"},
+			"none", "worklet"},
+		{"a first company on Worklet", restartLineTrackerOnly, restartLineVendorsOnly,
+			"worklet", "none"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newSandboxNode(t, nil)

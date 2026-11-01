@@ -11,14 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answerEngine is an engine holding one epoch and an in-memory fleet, which is
@@ -202,7 +202,7 @@ func TestWithNoFleetThereIsNoAnswerBudget(t *testing.T) {
 
 // THE KNOWLEDGE CORPUS MOVES WITH A WRITE AND WITH NO READ, on a real node.
 //
-// The answer cache keys an answer on where the tracker's, the pages' and the
+// The answer cache keys an answer on where Worklet's, Doclet's and the
 // vectors' rows last changed. A linearizable read on a log appends a barrier
 // there, which every data node applies and which changes no row: keyed on how
 // far the logs were applied, every read anywhere in the fleet retired every
@@ -213,16 +213,16 @@ func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, trashCompanyDoc))
 	kb := e.PagesStore()
-	if kb == nil || e.NativeSearcher() == nil {
-		t.Fatal("the premise: the node writes and searches a native knowledge base")
+	if kb == nil || e.DocletSearcher() == nil {
+		t.Fatal("the premise: the node writes and searches Doclet")
 	}
-	jane := pages.Actor{Handle: "jane", Kind: pages.AuthorHuman}
-	createEventually(t, kb, jane, pages.NewPage{
+	jane := doclet.Actor{Handle: "jane", Kind: doclet.AuthorHuman}
+	createEventually(t, kb, jane, doclet.NewPage{
 		Container: "DOCS", Title: "Runbook", Body: "the steps",
 	})
 	s := e.core.Load().log
 	logs := []*runningLog{
-		s.Domain(tracker.Domain{}.Name()), s.Domain(pages.Domain{}.Name()),
+		s.Domain(worklet.Domain{}.Name()), s.Domain(doclet.Domain{}.Name()),
 		s.Domain(search.Domain{}.Name()),
 	}
 	// AT REST: every log applied through its end, the page's write and the
@@ -241,7 +241,7 @@ func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 		t.Helper()
 		at, ok := e.KnowledgeCorpus()
 		if !ok {
-			t.Fatal("a node with a native knowledge base names no corpus")
+			t.Fatal("a node running Doclet names no corpus")
 		}
 		return at
 	}
@@ -257,12 +257,12 @@ func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 	}
 	waitUntil(t, 20*time.Second, "the reads' barriers applied", caughtUp)
 	if after := corpus(); after != before {
-		t.Fatalf("linearizable reads on the tracker's and the pages' logs moved the "+
+		t.Fatalf("linearizable reads on Worklet's and Doclet's logs moved the "+
 			"corpus from %q to %q — every read in the fleet retires every cached answer",
 			before, after)
 	}
 
-	createEventually(t, kb, jane, pages.NewPage{
+	createEventually(t, kb, jane, doclet.NewPage{
 		Container: "DOCS", Title: "Second runbook", Body: "more steps",
 	})
 	waitUntil(t, 20*time.Second, "a page written to move the corpus", func() bool {
@@ -270,9 +270,9 @@ func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 	})
 }
 
-// A COMPANY WITH NO NATIVE KNOWLEDGE HAS NO CORPUS POSITION, so its answers
+// A COMPANY WITHOUT DOCLET HAS NO CORPUS POSITION, so its answers
 // are never cached: an external wiki moves without this node hearing.
-func TestAnEngineWithNoNativeKnowledgeNamesNoCorpus(t *testing.T) {
+func TestAnEngineWithoutDocletNamesNoCorpus(t *testing.T) {
 	t.Parallel()
 	if position, ok := (&Engine{}).KnowledgeCorpus(); ok || position != "" {
 		t.Fatalf("KnowledgeCorpus = (%q, %v), want nothing", position, ok)

@@ -1,0 +1,314 @@
+/* CHATLET'S FRAME: the chat area's grid, its top bar and the Rooms panel,
+   slid in or pinned (`routes/chatlet/Chat.tsx` and the files it draws).
+   Imported by the screen rather than by `main.tsx`, so it ships beside
+   Chatlet's chunk. The room's rules are `chatlet-room.css` and the panes'
+   and views' `chatlet-panes.css`. Tokens only.
+
+   THE SCREEN OWNS THE HEIGHT RATHER THAN GROWING THE PAGE. Chatlet asks the
+   shell for the window, edge to edge (`app/fill.tsx`, flush), so the page
+   scroller stops being one and this grid takes what is left: the Rooms panel
+   scrolls itself, the transcript scrolls itself, and the composer stays where
+   somebody's hands are. A transcript inside a scrolling page leaves the
+   reader scrolling two things at once, and the one that moves under them is
+   whichever the pointer happens to be over. */
+
+/* THE CHAT AREA HOSTS ITS OWN LAYERS (the kit's LayerHost, which fills its
+   nearest positioned box: the shell's flush content column), so the slid-in
+   Rooms panel opens over the conversation and never over the app sidebar. */
+.chat-layer {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The conversation takes the row; the pinned Rooms panel and a pane add a
+   column either side of it. The widths are `app/layout.ts`'s, which holds
+   the transcript to its floor at every step, and `screenwidth.test.ts`
+   holds these literals to them.
+
+   THE DOCK'S TRACK IS AS WIDE AS THE DOCK, which is none until the panel is
+   pinned: the kit's dock column eases its own width, so the conversation
+   beside it narrows and widens with it rather than jumping. */
+.chat-app {
+  --chat-dock: 280px;
+  --chat-pane: 400px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-app.has-pane {
+  grid-template-columns: auto minmax(0, 1fr) var(--chat-pane);
+}
+@container page (width < 1180px) {
+  .chat-app {
+    --chat-dock: 248px;
+    --chat-pane: 340px;
+  }
+}
+
+/* UNDER 980PX A PANE LIES OVER THE CONVERSATION rather than beside it, at
+   its own width from the end edge, so the transcript keeps its floor behind
+   it and comes back whole when the pane closes.
+
+   THE PANE IS A DESCENDANT OF THE GRID, NOT ITS CHILD. It is drawn inside
+   the pane host (`routes/chatlet/Pane.tsx`), which draws no box
+   (`display: contents`), so the panel is the grid's item while a selector
+   still walks the markup. Written as a child, these two rules matched
+   nothing: a pane in a two-track grid took a row of its own under the
+   conversation, which is how opening Ask Crewlet beside a room dropped its
+   details to the foot of the screen. `Chat.test.tsx` holds every rule here
+   to the pane as the screen draws it. */
+@container page (width < 980px) {
+  .chat-app.has-pane {
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .chat-app.has-pane .chat-pane {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(var(--chat-pane), 92%);
+    z-index: var(--z-index-overlay);
+    box-shadow: var(--shadow-xl);
+  }
+}
+
+/* A NARROW CHAT AREA (`CHAT_NARROW`, measured by the frame) pins nothing,
+   draws no dock, and gives a pane the whole of it: the whole of what the
+   reader can see, so it ends where the assistant stands over the area's end
+   as an overlay (`--chat-cover-end`, `routes/chatlet/Chat.tsx`), and the
+   frame counts the area narrow by what is left. */
+.chat-app.is-narrow {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+}
+.chat-app.is-narrow .chat-pane {
+  position: absolute;
+  inset: 0 var(--chat-cover-end, 0px) 0 0;
+  width: auto;
+  z-index: var(--z-index-overlay);
+  border-inline-start: none;
+}
+
+.chat-main {
+  container: chat-main / inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  border-inline-start: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+
+/* ---- The top bar ----
+
+   EVERY CONTROL ON THE BAR IS ONE HEIGHT (the medium control step), centred
+   on one line, and the bar's edges are the transcript's, so Menu stands over
+   the faces and More over the composer's end. */
+.chat-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  height: var(--size-shell-topbar);
+  box-sizing: border-box;
+  padding: 0 var(--crewlet-chat-pad-x);
+  flex: none;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.chat-topbar-menu {
+  flex: none;
+}
+
+/* A narrow bar keeps Menu's glyph and badge and drops the word. */
+.chat-topbar.is-narrow .chat-topbar-menu-label {
+  display: none;
+}
+
+.chat-topbar-sep {
+  width: 1px;
+  height: var(--spacing-5);
+  flex: none;
+  background: var(--color-border-default);
+}
+
+/* THE SWITCHERS READ AS THE BAR'S HEADINGS: the open room's or conversation's
+   name at the compact step. A long name takes the cut, never the chevron or
+   the badge, so both switchers and the room's actions always share the row.
+   The kit's trigger takes its font from here and its width from this box. */
+.chat-switch {
+  --crewlet-switcher-lead: calc(var(--spacing-5) + var(--spacing-2));
+  display: inline-flex;
+  min-width: 0;
+  max-width: 26ch;
+  font-size: var(--font-size-compact);
+}
+.chat-topbar.is-narrow .chat-switch {
+  max-width: 15ch;
+}
+
+/* A row's quiet figure in a switcher: "3 new", or what a person is. */
+.chat-switch-figure {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.chat-topbar-end {
+  display: flex;
+  align-items: center;
+  flex: none;
+  margin-inline-start: auto;
+}
+
+/* The open room's actions: the members chip stands a gap before the glyph
+   buttons, which sit close together. */
+.chat-room-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE MEMBERS CHIP is a secondary button whose glyph is three faces and whose
+   word is the count, in the secondary ink. The stack's ring is drawn in the
+   button's own ground. */
+.chat-members {
+  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
+  margin-inline-end: var(--spacing-1);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.chat-members:hover {
+  --crewlet-avatar-stack-ground: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+}
+
+/* A narrow conversation drops the members chip (the room's details list
+   them), so the actions keep to Menu's row. */
+@container chat-main (width < 600px) {
+  .chat-members {
+    display: none;
+  }
+}
+
+/* ---- The Rooms panel ----
+
+   One body, slid in or pinned. It opens on its find row, as tall as the top
+   bar, so pinned its rule runs on as one line with the bar's and no row goes
+   to a title. */
+.chat-rooms {
+  --size-nav-gutter: var(--spacing-1);
+  --size-nav-row-pad: calc(var(--spacing-3) + var(--spacing-2));
+  container: chat-rooms / inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-rooms-find {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-height: var(--size-shell-topbar);
+  box-sizing: border-box;
+  padding: var(--spacing-2) var(--spacing-3);
+  flex: none;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.chat-rooms-find > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-rooms-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacing-2) 0 var(--spacing-3);
+}
+
+/* The label is a block in the row's label box, so a long name is cut instead
+   of running under the badge, and its marks stay beside it. */
+.chat-room-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.chat-room-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-room-label-mark {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+/* A group's count stands in a face's square, the size and corner of the
+   faces beside it. */
+.chat-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--spacing-5);
+  height: var(--spacing-5);
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* The foot's two ways to start a conversation, side by side, or stacked as
+   two more rows of the list in a narrow pinned panel. */
+.chat-rooms-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  flex: none;
+  border-top: 1px solid var(--color-border-default);
+}
+@container chat-rooms (width < 272px) {
+  .chat-rooms-foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+/* PINNED, the same panel is the kit's dock column beside the conversation
+   (`DockColumn`): it eases its own width, the conversation resizes beside
+   it, and its panel slides in and out at its own width. Here is only its
+   ground, the Rooms panel's subtle surface. */
+.chat-dock {
+  --crewlet-dock-column-ground: var(--color-surface-subtle);
+}
+
+/* SLID IN, it is the kit's sheet from the start edge, a little wider than the
+   pinned column, and its body is the panel's own flex column. */
+.chat-rooms-sheet {
+  width: min(320px, 88%);
+}

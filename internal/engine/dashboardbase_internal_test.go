@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A LINK FOR A PERSON IS BUILT ON THE DASHBOARD'S ADDRESS, never the vendors'.
@@ -74,7 +75,7 @@ func baseEngine(t *testing.T, b config.Bootstrap) *Engine {
 	t.Helper()
 	b.Node.Roles = []string{"data", "seats", "workers"}
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b})
 	if err != nil {

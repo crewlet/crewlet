@@ -1,0 +1,513 @@
+package worklet
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// The history row, the effective instant, the entered stamp, the project's
+// last-change stamp and the inbox — the five things every commit produces
+// besides its own object's row.
+//
+// # A QUIET COMMIT WRITES A HISTORY ROW LIKE EVERY OTHER
+//
+// "Quiet" means one thing and one thing only: it wakes nobody. The activity
+// feed is therefore a complete account of what happened rather than an account
+// of what was announced, and `notified` is how a reader tells "nothing was
+// announced" from "nothing happened".
+//
+// # AND EVERY HISTORY ROW SAYS WHAT MOVED
+//
+// One rule, for every kind [ObjectKind.RecordsHistory] names: the deltas in
+// `fields_json` are the APPLIER's, computed from the two states this frame
+// holds — the object as this node stored it and the object the record says it
+// should be. A task's comparison is [TaskDeltas]; every whole-document
+// object's is `deltas.go`, which states the bounds, the text forms and why a
+// value is never a rendering.
+//
+// The rule used to hold for a task alone, and the gap was the same one the
+// applier's own deltas were introduced to close, one layer out: a project, a
+// view, a tag set, a catalogue and a person record each passed a literal nil
+// here, so every one of those rows stored `{}` and no screen could say what
+// had changed. Both halves of the fix are the same sentence — what moved is a
+// property of the two documents, never of whether anybody was told.
+
+// writeHistory writes the record's history row and everything that hangs off
+// it.
+//
+// EVERYTHING DERIVED HANGS OFF THIS WRITE RATHER THAN OFF THE OBJECT ROW, and
+// the reason is the version guard: a reprocessed record whose position is
+// below an applied successor is SKIPPED on the object row, so a recompute
+// hanging there would leave that record out of the spans entirely. A missing
+// span is strictly worse than a slightly wrong instant.
+func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
+	keys subjectKeys, applied map[string]Delta) (int, error) {
+
+	subject := c.subject()
+	effective, err := effectiveAt(ctx, tx, subject.ID, c)
+	if err != nil {
+		return 0, err
+	}
+	notify := c.record.Notify
+	excerpt, fields, commentID := "", "{}", ""
+	notified := 0
+	late := 0
+	if notify != nil {
+		excerpt = notify.Excerpt
+		commentID = notify.CommentID
+		notified = 1
+		late = boolInt(notify.Late)
+	}
+	// THE KIND IS THE RECORD'S OWN, and it is a different fact from
+	// whether anybody was told: the same catalogue edit is
+	// `catalogue_updated` whether or not somebody heard about it, and a
+	// quiet purge is `purged`. The writer states it on every record that
+	// writes a history row, and [checkChangeKind] refuses one that does
+	// not, so it is stored verbatim — a kind a newer peer's writer
+	// introduced included, which every node then stores identically rather
+	// than replacing it with a guess of its own. See [MutationRecord.Kind].
+	kind := string(c.record.Kind)
+	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet, and
+	// nobody else's — see deltas.go. A record whose apply moved nothing
+	// stores `{}`, the column's one spelling of "nothing moved", even when
+	// its wake says otherwise: the wake is built from the snapshot the
+	// writer's tool read OUTSIDE the write's transaction, so a change
+	// another writer had already made reads there as a move this record
+	// is about to make and here as no move at all. Storing the wake's
+	// claim recorded a {from,to} this apply never made, beside the row of
+	// the record that did make it.
+	//
+	// The one caller with no comparison of its own passes the record's own
+	// statement in explicitly ([statedDeltas]); nothing here falls back to
+	// it.
+	if len(applied) > 0 {
+		fields = jsonOf(applied)
+	}
+
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_history
+			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
+			 operator_id, comment_id, excerpt, fields_json, turn_id,
+			 notified, late, log_seq, log_stream, log_generation, created_at,
+			 broker_at, effective_at, skew_ms, document)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT (id) DO NOTHING`,
+		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
+		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
+		commentID, excerpt, fields, c.record.TurnID,
+		notified, late, c.packed, c.position.Stream, c.position.Generation,
+		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
+		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation))
+	if err != nil {
+		return 0, fmt.Errorf("worklet: write the history row at %s: %w", c.position, err)
+	}
+	rows, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	if rows == 0 {
+		// A REDELIVERY. Everything below is derived from this row, so
+		// recomputing it would be work with no effect — and the
+		// notification rows are keyed on the record too.
+		return 0, nil
+	}
+
+	// THE REOPEN COUNTER, off the delta this row has just stored — see
+	// [countReopen] for why the row rather than the documents.
+	reopens, err := countReopen(ctx, tx, subject, fields)
+	if err != nil {
+		return 0, err
+	}
+	// AND THE HAND-OFF COUNT this commit left, from the history rather than
+	// the task row — see apply_handoffs.go for why.
+	handOffs := 0
+	if subject.Kind == KindTask {
+		if handOffs, err = deriveHandOffs(ctx, tx, subject.ID, c.packed); err != nil {
+			return 0, err
+		}
+	}
+	successors, err := a.raiseSuccessors(ctx, tx, subject.ID, c)
+	if err != nil {
+		return 0, err
+	}
+	stamped, err := a.stampProjectChange(ctx, tx, c, keys.Project)
+	if err != nil {
+		return 0, err
+	}
+	noticed, err := a.writeInbox(ctx, tx, c, keys.Key)
+	if err != nil {
+		return 0, err
+	}
+	return rows + reopens + handOffs + successors + stamped + noticed, nil
+}
+
+// stampProjectChange records that this commit changed the project's work, and
+// who made it.
+//
+// # Why it hangs off the HISTORY row rather than off the counts
+//
+// The three maintained counters move when a task ENTERS or LEAVES a status
+// group; this pair moves when anything about the work happens at all. The
+// write that knows about "anything at all" is the history row, which the
+// applier writes on every task commit — loud or quiet, a create, a field
+// change, a comment, an archive, a tombstone, a restore, a purge — and files
+// under the project the task is in. Hanging the stamp there makes one sentence
+// true that a reader can check from the screen: THE DIRECTORY'S LAST CHANGE IS
+// THE HEAD OF THAT PROJECT'S OWN ACTIVITY FEED. A row saying "changed two
+// minutes ago by ana" whose feed's newest entry is from last week is a
+// contradiction a person meets by clicking, and this is the only arrangement
+// in which it cannot arise.
+//
+// Three things therefore do NOT move it, and each is deliberate:
+//
+//   - A TURN. [Applier.applyTurn] adds an agent's spend to a task and writes
+//     no history row: what it records is what a turn COST, not a change to the
+//     work. Counting it would mark every project with a seat thinking in it as
+//     changed, continuously, while nothing about the work moved.
+//   - A RANK RE-ORDER. It is arbitrated on the project's own rank-order
+//     subject, writes no history row, and is the board's manual ORDER rather
+//     than a change to any task — the feed does not carry it either, and this
+//     column agrees with the feed by construction.
+//   - THE PROJECT DOCUMENT ITSELF. A rename, a new field declaration or an
+//     archive is filed under no project ([Applier.applyDocument] passes an
+//     empty [subjectKeys]), because the project's SETTINGS changing is not its
+//     WORK changing.
+//
+// And one case is worth naming because it looks like an omission: a task moved
+// OUT of a project stamps the project it moved TO and not the one it left,
+// although the one it left has a count that moves. That is the same rule, not
+// an exception to it — the commit's history row is filed where a reader
+// looking for it will be, which is the project the task is in now.
+//
+// # Why the AUTHORED instant
+//
+// This is a DISPLAYED instant, and every displayed instant in this domain is
+// the writer's own clock: `tracker_tasks.updated_at` beside it, this row's own
+// `updated_at`, and the `at` the activity feed renders for the very commit
+// this stamp names. A column that quoted the EFFECTIVE instant instead would
+// put a different kind of number next to those, and the two differ by exactly
+// the skew the feed already publishes as a figure rather than correcting. The
+// effective instant is what a DURATION is measured on — a status span, a
+// dependency's clearing time — and nothing measures a duration on this.
+//
+// The fleet agreement a derived instant usually needs comes from the guard
+// below rather than from the value: this is one record's own number copied
+// into a row, not an aggregate over several, so there is nothing here for two
+// nodes to compute differently.
+//
+// # Why the guard is the log position
+//
+// The three values are one record's, copied together, so the row must name the
+// commit HIGHEST IN THE LOG rather than whichever record this node applied
+// last. Two nodes at one checkpoint have seen the same set of records in
+// different orders, and these rows are compared byte for byte across the
+// fleet. The composed position is a total order every node already agrees on,
+// so `last_change_seq <` makes the write order-independent, idempotent under a
+// redelivery and correct for a record reprocessed below an applied successor —
+// with no clock comparison anywhere. An instant could not do it: two records
+// can share one, and the tie would go to whoever arrived first.
+func (a *Applier) stampProjectChange(ctx context.Context, tx *sql.Tx,
+	c applyContext, project string) (int, error) {
+
+	// A TASK COMMIT IN A PROJECT. The kind is checked rather than inferred
+	// from a non-empty key, so a later caller passing a project key for
+	// some other subject does not quietly move a column that means "this
+	// project's work".
+	if project == "" || c.subject().Kind != KindTask {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_projects
+		SET last_change_at = ?, last_change_actor = ?,
+		    last_change_actor_kind = ?, last_change_seq = ?
+		WHERE key = ? AND last_change_seq < ?`,
+		store.EncodeTime(c.authored()), c.record.Actor,
+		string(c.record.ActorKind), c.packed, project, c.packed)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: stamp %s's last change at %s: %w",
+			project, c.position, err)
+	}
+	return affected(res)
+}
+
+// raiseHistoryStatement is [Applier.raiseSuccessors]' statement over the
+// history rows, named for the plan test: an UPDATE finds its rows by its WHERE
+// exactly as a SELECT does, on every late record.
+const raiseHistoryStatement = `
+		UPDATE tracker_history SET effective_at = MAX(effective_at, ?)
+		WHERE subject_id = ? AND log_seq > ? AND effective_at < ?`
+
+// raiseSuccessors re-derives the effective instant of every row ABOVE this
+// one.
+//
+// # Why a late record can only RAISE them, and why that is the whole argument
+//
+// The effective instant is a MAX over a set: every row about this subject at a
+// position at or below its own. A record arriving late adds one element to
+// every successor's set, so each successor's max either stays where it was or
+// moves UP — never down. That is what makes the recompute confluent: two nodes
+// applying the same records in different orders reach the same value, because
+// a maximum does not care what order it saw its inputs in.
+//
+// A FOLD OVER ARRIVAL ORDER would not have this property, and the failure is
+// not theoretical: the two readers of this value compare it against each other,
+// so a divergence makes a repair duty fire on one node for ever and never on
+// its peer.
+func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID string,
+	c applyContext) (int, error) {
+
+	broker := store.EncodeTime(c.brokerAt)
+	var rows int
+	for _, statement := range []struct{ sql, column string }{
+		{raiseHistoryStatement, "history"},
+		{`UPDATE tracker_turns SET effective_at = MAX(effective_at, ?)
+		  WHERE task_id = ? AND log_seq > ? AND effective_at < ?`, "turns"},
+	} {
+		res, err := tx.ExecContext(ctx, statement.sql, broker, subjectID, c.packed, broker)
+		if err != nil {
+			return 0, fmt.Errorf("worklet: raise the %s successors of %s: %w",
+				statement.column, subjectID, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		rows += n
+	}
+	return rows, nil
+}
+
+// newestStatusStatement is [Applier.stampStatusEntered]'s read, named for the
+// plan test.
+const newestStatusStatement = `
+		SELECT h.effective_at
+		FROM tracker_history h
+		WHERE h.subject_id = ?
+		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		ORDER BY h.log_seq DESC
+		LIMIT 1`
+
+// statusEnteredStatement is [Applier.stampStatusEntered]'s write, named for
+// the plan test.
+const statusEnteredStatement = `UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`
+
+// stampStatusEntered rewrites a task's `status_entered_at` from its history.
+//
+// # Why the history rather than the record in hand
+//
+// SORTED BY THE COMPOSED POSITION rather than by any clock, which is what
+// makes a late reprocess and a redelivery both no-ops: the input is an order
+// the log itself defines, so the output is a function of what has been applied
+// and nothing else. The instant is the EFFECTIVE one, which is what keeps a
+// duration measured against this column non-negative — an authored clock can
+// run backwards between two nodes and a max over broker instants cannot.
+//
+// It is rewritten HERE rather than on the object row because a reprocessed
+// record below an applied successor is skipped on the object row, and the
+// column would then hold the instant of whichever record happened to be
+// applied last rather than of the newest status change.
+//
+// # Why only the newest row is read
+//
+// This derived the whole `tracker_status_spans` table until migration 0014
+// dropped it — one DELETE, a walk of the task's entire status history and one
+// INSERT per historical status change, to maintain rows nothing selected from.
+// What survived that table is this single column, and the column is the NEWEST
+// status change's instant, so the read is one seek on
+// `tracker_history_subject_idx` rather than a walk. The rows the spans held
+// are still derivable: they were a function of `tracker_history`, which is
+// never swept.
+//
+// THE STATUS'S OWN VALIDITY IS NOT CHECKED, deliberately and unlike the spans
+// this replaced. A span with no group was a span no report could read, so an
+// unknown status was skipped; this column is an INSTANT, it needs no group,
+// and skipping would leave it naming an older change than the one the task
+// actually last made.
+func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
+	var at int64
+	switch err := tx.QueryRowContext(ctx, newestStatusStatement, taskID).Scan(&at); {
+	case errors.Is(err, sql.ErrNoRows):
+		// NO STATUS CHANGE IN THE HISTORY AT ALL, which is not an error:
+		// a task whose every applied record was quiet about its status
+		// has nothing to stamp, and the column keeps what it holds.
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read the newest status of %s: %w", taskID, err)
+	}
+	if _, err := tx.ExecContext(ctx, statusEnteredStatement, at, taskID); err != nil {
+		return 0, fmt.Errorf("worklet: stamp the entered instant of %s: %w",
+			taskID, err)
+	}
+	return 1, nil
+}
+
+// subjectKeys is what the applier already read off the object row, named so
+// the two are not passed as two bare strings a call site can swap.
+//
+// BOTH COME FROM THE ROW THE APPLIER READ, which is the whole point: `Project`
+// is "ENG" and `Key` is "ENG-1", and neither is something a writer can state
+// on a CREATE — the item key is minted by the write itself, from the project's
+// own counter. A record's notification therefore cannot carry it, and for as
+// long as the inbox row took the writer's snapshot every creation in every
+// company wrote a notice whose subject was a uuid. [InboxNotice.SubjectKey]
+// says what it is for: "an inbox of uuids is an inbox nobody reads."
+//
+// Zero for a subject that has no item key — a project, a view, a person —
+// which is the honest value rather than a missing one.
+type subjectKeys struct{ Project, Key string }
+
+// inboxSubjectKey is the key a notice carries.
+//
+// THE APPLIER'S ROW WINS over the writer's snapshot, for the reason the field
+// exists: the applier read the object in this transaction and the snapshot is
+// a claim formed before the write, so on a rename the two differ and only one
+// of them is what the item is called now. The snapshot is the fallback for a
+// subject the applier holds no row for, where it is the only thing anybody
+// knows.
+func inboxSubjectKey(fromRow string, notify *Notify) string {
+	if fromRow != "" {
+		return fromRow
+	}
+	return notify.Snapshot.Key
+}
+
+// writeInbox writes one row per candidate the commit concerned.
+//
+// EVERY CANDIDATE, not every recipient: the row is the complete record of who
+// the change concerned, and the WAKE goes only to the people still employed —
+// which is a decision the routing filter makes, later, with a registry this
+// applier deliberately does not have.
+//
+// # BUT NEVER THE PERSON WHO MADE THE CHANGE
+//
+// Except under the one reason that is news to them ([Reason.WakesActor]):
+// the same step [Route] takes — [routing.Candidate.Hears], one predicate for
+// both — over the record's actor, the seat's identity whenever a person
+// writes as their seat ([iam.ActorFor]), the spelling a candidate is in. It
+// needs no registry — who wrote the record is on the record — so it belongs
+// here rather than only in the routing, and here is the only place it can be
+// kept: this table is what `work_inbox` reads, and a
+// row written for the actor is a notice in their own inbox about what they
+// just did. A founder who commented on her own task through her assistant
+// found it in her inbox, unread, as "assigned to you", and every such row
+// inflated her unread count. It is also what
+// `work_routing`'s `nobody` has always claimed of this table: "every
+// candidate was the actor" — which was true of the wake and false of the
+// rows.
+//
+// The retention horizon is applied AROUND the candidate computation rather
+// than inside it, which is what keeps that function free of a clock: a record
+// older than the horizon writes no inbox rows at all, so a whole-log replay
+// rebuilds no expired inbox.
+func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
+	subjectKey string) (int, error) {
+
+	notify := c.record.Notify
+	if notify == nil {
+		// A NIL GUARD, not the rule. That a quiet commit concerns nobody
+		// is a property of [Candidates] and is asserted there; this is
+		// what stops the loop below dereferencing a notification that is
+		// not there. Both are cheap and only one of them is the place
+		// the property lives.
+		return 0, nil
+	}
+	if horizon := inbox.Horizon(c.epoch); horizon > 0 && !c.brokerAt.IsZero() {
+		// A RECORD OLDER THAN THE HORIZON WRITES NO INBOX ROWS AT ALL,
+		// which is what makes a whole-log replay rebuild no expired
+		// inbox — the alternative, sweeping afterwards, means every
+		// replay writes a year of rows and then deletes them.
+		if c.authored().Before(c.brokerAt.Add(-horizon)) {
+			return 0, nil
+		}
+	}
+	candidates := Candidates(notify)
+	// THE TASK THE NOTICE IS ABOUT, beside the subject it was written on.
+	// For a task commit they are one task; for a lead's priorities write
+	// the subject is the PERSON and the key stored beside it is the TASK's,
+	// so without the id a reader has a key and nothing to say whether that
+	// key opens the task the wake meant — which it does not, once another
+	// task claimed it first. See [InboxNotice.Task].
+	task := notify.Snapshot.TaskID(c.subject())
+	written := 0
+	for _, candidate := range candidates {
+		// THE CHANGE'S OWN AUTHOR GETS NO NOTICE OF IT, unless the reason
+		// is one that wakes the actor too ([Reason.WakesActor]). The actor
+		// is the seat's identity whenever a person writes AS their seat
+		// ([iam.ActorFor]), which is the same spelling a candidate's
+		// handle is in, so one comparison covers a seat, a person at the
+		// dashboard and their own assistant alike.
+		if !candidate.Hears(c.record.Actor, Reason.WakesActor) {
+			continue
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO tracker_notifications
+				(record_id, recipient, subject_id, subject_key, task_id, kind,
+				 reason, addressed, fallback_only, fallback_rank, excerpt,
+				 created_at, log_seq, log_stream, log_generation)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT (record_id, recipient) DO NOTHING`,
+			historyID(c), candidate.Handle, c.subject().ID,
+			inboxSubjectKey(subjectKey, notify), task,
+			string(notify.Kind), string(candidate.Reason),
+			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
+			candidate.FallbackRank, notify.Excerpt,
+			store.EncodeTime(c.authored()), c.packed, c.position.Stream,
+			c.position.Generation)
+		if err != nil {
+			return 0, fmt.Errorf("worklet: write the inbox row for %s at %s: %w",
+				candidate.Handle, c.position, err)
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			// A ROW THIS TRANSACTION WROTE, and only then: a redelivery
+			// wrote nothing, so it moved nobody's inbox. See
+			// [inbox.Movement] for what the movement is for.
+			a.inboxed.Note(inbox.Note{
+				Record: historyID(c), Handle: candidate.Handle,
+				Subject: c.subject().ID, Reason: string(candidate.Reason),
+				Position: c.packed, At: c.brokerAt,
+			})
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// historyID is the history row's key: the record's own operation id when it
+// has one, else its position.
+//
+// THE POSITION IS THE FALLBACK RATHER THAN A NEW UUID, because a generated id
+// would differ between two nodes applying the same record — and the inbox rows
+// are keyed on this value, so two nodes would write two inboxes for one change.
+func historyID(c applyContext) string {
+	if c.record.OpID != "" {
+		return c.record.OpID
+	}
+	return fmt.Sprintf("%s#%d", c.position.Stream, c.packed)
+}
+
+// statedDeltas is the record's WRITER'S account of what it moved — its wake's
+// fields — for the one apply that has no comparison of its own.
+//
+// That apply is a record the version guard skipped: one reprocessed below a
+// successor this node has already applied, because it was deferred here (a
+// newer peer's record this build could not read until it could). The document
+// it would have compared against is gone, replaced by its successor's, and a
+// delta computed against that successor would name a move this record never
+// made — so the writer's own statement is the only account there is. A plain
+// redelivery takes the same branch and stores nothing, since its history row
+// is already written (`ON CONFLICT (id) DO NOTHING`).
+func statedDeltas(c applyContext) map[string]Delta {
+	if c.record.Notify == nil {
+		return nil
+	}
+	return c.record.Notify.Fields
+}

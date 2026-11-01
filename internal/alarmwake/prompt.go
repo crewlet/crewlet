@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -80,7 +81,15 @@ func (Prompt) DigestBody(_, body string) string { return body }
 
 // WakesActor implements [notify.Prompt]: never, and the question does not
 // arise — an alarm has no author, so the parser names no actor.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
+
+// Provenance implements [notify.Prompt]: an alert, by nobody the engine can
+// name, as a monitor's is. The alarm's words are the engine's, but the values
+// it reports — a node id, a stream, an error a dependency returned — are what
+// the measured system said, and nothing vouches for those.
+func (Prompt) Provenance(notify.Inbound, notify.Parties) notify.Provenance {
+	return notify.Provenance{Source: provenance.SourceAlert}
+}
 
 // Build implements [notify.Prompt].
 func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {

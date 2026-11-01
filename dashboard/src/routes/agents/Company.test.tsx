@@ -131,7 +131,7 @@ async function teams(org: OrgProjection) {
             total: 1,
           }
         : what === "viewer"
-          ? { login: "jane", owner: "jane", grants: ["tracker"], acts: [] }
+          ? { login: "jane", owner: "jane", grants: ["worklet"], acts: [] }
           : {},
     );
   render(
@@ -177,7 +177,7 @@ test("a unit shows its project key and its goals", async () => {
   };
   withGoals.units[0]!.children[0]!.goals = ["Ship the scheduler"];
   await teams(withGoals);
-  expect(screen.getByRole("link", { name: "BE" }).getAttribute("href")).toBe("#/work/BE");
+  expect(screen.getByRole("link", { name: "BE" }).getAttribute("href")).toBe("#/worklet/BE");
   expect(screen.getByText("Ship the scheduler")).toBeTruthy();
 });
 

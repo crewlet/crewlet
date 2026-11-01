@@ -48,7 +48,7 @@ import (
 //     against its principal a minute on, and three minutes on (e^-3, 5 %
 //     left) the person waits as one who spent nothing does.
 //   - mix=runs/weights=P:M:R: THE CODING BOXES' CLASS AMONG THE OTHERS
-//     (ADR-0063) — the machine's sixty-four, a minute into holding the lane,
+//     (ADR-0086) — the machine's sixty-four, a minute into holding the lane,
 //     then boxClones coding boxes arriving, each a principal of its own (its
 //     launch) making the coding recipe's two transfers again and again
 //     (boxClone: a blobless fetch of the tip, then its checkout's fetch of

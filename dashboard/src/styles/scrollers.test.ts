@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
 import { sheetRules } from "../test/sheets.ts";
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
@@ -134,17 +136,17 @@ const KEEPS_THE_WHEEL: Record<string, string> = {};
  * than a guess at a box inside one.
  */
 const LITERAL_BOUND: Record<string, string> = {
-  "components.css .input-suggest-list":
-    "an absolutely positioned completion list over the field that opened it, in a dialog: an overlay, never a box in the page's flow",
   "screens.css .work-menu-list":
     "the list inside a filter menu's Popover: an overlay, never a box in the page's flow",
   "screens.css .composer-picklist":
     "a pick list inside the composer's Modal, which is portaled outside the page",
-  "screens.css .int-manifest-text":
+  "integrations.css .int-manifest-text":
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":
     "a board at its own size inside the opened-board Modal, which is portaled outside the page",
-  "screens.css .int-subjects":
+  "chatlet-panes.css .chat-suggest__list":
+    "the suggestions inside Add people's Modal, which is portaled outside the page",
+  "integrations.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };
 
@@ -154,6 +156,61 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
 };
+
+/**
+ * The lists on a screen that FILLS THE SHELL, each scrolling itself.
+ *
+ * Under the fill (`app/fill.tsx`) the shell's own scroller stops being one, so
+ * a view whose list has no block scroller of its own is clipped at its foot
+ * with nothing to scroll it, as the retired mention feed's older rows and
+ * Search chat's lower hits were on any company with more than a screenful. A
+ * room's transcript and a thread are the kit's `ChatThread`, which scrolls
+ * itself. Each of these FILLS rather than being bounded (no height of its
+ * own: it is the rest of a column the shell sized), so the bound rule below
+ * does not reach it; this does. jsdom computes no layout, which is why it is
+ * held in the sheets.
+ */
+const FILLS_AND_SCROLLS: Record<string, string> = {
+  "chatlet-frame.css .chat-rooms-scroll": "chat's Rooms panel, slid in or pinned",
+  "chatlet-panes.css .chat-view-scroll":
+    "a Chatlet view's list: Activity, Threads, Drafts and sent, Saved, Search and Browse rooms",
+  "chatlet-panes.css .chat-pane-scroll": "a pane's body, a room's details",
+};
+
+describe("a list on a screen that fills the shell", () => {
+  test("scrolls itself, and may shrink below what it holds", () => {
+    const all = rules();
+    for (const [where, what] of Object.entries(FILLS_AND_SCROLLS)) {
+      const body = all.get(where);
+      expect(body, `${what} (${where}) is gone from the sheets`).toBeDefined();
+      expect(scrollsBlock(body!), `${what} scrolls its block axis`).toBe(true);
+      expect(decl(body!, "min-height"), `${what} may shrink below its content`).toBe("0");
+    }
+  });
+
+  test("is what every chat view draws its list in", () => {
+    // A VIEW IS A `.chat-view`, and one whose list is not the scroller above
+    // is the clipped list again, so every module that draws one draws its list
+    // in `.chat-view-scroll`.
+    const views = modules().filter(
+      (m) => m.path.startsWith("routes/chatlet/") && /className="chat-view"/.test(m.text),
+    );
+    // THE CONTROL: the search, Browse rooms and the reader's views are views.
+    expect(views.map((m) => m.path)).toEqual(
+      expect.arrayContaining([
+        "routes/chatlet/Search.tsx",
+        "routes/chatlet/Browse.tsx",
+        "routes/chatlet/Views.tsx",
+      ]),
+    );
+    for (const view of views) {
+      expect(
+        view.text,
+        `${view.path} draws a .chat-view with no .chat-view-scroll to scroll it`,
+      ).toMatch(/className="chat-view-scroll"/);
+    }
+  });
+});
 
 describe("a box that scrolls inside the page", () => {
   test("the detectors read every spelling, and only those", () => {
@@ -251,8 +308,16 @@ describe("a box that scrolls inside the page", () => {
     // it falls back to the small viewport, which is the `dvh` guess again.
     const main = rules().get("frame.css .app .crewlet-app-shell__main");
     expect(main).toMatch(/container:\s*scroller\s*\/\s*size/);
-    // And the peek's, for a record in a peek, which is not inside `main`.
-    expect(rules().get("frame.css .peek-body")).toMatch(/container:\s*peek\s*\/\s*size/);
+    // And the peek's, for a record in a peek, which is not inside `main`: the
+    // kit's rail body is the size container there, and the frame's ceiling
+    // rule names that body beside `main`.
+    const kit = readFileSync(
+      createRequire(import.meta.url).resolve("@crewlethq/ui/styles.css"),
+      "utf8",
+    );
+    expect(kit).toMatch(
+      /\.crewlet-peek-rail__body\s*\{[^}]*container:\s*crewlet-peek-rail\s*\/\s*size/,
+    );
   });
 });
 
@@ -264,7 +329,7 @@ describe("a box that scrolls inside the page", () => {
  * inline custom property, which the sheet half of this gate cannot see.
  */
 describe("the record ceiling", () => {
-  const SCROLLERS = "frame.css .app .crewlet-app-shell__main, .app .peek-body";
+  const SCROLLERS = "frame.css .app .crewlet-app-shell__main, .app .crewlet-peek-rail__body";
 
   test("is the view, capped and floored, on both scrollers a record can sit in", () => {
     const body = rules().get(SCROLLERS);

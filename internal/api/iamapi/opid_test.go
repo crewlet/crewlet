@@ -48,7 +48,7 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 		{"an edit moving a seat, a login and a stage", http.MethodPatch,
 			"/iam/people/" + bob.String(), map[string]any{"seat": "sre",
 				"login": "bob.ops", "stage": "suspended",
-				"grants": []string{"knowledge"}}},
+				"grants": []string{"doclet"}}},
 		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(), nil},
 		{"ending somebody's sessions", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", nil},
@@ -116,7 +116,7 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		body                      any
 	}{
 		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(), "retry-7",
-			map[string]any{"grants": []string{"knowledge"}}},
+			map[string]any{"grants": []string{"doclet"}}},
 		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(),
 			"0192f00d-0000-4000-8000-000000000001", nil},
 		{"ending somebody's sessions", http.MethodDelete,
@@ -216,7 +216,7 @@ func TestAWriteNamingARemovedPersonIsNotFound(t *testing.T) {
 		body                       any
 	}{
 		{"an edit", "update", http.MethodPatch, "/iam/people/" + bob.String(),
-			map[string]any{"grants": []string{"knowledge"}}},
+			map[string]any{"grants": []string{"doclet"}}},
 		{"ending their sessions", "revoke", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", nil},
 		{"a seat binding", "identity", http.MethodPatch,

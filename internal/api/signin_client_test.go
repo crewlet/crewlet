@@ -81,7 +81,7 @@ func TestTheSignInPolicyIsThisNodesTierA(t *testing.T) {
 			b := config.DefaultBootstrap()
 			authorize(&b,
 				config.APIToken{ID: "ops", Token: orgOpsToken},
-				config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{iam.GrantTracker}},
+				config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{iam.GrantWorklet}},
 			)
 			tc.write(&b.API.Auth)
 			a := newApp(t, api.Options{Bootstrap: &b,

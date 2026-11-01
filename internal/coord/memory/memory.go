@@ -14,6 +14,24 @@
 // a lease expires it in place so the epoch counter survives, because a
 // counter that restarts hands the next owner a token a zombie from the
 // previous tenure is still fencing its writes with.
+//
+// # The counter outlives the process; the leases do not
+//
+// A single node's leases are rightly this process's: it has nobody to fence
+// against, and it re-claims everything at boot. Its fencing tokens are not,
+// because the rows they are compared with (a sandbox run's owner_epoch above
+// all) are the fleet store's and outlive the process. So the counter is
+// pluggable ([Backend.Epochs]): the engine hands a single node the same
+// persistent counter a fleet's lease store mints from (coord/kv.Epochs), and
+// a token minted after a restart is strictly above every token minted before
+// it. Nil keeps the counter in this process, which is right for a test and
+// for nothing that persists a token.
+//
+// A token is minted OUTSIDE the store's lock, because a persistent counter is
+// a round trip and every renew, release and read of every other resource
+// waits on that lock. The resource is held meanwhile by a CLAIMING marker,
+// the in-process form of the KV store's claiming record: a peer reads it as
+// held, and a claim that cannot mint gives it back.
 package memory
 
 import (
@@ -42,6 +60,13 @@ var (
 	errBadTTL  = errors.New("coord: ttl must be positive")
 )
 
+// EpochCounter mints fencing tokens. Next returns a token strictly above every
+// one it has returned for the resource, or an error that mints nothing usable.
+// coord/kv.Epochs is the persistent one.
+type EpochCounter interface {
+	Next(ctx context.Context, resource string) (int64, error)
+}
+
 // Backend is the in-memory lease store. The zero value is ready to use and
 // keeps time with time.Now.
 type Backend struct {
@@ -51,12 +76,23 @@ type Backend struct {
 	// moment it chooses rather than at a moment it waits for.
 	Clock func() time.Time
 
+	// Epochs mints every fencing token this store hands out. Nil counts in
+	// this process, so a token restarts with it: right for a test, and
+	// wrong for any deployment whose tokens are written to records that
+	// outlive the process. See the package doc.
+	Epochs EpochCounter
+
 	mu    sync.Mutex
 	rows  map[string]*record
 	shift time.Duration
 	// watchers is every running [Backend.WatchLive], each told of every
 	// write to its class while mu is held — see watch.go.
-	watchers map[*watcher]struct{}
+	watchers map[*leaseWatch]struct{}
+	// minted is the in-process counter Epochs stands in for when nil.
+	minted map[string]int64
+	// claims numbers the claims in flight, so a claim gives back or
+	// commits only the marker it set.
+	claims uint64
 }
 
 // New returns an empty store.
@@ -74,14 +110,45 @@ type record struct {
 	preferred  string
 	protocol   int
 	meta       map[string]any
+	// claiming is the claim minting this record's next token, or nil. Only
+	// a record with no live lease is ever claimed.
+	claiming *claim
+}
+
+// claim is one TryAcquire between deciding to mint a token and committing it.
+type claim struct {
+	id       uint64
+	owner    string
+	protocol int
 }
 
 func (r *record) live(now time.Time) bool { return r.expiresAt.After(now) }
 
-// gated reports whether the record is one the protocol gate judges: live, and
-// of a class the gate counts (coord.ProtocolGateCounts).
-func (r *record) gated(now time.Time) bool {
-	return r.live(now) && coord.ProtocolGateCounts(r.resource)
+// held reports whether the record keeps the resource from a claimant: a live
+// lease, or a claim minting one. The KV store reads its claiming record the
+// same way.
+func (r *record) held(now time.Time) bool { return r.live(now) || r.claiming != nil }
+
+// heldBy is the owner [record.held] holds the resource for.
+func (r *record) heldBy() string {
+	if r.claiming != nil {
+		return r.claiming.owner
+	}
+	return r.owner
+}
+
+// gated reports whether the record is one the protocol gate judges, and at
+// which protocol: held, and of a class the gate counts
+// (coord.ProtocolGateCounts). A claim counts at its own protocol, as the KV
+// store counts a claiming record.
+func (r *record) gated(now time.Time) (int, bool) {
+	if !r.held(now) || !coord.ProtocolGateCounts(r.resource) {
+		return 0, false
+	}
+	if r.claiming != nil {
+		return r.claiming.protocol, true
+	}
+	return r.protocol, true
 }
 
 func (r *record) lease() coord.Lease {
@@ -135,15 +202,50 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 		return nil, "", err
 	}
 	opts.Meta = wire
-	lease, refused := b.acquire(resource, opts)
-	if lease == nil {
-		return nil, refused, nil
+	lease, refused, pending, err := b.decide(resource, opts)
+	if err != nil || pending == nil {
+		return lease, refused, err
+	}
+	// THE MARKER IS GIVEN BACK ON EVERY EXIT, a counter that panics
+	// included: left set, it held the resource against every claimant, its
+	// own owner's retries too, for the life of the process. commit clears it
+	// on every path it takes, so this finds nothing to do unless commit
+	// never ran.
+	defer b.giveBack(resource, pending)
+	// THE ONE STEP OUTSIDE THE LOCK: see the package doc.
+	epoch, err := b.next(ctx, resource)
+	lease, err = b.commit(resource, opts, pending, epoch, err)
+	if err != nil {
+		return nil, "", err
 	}
 	log.DebugContext(ctx, "lease_acquired", "resource", resource, "owner", opts.Owner, "epoch", lease.Epoch)
 	return lease, "", nil
 }
 
-func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal) {
+// next mints resource's next token from [Backend.Epochs], or from this
+// process's own count when there is none.
+func (b *Backend) next(ctx context.Context, resource string) (int64, error) {
+	if b.Epochs != nil {
+		epoch, err := b.Epochs.Next(ctx, resource)
+		if err != nil {
+			return 0, fmt.Errorf("%w: mint the fencing epoch of %s: %w", coord.ErrUnavailable, resource, err)
+		}
+		return epoch, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.minted == nil {
+		b.minted = map[string]int64{}
+	}
+	b.minted[resource]++
+	return b.minted[resource], nil
+}
+
+// decide is a claim's first half, under the lock: a refusal, a renew of a
+// lease the owner still holds (which keeps its token and is the whole answer),
+// or a CLAIM set on the record, for [Backend.commit] to finish once a new
+// token is minted.
+func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, *claim, error) {
 	protocol := opts.EffectiveProtocol()
 
 	b.mu.Lock()
@@ -154,12 +256,20 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 	now := b.now()
 
 	row := b.rows[resource]
-	if row != nil && row.live(now) && row.owner != opts.Owner {
-		// A PEER HOLDS IT, which is the answer whatever the gate would
-		// say: a claim that cannot write has nothing for a gate to stop.
-		// First, so the twin gives the reason the KV backend gives — see
-		// coord.RefusedHeld.
-		return nil, coord.RefusedHeld
+	if row != nil && row.held(now) && row.heldBy() != opts.Owner {
+		// A PEER HOLDS IT, or is minting the token to, which is the answer
+		// whatever the gate would say: a claim that cannot write has
+		// nothing for a gate to stop. First, so the twin gives the reason
+		// the KV backend gives (see coord.RefusedHeld).
+		return nil, coord.RefusedHeld, nil, nil
+	}
+	if row != nil && row.claiming != nil {
+		// THIS OWNER is already minting a token for it, on another call.
+		// Neither a grant nor a refusal is true yet, so it is the third
+		// answer, as the KV store gives an owner whose sibling claim is
+		// one round trip from committing.
+		return nil, "", nil, fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight,
+			resource, opts.Owner)
 	}
 
 	// The mixed-version gate. Refuse while any live lease the gate counts
@@ -170,32 +280,81 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 	// so a lower-protocol node is never blocked.
 	if !opts.Ungated {
 		for _, r := range b.rows {
-			if r.gated(now) && r.protocol < protocol {
-				return nil, coord.RefusedProtocol
+			if held, ok := r.gated(now); ok && held < protocol {
+				return nil, coord.RefusedProtocol, nil, nil
 			}
 		}
 	}
 
-	switch {
-	case row == nil:
-		row = &record{resource: resource, epoch: 1, acquiredAt: now}
-		b.rows[resource] = row
-	case row.live(now):
+	if row != nil && row.live(now) {
 		// An unbroken same-owner hold keeps its epoch: nothing was ever
 		// unowned, so the holder's in-flight work stayed covered. This
 		// branch is also the renew path — a claim doubles as one.
-	default:
-		// Takeover, or this same owner re-claiming after its own lease
-		// lapsed. Both mint a new token, because during the gap the work
-		// was covered by nothing and must be fenced against its own past
-		// self. A new token is a new tenure, so it gets its own start.
-		row.epoch++
-		row.acquiredAt = now
+		b.write(row, opts, now)
+		lease := row.lease()
+		return &lease, "", nil, nil
 	}
 
+	// Unclaimed, a takeover, or this same owner re-claiming after its own
+	// lease lapsed. Each mints a new token, because during the gap the work
+	// was covered by nothing and must be fenced against its own past self.
+	if row == nil {
+		row = &record{resource: resource}
+		b.rows[resource] = row
+	}
+	b.claims++
+	row.claiming = &claim{id: b.claims, owner: opts.Owner, protocol: protocol}
+	return nil, "", row.claiming, nil
+}
+
+// commit is a claim's second half: it gives the record back when no token
+// could be minted, and otherwise starts the new tenure at the token minted.
+//
+// A TOKEN AT OR BELOW THE ONE THE RECORD ALREADY CARRIES IS REFUSED, as
+// UNKNOWN: it can only mean the counter was reset under this process, and
+// handing it out is the one mistake the counter exists to prevent.
+func (b *Backend) commit(resource string, opts coord.AcquireOptions, pending *claim, epoch int64, minted error) (*coord.Lease, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	row := b.rows[resource]
+	if row == nil || row.claiming == nil || row.claiming.id != pending.id {
+		// Nothing but this claim clears its own marker, so this is a bug.
+		return nil, fmt.Errorf("%w: the claim of %s lost its marker while minting its epoch",
+			coord.ErrUnavailable, resource)
+	}
+	row.claiming = nil
+	if minted != nil {
+		return nil, minted
+	}
+	if epoch <= row.epoch {
+		return nil, fmt.Errorf("%w: the epoch counter for %s minted %d, which is not above "+
+			"the %d this store already handed out; the counter was reset, and a reset "+
+			"counter hands out tokens a past tenure still holds", coord.ErrUnavailable,
+			resource, epoch, row.epoch)
+	}
+	// A new token is a new tenure, so it gets its own start.
+	now := b.now()
+	row.epoch, row.acquiredAt = epoch, now
+	b.write(row, opts, now)
+	lease := row.lease()
+	return &lease, nil
+}
+
+// giveBack clears pending's claiming marker if it is still set, and only
+// pending's: a later claim's marker is never another call's to clear.
+func (b *Backend) giveBack(resource string, pending *claim) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if row := b.rows[resource]; row != nil && row.claiming != nil && row.claiming.id == pending.id {
+		row.claiming = nil
+	}
+}
+
+// write sets what every grant sets, a renew's included.
+func (b *Backend) write(row *record, opts coord.AcquireOptions, now time.Time) {
 	row.owner = opts.Owner
 	row.expiresAt = now.Add(opts.TTL)
-	row.protocol = protocol
+	row.protocol = opts.EffectiveProtocol()
 	// A claim that names no node leaves the hint alone: it records the
 	// last deliberate placement, not who happens to hold the resource.
 	if opts.Preferred != "" {
@@ -209,9 +368,6 @@ func (b *Backend) acquire(resource string, opts coord.AcquireOptions) (*coord.Le
 		row.meta = copyMeta(opts.Meta)
 	}
 	b.wrote(row)
-
-	lease := row.lease()
-	return &lease, ""
 }
 
 // Renew extends a lease the caller still holds at this epoch.
@@ -401,11 +557,12 @@ func (b *Backend) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	now := b.now()
 	floor, found := 0, false
 	for _, r := range b.rows {
-		if !r.gated(now) {
+		protocol, ok := r.gated(now)
+		if !ok {
 			continue
 		}
-		if !found || r.protocol < floor {
-			floor, found = r.protocol, true
+		if !found || protocol < floor {
+			floor, found = protocol, true
 		}
 	}
 	return floor, found, nil

@@ -146,7 +146,7 @@ const (
 	SearchSlice = SearchPrefix + "slice"
 
 	// ObservePrefix prefixes the observability read scatter's subjects —
-	// the fleet's turn-level history, asked of every node's own event
+	// the fleet's turn-level history, asked of every data node's own event
 	// store at query time (internal/eventfan, ADR-0021).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a history read is the
@@ -161,6 +161,25 @@ const (
 	// output is scattered (internal/sandbox, `sandbox_tail`). Every node
 	// serves it and only the incarnation that owns the run answers.
 	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
+
+	// SandboxPrefix prefixes the subjects the code sandbox's nodes reach
+	// each other on about a run's box (internal/sandbox, boxhost.go): a box
+	// on an engine host is its launching node's, and every other node asks
+	// that one.
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a box read is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], and a nudge an ephemeral
+	// broadcast, both worth nothing once their moment has passed — the
+	// run's row is the record, and the poll the guarantee.
+	SandboxPrefix = "crewlet.sandbox."
+	// SandboxBoxRead is where a read of a run's box is asked of the node
+	// whose host the box is on. Every node serves it and only that node
+	// answers.
+	SandboxBoxRead = SandboxPrefix + "box_read"
+	// SandboxNudge is where a node tells whichever waiter drives a run to
+	// look at it now ([queue.EventQueue.Broadcast]): its work was just
+	// submitted, or its box just left to its host.
+	SandboxNudge = SandboxPrefix + "nudge"
 
 	// SteerPrefix prefixes the subjects a person's note to a running turn
 	// crosses (internal/agent/steer).
@@ -190,20 +209,24 @@ const (
 	HeldRead = HeldPrefix + "read"
 
 	// RelayPrefix prefixes the subjects a data node RELAYS what its own
-	// applier announced on, to a peer whose own copy is out of service
-	// (internal/engine, inboxrelay.go).
+	// appliers announced on, to a peer whose own copy is out of service
+	// (internal/engine, liverelay.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a relay is the ephemeral
-	// request and reply of [queue.EventQueue.Ask], and what it carries —
-	// whose inbox moved — is a hint about rows every data node already
-	// holds, so a durable copy would be a second record of the same facts.
-	// And NOT under AgentInboxPrefix, whose `.inbox` subjects are seats'
-	// durable mailboxes: nothing here is anybody's mail.
+	// request and reply of [queue.EventQueue.AskEach], and what it carries —
+	// whose inbox moved, what landed in a room, what moved on an artifact —
+	// is what every data node's own rows already hold, so a durable copy
+	// would be a second record of the same facts. Every ask and answer is
+	// SIGNED (internal/signedask), because what it carries is shown on a
+	// screen as somebody's words. And NOT under AgentInboxPrefix, whose
+	// `.inbox` subjects are seats' durable mailboxes: nothing here is
+	// anybody's mail.
 	RelayPrefix = "crewlet.relay."
-	// InboxRelayPrefix is followed by one data node's id, escaped as a
+	// LiveRelayPrefix is followed by one data node's id, escaped as a
 	// subject token, and that node alone serves it: a follower reads ONE
-	// server's sequence of announced batches.
-	InboxRelayPrefix = RelayPrefix + "inbox."
+	// server's sequence of announced batches, every domain's in one
+	// sequence.
+	LiveRelayPrefix = RelayPrefix + "live."
 )
 
 // AgentInbox returns the inbox subject for the seat with this id.
@@ -235,10 +258,12 @@ func AgentInboxGroup(seat uuid.UUID) string {
 
 // AgentControl returns the seat's sandbox-control subject.
 //
-// Separate from the inbox because a seat awaiting a detached run REQUEUES
-// everything its inbox delivers: a completion riding the inbox would be
-// requeued behind the very wait it exists to end. Attached and detached
-// alongside the inbox, so a completion reaches the seat's owner and only its
+// Separate from the inbox because a seat a detached run holds fetches nothing
+// from its inbox: a completion riding the inbox would wait behind the very run
+// it exists to end. A person's answer to a parked run (an answer by turn) rides
+// it for the same reason: on the inbox it waited behind every run that held the
+// seat and every older message after that. Attached and detached alongside the
+// inbox, so what is addressed to a run reaches the seat's owner and only its
 // owner.
 func AgentControl(seat uuid.UUID) string {
 	if seat == uuid.Nil {

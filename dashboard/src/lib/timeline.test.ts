@@ -185,7 +185,7 @@ describe("the arrows", () => {
 
 describe("the axis rules", () => {
   it("rules on Mondays, and always labels its own first column", () => {
-    // Monday because `internal/tracker/dates.go` pins the week's start there.
+    // Monday because `internal/worklet/dates.go` pins the week's start there.
     // A ruled axis whose leftmost column has no label reads as a column that
     // is not there.
     const line = timelineOf([task("a", "2026-06-03", "2026-06-24")], { now: NOW });

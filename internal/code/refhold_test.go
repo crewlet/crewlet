@@ -174,7 +174,7 @@ func TestARefDeletedAfterTheTurnReadItAnswersTheHoldDeleted(t *testing.T) {
 	}
 }
 
-// A REF HOLD RECORD COSTS THE LOG ONE SMALL RECORD — what internal/tracker's
+// A REF HOLD RECORD COSTS THE LOG ONE SMALL RECORD — what internal/worklet's
 // code log day weighs a seat branch's hold at, as TestAHoldRecordCostsTheLog-
 // OneSmallRecord measures a scratch repository's: the log's stream grown by the
 // one record, as the broker counts it against the log's ceiling. Measured at
@@ -227,7 +227,7 @@ func TestARefHoldRecordCostsTheLogOneSmallRecord(t *testing.T) {
 }
 
 // refHoldRecordBytes is the most one hold of a seat's branch takes the code log
-// as the engine writes one, the figure internal/tracker's codeLogNegligible
+// as the engine writes one, the figure internal/worklet's codeLogNegligible
 // names for it.
 const refHoldRecordBytes = 4096
 

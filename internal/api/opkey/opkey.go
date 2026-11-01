@@ -1,12 +1,15 @@
 // Package opkey is the HTTP half of an operation id: the header a caller
 // sends one in, the rule a key it sends is held to, the digest that binds the
 // id a write is published under to the request that asked for it, and what an
-// unknown outcome tells the caller to retry with.
+// unknown outcome tells the caller to retry with. It also holds the ONE
+// canonical encoding of a request ([Canonical]) and the full-length digest
+// over it ([RequestDigest]) that the Dashboard Assistant binds an approval to,
+// so the two bindings of a request to what it asked can never disagree.
 //
 // # Why one package, and not a copy per surface
 //
-// Two surfaces take a key — `/iam` and the human write surface (`/work`,
-// `/pages`) — and a script retrying a write on this engine is one
+// Two surfaces take a key, `/iam` and the human write surface (`/worklet`,
+// `/doclet/pages`), and a script retrying a write on this engine is one
 // script whichever of them it wrote to: an `unknown` answer carries the key,
 // and the route accepts it back under the same header, held to the same
 // grammar and refused with the same code. Each surface carried its own copy of
@@ -42,7 +45,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -233,11 +235,32 @@ func UnknownDetail(unvouched bool) string {
 		"as the " + Header + " header."
 }
 
+// Reused is what a write is answered with when the state log refused it because
+// an operation its key derives already names a write to another object
+// ([statelog.ReasonOpReused]): what the request names moved since the key was
+// first sent, or the key was sent with another request. Nothing was written,
+// and a new key settles it where no wait would.
+//
+// THE FRAMEWORK'S OWN REFUSAL IS NEVER SAID BESIDE IT. It names the operation,
+// the subject it landed on and the one this request is about, broker paths a
+// person cannot act on, and /iam answered it after the directory's own
+// sentinel. One sentence for every surface that takes a key, for
+// [UnknownDetail]'s reason: the operator's surface answered it in a sentence
+// of its own, and the two would have drifted as UnknownDetail's copies did.
+//
+// IN A PERSON'S WORDS (ADR-0060), where [UnknownDetail] is the rule a client
+// retries by: every surface that answers it answers a person, and one who
+// pressed a button again never chose the key, so it says what moved and what
+// to do rather than which key to replace. The answer's `field` names [Header],
+// which is what a client changes.
+const Reused = "What this change was about moved since it was first sent, " +
+	"so nothing was written. Look again, then make the change."
+
 // Digest is what binds a write's operation to its request: the path (the
 // object), the query and the decoded body, in a form one request always
 // produces — the body re-encoded from its decoded value, so the same fields
-// in another order or spacing are the same request. asks is the decoded
-// body, nil for a route that takes none.
+// in another order or spacing are the same request ([Canonical] is the one
+// encoding). asks is the decoded body, nil for a route that takes none.
 //
 // # Why a key alone is not the operation
 //
@@ -256,17 +279,12 @@ func UnknownDetail(unvouched bool) string {
 // and will not encode: a type the surface declared wrongly, never the
 // caller's to fix.
 func Digest(r *http.Request, asks any) (string, error) {
-	body, err := json.Marshal(asks)
+	canon, err := Canonical(r.URL.Path, r.URL.Query(), asks)
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	for _, part := range [][]byte{[]byte(r.URL.Path),
-		[]byte(r.URL.Query().Encode()), body} {
-		_, _ = h.Write(part)
-		_, _ = h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))[:digestLen], nil
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])[:digestLen], nil
 }
 
 // digestLen is how many hex digits of a request's digest its operation

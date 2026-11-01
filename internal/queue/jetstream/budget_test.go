@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -31,6 +32,19 @@ func fileQueue(t *testing.T) *Queue {
 	return q
 }
 
+// sizedFileQueue is [fileQueue] with its cap declared at
+// [brokertest.StoreMaxBytes], for a case that reserves gibibytes and whose
+// subject is not where the cap comes from.
+//
+// DECLARED, because a derived cap is three quarters of the runner's free
+// space: a case reserving three gibibytes against one fails on a runner with
+// less than four free, whatever the code under test does. A case whose
+// subject IS the cap a volume gives keeps [fileQueue].
+func sizedFileQueue(t *testing.T) *Queue {
+	t.Helper()
+	return newQueueWith(t, Config{StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
+}
+
 // budgetLog is a domain stream reserving ceiling bytes.
 func budgetLog(name string, ceiling int64) DomainStream {
 	return DomainStream{
@@ -46,8 +60,8 @@ func budgetLog(name string, ceiling int64) DomainStream {
 // Its account states no limit at all, so a budget read from the account alone
 // is "unlimited" on exactly the topology that refused a boot for want of room.
 // And the broker compares a new ceiling against the ceilings it has granted,
-// not against what they store: a stream reserving a gibibyte and holding
-// nothing has spent a gibibyte.
+// not against what they store: a stream reserving bytes and holding nothing has
+// spent them.
 func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -68,7 +82,11 @@ func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 				t.Fatalf("budget = %+v, want a stated limit from %s", before, tc.want)
 			}
 
-			const ceiling = int64(1) << 30
+			// A GIBIBYTE OR HALF WHAT IS LEFT, whichever is smaller: the
+			// file store's cap is derived from this runner's free disk,
+			// which is this row's subject, so a fixed gibibyte would fail
+			// it on a disk with less than a third more than that free.
+			ceiling := min(int64(1)<<30, before.Available()/2)
 			if err := q.EnsureDomainStream(t.Context(), budgetLog("SPEND", ceiling)); err != nil {
 				t.Fatalf("EnsureDomainStream: %v", err)
 			}
@@ -95,7 +113,7 @@ func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 // refused the last log created.
 func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
 	t.Parallel()
-	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL(),
+	q := newQueueWith(t, Config{URL: externaltest.StartUnstated(t, queue.MaxPayloadBytes).URL(),
 		Token: externaltest.Token})
 	before, err := q.StreamBudget(t.Context())
 	if err != nil {
@@ -115,6 +133,27 @@ func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
 	if after.Committed-before.Committed != ceiling {
 		t.Errorf("a %d-byte reservation on a broker that states no limit moved the "+
 			"committed figure from %d to %d", ceiling, before.Committed, after.Committed)
+	}
+}
+
+// THE TEST SUITES' EXTERNAL BROKER STATES ITS ACCOUNT'S LIMIT, and it is the
+// shared test size.
+//
+// A node on a broker whose account states nothing sizes its state logs from
+// its own volume's free space, so every suite booting a node against
+// externaltest's server would again pass or fail on how full the runner's disk
+// is — the derivation the stated limit exists to take out of the suites. Read
+// through StreamBudget, as a node reads it.
+func TestTheTestSuitesExternalBrokerStatesItsAccountLimit(t *testing.T) {
+	t.Parallel()
+	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL()})
+	budget, err := q.StreamBudget(t.Context())
+	if err != nil {
+		t.Fatalf("StreamBudget: %v", err)
+	}
+	if budget.Source != BudgetAccount || budget.Limit != brokertest.StoreMaxBytes {
+		t.Fatalf("the test broker's budget read as %+v, want the account's own "+
+			"limit of %d (brokertest.StoreMaxBytes)", budget, brokertest.StoreMaxBytes)
 	}
 }
 
@@ -181,7 +220,7 @@ func TestARefusedReservationIsNotReadBack(t *testing.T) {
 // directions are the broker's own answer here, one byte apart.
 func TestAGrowthBudgetIsTheRoomAnUpdateIsHeldTo(t *testing.T) {
 	t.Parallel()
-	q := fileQueue(t)
+	q := sizedFileQueue(t)
 	const ceiling = int64(1) << 30
 	if err := q.EnsureDomainStream(t.Context(), budgetLog("GROW", ceiling)); err != nil {
 		t.Fatalf("EnsureDomainStream: %v", err)
@@ -212,7 +251,7 @@ func TestAGrowthBudgetIsTheRoomAnUpdateIsHeldTo(t *testing.T) {
 // the one it was created with.
 func TestADomainStreamsCeilingIsReadBack(t *testing.T) {
 	t.Parallel()
-	q := fileQueue(t)
+	q := sizedFileQueue(t)
 	if held, found, err := q.DomainStreamCeiling(t.Context(), "ABSENT"); err != nil || found || held != 0 {
 		t.Fatalf("an absent stream = (%d, %v, %v), want (0, false, nil)", held, found, err)
 	}

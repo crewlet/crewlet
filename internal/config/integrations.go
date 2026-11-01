@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Integrations is the INBOUND half of the external world: how events reach
@@ -500,7 +501,11 @@ type WorkingStatus string
 
 const (
 	// StatusAddressed shows it only when a human is plausibly waiting on
-	// this seat: a DM, a direct mention, or a thread it already follows.
+	// this seat, which is whatever the chat surface's own address rule says
+	// (notify.AddressRule): a direct message, a personal mention, or a
+	// thread the seat is in for a reason that owes an answer — never one it
+	// reached through a room-wide address or only by having spoken there
+	// once, which every seat in the room shares and most stay silent on.
 	StatusAddressed WorkingStatus = "addressed"
 	// StatusAlways shows it on every chat-triggered turn, including
 	// passive channel messages and broadcasts. It is the DEFAULT: a turn
@@ -531,7 +536,7 @@ func (w WorkingStatus) validate(path Path) error {
 		return nil
 	}
 	var p problems
-	p.add(path, ErrUnknownValue, "%q (want %s)", w, names(WorkingStatuses))
+	p.add(path, ErrUnknownValue, "%q (want %s)", w, words.Or(WorkingStatuses))
 	return p.err()
 }
 
@@ -549,6 +554,12 @@ type Slack struct {
 
 	// StatusPhrases replaces the words the indicator shows.
 	StatusPhrases StatusPhrases `yaml:"status_phrases,omitempty" json:"status_phrases,omitzero"`
+
+	// AppConfigToken points at the sealed app-configuration token the
+	// engine creates and keeps every agent's Slack app with (D11). A whole
+	// ${VAR} and never a literal: Slack's refresh token works once, so each
+	// rotation is sealed back under the same name, which a literal has not.
+	AppConfigToken string `secret:"true" yaml:"app_config_token,omitempty" json:"app_config_token,omitempty" desc:"Reference to the sealed Slack app-configuration token the engine creates agents' apps with; a whole ${VAR}."`
 }
 
 // validate refuses a typing_status outside the closed set.
@@ -560,6 +571,13 @@ type Slack struct {
 func (s *Slack) validate(path Path) error {
 	var p problems
 	p.wrap(s.TypingStatus.validate(at(path, "typing_status")))
+	if token := strings.TrimSpace(s.AppConfigToken); token != "" {
+		if _, whole := envref.Whole(token); !whole {
+			p.add(at(path, "app_config_token"), ErrShape,
+				"must be one whole ${VAR}: Slack's refresh token works once, and the "+
+					"engine seals each new one back under the same name")
+		}
+	}
 	return p.err()
 }
 
@@ -739,7 +757,7 @@ func atlassianDeployment(p *problems, path Path, url, cloudID string, declared a
 		p.add(at(path, "url"), ErrConflict,
 			"%q is an Atlassian Cloud address, and integrations.atlassian.deployment "+
 				"declares %s: no Data Center instance is served there, so one "+
-				"of the two is wrong — declare %s, or give the instance's own address",
+				"of the two is wrong. Declare %s, or give the instance's own address",
 			url, AtlassianDataCenter, AtlassianCloud)
 	}
 	return deploy
@@ -791,11 +809,6 @@ type DatadogProvisioning struct {
 	// application key says which user acts.
 	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Datadog API key; says which organization."`
 	AppKey string `secret:"true" yaml:"app_key,omitempty" json:"app_key,omitempty" desc:"Datadog application key; says which user acts."`
-
-	// Role is the Datadog role every agent account is created holding.
-	// Empty takes the read-only role, which is the honest default for
-	// accounts nothing yet authenticates with.
-	Role string `yaml:"role,omitempty" json:"role,omitempty" desc:"Role each agent's service account holds (default Datadog Read Only Role)."`
 
 	// EmailDomain is the domain each agent's service-account address is
 	// built under. Service accounts need an address Datadog will accept
@@ -945,18 +958,6 @@ type GitHubProvisioning struct {
 	OrgWebhook ContainerWebhookMode `yaml:"org_webhook,omitempty" json:"org_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one org hook where the credential may), true, or false."`
 }
 
-// GitLabAccessLevel is a service account's membership level.
-type GitLabAccessLevel string
-
-// The membership levels the provisioner grants.
-const (
-	GitLabDeveloper  GitLabAccessLevel = "developer"
-	GitLabMaintainer GitLabAccessLevel = "maintainer"
-)
-
-// GitLabAccessLevels is the closed set.
-var GitLabAccessLevels = []GitLabAccessLevel{GitLabDeveloper, GitLabMaintainer}
-
 // ContainerWebhookMode is how a provisioner registers hooks: once on the
 // container that holds the repositories, or once per repository.
 //
@@ -1081,9 +1082,6 @@ type GitLabProvisioning struct {
 	// exactly what to revoke.
 	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts."`
 
-	AccessLevel  GitLabAccessLevel            `yaml:"access_level,omitempty" json:"access_level,omitempty" js:"enum=developer|maintainer" desc:"Default membership level."`
-	AccessLevels map[string]GitLabAccessLevel `yaml:"access_levels,omitempty" json:"access_levels,omitempty" desc:"Per-handle membership overrides."`
-
 	UsernamePrefix string `yaml:"username_prefix,omitempty" json:"username_prefix,omitempty" desc:"Prefix on each service-account username."`
 
 	// Projects are extra projects to add each account to and register
@@ -1111,9 +1109,6 @@ type GitLabProvisioning struct {
 	// The flag is still there and still overrides, for one invocation, the
 	// way `-public-url` overrides `api.external_url`.
 	Mode GitLabMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=group|instance" desc:"Where service accounts are owned: group (default, and all GitLab.com offers) or instance (self-managed only; needs an instance-administrator token)."`
-
-	// TokenScopes are minted on each service-account token.
-	TokenScopes []string `yaml:"token_scopes,omitempty" json:"token_scopes,omitempty" desc:"Scopes minted on each service-account token."`
 }
 
 // GitLabMode is where this company's GitLab service accounts are owned.
@@ -1193,7 +1188,7 @@ func (g *GitHub) validate(path Path) error {
 	pp := at(path, "provisioning")
 	if pv.OrgWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.OrgWebhook) {
 		p.add(at(pp, "org_webhook"), ErrUnknownValue, "%q (want %s)",
-			pv.OrgWebhook, names(ContainerWebhookModes))
+			pv.OrgWebhook, words.Or(ContainerWebhookModes))
 	}
 	if pv.OrgWebhook == ContainerWebhookRequire && strings.TrimSpace(pv.Org) == "" {
 		p.add(at(pp, "org"), ErrMissing,
@@ -1262,21 +1257,11 @@ func (g *GitLab) validate(path Path) error {
 	// account reported removed and still live.
 	if !pv.Mode.Valid() {
 		p.add(at(pp, "mode"), ErrUnknownValue, "%q is not one of %s",
-			pv.Mode, strings.Join(GitLabModes(), ", "))
-	}
-	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
-		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
-			pv.AccessLevel, names(GitLabAccessLevels))
-	}
-	for _, handle := range sortedKeys(pv.AccessLevels) {
-		if !slices.Contains(GitLabAccessLevels, pv.AccessLevels[handle]) {
-			p.add(entry(at(pp, "access_levels"), handle), ErrUnknownValue, "%q (want %s)",
-				pv.AccessLevels[handle], names(GitLabAccessLevels))
-		}
+			pv.Mode, words.Or(GitLabModes()))
 	}
 	if pv.GroupWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.GroupWebhook) {
 		p.add(at(pp, "group_webhook"), ErrUnknownValue, "%q (want %s)",
-			pv.GroupWebhook, names(ContainerWebhookModes))
+			pv.GroupWebhook, words.Or(ContainerWebhookModes))
 	}
 	return p.err()
 }
@@ -1640,7 +1625,7 @@ func (d *Datadog) validate(path Path) error {
 				"required when datadog is enabled: it is the region the keys "+
 					"were issued in, and a key from one region is refused by "+
 					"every other. One of %s",
-				strings.Join(DatadogSites, ", "))
+				words.Or(DatadogSites))
 		case envref.Has(d.Provisioning.Site):
 			// A ${VAR} IS UNKNOWN, NOT WRONG. Tier B holds pointers
 			// verbatim and resolves them where a client is built, so the
@@ -1652,7 +1637,7 @@ func (d *Datadog) validate(path Path) error {
 					"that tells one organization's keys from another's, so a "+
 					"value Datadog does not serve resolves to no API at all. "+
 					"One of %s",
-				d.Provisioning.Site, strings.Join(DatadogSites, ", "))
+				d.Provisioning.Site, words.Or(DatadogSites))
 		}
 	}
 

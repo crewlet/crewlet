@@ -17,7 +17,7 @@ import (
 // revision asked about; `code_change_routing`, whom its records reached
 // (…/routing); and `code_reviews`, the reviews one reviewer gave
 // (GET /code/reviews). Each is decided per repository by the grant the
-// serving node derives (code.GrantOf, ADR-0058), as every code question is,
+// serving node derives (code.GrantOf, ADR-0081), as every code question is,
 // and read at the caller's own freshness: a screen reads a change back at
 // `session` beside the position its write answered with.
 //

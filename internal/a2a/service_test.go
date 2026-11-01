@@ -373,7 +373,8 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 
 	rec.sent = nil
 	if err := svc.Reply(context.Background(), a2a.Answer{
-		ChannelID: id, Sender: "bob", Content: "yes", CausedBy: ask,
+		ChannelID: id, Sender: "bob", Content: "yes",
+		AskTrace: events.TraceContext{TraceID: ask.TraceID, SpanID: ask.SpanID},
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}
@@ -639,9 +640,9 @@ func TestAnAskCarriesTheAskersItem(t *testing.T) {
 	for name, tc := range map[string]struct {
 		item *types.WorkItem
 	}{
-		"an asker on a task":  {&types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}},
+		"an asker on a task":  {&types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}},
 		"an asker on nothing": {nil},
-		"an item with no id":  {&types.WorkItem{Backend: types.WorkNative, Key: "ENG-1"}},
+		"an item with no id":  {&types.WorkItem{Backend: types.WorkWorklet, Key: "ENG-1"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -678,8 +679,8 @@ func TestAnAskCarriesTheAskersItem(t *testing.T) {
 // TestTheSweepAnnouncesEveryChannelItCloses is the close event that was never
 // published.
 //
-// [a2a.Store.CloseIdle] returns the channels it closed rather than a count
-// precisely so its caller can announce them, and the one caller — the
+// The store's idle close returned the channels it closed rather than a count
+// precisely so its caller could announce them, and the one caller — the
 // retention sweep — discarded the list. So a channel nobody answered ended
 // silently, although that is the case worth seeing: the requester's turn ended
 // when it asked, so a channel reaching the sweep means some turn never
@@ -710,9 +711,13 @@ func TestTheSweepAnnouncesEveryChannelItCloses(t *testing.T) {
 		}
 	}
 	rec.sent = nil
+	sweeper, err := a2a.NewSweeper(st, rec, owedTo{}, func() time.Time { return clock })
+	if err != nil {
+		t.Fatalf("NewSweeper: %v", err)
+	}
 	// The pinned clock is the channels' own LastAt, so a cutoff after it is
 	// what makes both idle.
-	swept, err := svc.SweepIdle(ctx, clock.Add(time.Hour))
+	swept, err := sweeper.SweepIdle(ctx, clock.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("SweepIdle: %v", err)
 	}
@@ -746,18 +751,22 @@ func TestTheSweepAnnouncesEveryChannelItCloses(t *testing.T) {
 // announcement it exists for becomes a duplicate close per tick for ever.
 func TestASweptChannelIsNotSweptTwice(t *testing.T) {
 	t.Parallel()
-	svc, _, rec := service(t, dir{"bob": true})
+	svc, st, rec := service(t, dir{"bob": true})
 	ctx := context.Background()
 	if _, err := svc.Open(ctx, a2a.Ask{
 		Requester: "alice", Target: "bob", Brief: "?",
 	}); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := svc.SweepIdle(ctx, clock.Add(time.Hour)); err != nil {
+	sweeper, err := a2a.NewSweeper(st, rec, owedTo{}, func() time.Time { return clock })
+	if err != nil {
+		t.Fatalf("NewSweeper: %v", err)
+	}
+	if _, err := sweeper.SweepIdle(ctx, clock.Add(time.Hour)); err != nil {
 		t.Fatalf("SweepIdle: %v", err)
 	}
 	rec.sent = nil
-	n, err := svc.SweepIdle(ctx, clock.Add(time.Hour))
+	n, err := sweeper.SweepIdle(ctx, clock.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("second SweepIdle: %v", err)
 	}

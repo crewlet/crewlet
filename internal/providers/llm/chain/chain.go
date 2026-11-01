@@ -10,17 +10,52 @@
 // one: its vendor's outage or its own crash is not the next member's, so the
 // walk moves on.
 //
-// Fallback is per CALL, not per round. A member that fails is dropped along
-// with whatever it produced, and the next one starts the call from scratch,
-// which keeps one telemetry span per attempt instead of a conversation
-// stitched from two models.
+// # The next member continues from the session's record
+//
+// Fallback is per CALL: one CLI run, which for a seat at work is a whole loop
+// of model requests and tool calls. A member that fails partway through has
+// already had calls run — the phase's tool host ran them, recorded them and
+// charged what the run spent — and its failure undoes none of it. Starting the
+// call from scratch on the next member would run them again: a second post, a
+// second issue, written by a model that never saw the first.
+//
+// So the next member is handed the SAME request — the same conversation and
+// the same host — and its backend shows its CLI what the host holds since the
+// conversation was last folded ([llm.ToolHost.Pending]) as work already done,
+// which the model reads rather than does again. What is dropped is only the
+// failed member's unfinished prose: a streaming consumer is told the attempt
+// restarted ([llm.Delta.Restart]) and sets aside the text it was showing,
+// never the calls, which are on the record whoever made them.
+//
+// # The walk stops where the phase is decided
+//
+// A member whose run the host ENDED — the phase submitted, parked, ran out of
+// rounds or was stopped, or the run was cut short for something the next run
+// of the loop answers — fails the way any CLI that is stopped mid-run does. No
+// other member continues that run: what happens next is the tool loop's, which
+// holds the host and reads the outcome off its own record, and a second member
+// would only redo or overrun a phase that is over. [llm.ToolHost.Halted]
+// answers it, and the chain returns the member's error as it came.
+//
+// # A seat's executor falls back per launch
+//
+// A seat's EXECUTOR is not a call this walks ([Pick]): its run is the CLI's
+// own, in a box, and hours long, so there is no call to continue on the next
+// member once it started — a run that meets a limit midway is not relaunched
+// elsewhere. What can still move is where the next run starts, so the launch
+// asks each member whether it is ready in the same order and with the same
+// vocabulary a call uses: a retryable refusal hands off, a fatal one stops the
+// walk, and running out is the same [Error] a call reports.
 package chain
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -120,7 +155,8 @@ func (c *Chain) Keys() []string {
 }
 
 // Complete walks the chain. The first member whose call does not fail
-// retryably wins.
+// retryably wins — and a member whose run the request's host ended is the
+// last one tried, whatever it answered.
 func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if len(c.members) == 0 {
 		// A `Chain{}` literal compiles anywhere — the fields are unexported,
@@ -138,7 +174,9 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	// whoever is watching. The next member's fragments must not simply
 	// continue it — two half-answers from two models read as one incoherent
 	// paragraph — so a failover announces itself, and the consumer decides
-	// what to do with the abandoned attempt.
+	// what to do with the abandoned attempt. The TEXT is all a restart
+	// abandons: the calls the member made are the host's record, which the
+	// next member continues from.
 	streamed := false
 	inner := req
 	if req.Streaming() {
@@ -158,6 +196,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	}
 
 	var last error
+	failures := make([]error, 0, len(c.members))
 	for i, m := range c.members {
 		if streamed {
 			req.Send(llm.Delta{Restart: true, Model: m.Provider.Model()})
@@ -186,10 +225,23 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		}
 
 		kind := llm.KindOf(err)
-		if !kind.Retryable() {
+		if !kind.Retryable() || ctx.Err() != nil {
 			// Returned as it came, so errors.As still reaches the
 			// backend's own *llm.Error with its provider and model
 			// intact.
+			//
+			// A CALL WHOSE CALLER IS GONE IS NOT WALKED, whatever its
+			// member called the failure: the next member would be
+			// started on a context that has already ended, and a
+			// cancellation logged as a fallback reads as an outage of a
+			// member that did nothing wrong.
+			return nil, err
+		}
+		if req.Tools != nil && req.Tools.Halted() {
+			// THE HOST ENDED THIS RUN, and a CLI stopped mid-run fails
+			// like one that broke: no member continues a phase that is
+			// decided — see the package doc. Not a hand-off, so nothing
+			// is announced as one.
 			return nil, err
 		}
 
@@ -203,9 +255,75 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			c.onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
 		}
 		last = err
+		failures = append(failures, err)
 	}
 
-	return nil, &Error{Attempted: c.Keys(), Err: last}
+	return nil, &Error{Attempted: c.Keys(), Failures: failures, Err: last}
+}
+
+// Pick is the executor's fallback at launch: the first of members that ready
+// accepts, walked in order.
+//
+// ready answers for one member at the moment of the launch — nil when it can
+// take the run, a classified error when it cannot. A RETRYABLE refusal (an
+// entry sitting out its spent plan) hands off exactly as [Chain.Complete]
+// does: it is logged as provider_fallback, reported to onFallback naming the
+// member that takes over — or none, on the last — and the walk moves on. A
+// fatal refusal is returned as it came, for the reason a fatal call stops the
+// walk, and so is any refusal once ctx is done. Every member refusing
+// retryably is an [*Error] naming them all, WITH EACH ONE'S REFUSAL
+// ([Error.Failures]), so the caller reads an exhausted launch exactly as an
+// exhausted call: the same unavailability the seat reports either way, and,
+// where every member sits out a limit, the same [Limited] chain a seat is
+// parked on until the first is tried again. Without them a launch every
+// member of which sat out read as a chain that had failed, and every turn
+// launches, so the seat's mail was taken back into the limit until the broker
+// dead-lettered it.
+//
+// The caller filters members that can never take a launch (a CLI with no
+// in-box runner) BEFORE calling: that is a fact of the configuration, not a
+// refusal of the moment, and announcing it as a hand-off on every launch
+// would publish a fallback nothing fell from.
+func Pick(ctx context.Context, members []Member, ready func(Member) error,
+	onFallback func(Fallback)) (Member, error) {
+	if len(members) == 0 {
+		return Member{}, &llm.Error{
+			Kind: llm.KindFatal,
+			Err:  errors.New("chain: no member can take the launch"),
+		}
+	}
+	var (
+		last     error
+		failures []error
+	)
+	for i, m := range members {
+		err := ready(m)
+		if err == nil {
+			return m, nil
+		}
+		kind := llm.KindOf(err)
+		// A caller that is gone stops the walk as it stops a call's: no
+		// member is asked on behalf of a launch nobody is waiting for.
+		if !kind.Retryable() || ctx.Err() != nil {
+			return Member{}, err
+		}
+		next := ""
+		if i+1 < len(members) {
+			next = members[i+1].Key
+		}
+		log.WarnContext(ctx, "provider_fallback",
+			"from", m.Key, "to", next, "kind", kind.String(), "error", err.Error())
+		if onFallback != nil {
+			onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
+		}
+		last = err
+		failures = append(failures, err)
+	}
+	attempted := make([]string, len(members))
+	for i, m := range members {
+		attempted[i] = m.Key
+	}
+	return Member{}, &Error{Attempted: attempted, Failures: failures, Err: last}
 }
 
 // Error reports that every member failed retryably.
@@ -217,8 +335,90 @@ type Error struct {
 	// Attempted is every key that was tried, in order.
 	Attempted []string
 
+	// Failures is every member's failure, in the order Attempted names
+	// them: what [Limited] reads to tell a chain every member of which is
+	// sat out from one whose last member happened to be.
+	Failures []error
+
 	// Err is the last member's failure.
 	Err error
+}
+
+// Limit is a chain every member of which refused for a rate limit: the keys,
+// when the first of them is tried again, and when the vendors said the limits
+// lift.
+type Limit struct {
+	// Keys are the members, in the chain's order.
+	Keys []string
+	// RetryAt is the earliest instant any member is tried again: before it,
+	// a call through the chain is refused by every member without one of
+	// them being asked.
+	RetryAt time.Time
+	// ResetsAt is the earliest instant a member's vendor said its limit
+	// lifts, where every member named one; zero where any did not, since a
+	// member that named none may lift sooner than the named ones, and a
+	// person told "4:30 PM" would wait for nothing.
+	ResetsAt time.Time
+	// Said is the head member's own sentence, for whoever is shown why.
+	Said string
+	// Agent and Subscription are the head member's CLI and whether it signs
+	// in on a plan ([llm.Error.Agent]): what the limit is called.
+	Agent        string
+	Subscription bool
+}
+
+// Limited reports whether err is a chain whose every member refused for a rate
+// limit with an instant it is tried again, and what that limit is.
+//
+// EVERY MEMBER, and not the last one: a chain whose head is spent and whose
+// fallback failed for a reason nothing says will last (a server error, a
+// timeout) is worth trying again on the ordinary retry, and treating it as
+// spent would hold a seat for an hour over a blip of its fallback's. A member
+// that names no instant it is tried again is not one this can wait out either.
+func Limited(err error) (Limit, bool) {
+	var exhausted *Error
+	if !errors.As(err, &exhausted) || len(exhausted.Failures) == 0 ||
+		len(exhausted.Failures) != len(exhausted.Attempted) {
+		return Limit{}, false
+	}
+	limit := Limit{Keys: slices.Clone(exhausted.Attempted)}
+	unnamed := false
+	for i, failure := range exhausted.Failures {
+		retryAt, resetsAt, ok := llm.LimitedUntil(failure)
+		if !ok || retryAt.IsZero() {
+			return Limit{}, false
+		}
+		if limit.RetryAt.IsZero() || retryAt.Before(limit.RetryAt) {
+			limit.RetryAt = retryAt
+		}
+		switch {
+		case resetsAt.IsZero():
+			unnamed = true
+		case limit.ResetsAt.IsZero() || resetsAt.Before(limit.ResetsAt):
+			limit.ResetsAt = resetsAt
+		}
+		if i == 0 {
+			limit.Said = saidOf(failure)
+			var head *llm.Error
+			if errors.As(failure, &head) {
+				limit.Agent, limit.Subscription = head.Agent, head.Subscription
+			}
+		}
+	}
+	if unnamed {
+		limit.ResetsAt = time.Time{}
+	}
+	return limit, true
+}
+
+// saidOf is a member's failure as its backend worded it, without the frame
+// [llm.Error.Error] adds.
+func saidOf(err error) string {
+	var failure *llm.Error
+	if errors.As(err, &failure) && failure.Err != nil {
+		return failure.Err.Error()
+	}
+	return err.Error()
 }
 
 func (e *Error) Error() string {
@@ -227,3 +427,108 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// unready is a member that can say, without a call, that its next call would
+// fail (cliagent's Provider).
+type unready interface {
+	Unready(ctx context.Context) error
+}
+
+// Unready is the failure a call through these members would meet as far as
+// they know without a call, or nil when any of them may answer: a member that
+// cannot say (a test double, a backend with no memory) may, so it answers nil.
+//
+// THE CHAIN FAILS ONLY WHEN EVERY MEMBER WOULD, and its failure is the one
+// that clears first: a spent plan, which ends at a known reset (the earliest
+// of them, an unnamed reset after every named one), over a login somebody has
+// to mend, over a CLI that cannot start.
+func Unready(ctx context.Context, members []llm.Provider) error {
+	if len(members) == 0 {
+		return nil
+	}
+	failures := make([]error, 0, len(members))
+	for _, m := range members {
+		u, ok := m.(unready)
+		if !ok {
+			return nil
+		}
+		err := u.Unready(ctx)
+		if err == nil {
+			return nil
+		}
+		failures = append(failures, err)
+	}
+	slices.SortStableFunc(failures, func(a, b error) int {
+		if c := cmp.Compare(clearsAt(a), clearsAt(b)); c != 0 {
+			return c
+		}
+		ra, rb := retryAt(a), retryAt(b)
+		if ra.IsZero() != rb.IsZero() {
+			return cmp.Compare(boolRank(ra.IsZero()), boolRank(rb.IsZero()))
+		}
+		return ra.Compare(rb)
+	})
+	return failures[0]
+}
+
+// KnownLimit is the limit a call through members would meet as far as they
+// already know without a call ([Unready]), read as [Limited] reads a call's
+// failure: every member refusing for a rate limit with an instant it is tried
+// again. False where any member may answer or cannot say, and where any refuses
+// for another reason, which no park waits out.
+//
+// THE LIMIT, NOT ONLY ITS INSTANT, because a caller with no call of its own to
+// fail parks on it: a coding run's completion, collected while its review's
+// chain sits out the plan its run spent, parks its seat on the same limit a
+// call through that chain would have met, keys, reset and sentence alike,
+// without a process being started to hear it.
+func KnownLimit(ctx context.Context, members []Member) (Limit, bool) {
+	if len(members) == 0 {
+		return Limit{}, false
+	}
+	keys := make([]string, 0, len(members))
+	failures := make([]error, 0, len(members))
+	for _, m := range members {
+		u, ok := m.Provider.(unready)
+		if !ok {
+			return Limit{}, false
+		}
+		err := u.Unready(ctx)
+		if err == nil {
+			return Limit{}, false
+		}
+		keys = append(keys, m.Key)
+		failures = append(failures, err)
+	}
+	return Limited(&Error{Attempted: keys, Failures: failures, Err: failures[len(failures)-1]})
+}
+
+// clearsAt ranks a failure by how soon it clears without anybody acting: a
+// spent plan first, then a login, then anything else.
+func clearsAt(err error) int {
+	switch llm.KindOf(err) {
+	case llm.KindRateLimit:
+		return 0
+	case llm.KindAuth:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// retryAt is a failure's reset instant, zero where it names none.
+func retryAt(err error) time.Time {
+	var failure *llm.Error
+	if errors.As(err, &failure) {
+		return failure.RetryAt
+	}
+	return time.Time{}
+}
+
+// boolRank orders false before true.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

@@ -22,7 +22,6 @@
 
 import { Card, SegmentedControl, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
-import { GROUPS } from "~/contract/spend.ts";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
@@ -43,11 +42,14 @@ const GROUP_NOUN: Record<string, string> = {
 export function PhaseChart({
   series,
   group,
+  groups,
   onGroup,
   zone,
 }: {
   series: QueryResult<TokenSeries>;
   group: string;
+  /** The splits this reader may ask for (`GROUPS`, less an admin's alone). */
+  groups: readonly { value: string; label: string }[];
   onGroup: (group: string) => void;
   zone: string | undefined;
 }) {
@@ -136,7 +138,7 @@ export function PhaseChart({
           size="sm"
           value={group}
           onValueChange={onGroup}
-          options={GROUPS.map((g) => ({ value: g.value, label: g.label }))}
+          options={groups.map((g) => ({ value: g.value, label: g.label }))}
         />
         {unbanded > 0 && data && (
           // THE GAP IS SAID OUT LOUD. Splitting by worker leaves out every

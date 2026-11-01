@@ -37,9 +37,9 @@ func runObjects(environ config.Source, args []string, stdout, stderr io.Writer) 
 	case "migrate":
 		return objectsMigrate(environ, rest, stdout, stderr)
 	case "", "help":
-		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-url] [-json]")
+		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-api URL] [-json]")
 		fmt.Fprintln(stderr, "       crewlet objects migrate -to s3 -target <absolute path on the "+
-			"engine's host> [-final] [<config.yaml>] [-url] [-json]")
+			"engine's host> [-final] [<config.yaml>] [-api URL] [-json]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown objects command %q", sub)
@@ -98,7 +98,7 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 	var asJSON *bool
 	client, err := nodeClientFor(environ, args, "objects status", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false,
-			"print the fleet view's objects block as the node answered it")
+			"print the fleet view's objects block as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -111,11 +111,10 @@ func objectsStatus(environ config.Source, args []string, stdout, stderr io.Write
 	}
 	if len(answer.Objects) == 0 {
 		return errors.New("this node's fleet view carries no object store: it runs " +
-			"none, so ask a node that does with -url")
+			"none, so ask a node that does with -api")
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", answer.Objects)
-		return err
+		return printAnswer(stdout, answer.Objects)
 	}
 	var view objectsView
 	if err := json.Unmarshal(answer.Objects, &view); err != nil {
@@ -130,7 +129,7 @@ func renderObjects(w io.Writer, v objectsView) error {
 	switch v.State {
 	case "unavailable":
 		return errors.New("the object store's record could not be read: the coordination " +
-			"store did not answer — ask again in a moment")
+			"store did not answer. Ask again in a moment")
 	case "not_yet":
 		_, err := fmt.Fprintln(w, "The object store's collector has not finished a pass yet: "+
 			"it runs on a data node holding the worker duties, hourly.")
@@ -143,7 +142,7 @@ func renderObjects(w io.Writer, v objectsView) error {
 	fmt.Fprintf(&b, "Files are kept in: %s\n", backendName(v.Backend))
 	fmt.Fprintf(&b, "Collector:         %s\n", v.Node)
 	if c := v.Collect; c != nil {
-		fmt.Fprintf(&b, "Last collection:   %s — %d objects listed, %d deleted, "+
+		fmt.Fprintf(&b, "Last collection:   %s: %d objects listed, %d deleted, "+
 			"%d unfinished upload(s) abandoned%s\n",
 			c.At.Format(time.RFC3339), c.Listed, c.Deleted, c.Abandoned,
 			passNote(c.Completed, c.Skipped, c.Error))
@@ -162,11 +161,11 @@ func renderObjects(w io.Writer, v objectsView) error {
 	case a == nil:
 		fmt.Fprintln(&b, "Last audit:        none yet")
 	case a.Found == nil:
-		fmt.Fprintf(&b, "Last audit:        none has finished — the last, at %s, stopped: %s\n",
+		fmt.Fprintf(&b, "Last audit:        none has finished. The last, at %s, stopped: %s\n",
 			a.At.Format(time.RFC3339), a.Error)
 	default:
 		f := a.Found
-		fmt.Fprintf(&b, "Last audit:        %s — %d files named, %d missing, %d damaged, %d unanswered%s\n",
+		fmt.Fprintf(&b, "Last audit:        %s: %d files named, %d missing, %d damaged, %d unanswered%s\n",
 			f.At.Format(time.RFC3339), f.Referenced, f.Missing, f.Damaged, f.Unanswered,
 			passNote(f.Completed, "", ""))
 		if a.Error != "" && a.At.After(f.At) {
@@ -277,7 +276,7 @@ func objectsMigrate(environ config.Source, args []string, stdout, stderr io.Writ
 		final = fs.Bool("final", false, "run the final pass, which moves the fleet; every node "+
 			"must be running with -mode maintenance")
 		wait = fs.Duration("wait", migrateWait, "how long to wait for the pass before giving up on the answer")
-		asJSON = fs.Bool("json", false, "print the node's report as it answered it")
+		asJSON = fs.Bool("json", false, "print the node's report as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -305,8 +304,7 @@ func objectsMigrate(environ config.Source, args []string, stdout, stderr io.Writ
 		return err
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", raw)
-		return err
+		return printAnswer(stdout, raw)
 	}
 	var view migrateView
 	if err := json.Unmarshal(raw, &view); err != nil {

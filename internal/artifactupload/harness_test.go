@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -488,7 +489,11 @@ type domainNode struct {
 
 func newDomainNode(t *testing.T, clock *clock) *domainNode {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// a fact about the machine rather than about the upload under test.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -499,10 +504,11 @@ func newDomainNode(t *testing.T, clock *clock) *domainNode {
 	})
 	d := artifactsdomain.Domain{}
 	spec := d.Stream()
-	// A SMALL CEILING: the broker reserves a stream's whole ceiling on disk
-	// when it creates it, and a case writes a few records; the gate reserve
-	// above the soft ceiling is a few of the log's largest appends, far
-	// inside it.
+	// A SMALL CEILING, and tighter is the honest direction, as it is in the
+	// artifacts domain's own harness: a case writes a few records, and the
+	// gate reserve above the soft ceiling is a few of the log's largest
+	// appends, far inside it. What the broker reserves for the log is
+	// accounting against its own declared limit, not a claim on disk.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.ArtifactsLogMaxBytesFloor / 32,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,

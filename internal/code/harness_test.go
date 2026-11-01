@@ -33,7 +33,7 @@ var harnessAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 // asker is who every read a case makes asks as, where the case is not about
 // who asks: a person, bound to their human seat, whom no chart and no
-// visibility narrows (ADR-0058) — so no case's own check of the rows is
+// visibility narrows (ADR-0081) — so no case's own check of the rows is
 // filtered by the grant it is not about.
 var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder-token", Seat: "founder"}
 

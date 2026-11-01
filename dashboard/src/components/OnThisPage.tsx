@@ -1,6 +1,6 @@
 /**
  * "On this page": a document's outline beside it, following the scroll. One
- * component for every Markdown document the dashboard draws (a Knowledge page,
+ * component for every Markdown document the dashboard draws (a Doclet page,
  * a doc's tab), so a heading is found by the renderer's own walk ([outline])
  * and its entry points at the id [renderMarkdown] gave it.
  */
@@ -35,7 +35,7 @@ export function pageOutline(body: string): Heading[] {
 export function OnThisPage({ body }: { body: string }) {
   const headings = useMemo(() => pageOutline(body), [body]);
   // THE SCROLLER IS THE ONE THAT MOVES THE HEADINGS, found from the first of
-  // them once they are drawn: a Knowledge page scrolls the shell, a doc
+  // them once they are drawn: a Doclet page scrolls the shell, a doc
   // scrolls its artifact's own body.
   const [root, setRoot] = useState<HTMLElement | null>(null);
   const first = headings[0]?.id;

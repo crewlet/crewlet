@@ -32,7 +32,8 @@ import (
 // So: value, then pointer, then publish. And when the pointer needed no
 // change (a rotation, where the config already names the right variable) the
 // publish still happens, as a reload of the unchanged document, because
-// otherwise the new value never reaches the seats.
+// otherwise the new value never reaches the seats — a reload of the revision
+// the submission read, which is the one whose slot names that variable.
 
 // Secrets is the sealed store this package writes credentials into.
 //
@@ -56,7 +57,16 @@ type Secrets interface {
 type Config interface {
 	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor,
 		expect string) (revisionID string, epoch int64, err error)
-	Reload(ctx context.Context, summary string, by iam.Actor) (
+	// Reload re-publishes the document unchanged, which is how a rotated
+	// value reaches the running seats.
+	//
+	// EXPECT IS HELD TO ITS COMPARE-AND-SET, as Apply's is. A rotation
+	// decided to write through the `${VAR}` the document it read holds, so
+	// a reload of whatever the pointer names by the time it runs — a write in
+	// between that put a literal in that slot, or pointed it at another
+	// name — would republish a document that never reads the value just
+	// sealed and answer that the rotation reached the seats.
+	Reload(ctx context.Context, summary string, by iam.Actor, expect string) (
 		revisionID string, epoch int64, err error)
 	// Current is the revision a conditional submission is checked against
 	// BEFORE anything is sealed. Apply performs the same check, and has
@@ -125,6 +135,12 @@ type Submission struct {
 }
 
 // Result is what a submission produced.
+//
+// SECRETS IS SET ON EVERY RETURN AFTER THE FIRST SEAL, a failed one included:
+// a patch or a reload refused, raced or unanswered, and a later seal that
+// failed ([SealError]) all leave the values sealed before them in the fleet's
+// store, which nothing may point at yet, and the names are the caller's only
+// record of them. Empty on a refusal before anything was sealed.
 type Result struct {
 	RevisionID string   `json:"revision_id"`
 	Epoch      int64    `json:"epoch"`
@@ -133,6 +149,26 @@ type Result struct {
 	// advanced anyway, so a rotated value reached the running seats.
 	Reloaded bool `json:"reloaded"`
 }
+
+// SealError reports a credential the secret store did not take: the write of
+// Name failed, and nothing after it — the document, the reload — was
+// attempted.
+//
+// ITS OWN ERROR, because the fleet's secret store is a coordination write
+// ([Secrets.Set] ends in one), so the same coord.ErrUnavailable a pointer read
+// fails with arrives here meaning something else: not "the fleet's activation
+// could not be read" but "this credential's write was not answered", which
+// may still have landed. A caller answering the two alike told an operator
+// the wrong thing failed. Named, never valued, like every error here; the
+// names sealed before it are [Result.Secrets].
+type SealError struct {
+	// Name is the secret whose write failed.
+	Name string
+	Err  error
+}
+
+func (e *SealError) Error() string { return fmt.Sprintf("setup: seal %s: %v", e.Name, e.Err) }
+func (e *SealError) Unwrap() error { return e.Err }
 
 // Writer performs a submission against one company.
 type Writer struct {
@@ -145,7 +181,10 @@ type Writer struct {
 //
 // The requirements carry what the document holds today, in [Requirement.Stored],
 // which is how a secret requirement decides between minting a new pointer,
-// writing through an existing one, and refusing a literal.
+// writing through an existing one, and refusing a literal. So [Submission.Expect]
+// — the revision they were read from — holds every write the submission makes
+// to the document, the patch and the reload alike, and a failure after the
+// first seal still carries the names sealed ([Result]).
 func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (Result, error) {
 	if w.Config == nil {
 		return Result{}, fmt.Errorf("setup: Writer.Config is nil, so there is no " +
@@ -250,10 +289,24 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		}
 	}
 
-	// A CHANGE TO THE DOCUMENT IS AUTHORIZED BEFORE ANY VALUE IS SEALED. A
-	// rotation (no pointer to write) changes nothing in it and is not asked.
+	if len(patch) == 0 && len(secretsToWrite) == 0 {
+		return Result{}, fmt.Errorf("setup: the submission carried no values")
+	}
+
+	// THE PATCH IS ENCODED BEFORE ANY VALUE IS SEALED, beside every other
+	// refusal that needs nothing written, so no return after the first seal
+	// can leave out the names sealed ([Result]): an encode placed after the
+	// seal loop was the one return there that dropped them.
+	var body []byte
 	if len(patch) > 0 {
-		if err := w.Config.Authorize(in.By); err != nil {
+		var err error
+		if body, err = json.Marshal(patch); err != nil {
+			return Result{}, fmt.Errorf("setup: encode the patch: %w", err)
+		}
+		// A CHANGE TO THE DOCUMENT IS AUTHORIZED BEFORE ANY VALUE IS SEALED.
+		// A rotation (no pointer to write) changes nothing in it and is not
+		// asked.
+		if err = w.Config.Authorize(in.By); err != nil {
 			return Result{}, err
 		}
 	}
@@ -268,8 +321,9 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), secrets.SourceSetup, now); err != nil {
 			// Named, never valued. The name is a fact an operator needs;
 			// the value is the one thing that must not reach a log or a
-			// response body.
-			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
+			// response body. And the ones sealed before it ride along:
+			// they are in the store whatever this one did.
+			return Result{Secrets: written}, &SealError{Name: p.name, Err: err}
 		}
 		written = append(written, p.name)
 	}
@@ -278,21 +332,18 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		// NOTHING TO PATCH, and still something to do: the pointer was
 		// already correct and only the value changed, which a running
 		// process cannot see until an activation refreshes its snapshot.
-		if len(written) == 0 {
-			return Result{}, fmt.Errorf("setup: the submission carried no values")
-		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By)
+		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By, in.Expect)
 		if err != nil {
-			return Result{}, err
+			// THE VALUES ARE SEALED AND STAY, as on a failed patch: a
+			// rotation whose reload raced, went unanswered or could not
+			// read the pointer has still overwritten the value under its
+			// name, and the company reads it at its next activation.
+			return Result{Secrets: written}, err
 		}
 		return Result{RevisionID: id, Epoch: epoch, Secrets: written, Reloaded: true}, nil
 	}
 
-	body, err := json.Marshal(patch)
-	if err != nil {
-		return Result{}, fmt.Errorf("setup: encode the patch: %w", err)
-	}
 	id, epoch, err := w.Config.Apply(ctx, body, in.Summary, in.By, in.Expect)
 	if err != nil {
 		// THE SECRETS STAY. A value sealed under a name nothing points at
@@ -381,8 +432,20 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		}
 	}
 
-	// AUTHORIZED BEFORE ANY VALUE IS SEALED, as the company-wide half is.
+	if !changed && len(secretsToWrite) == 0 {
+		return Result{}, fmt.Errorf("setup: the submission carried no values")
+	}
 	if changed {
+		turnOn(seat, reqs, in.Values)
+	}
+
+	// ENCODED AND AUTHORIZED BEFORE ANY VALUE IS SEALED, as the company-wide
+	// half is, and for its reasons.
+	var body []byte
+	if changed {
+		if body, err = json.Marshal(seat); err != nil {
+			return Result{}, fmt.Errorf("setup: encode seat %s: %w", in.Seat, err)
+		}
 		if refused := w.Config.Authorize(in.By); refused != nil {
 			return Result{}, refused
 		}
@@ -393,7 +456,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	for _, p := range secretsToWrite {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), secrets.SourceSetup, now); err != nil {
-			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
+			return Result{Secrets: written}, &SealError{Name: p.name, Err: err}
 		}
 		written = append(written, p.name)
 	}
@@ -402,26 +465,47 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		// The pointer was already right and only the value rotated, which
 		// a running process cannot see until an activation refreshes its
 		// snapshot.
-		if len(written) == 0 {
-			return Result{}, fmt.Errorf("setup: the submission carried no values")
-		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By)
+		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By, in.Expect)
 		if err != nil {
-			return Result{}, err
+			return Result{Secrets: written}, err
 		}
 		return Result{RevisionID: id, Epoch: epoch, Secrets: written, Reloaded: true}, nil
 	}
 
-	body, err := json.Marshal(seat)
-	if err != nil {
-		return Result{}, fmt.Errorf("setup: encode seat %s: %w", in.Seat, err)
-	}
 	id, epoch, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.By, in.Expect)
 	if err != nil {
 		return Result{Secrets: written}, err
 	}
 	return Result{RevisionID: id, Epoch: epoch, Secrets: written}, nil
+}
+
+// turnOn states `enabled: true` on every seat integration block a submission
+// wrote into that does not already say whether the seat is on.
+//
+// A PERSON CONNECTING ONE AGENT'S APP IS TURNING THAT AGENT ON THERE: it is
+// the explicit opt-in D9 asks for, and every seat block must state `enabled`,
+// so a connect that wrote the credential and left the block silent would be
+// refused as a document. A block that already says either way keeps it: a
+// connect never turns back on an agent somebody turned off.
+func turnOn(seat map[string]any, reqs []Requirement, values map[string]string) {
+	for _, r := range reqs {
+		if _, submitted := values[r.Field]; !submitted {
+			continue
+		}
+		parts := strings.Split(r.ConfigPath, ".")
+		if len(parts) < 3 || parts[0] != "integrations" {
+			continue
+		}
+		integrations, _ := seat["integrations"].(map[string]any)
+		block, _ := integrations[parts[1]].(map[string]any)
+		if block == nil {
+			continue
+		}
+		if _, stated := block["enabled"]; !stated {
+			block["enabled"] = true
+		}
+	}
 }
 
 func (w Writer) now() time.Time {

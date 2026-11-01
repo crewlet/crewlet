@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -35,8 +36,6 @@ providers:
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
 `
 
 // companyWithoutSandboxDoc is the same company with nothing that runs code.
@@ -48,12 +47,12 @@ roles:
 `
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS THE CODE SANDBOX UP WITH THE FIRST
-// ONE THAT CONFIGURES IT — the coordinator, the completion poll, run_sandbox,
-// and the seat's own preparation — with no restart.
+// ONE THAT CONFIGURES IT — the coordinator, the completion poll, and the seat's
+// own preparation — with no restart.
 //
 // The coordinator was built at boot or never, so a node started the way the
-// quickstart starts one served a code-enabled company with no code tool until
-// its process restarted, and a run a peer had left on one of its seats was
+// quickstart starts one served a company with no executor runtime until its
+// process restarted, and a run a peer had left on one of its seats was
 // polled, collected and resumed by nobody here.
 func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testing.T) {
 	t.Parallel()
@@ -61,8 +60,10 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	if e.sandbox.Load() != nil {
 		t.Fatal("the premise: a node with no company runs no sandbox")
 	}
-	// A RUN A PEER LEFT ON THE SEAT, still going, before this node has a
-	// company at all: its recovery is part of what the apply has to bring.
+	// A RUN LEFT ON THE SEAT, still going, before this node has a company
+	// at all — this node's own, from before a restart, since a box in the
+	// direct cell is polled by the node that launched it: its recovery is
+	// part of what the apply has to bring.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
@@ -80,10 +81,6 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	}
 	if e.sandboxWaiter.Load() == nil {
 		t.Error("the apply started no completion poll, so no detached run ever finishes")
-	}
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); !ok {
-		t.Error("the applied company has no run_sandbox — equip ran before the " +
-			"coordinator it registers against")
 	}
 
 	// THE SEAT, once this node takes it: its control topic attached and
@@ -110,43 +107,6 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	eventually(t, "the poll to keep the job's box alive", func() bool {
 		return box.Keepalives() > 0
 	})
-}
-
-// AN ANSWER BY TURN FOLLOWS THE RUNTIME CURRENT WHEN IT ARRIVES.
-//
-// The dispatcher is built once, at boot, and the coordinator arrives later, by
-// apply. Bound to the coordinator when the dispatcher was built, a node that
-// booted with no company had no route for an answer by turn for the life of
-// its process: every one was handed back for a coordinator that had long
-// since come up. Before the runtime exists the answer is DEFERRED — this node
-// cannot resume a run, and the delivery is the seat's next holder's to spend —
-// and once the apply brings it up the same route reaches it.
-func TestAnAnswerByTurnReachesACoordinatorTheApplyBroughtUp(t *testing.T) {
-	t.Parallel()
-	e := sandboxNode(t, nil)
-	answer := e.dispatch.AnswerByTurn
-	if answer == nil {
-		t.Fatal("the dispatcher has no route for an answer by turn")
-	}
-	given := types.SandboxAnswerGiven{TurnID: "t1", AgentHandle: "swe", Answer: "main", LaunchID: "launch-1"}
-	trigger := events.New(given, events.TraceContext{})
-
-	disposition, err := answer(t.Context(), given, trigger)
-	if disposition != sandbox.AnswerDeferred || err == nil {
-		t.Fatalf("an answer before any sandbox runtime = (%q, %v), want deferred "+
-			"with the reason — it is not this node's to spend", disposition, err)
-	}
-
-	applyOK(t, e, sandboxDoc(""))
-	if e.sandbox.Load() == nil {
-		t.Fatal("the premise: the apply brought up no sandbox runtime")
-	}
-	disposition, err = answer(t.Context(), given, trigger)
-	if err != nil || disposition != sandbox.AnswerNotMine {
-		t.Fatalf("an answer to a run with no record after the apply = (%q, %v), "+
-			"want the coordinator's not_mine — the route still answers for the "+
-			"runtime the dispatcher was built without", disposition, err)
-	}
 }
 
 // A LATER REVISION THAT CHANGES providers.sandbox RECONFIGURES THE RUNTIME IN
@@ -274,10 +234,18 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 			"runs in flight are finished through")
 	}
 	// ...AND LAUNCHES NOTHING NEW on it: the runtime outlives the catalogue
-	// only to finish what that catalogue started.
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); ok {
-		t.Error("a company with no providers.sandbox still registers run_sandbox, " +
-			"launching on a catalogue it no longer configures")
+	// only to finish what that catalogue started, so an executor pinned to
+	// the revision without one is refused rather than given a box.
+	current := e.Company()
+	seat := current.Org.AgentSeatByHandle("swe")
+	executor, _ := executorCompany(t)
+	pinned := &Company{Config: current.Config, Org: current.Org, Models: executor.Models}
+	seat.LLM = executor.Org.Roles[0].LLM
+	l := launcherOn(e, pinned, seat, "t-after")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+		!strings.Contains(err.Error(), "providers.sandbox") {
+		t.Errorf("an executor launched for a company with no providers.sandbox (err %v), "+
+			"on a catalogue it no longer configures", err)
 	}
 }
 
@@ -286,29 +254,52 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 //
 // It was built only where a coordinator already existed, so on every other
 // node a revision whose providers.sandbox could never mint a box was published,
-// and its code-enabled seats planned around one.
+// and every seat's executor launched into a catalogue that had none.
 func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
-	broken := `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`
+	broken := e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY_NEVER_SET}")
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
 	}
 	if e.Company() != nil || e.sandbox.Load() != nil {
 		t.Error("the unbuildable catalogue was installed or started a runtime")
+	}
+	// THE TRAIL NAMES THE COMPANY IT BUILT and nothing past it, so a refusal
+	// after the company is told from one of the company itself.
+	if want := []string{"secrets", "company"}; !slices.Equal(applied, want) {
+		t.Errorf("a refused catalogue reported %v, want %v", applied, want)
+	}
+}
+
+// THE CHECK A WRITE ASKS BEFORE IT LANDS A REVISION IS THE APPLY'S OWN BUILD,
+// over this node's own chain, and it changes nothing.
+//
+// `crewlet run` holds the Tier B file it imports to [Engine.Buildable] before
+// the file is stored or activated, because nothing else builds it until an
+// apply does, after the whole fleet has been pointed at it. A check that built
+// less than an apply — the company, without the sandbox catalogue — passed
+// exactly the file whose every apply is refused; one that resolved from the
+// environment alone refused a key the node keeps in its secret store.
+//
+// Mutations: drop the catalogue from [buildRevision] and the unset key builds;
+// resolve from the environment alone and the stored key does not.
+func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
+	t.Parallel()
+	company := parseCompany(t, e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY}"))
+	// AN EMPTY ENVIRONMENT, so the process's own can answer nothing here.
+	e := &Engine{environ: config.MapSource{}}
+	e.installSecrets(map[string]string{})
+	if err := e.Buildable(company); err == nil {
+		t.Error("a revision whose sandbox catalogue cannot be built was buildable")
+	}
+	e.installSecrets(map[string]string{"CREWLET_TEST_E2B_KEY": "e2b_test_key"})
+	if err := e.Buildable(company); err != nil {
+		t.Errorf("a revision whose key this node's secret store holds was refused: %v", err)
+	}
+	if e.Company() != nil || e.sandbox.Load() != nil {
+		t.Error("checking a revision installed it or started a sandbox runtime")
 	}
 }
 
@@ -324,7 +315,7 @@ func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	e, err := New(t.Context(), Options{
 		Bootstrap:           &b,
 		SandboxPollInterval: coord.MaxDutyTTL/dutyTTLTicks + time.Second,
@@ -392,7 +383,7 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	PinGitLanes(&b)
 	SeedStore(t, &b)
 	RequireNodeGit(t, &b, company)
@@ -410,6 +401,31 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	return e
+}
+
+// e2bExecutorDoc is a one-seat company whose executor's entry runs its runs in
+// the remote cell, keyed by key — the one cell whose backend a catalogue can
+// fail to build for want of a credential.
+func e2bExecutorDoc(t *testing.T, key string) string {
+	t.Helper()
+	return fmt.Sprintf(`
+name: Nimbus
+providers:
+  llm:
+    cc:
+      agent: claude-code
+      model: sonnet
+      run_in: e2b
+      state_dir: %q
+      auth: {mode: api-key, api_key: "sk-ant-not-real"}
+  sandbox:
+    e2b:
+      api_key: %q
+roles:
+  - name: SWE
+    handle: swe
+    llm: cc
+`, t.TempDir(), key)
 }
 
 // sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox
@@ -438,9 +454,12 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running coding job on the swe seat, as the node that
-// launched it would: no command id, so the job never reports itself done and
-// every tick of the poll is a keepalive.
+// seedRunningRun records a running coding job on the swe seat, as e itself
+// launched it — before a restart, say — in the direct cell: no command id, so
+// the job never reports itself done and every tick of the poll is a keepalive.
+//
+// e's OWN, because a box in the direct cell is on the host of the node that
+// launched it and is polled there alone (internal/sandbox, boxhost.go).
 func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
@@ -450,17 +469,17 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
+		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: sandboxID, CodingAgent: "claude-code",
+		SandboxID: sandboxID, CodingAgent: "claude-code", Placement: string(sandbox.Direct),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` + builtin.RunSandboxTool + `"}`)})
+		`{"version":4,"iteration":1}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

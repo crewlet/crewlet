@@ -43,6 +43,7 @@ var publicRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/webhooks/github-app?code=c&state=s"},
 	{http.MethodPost, "/otlp/not-a-token/v1/traces"},
 	{http.MethodPost, mcpbridge.PathPrefix + "not-a-token"},
+	{http.MethodGet, mcpbridge.PathPrefix + "not-a-token/steer/notes"},
 	{http.MethodGet, auth.BoxGitPrefix + "web.git/info/refs?service=git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-receive-pack"},
@@ -150,6 +151,7 @@ var publishedRoutes = []string{
 	"GET /webhooks/github-app",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	mcpbridge.SteerPattern,
 	host.PatternBoxInfoRefs,
 	host.PatternBoxUploadPack,
 	host.PatternBoxReceivePack,
@@ -288,32 +290,6 @@ func TestEachListenerSendsHSTSByItsOwnAddress(t *testing.T) {
 	}
 }
 
-// AND THE BRIDGE-ONLY LISTENER IS THE PUBLIC ONE. A seats node without the
-// ingress role binds it on api.public, so it answers by the public listener's
-// address — never api.port's, which is another socket under another scheme.
-func TestTheBridgeOnlyListenerSendsHSTSByThePublicAddress(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		admin, public string
-		want          string
-	}{
-		{"http://127.0.0.1:8080", "https://hooks.example.com", pagepolicy.HSTS},
-		{"https://crewlet.example.com", "http://10.0.0.5:8443", ""},
-	} {
-		b := closedPosture()
-		b.API.ExternalURL = tc.admin
-		b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
-		h := api.BridgeOnly(&b, bridgeFor(t, mcpbridge.Options{
-			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
-		}))
-		got := sendTo(t, h, http.MethodGet, "/nope").Header().Get("Strict-Transport-Security")
-		if got != tc.want {
-			t.Errorf("published at %s beside an admin side at %s: "+
-				"Strict-Transport-Security = %q, want %q", tc.public, tc.admin, got, tc.want)
-		}
-	}
-}
-
 // THE PUBLIC LISTENER NEVER LOOKS AT AN OPERATOR TOKEN. A guarded route there
 // is absent before any credential is compared, so the socket a deployment
 // publishes cannot tell a valid token from an invalid one: a missing token, a
@@ -405,7 +381,8 @@ func TestBothListenersDrain(t *testing.T) {
 				"want the draining 503", path, rec.Code)
 		}
 	}
-	for _, path := range []string{mcpbridge.PathPrefix + "not-a-token", "/otlp/not-a-token/v1/traces"} {
+	for _, path := range []string{mcpbridge.PathPrefix + "not-a-token",
+		mcpbridge.PathPrefix + "not-a-token/steer/read", "/otlp/not-a-token/v1/traces"} {
 		if rec := sendTo(t, public, http.MethodPost, path); refusedForDraining(t, rec) {
 			t.Errorf("POST %s on the public listener was refused for draining: an "+
 				"in-flight run lost its edge", path)
@@ -416,6 +393,32 @@ func TestBothListenersDrain(t *testing.T) {
 	}
 	if rec := sendTo(t, a, http.MethodPost, "/backup"); !refusedForDraining(t, rec) {
 		t.Errorf("POST /backup on api.port answered %d during a drain", rec.Code)
+	}
+}
+
+// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a coding CLI inside a box
+// polls it with the run's token alone, so it is served on the public listener
+// and never on api.port, asks for no operator token — an unminted token gets
+// the bridge's own 401 — and is served through a drain, which cannot wait for
+// the runs it carries notes to.
+func TestTheBridgeNotesRouteIsServedOnThePublicListenerUnderDrain(t *testing.T) {
+	t.Parallel()
+	for _, draining := range []bool{false, true} {
+		a := listenerApp(t, true, draining)
+		public := a.Public()
+		for _, req := range []struct{ method, path string }{
+			{http.MethodGet, mcpbridge.PathPrefix + "not-a-token/steer/notes"},
+			{http.MethodPost, mcpbridge.PathPrefix + "not-a-token/steer/read"},
+		} {
+			rec := sendTo(t, public, req.method, req.path)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s on the public listener (draining %v) answered %d, want the "+
+					"bridge's own 401", req.method, req.path, draining, rec.Code)
+			}
+			if rec := sendTo(t, a, req.method, req.path); !absent(t, rec) {
+				t.Errorf("%s %s answered %d on api.port, want 404", req.method, req.path, rec.Code)
+			}
+		}
 	}
 }
 
@@ -443,7 +446,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 }
 
 // GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
-// with their own bound token (ADR-0055), and api.public is the socket whose
+// with their own bound token (ADR-0078), and api.public is the socket whose
 // premise is that it serves only outside parties and asks no operator token —
 // so /git/ and /code/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach

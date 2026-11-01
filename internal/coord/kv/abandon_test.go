@@ -122,7 +122,7 @@ func TestAClaimThatFailsPartWayGivesItsRecordBack(t *testing.T) {
 					}
 					return true, tc.lands
 				}
-				s.epochs = &faultyBucket{KeyValue: s.epochs,
+				s.counter.kv = &faultyBucket{KeyValue: s.counter.kv,
 					fail: func(context.Context, []byte) (bool, bool) { return trip(theEpoch) }}
 				s.leases.kv = &faultyBucket{KeyValue: s.leases.kv,
 					fail: func(_ context.Context, value []byte) (bool, bool) {

@@ -204,6 +204,83 @@ func TestShadowedNameIsLoggedOnceByNameOnly(t *testing.T) {
 	}
 }
 
+// A SHADOW IS TOLD ONCE FOR THE CHAIN, HOWEVER MANY CHAINS ARE LAID OVER IT.
+//
+// A seat's resolution is a chain of its own, the seat's issued token laid in
+// front of the company's (Ahead), built for every turn and every pass over the
+// seat's values. A record of told warnings of its own started empty each time,
+// so a name the store and the environment disagree on was warned again on
+// every agent turn: the "forever" the record exists to prevent.
+func TestAShadowIsToldOnceAcrossTheChainsLaidOverIt(t *testing.T) {
+	var buf strings.Builder
+	t.Setenv("NPM_TOKEN", "exported")
+	base := WithStore(MapSource{"NPM_TOKEN": "stored"})
+	base.log = testLogger(&buf)
+	seat := MapSource{"GITHUB_APP_TOKEN_ENG": "ghs_issued"}
+
+	for range 3 {
+		base.Ahead(seat).Value("${NPM_TOKEN}")
+	}
+	base.Value("${NPM_TOKEN}")
+
+	if got := strings.Count(buf.String(), "secret_shadowed_env"); got != 1 {
+		t.Fatalf("three seat chains and the company's read one shadowed name: %d warnings, "+
+			"want one:\n%s", got, buf.String())
+	}
+}
+
+// A SHADOW NAMES THE SOURCE THAT ANSWERED, and the one it hid, with the remedy
+// for the hidden one. A seat's issued token answering in front of a stale
+// stored value under its name was reported as "the stored value wins", which
+// sent the operator after the export when the stored value is the one to
+// remove. The two stories under one name are told once each.
+func TestAShadowNamesTheSourceThatAnswered(t *testing.T) {
+	var buf strings.Builder
+	t.Setenv("GITHUB_APP_TOKEN_ENG", "ghs_exported")
+	base := WithStore(MapSource{"GITHUB_APP_TOKEN_ENG": "ghs_stored"})
+	base.log = testLogger(&buf)
+	seat := base.Ahead(issuedSource{"GITHUB_APP_TOKEN_ENG": "ghs_issued"})
+
+	seat.Value("${GITHUB_APP_TOKEN_ENG}")
+	out := buf.String()
+	for _, want := range []string{
+		`answered_by="the seat's issued token"`,
+		`shadowed="the secret store"`,
+		"crewlet secrets unset GITHUB_APP_TOKEN_ENG",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning for an issued token hiding a stored one lacks %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "the stored value wins") {
+		t.Errorf("an issued token's win was reported as the store's:\n%s", out)
+	}
+
+	buf.Reset()
+	base.Value("${GITHUB_APP_TOKEN_ENG}")
+	out = buf.String()
+	if !strings.Contains(out, `answered_by="the secret store"`) ||
+		!strings.Contains(out, `shadowed="the environment"`) ||
+		!strings.Contains(out, "Remove the stale export or .env entry") {
+		t.Errorf("the store hiding an export under the same name was not told as its own story:\n%s", out)
+	}
+	for _, value := range []string{"ghs_exported", "ghs_stored", "ghs_issued"} {
+		if strings.Contains(out, value) {
+			t.Fatalf("a credential value reached the log:\n%s", out)
+		}
+	}
+}
+
+// issuedSource is a source that names itself, as a seat's issued token does.
+type issuedSource map[string]string
+
+func (s issuedSource) Lookup(name string) (string, bool) {
+	v, ok := s[name]
+	return v, ok
+}
+
+func (issuedSource) SourceName() string { return "the seat's issued token" }
+
 // Agreeing sources are not a shadow: warning on every name the store and a
 // correctly-synced .env both hold would bury the one that matters.
 func TestAgreeingSourcesAreNotShadowed(t *testing.T) {
@@ -286,7 +363,7 @@ logging:
   level: ${LEVEL}
 `)), NewResolver(MapSource{
 		"API_PORT": "9090", "STREAM_DEBUG": "true", "MAX": "0x10",
-		"LEASE": "12.5", "STORE_NAME": "null", "LEVEL": "debug",
+		"LEASE": "22.5", "STORE_NAME": "null", "LEVEL": "debug",
 	}))
 	if err != nil {
 		t.Fatalf("a Tier A file taking every kind of field from the environment was refused: %v", err)
@@ -300,8 +377,8 @@ logging:
 	if cfg.Node.MaxConcurrent != 16 {
 		t.Errorf("node.max_concurrent = %d, want 16 — 0x10 is read as the literal it spells", cfg.Node.MaxConcurrent)
 	}
-	if cfg.Coordination.LeaseTTLSeconds != 12.5 {
-		t.Errorf("coordination.lease_ttl_seconds = %v, want 12.5", cfg.Coordination.LeaseTTLSeconds)
+	if cfg.Coordination.LeaseTTLSeconds != 22.5 {
+		t.Errorf("coordination.lease_ttl_seconds = %v, want 22.5", cfg.Coordination.LeaseTTLSeconds)
 	}
 	if cfg.Store.Path != "null" {
 		t.Errorf("store.path = %q, want the text \"null\": a resolved value is data, "+

@@ -1,0 +1,1489 @@
+package worklet
+
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// ONE GRAMMAR, parsed once.
+//
+// The board, a seat's `list_tasks`, a saved view and the dashboard's URL hash
+// are the same question asked four ways, and they are parsed by this one
+// function into one struct. That is not tidiness: a filter honoured on one
+// path and ignored on another is how a saved view answers a different question
+// from the screen that saved it, and nobody notices until somebody compares
+// two numbers that should have matched.
+//
+// THERE IS NO QUERY LANGUAGE. Every key is a flat parameter, so a model can
+// write one without a parser in its head and a URL can carry one without
+// escaping. What that costs is expressiveness, and the `any` key is where the
+// cost is paid: one level of disjunction, capped, and never nested.
+
+// The limits a query is clamped or refused by.
+const (
+	// MaxAnyBranches caps the disjunction.
+	//
+	// An N-way OR across indexes is the one shape the planner handles
+	// worst — it cannot drive from one index and has to union or scan —
+	// and eight is the widest any view in this model needs.
+	MaxAnyBranches = 8
+
+	// MaxQueryText bounds the FIND ([Query.Text]): the longest title, because
+	// a find is a substring of a key or a title and nothing longer than the
+	// longest title can be one. Refused past it rather than run as a LIKE
+	// certain to match nothing — an empty board is read as "there is no such
+	// item", which is the answer a refusal naming the bound does not give.
+	//
+	// It was 400, justified by a ranker's posting-scan cap; there is no
+	// ranker on this grammar, and the 257th to 400th bytes bought a query that
+	// could never match.
+	MaxQueryText = MaxTitle
+
+	// MaxTotals caps the aggregate list, because every entry is another
+	// pass over the same rows.
+	MaxTotals = 8
+
+	// ActivityQuerySpanDays bounds a text search over the activity feed.
+	//
+	// The gate it enforces is on what the query would SCAN rather than on
+	// which key is present — the shape it replaces asked for "a task, a
+	// container or a since: bound", and `container=workspace` and a
+	// five-year `since:` both satisfied that while narrowing nothing.
+	//
+	// `q=` is an escaped LIKE over `excerpt`, which no index on
+	// `tracker_history` covers: unscoped it reads every commit the company
+	// has ever made — every quiet one included, since every commit writes a
+	// row — and at the measured scan coefficient that busts a five-second
+	// read budget inside the first year and only gets worse, with no
+	// cheaper mode to fall back to and no partial answer to return.
+	//
+	// A project and a ninety-day window make it a range over
+	// `(project_key, log_seq DESC)`. Ninety because it is a quarter, which
+	// is the span somebody actually asks a question like this about. The
+	// alternatives were refused: pushing `q=` through the lexical index is
+	// a second search surface for a facet nobody asked to rank, and
+	// DEFAULTING to a window silently answers a different question than the
+	// one asked. See [Reader.Activity].
+	ActivityQuerySpanDays = 90
+
+	// GroupByRowCeiling is the row count at which a grouped answer's sort
+	// working set crosses the page cache and spills.
+	//
+	// The gate runs a BOUNDED COUNT first and refuses past this, because
+	// the materialisation a window function needs cannot be pushed down:
+	// the whole partitioned, sorted input exists before the per-group limit
+	// applies.
+	GroupByRowCeiling = 20_000
+)
+
+// Scope is what a query is scoped to — the container a board is drawn over.
+type Scope struct {
+	// Workspace is the Everything level, and it is EXPLICIT — never
+	// implied by an absent container, because "everything" and "you did not
+	// say" are answers a caller acts on differently.
+	Workspace bool
+
+	// Project is the project key when the scope is one project.
+	Project string
+}
+
+// TagMode is how a tag list combines.
+type TagMode string
+
+// The three tag modes. `any` matches a task carrying at least one of the
+// named tags, `all` one carrying every one of them, and `none` one carrying
+// no member of the set — which is a filter over the ABSENT rather than a
+// negation of `any`, and is how "untagged work in this project" is asked.
+const (
+	TagAny  TagMode = "any"
+	TagAll  TagMode = "all"
+	TagNone TagMode = "none"
+)
+
+// TagFilter is a tag list and how it combines.
+type TagFilter struct {
+	Mode TagMode
+	Tags []string
+}
+
+// NumOp is a comparison against a numeric column.
+type NumOp string
+
+// The numeric comparisons, spelled as words rather than as symbols because
+// they travel in a query string where `<` and `>` would have to be escaped by
+// every caller that builds one.
+const (
+	NumLT      NumOp = "lt"
+	NumLTE     NumOp = "lte"
+	NumGT      NumOp = "gt"
+	NumGTE     NumOp = "gte"
+	NumRange   NumOp = "range"
+	NumNull    NumOp = "null"
+	NumNotNull NumOp = "not_null"
+)
+
+// NumFilter is one numeric predicate.
+type NumFilter struct {
+	Op       NumOp
+	From, To float64
+}
+
+// FieldFilter is one custom-field predicate, left as the raw op and value
+// because what is legal depends on the field's declared type — which the
+// parser does not have and the compiler does.
+type FieldFilter struct {
+	// Ref is the slug or the id the caller typed, unresolved: resolution
+	// needs the catalogues, and a parser that read them would be a parser
+	// that could fail on a store.
+	Ref   string
+	Op    string
+	Value string
+}
+
+// SubtaskMode is how a subtree is filtered.
+type SubtaskMode string
+
+const (
+	// SubtasksCollapsed hides a subtree behind its root. It and
+	// SubtasksExpanded filter each task's ANCHOR and let what hangs from
+	// it ride along unfiltered — on the live side a tree's root, and in
+	// the trash the removal that took the task ([anchorOf]), so a task
+	// removed on its own is listed on its own; SubtasksSeparate filters
+	// every task on its own.
+	SubtasksCollapsed SubtaskMode = "collapsed"
+
+	// SubtasksExpanded shows a subtree under the root it rides along with,
+	// unfiltered — see [SubtasksCollapsed].
+	SubtasksExpanded SubtaskMode = "expanded"
+
+	// SubtasksSeparate files every task on its own row, each filtered in
+	// its own right.
+	SubtasksSeparate SubtaskMode = "separate"
+)
+
+// ShowClosed is how finished work is included.
+//
+// THREE WAYS TO ASK, and at most one of them per query: every finished task,
+// the ones finished within a DURATION of now (`show_closed=recent:168h`), and
+// the ones finished at or after a CALENDAR BOUNDARY (`closed_since=sow`). The
+// last two look alike and are not: "the last seven days" slides with the clock
+// and "this week" starts on Monday at the company's own midnight, which is the
+// Board's Recent scope — a Done lane that empties itself at 00:00 on Monday in
+// the company's zone, rather than dropping one task an hour for a week.
+type ShowClosed struct {
+	All bool
+
+	// Recent bounds the finished set by age. It applies to the WHOLE
+	// finished set, so a task cancelled inside the window is in the answer
+	// exactly as one done inside it is — which is what the group stamp
+	// buys.
+	Recent time.Duration
+
+	// Since is the same bound as an INSTANT, resolved from a date token on
+	// the company's clock by [ParseQuery] — `closed_since=sow` is the first
+	// instant of this ISO week in the company's zone, never the reader's.
+	// NIL IS UNSET, and it is a pointer because the zero instant is a
+	// value a caller can write — `closed_since=0001-01-01T00:00:00Z` is
+	// every finished task — and must not read as "no bound", which
+	// excludes them all.
+	Since *time.Time
+}
+
+// Finished reports whether any finished work is in the answer — the one
+// question [compilePredicate] and [admittedStatuses] both ask of this, stated
+// once so a fourth way to ask cannot reach one of them and not the other.
+func (s ShowClosed) Finished() bool {
+	return s.All || s.Recent > 0 || s.Since != nil
+}
+
+// ArchivedMode is how archived work is included.
+type ArchivedMode string
+
+// The three archived modes, spelled `false` / `true` / `only` on the wire
+// because the parameter reads as a boolean to anybody who has not needed the
+// third answer yet — and `only` is what makes "what did we retire" a query
+// rather than a scan a caller filters afterwards.
+const (
+	ArchivedExclude ArchivedMode = "false"
+	ArchivedInclude ArchivedMode = "true"
+	ArchivedOnly    ArchivedMode = "only"
+)
+
+// ArchivedModes is every mode, in the order a refusal names them.
+var ArchivedModes = []ArchivedMode{ArchivedExclude, ArchivedInclude, ArchivedOnly}
+
+// ArchivedModeNames is the same list as wire strings, for the surfaces that
+// have to quote it back at a caller who spelled one wrong.
+func ArchivedModeNames() []string {
+	out := make([]string, len(ArchivedModes))
+	for i, m := range ArchivedModes {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// Valid reports whether this is one of the three modes.
+//
+// THE ZERO VALUE IS NOT ONE OF THEM, deliberately. "" is what a caller who has
+// not answered the question carries, and the question has three answers rather
+// than two — so every surface that takes one either resolves the absence to
+// its own default before reading ([Query.parseArchived], over the default
+// [Parse] already set) or refuses it by name ([Reader.Projects], which builds
+// its query from a struct literal and so has no constructor to carry one).
+func (m ArchivedMode) Valid() bool { return slices.Contains(ArchivedModes, m) }
+
+// Sort is one ordering term.
+type Sort struct {
+	Key        string
+	Descending bool
+}
+
+// Query is one parsed question.
+//
+// EVERY FIELD IS RESOLVED OR REFUSED — nothing here is a string somebody
+// downstream has to re-parse — with two deliberate exceptions, both marked at
+// the field: a custom field's op needs the catalogue, and the text query is the
+// searcher's own input.
+type Query struct {
+	Scope Scope
+
+	// View and Preset are loaded FIRST and explicit keys override them, so
+	// a saved view is a set of defaults rather than a lock.
+	View   string
+	Preset string
+
+	Status       []Status
+	StatusNot    []Status
+	StatusGroups []StatusGroup
+
+	Assignee          []string
+	Collaborator      []string
+	Reporter          []string
+	Watcher           []string
+	ChecklistAssignee []string
+
+	Unit        []string
+	RoutingUnit []string
+
+	// Units is the chart the two keys above are resolved through, so a
+	// filter naming a unit by its id or its name finds the work filed
+	// under its key — see [Units] and [unitKeys]. Nil matches
+	// what the caller typed, literally, which is the honest answer for a
+	// surface holding no chart.
+	//
+	// NOT PART OF THE GRAMMAR: it is the SURFACE's own chart rather than
+	// something a caller can write, so [ParseQuery] neither reads nor
+	// refuses a key for it, and a surface sets it beside the read level it
+	// resolves.
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
+
+	Tags TagFilter
+
+	Types      []string
+	Priorities []Priority
+
+	// PriorityListOf is whose stored priority list to narrow to — the
+	// ordered ids on a Person, not the priority ENUM above. Two keys with
+	// nearly one name because that is the surface's own vocabulary:
+	// `Person.Priorities` and `update_priorities` are what a person calls
+	// their list, and renaming it here would leave one word meaning two
+	// things across the API.
+	PriorityListOf string
+
+	// PriorityList is that list, RESOLVED — filled inside the read's own
+	// transaction, because it lives on another object and a parser that
+	// read it would be a parser that could fail on a store.
+	PriorityList []string
+
+	Parent   string
+	Root     string
+	Subtasks SubtaskMode
+
+	// Keys narrows to the task keys a caller already holds — what
+	// somebody pasted into chat, what a report linked. A LIST rather than
+	// one key, because resolving eight pasted keys as eight reads is
+	// eight round trips for one question.
+	Keys []string
+
+	// Removed is the TRASH, and it is three-valued for the reason every
+	// other tombstone filter here is: absent excludes removed work (what
+	// every board means), `true` asks for ONLY it (the restore surface),
+	// and `false` is the same exclusion said out loud.
+	//
+	// Without it there is no way to list what a removal hid, so nothing
+	// could reach [OpRestore] — `tracker_tasks_removed_idx` was declared
+	// for a `work_trash` reader that did not exist. A listing of the trash
+	// is read through the trash's own indexes ([taskSource]), and in the
+	// default subtask mode it lists each REMOVAL with what it took riding
+	// along ([anchorOf]).
+	Removed *bool
+
+	// Dates are keyed by the column they filter, so a compiler walks them
+	// rather than switching on eight named fields.
+	Dates map[string]DateFilter
+
+	Estimate *NumFilter
+	Points   *NumFilter
+	Spend    *NumFilter
+
+	Fields []FieldFilter
+
+	Blocked         *bool
+	Blocking        *bool
+	HasDependencies *bool
+	HasChildren     *bool
+	HasParent       *bool
+	HasOpenAsks     *bool
+	AskedOf         string
+
+	// AskedBy is whose open questions to narrow to — the work a person is
+	// WAITING on. ONE NAME, the asker's record name: a person bound to a
+	// seat writes AS that seat whatever credential they hold (see
+	// iam.ActorFor), so an ask they put through their own token and one
+	// they put from the dashboard carry the same author.
+	AskedBy string
+
+	LinkedPage string
+	References string
+
+	// Any is one level of disjunction, ANDed with the top-level keys.
+	Any []Query
+
+	// Text is a substring of a key or a title — the FIND, not a search.
+	// See [Query.parseText] for why there is no mode beside it.
+	Text string
+
+	ShowClosed ShowClosed
+	Archived   ArchivedMode
+	Flags      []string
+
+	GroupBy    string
+	GroupBy2   string
+	GroupLimit int
+
+	// Group narrows a board to ONE column and Subgroup to one lane of it,
+	// which is how a board loads a column further — a grouped answer mints
+	// no cursor, so there is nothing else to page with.
+	//
+	// POINTERS, because the empty string is a VALUE on every axis in this
+	// grammar: the absent-value column is a column a board DRAWS — "nobody
+	// is assigned", "untagged", "no due date" — and `group=` is the
+	// spelling that loads it. Held as plain strings, the one column a
+	// board could not page was the one holding everything nobody had
+	// filled in, and the request that asked for it answered the WHOLE
+	// board instead, which is the widest possible reading of a narrowing
+	// somebody asked for. [Params.Has] tells "named and empty" from
+	// "absent", which is the same rule `blocked=` is read by and the one
+	// its own doc states.
+	Group    *string
+	Subgroup *string
+
+	Sort []Sort
+
+	Totals []string
+
+	// RowFields are the OPT-IN row facts a caller asked for with
+	// `fields=` — see [RowField]. Empty for every caller that named none,
+	// which keeps [TaskRow] exactly the shape a seat's `list_work_items`
+	// has always read.
+	RowFields []RowField
+
+	// Around is one task — its id, its key or a former key, resolved the
+	// way a task page resolves its own address — whose place in THIS
+	// answer's drawing order the caller wants: `around=ENG-7`, so a task
+	// page opened from a board can say "3 of 18" and step to its
+	// neighbours without holding the board. Empty is not asked. See
+	// [Around].
+	Around string
+
+	// DayStart is midnight today in the COMPANY's zone, resolved once by
+	// [ParseQuery] and carried so that every answer about "today" agrees.
+	//
+	// The row's `overdue` flag is derived from it, and so is the
+	// `due=overdue` filter — the field exists precisely so a renderer
+	// never re-derives the predicate differently, and deriving it from
+	// the reader's own `time.Now()` made the row and the filter two
+	// different questions on two different clocks.
+	DayStart time.Time
+
+	// DayEnd and WeekEnd are the other two boundaries of that same
+	// calendar — the instant today ends, and the instant the
+	// Monday-anchored week it sits in does. They are what the
+	// `due:bucket` grouping cuts Today from This week from Later on.
+	//
+	// RESOLVED HERE, beside DayStart, rather than derived from it in SQL.
+	// A day is not always 24 hours and a week is not always 168: a
+	// daylight-saving transition makes one of each an hour shorter or
+	// longer, so `DayStart + 86 400 s` is a different instant from
+	// tomorrow's midnight twice a year in the company's own zone — and a
+	// band cut there would disagree with the `due=range:today..tomorrow`
+	// filter that means the same thing, which is the whole defect this
+	// axis exists to remove. [period.Resolve] owns that calendar, and these
+	// are its `tomorrow` and its `eow`.
+	DayEnd  time.Time
+	WeekEnd time.Time
+
+	Level statelog.ReadLevel
+
+	// MaxLag is the bound a `stale` read declares it will accept, and zero
+	// accepts anything.
+	//
+	// CARRIED RATHER THAN MERELY VALIDATED. `max_lag_seconds` was checked
+	// against the level and then dropped on the floor, so a dashboard tile
+	// polling every twenty seconds and declaring a twenty-second bound was
+	// served an answer of any age at all — and rendered it as a live tile,
+	// because the answer came back at the level it asked for.
+	MaxLag time.Duration
+
+	// MaxLagSeq is the same bound counted in RECORDS, and it was the other
+	// half of exactly the defect above: `max_lag_seq` was refused at every
+	// level that is not a staleness bound and then IGNORED at the one
+	// level it means something on — the shape the comment beside it says
+	// was fixed, left standing for the second key.
+	//
+	// A record count is what the broker actually answers and a duration is
+	// derived from it through this node's own drain rate, so a caller that
+	// can say "at most this many records behind" is naming the measured
+	// quantity rather than an estimate made from it. Both may be set and
+	// the read refuses past whichever is reached first.
+	MaxLagSeq uint64
+
+	// Session is the caller's own high-water mark on this domain's log,
+	// which is what a `session` read waits through. Zero is a caller that
+	// has written nothing, for whom every level below linearizable is the
+	// same answer.
+	Session statelog.Position
+
+	// Floors are the floors a caller named with `min_position` — the
+	// position a wake carried, or one its own previous write returned —
+	// and the answer is served from no earlier than the one on this log,
+	// at every level. A floor on another log is refused by the read
+	// ([statelog.Query.Floors]), never dropped.
+	Floors []statelog.Position
+
+	Limit  int
+	Cursor string
+}
+
+// Params is the request's own parameters, as this parser reads them.
+//
+// DECLARED HERE, BY THE CONSUMER, and kept to the six methods the grammar
+// actually calls. The concrete bag lives with the API surface that fills it
+// from a query string or a socket frame — and a parser that imported that
+// surface would be the tracker depending on the transport it is read through,
+// which is also an import cycle the moment the surface reads a tracker type.
+type Params interface {
+	// String is one value, empty when absent.
+	String(key string) string
+
+	// List is every value a key that may REPEAT was given ([RepeatedKeys]),
+	// in order: each of a query string's values, each string of a JSON
+	// array, and one value given plainly as a list of one. False is a value
+	// that is neither a string nor a list of strings, which the grammar
+	// refuses by the key's name rather than reading as absent.
+	List(key string) ([]string, bool)
+
+	// Int and Bool take a default, because "absent" and "zero" are
+	// different answers for both: `limit=0` is a caller asking for
+	// nothing, and an absent limit is a caller asking for the default.
+	Int(key string, def int) int
+	Bool(key string, def bool) bool
+
+	// Has distinguishes them, which is what makes `open=false` and no
+	// `open` at all two different questions.
+	Has(key string) bool
+
+	// Keys is every parameter named, so an unknown one is REFUSED rather
+	// than ignored: a filter nobody parsed is a board showing more than
+	// the person asked for, silently.
+	Keys() []string
+}
+
+// QueryKeys is every parameter this grammar reads, sorted.
+//
+// IT EXISTS SO AN UNKNOWN KEY CAN BE REFUSED, which is what [Params.Keys] is
+// for and what a caller is entitled to: a filter nobody parsed is a board
+// showing more than the person asked for, silently, and the person has no way
+// to tell. Ignoring `open=true` renders every closed task beside the open
+// ones and looks exactly like a project where nothing is finished.
+//
+// It is a LIST rather than a check per parser because the refusal has to run
+// before any of them: a key misspelled into a neighbour's territory must be
+// named as unknown rather than swallowed by whichever helper reached it first.
+// The one shape not in it is a custom field, `f.<ref>`, whose refs are a
+// company's own and cannot be enumerated here — see [Query.parseFields].
+var QueryKeys = []string{
+	"any", "archived", "archived_at", "around", "asked_by", "asked_of", "assignee",
+	"blocked", "blocking", "checklist_assignee", "closed",
+	"closed_since", "collaborator",
+	"container", "created", "cursor", "done", "due", "estimate",
+	"fields", "finished", "flag", "group", "group_by", "group_by2",
+	"group_limit", "has_children", "has_dependencies", "has_open_asks",
+	"has_parent", "key", "limit", "linked_page",
+	"max_lag_seconds", "max_lag_seq", "min_position", "parent", "points", "preset",
+	"priorities", "priority", "q", "read_level", "references", "removed",
+	"reporter",
+	"root", "routing_unit", "show_closed", "sort", "spend_tokens",
+	"start", "status", "status_entered", "status_group", "subgroup",
+	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
+	"watcher",
+}
+
+// RepeatedKeys are the parameters a request may carry MORE THAN ONCE, read as
+// every value given ([Params.List]): `min_position`, one floor per log an
+// answer is read from ([statelog.ParseFreshness]).
+//
+// A LIST, and only these, because every other key is one value: a transport
+// that carries a key twice hands a scalar reader the first, and a key that
+// meant something repeated would read as its first value there, silently. So
+// a transport keeps every value of exactly these.
+var RepeatedKeys = []string{"min_position"}
+
+// FieldKeyPrefix is what makes a parameter a custom-field filter.
+const FieldKeyPrefix = "f."
+
+// checkKeys refuses a parameter nothing in this grammar reads.
+func checkKeys(p Params) error {
+	for _, key := range p.Keys() {
+		if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
+			continue
+		}
+		if slices.Contains(QueryKeys, key) {
+			continue
+		}
+		// THE REFUSAL NAMES THE KEY AND NOTHING ELSE. Listing sixty-odd
+		// parameters at a caller who typed one wrong is a wall nobody
+		// reads; the schema and the docs are where the set is written
+		// down, and `f.` is named because it is the one shape a reader
+		// cannot find in either.
+		return fmt.Errorf("worklet: %q is not a query parameter; a filter "+
+			"nothing parses would silently widen this answer, so it is "+
+			"refused rather than ignored; a custom field is %s<ref>",
+			key, FieldKeyPrefix)
+	}
+	return nil
+}
+
+// ParseQuery reads one flat parameter map into one query.
+//
+// `now` and `loc` are ARGUMENTS rather than reads, because every relative date
+// resolves against the company's own clock and a parser that read a package
+// clock could not be tested at a boundary — and half the tokens in this
+// grammar are boundaries.
+func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
+	// FIRST, so a misspelling is named as unknown rather than reported by
+	// whichever parser its neighbour belongs to.
+	if err := checkKeys(p); err != nil {
+		return Query{}, err
+	}
+	// THE DAY BOUNDARY THIS QUERY IS ABOUT, resolved once and carried.
+	//
+	// It is what `due=overdue` and `preset=overdue` compile against, and
+	// the row's own `overdue` flag is derived from the SAME value rather
+	// than from a clock the reader happens to have — which is what the
+	// field's own doc promises. Derived in the browser, or from
+	// time.Now() in the reader, the two disagreed by up to a day: a task
+	// due at 09:00 today was `overdue: true` on every row from 09:01 and
+	// absent from `?due=overdue` all day.
+	dayStart, err := period.Resolve("today", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	// AND THE TWO BOUNDARIES THAT DAY AND ITS WEEK END ON, from the same
+	// calendar in the same call — see [Query.DayEnd].
+	dayEnd, err := period.Resolve("tomorrow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	weekEnd, err := period.Resolve("eow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	q := Query{
+		Subtasks:   SubtasksCollapsed,
+		Archived:   ArchivedExclude,
+		DayStart:   dayStart.At,
+		DayEnd:     dayEnd.At,
+		WeekEnd:    weekEnd.At,
+		Dates:      map[string]DateFilter{},
+		View:       p.String("view"),
+		Preset:     p.String("preset"),
+		Cursor:     p.String("cursor"),
+		LinkedPage: p.String("linked_page"),
+		// UPPERCASED FOR THE SAME REASON `key` IS, and it is the same
+		// value: `references=` names a task KEY, compared exactly
+		// against `tracker_task_keys.key`, which is minted upper-case.
+		// Read raw, `references=eng-7` answered an empty list with no
+		// error while `key=eng-7` beside it resolved — one spelling
+		// answering two ways depending on which parameter it was
+		// pasted into.
+		References: ProjectKey(p.String("references")),
+		AskedOf:    p.String("asked_of"),
+		// THE LIST, not the enum. See [Query.PriorityListOf].
+		PriorityListOf: strings.TrimSpace(p.String("priorities")),
+		AskedBy:        strings.TrimSpace(p.String("asked_by")),
+		Parent:         p.String("parent"),
+		Root:           p.String("root"),
+	}
+
+	if err := q.parseScope(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseStatus(p); err != nil {
+		return Query{}, err
+	}
+	q.Assignee = csv(p.String("assignee"))
+	q.Collaborator = csv(p.String("collaborator"))
+	q.Reporter = csv(p.String("reporter"))
+	q.Watcher = csv(p.String("watcher"))
+	q.ChecklistAssignee = csv(p.String("checklist_assignee"))
+	q.Unit = csv(p.String("unit"))
+	q.RoutingUnit = csv(p.String("routing_unit"))
+	q.Types = csv(p.String("type"))
+	q.Flags = csv(p.String("flag"))
+	// KEYS ARE UPPERCASED, because a key is what somebody pasted and
+	// `eng-7` is the same task as `ENG-7`. The project half is minted
+	// upper-case, so lowering the column instead would defeat
+	// `tracker_tasks_key_idx`.
+	for _, key := range csv(p.String("key")) {
+		q.Keys = append(q.Keys, ProjectKey(key))
+	}
+	if p.Has("removed") {
+		removed := p.Bool("removed", true)
+		q.Removed = &removed
+	}
+
+	if err := q.parseTags(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parsePriorities(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseSubtasks(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseDates(p, now, loc); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseNumbers(p); err != nil {
+		return Query{}, err
+	}
+	q.parseFields(p)
+	q.parseBools(p)
+	if err := q.parseText(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseShowClosed(p, now, loc); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseArchived(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseGrouping(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseSort(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseTotals(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseRowFields(p); err != nil {
+		return Query{}, err
+	}
+	q.Around = strings.TrimSpace(p.String("around"))
+	if err := q.parseLevel(p); err != nil {
+		return Query{}, err
+	}
+	if err := q.parseAny(p, now, loc); err != nil {
+		return Query{}, err
+	}
+	q.Limit = p.Int("limit", 0)
+	return q, nil
+}
+
+// parseScope reads the container.
+//
+// AN ABSENT CONTAINER IS NEITHER — not the workspace and not a project — and
+// the caller resolves it from its own surface: a seat's tools scope to the
+// seat's own projects, and a human's to everything. Defaulting to the
+// workspace here would make an omitted key the most expensive query in the
+// system.
+func (q *Query) parseScope(p Params) error {
+	value := strings.TrimSpace(p.String("container"))
+	switch {
+	case value == "":
+		return nil
+	case value == "workspace":
+		q.Scope.Workspace = true
+		return nil
+	}
+	key := value
+	if rest, ok := strings.CutPrefix(value, "project:"); ok {
+		key = rest
+	} else if kind, _, named := strings.Cut(value, ":"); named {
+		// ANOTHER CONTAINER KIND IS REFUSED BY NAME. It was read as a
+		// project key — `container=unit:eng` became the project
+		// `UNIT:ENG`, which no project key can be (they are letters and
+		// digits) — so a board asked for a team's work answered an empty
+		// list rather than a refusal. A view strip belongs to a unit or a
+		// person; a TASK does not, and the grammar's own keys are how
+		// their work is selected.
+		return fmt.Errorf("worklet: container %q is not a task container; "+
+			"a task lives in the workspace or a project (container=workspace, "+
+			"container=project:<KEY>); a team's work is unit=<name> and a "+
+			"person's is assignee=<handle>, not container=%s:…", value, kind)
+	}
+	if key == "" {
+		return fmt.Errorf("worklet: container %q names no project", value)
+	}
+	// UPPER-CASED, because a project key is stored upper and the scope is
+	// an EXACT compare against `project_key`. A board asked for
+	// `project:eng` would otherwise answer an empty list rather than a
+	// refusal — the one failure shape a person acts on, by filing the
+	// duplicate or concluding the migration lost their work.
+	q.Scope.Project = ProjectKey(key)
+	return nil
+}
+
+// parseStatus reads the status and status_group keys, with `!` negation.
+func (q *Query) parseStatus(p Params) error {
+	for _, value := range csv(p.String("status")) {
+		negated := strings.HasPrefix(value, "!")
+		slug := Status(strings.TrimPrefix(value, "!"))
+		if !slug.Valid() {
+			return fmt.Errorf("worklet: %q is not one of this company's six "+
+				"statuses — there is no per-container set and no cancelled= key, "+
+				"because cancelled IS a status", value)
+		}
+		if negated {
+			q.StatusNot = append(q.StatusNot, slug)
+			continue
+		}
+		q.Status = append(q.Status, slug)
+	}
+	for _, value := range csv(p.String("status_group")) {
+		group := StatusGroup(value)
+		if !group.Valid() {
+			return fmt.Errorf("worklet: %q is not one of the four status groups",
+				value)
+		}
+		q.StatusGroups = append(q.StatusGroups, group)
+	}
+	return nil
+}
+
+// parseTags reads the tag filter and its mode.
+func (q *Query) parseTags(p Params) error {
+	value := strings.TrimSpace(p.String("tag"))
+	if value == "" {
+		return nil
+	}
+	mode := TagAny
+	if head, rest, found := strings.Cut(value, ":"); found {
+		switch TagMode(head) {
+		case TagAny, TagAll, TagNone:
+			mode, value = TagMode(head), rest
+		default:
+			return fmt.Errorf("worklet: %q is not a tag mode; the three "+
+				"are `any:`, `all:` and `none:`", head)
+		}
+	}
+	// EVERY TAG IS NORMALISED AS A WRITE NORMALISES IT ([tagSlugs], the
+	// write's own rule), because the rows hold slugs and a filter compares
+	// them exactly: left as typed, `tag=Regression` — what a model writes
+	// for the label it read — matched nothing, and an empty board reads as
+	// "no work carries this tag" rather than as a spelling the filter never
+	// resolved. A value that normalises to no slug is refused naming it, for
+	// the same reason and with the write's own refusal, and a tag named
+	// twice is named once.
+	tags, err := tagSlugs(csv(value))
+	if err != nil {
+		return err
+	}
+	q.Tags = TagFilter{Mode: mode, Tags: tags}
+	return nil
+}
+
+func (q *Query) parsePriorities(p Params) error {
+	for _, value := range csv(p.String("priority")) {
+		priority := Priority(value)
+		if !priority.Valid() {
+			return fmt.Errorf("worklet: %q is not one of the five priorities", value)
+		}
+		q.Priorities = append(q.Priorities, priority)
+	}
+	return nil
+}
+
+func (q *Query) parseSubtasks(p Params) error {
+	switch value := SubtaskMode(p.String("subtasks")); value {
+	case "":
+	case SubtasksCollapsed, SubtasksExpanded, SubtasksSeparate:
+		q.Subtasks = value
+	default:
+		return fmt.Errorf("worklet: %q is not a subtask mode; the three are "+
+			"collapsed, expanded and separate", value)
+	}
+	return nil
+}
+
+// dateKeys are the nine columns a date filter may name.
+//
+// `status_entered` reads the EFFECTIVE instant because it is the start of a
+// duration; the other eight read the AUTHORED one, because each is a
+// wall-clock bound the caller typed and a clamp would answer a different
+// question from the one on the screen.
+//
+// `archived_at` is the newest of them and it is what gave that column a
+// reader: the instant was stamped, stored and read by nothing at all, so the
+// one question the archive raises — what left the board, and when — had no way
+// to be asked. It is spelled in full because `archived` is already the
+// three-valued MODE that decides whether archived rows are in the answer at
+// all, and one key cannot be both.
+var dateKeys = []string{
+	"due", "start", "created", "updated", "done", "closed", "finished",
+	"archived_at", "status_entered",
+}
+
+func (q *Query) parseDates(p Params, now time.Time, loc *time.Location) error {
+	for _, key := range dateKeys {
+		value := strings.TrimSpace(p.String(key))
+		if value == "" {
+			continue
+		}
+		filter, err := ParseDateFilter(value, now, loc)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		q.Dates[key] = filter
+	}
+	return nil
+}
+
+func (q *Query) parseNumbers(p Params) error {
+	for key, target := range map[string]**NumFilter{
+		"estimate": &q.Estimate,
+		"points":   &q.Points,
+		// NAMED AFTER THE COLUMN, as the sort beside it is — see
+		// [sortKeys] for why `spend` alone stopped naming one number.
+		"spend_tokens": &q.Spend,
+	} {
+		value := strings.TrimSpace(p.String(key))
+		if value == "" {
+			continue
+		}
+		filter, err := parseNumFilter(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		*target = &filter
+	}
+	return nil
+}
+
+func parseNumFilter(value string) (NumFilter, error) {
+	switch NumOp(value) {
+	case NumNull, NumNotNull:
+		return NumFilter{Op: NumOp(value)}, nil
+	}
+	op, rest, found := strings.Cut(value, ":")
+	if !found {
+		return NumFilter{}, fmt.Errorf("worklet: %q names no comparison; a "+
+			"numeric filter is lt:, lte:, gt:, gte:, range:a..b, null or "+
+			"not_null", value)
+	}
+	switch NumOp(op) {
+	case NumLT, NumLTE, NumGT, NumGTE:
+		n, err := strconv.ParseFloat(rest, 64)
+		if err != nil {
+			return NumFilter{}, fmt.Errorf("worklet: %q is not a number", rest)
+		}
+		return NumFilter{Op: NumOp(op), From: n}, nil
+	case NumRange:
+		from, to, ok := strings.Cut(rest, "..")
+		if !ok {
+			return NumFilter{}, fmt.Errorf("worklet: a range is a..b and %q "+
+				"carries no separator", rest)
+		}
+		lo, err := strconv.ParseFloat(from, 64)
+		if err != nil {
+			return NumFilter{}, fmt.Errorf("worklet: %q is not a number", from)
+		}
+		hi, err := strconv.ParseFloat(to, 64)
+		if err != nil {
+			return NumFilter{}, fmt.Errorf("worklet: %q is not a number", to)
+		}
+		if hi < lo {
+			return NumFilter{}, fmt.Errorf("worklet: the range %q ends below "+
+				"where it starts, so it matches nothing", rest)
+		}
+		return NumFilter{Op: NumRange, From: lo, To: hi}, nil
+	}
+	return NumFilter{}, fmt.Errorf("worklet: %q is not a numeric comparison", op)
+}
+
+// parseFields collects the custom-field predicates.
+//
+// LEFT UNRESOLVED, deliberately: which ops a field admits depends on its
+// declared type, and the declaration lives in a catalogue this parser does not
+// read. A parser that read one could fail on a store, and a query that cannot
+// be parsed without I/O cannot be parsed inside a transaction.
+func (q *Query) parseFields(p Params) {
+	for _, key := range p.Keys() {
+		ref, ok := strings.CutPrefix(key, FieldKeyPrefix)
+		if !ok || ref == "" {
+			continue
+		}
+		value := strings.TrimSpace(p.String(key))
+		// `null` AND `not_null` ARE THE WHOLE VALUE, exactly as they are
+		// in a numeric filter beside this one: they take no operand, so
+		// a caller writes `f.effort=not_null` rather than a colon and
+		// nothing. Read as an `eq` against the text "not_null" they
+		// would be compared as a VALUE — against a number column, which
+		// refuses it, and against a text one, which silently matches the
+		// tasks whose field literally says "not_null".
+		switch value {
+		case FieldOpNull, FieldOpNotNull, FieldOpMe:
+			// AND `me` IS THE WHOLE VALUE TOO, for the same reason:
+			// it names no operand. Its operand is the VIEWER, which
+			// [Reader.Expand] substitutes before this parser ever sees
+			// it — exactly where `preset=my_queue` resolves the same
+			// word — so one reaching here is a surface that read
+			// without expanding, and [checkFieldOp] says so.
+			q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: value})
+			continue
+		}
+		// A COLON IS AN OPERATOR SEPARATOR, EXCEPT IN A URL.
+		//
+		// `strings.Cut` alone read the scheme of every URL as an
+		// operator — `f.homepage=https://x` became op `https` — so a
+		// `url` field could not be filtered by value at all. The `//`
+		// is what tells the two apart, and it is the whole exception:
+		// an unknown prefix anywhere else is still carried through as an
+		// operator, so a TYPO is refused naming the set rather than
+		// silently answered as a value nobody holds.
+		//
+		// AND A BARE VALUE IS LEFT WITH NO OPERATOR rather than
+		// defaulting to `eq` here, because what "no operator" means is a
+		// property of the field's TYPE — on a set it is `any` — and this
+		// parser has not read the catalogue and cannot know which it is.
+		op, rest := "", value
+		if head, tail, found := strings.Cut(value, ":"); found &&
+			!strings.HasPrefix(tail, "//") {
+			op, rest = head, tail
+		}
+		q.Fields = append(q.Fields, FieldFilter{Ref: ref, Op: op, Value: rest})
+	}
+	// THE ORDER IS STABLE BECAUSE Keys IS SORTED, and it is sorted there
+	// rather than here: every reader that enumerates parameters needs the
+	// same guarantee, and a second sort in this function would be a second
+	// place the property could be true.
+}
+
+func (q *Query) parseBools(p Params) {
+	for key, target := range map[string]**bool{
+		"blocked":          &q.Blocked,
+		"blocking":         &q.Blocking,
+		"has_dependencies": &q.HasDependencies,
+		"has_children":     &q.HasChildren,
+		"has_parent":       &q.HasParent,
+		"has_open_asks":    &q.HasOpenAsks,
+	} {
+		if !p.Has(key) {
+			continue
+		}
+		value := p.Bool(key, true)
+		*target = &value
+	}
+}
+
+// parseText reads the FIND, which is not a search.
+//
+// `q` here is a substring of a key or a title — "the item I half remember" —
+// and that is the whole of it. RANKED SEARCH over what the company's work SAYS
+// is [Searcher]'s — `search_work_items`, and `work_search` on the API — over
+// the inverted list and the vectors the search index keeps for both corpora.
+// This grammar reads none of them: it is a filter composed into the board
+// query, and a ranking cannot be one (see search.go).
+//
+// So there is no `mode`. Three modes over one behaviour is a knob whose values
+// cannot differ, which is worse than no knob: a caller that asked for
+// `semantic` and got a substring match has been answered by a name rather than
+// by a search.
+func (q *Query) parseText(p Params) error {
+	q.Text = strings.TrimSpace(p.String("q"))
+	if len(q.Text) > MaxQueryText {
+		return fmt.Errorf("worklet: the find text is %d bytes and the bound is "+
+			"%d — this is a substring of a key or a title, and no title is "+
+			"longer, so a longer one matches nothing; to find work by what it "+
+			"is about, search it ("+SearchWorkItemsTool+", or work_search)",
+			len(q.Text), MaxQueryText)
+	}
+	return nil
+}
+
+func (q *Query) parseShowClosed(p Params, now time.Time, loc *time.Location) error {
+	value := strings.TrimSpace(p.String("show_closed"))
+	since := strings.TrimSpace(p.String("closed_since"))
+	if since != "" {
+		// ONE ANSWER TO ONE QUESTION. `closed_since` is a bound on the
+		// finished set and `show_closed` is the other spelling of the
+		// same decision, so a query naming both says two things about
+		// which finished work is in the answer — refused naming the pair
+		// rather than resolved by whichever this function read last.
+		if value != "" {
+			return fmt.Errorf("worklet: closed_since and show_closed both say "+
+				"which finished work is in the answer — closed_since=%s is "+
+				"open work plus what finished since then, so drop "+
+				"show_closed=%s", since, value)
+		}
+		// A DATE TOKEN ON THE COMPANY'S CLOCK, through the same calendar
+		// every `due=` bound resolves on, so `closed_since=sow` begins
+		// the week the `due:bucket` bands and `due=range:sow..eow` mean.
+		at, err := period.Resolve(since, now, loc)
+		if err != nil {
+			return fmt.Errorf("closed_since: %w", err)
+		}
+		q.ShowClosed.Since = &at.At
+		return nil
+	}
+	switch value {
+	case "", "false":
+		return nil
+	case "true":
+		q.ShowClosed.All = true
+		return nil
+	}
+	rest, ok := strings.CutPrefix(value, "recent:")
+	if !ok {
+		return fmt.Errorf("worklet: show_closed is false, true or recent:<dur>, "+
+			"and %q is none of them", value)
+	}
+	d, err := time.ParseDuration(rest)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("worklet: %q is not a positive duration", rest)
+	}
+	q.ShowClosed.Recent = d
+	return nil
+}
+
+func (q *Query) parseArchived(p Params) error {
+	value := ArchivedMode(p.String("archived"))
+	// ABSENT IS NOT A FOURTH STATE: it leaves the default [Parse] set.
+	if value == "" {
+		return nil
+	}
+	if !value.Valid() {
+		return fmt.Errorf("worklet: archived is %s, and %q is none of them",
+			strings.Join(ArchivedModeNames(), ", "), value)
+	}
+	q.Archived = value
+	return nil
+}
+
+// groupKeys are the groupings a caller may ask for.
+var groupKeys = []string{
+	"status", "status_group", "assignee", "priority", "tag", "type",
+	"project", "unit", "routing_unit", "parent",
+	"due:day", "due:week", groupByDueBucket, "start:week",
+}
+
+// GroupKeys is every grouping the grammar takes, for the one caller that
+// carries its own copy of the list — the dashboard's Display menu — to be held
+// against; see client_gate_test.go.
+func GroupKeys() []string { return slices.Clone(groupKeys) }
+
+func (q *Query) parseGrouping(p Params) error {
+	q.GroupLimit = p.Int("group_limit", 0)
+	// NAMED, NOT NON-EMPTY — see [Query.Group]. `group=` is a request for
+	// the column holding the rows with no value, and it is the only way to
+	// ask for one.
+	for key, target := range map[string]**string{
+		"group":    &q.Group,
+		"subgroup": &q.Subgroup,
+	} {
+		if !p.Has(key) {
+			continue
+		}
+		value := strings.TrimSpace(p.String(key))
+		*target = &value
+	}
+	for key, target := range map[string]*string{
+		"group_by":  &q.GroupBy,
+		"group_by2": &q.GroupBy2,
+	} {
+		value := strings.TrimSpace(p.String(key))
+		if value == "" {
+			continue
+		}
+		if !slices.Contains(groupKeys, value) && !strings.HasPrefix(value, "f.") {
+			return fmt.Errorf("worklet: %q is not a grouping", value)
+		}
+		*target = value
+	}
+	if q.GroupBy2 != "" && q.GroupBy2 == q.GroupBy {
+		return fmt.Errorf("worklet: the secondary grouping is %q, the same as "+
+			"the first — every row would be alone in its own subgroup", q.GroupBy)
+	}
+	if q.GroupBy2 != "" && q.GroupBy == "" {
+		return fmt.Errorf("worklet: group_by2 was passed without group_by; the " +
+			"secondary grouping is a split of the first")
+	}
+	// `project` groups only at the workspace level, because inside one
+	// project every row is in the same group.
+	if q.GroupBy == "project" && q.Scope.Project != "" {
+		return fmt.Errorf("worklet: group_by=project inside project %s puts "+
+			"every row in one group", q.Scope.Project)
+	}
+	// A COLUMN FILTER WITH NO AXIS IS REFUSED NAMING IT. `group=todo` is
+	// "one column of a board grouped by status" and means nothing without
+	// the board — ignoring it would answer the WHOLE set, which is the
+	// widest possible reading of a narrowing the caller asked for.
+	if q.Group != nil && q.GroupBy == "" {
+		return fmt.Errorf("worklet: group=%s was passed without group_by; a "+
+			"column with no axis is a narrowing that would silently answer "+
+			"everything", *q.Group)
+	}
+	if q.Subgroup != nil && q.GroupBy2 == "" {
+		return fmt.Errorf("worklet: subgroup=%s was passed without group_by2, "+
+			"so there is no second axis for it to name", *q.Subgroup)
+	}
+	if q.GroupLimit != 0 && q.GroupBy == "" {
+		return fmt.Errorf("worklet: group_limit bounds the rows one COLUMN " +
+			"carries and no group_by was passed — `limit` is what bounds a " +
+			"flat answer")
+	}
+	if q.GroupLimit < 0 {
+		return fmt.Errorf("worklet: group_limit is %d; a column carries a "+
+			"number of rows, and a negative one is not a bound", q.GroupLimit)
+	}
+	return nil
+}
+
+// sortKeys are the orderings a caller may ask for.
+//
+// `spend_tokens` IS THE COLUMN'S OWN NAME, as a total's is (`totals=
+// spend_tokens:sum`). It was `spend`, which stopped naming one number the day
+// a row could carry `fields=spend` — an object of five — and a sort on "spend"
+// would have had to pick which of them it meant without saying so.
+var sortKeys = []string{
+	"rank", "updated", "due", "start", "priority", "created", "title",
+	"estimate", "points", "spend_tokens", "reopens", "status_entered", "removed",
+}
+
+func (q *Query) parseSort(p Params) error {
+	for _, value := range csv(p.String("sort")) {
+		descending := strings.HasPrefix(value, "-")
+		key := strings.TrimPrefix(value, "-")
+		// A BARE `f.` IS NOT A FIELD. It resolves to nothing, so the term
+		// would be dropped when the order was compiled and the answer
+		// would come back in the DEFAULT order with nothing saying the
+		// caller's own ordering had been ignored.
+		if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref == "" {
+			return fmt.Errorf("worklet: %q names no field to sort on; a "+
+				"custom-field sort is %s<slug>", value, FieldKeyPrefix)
+		}
+		if !slices.Contains(sortKeys, key) && !strings.HasPrefix(key, FieldKeyPrefix) {
+			return fmt.Errorf("worklet: %q is not a sort key", value)
+		}
+		q.Sort = append(q.Sort, Sort{Key: key, Descending: descending})
+	}
+	return nil
+}
+
+func (q *Query) parseTotals(p Params) error {
+	q.Totals = csv(p.String("totals"))
+	if len(q.Totals) > MaxTotals {
+		return fmt.Errorf("worklet: %d totals were asked for and the cap is %d; "+
+			"each one is another pass over the same rows", len(q.Totals), MaxTotals)
+	}
+	for _, entry := range q.Totals {
+		if _, _, found := strings.Cut(entry, ":"); !found {
+			return fmt.Errorf("worklet: a total is <column>:<op> and %q carries "+
+				"no operation", entry)
+		}
+	}
+	// THE COLUMN AND THE OP ARE CHECKED AT COMPILE, not here, for the
+	// reason a custom-field filter is: `f.<slug>:sum` needs the catalogue
+	// to know whether the field is summable at all, and a parser that read
+	// one could fail on a store.
+	return nil
+}
+
+// RowField is one opt-in fact a row carries when a caller asks for it with
+// `fields=`.
+//
+// # Why these are opt-in rather than on every row
+//
+// [TaskRow] is what a SEAT reads through `list_work_items`, and every byte on
+// it is a byte in a model's context on every listing — so a fact only a board
+// card draws (its labels, "blocks 3", an open question, what it has cost) is
+// asked for by the surface that draws it and by nobody else. Each is a batched
+// read over the page's ids inside the answer's own transaction, never a column
+// of the row statement: a join per fact would multiply the one statement every
+// listing shares, and a read outside the transaction would decorate the rows
+// with a different snapshot from the one they were read at.
+type RowField string
+
+// The four row facts.
+const (
+	// RowFieldTags is the task's labels, sorted, and an empty list when it
+	// has none — present because it was asked for.
+	RowFieldTags RowField = "tags"
+
+	// RowFieldDependentsCount is how many live tasks wait on this one: the
+	// AUTHORED edges (`waiting_on` on the dependent, the ones `blocking=`
+	// filters on), never the mirrored list, which lags them for as long
+	// as a one-sided edge is unrepaired.
+	RowFieldDependentsCount RowField = "dependents_count"
+
+	// RowFieldOpenAsks is how many questions on the task are still waiting
+	// for an answer — the predicate `has_open_asks=` filters on, so the
+	// count and the filter cannot disagree about one task.
+	RowFieldOpenAsks RowField = "open_asks"
+
+	// RowFieldSpend is what the task has cost — see [RowSpend].
+	RowFieldSpend RowField = "spend"
+)
+
+// RowFieldNames are the four, in the order a refusal lists them.
+var RowFieldNames = []RowField{
+	RowFieldTags, RowFieldDependentsCount, RowFieldOpenAsks, RowFieldSpend,
+}
+
+// Valid reports whether this is one of the four.
+func (f RowField) Valid() bool { return slices.Contains(RowFieldNames, f) }
+
+// parseRowFields reads `fields=`, refusing a name it does not know rather
+// than ignoring it: a card that asked for `spend` spelled wrong would draw
+// every task as having cost nothing.
+func (q *Query) parseRowFields(p Params) error {
+	for _, name := range csv(p.String("fields")) {
+		field := RowField(name)
+		if !field.Valid() {
+			names := make([]string, len(RowFieldNames))
+			for i, f := range RowFieldNames {
+				names[i] = string(f)
+			}
+			return fmt.Errorf("worklet: %q is not a row field; the four are %s",
+				name, strings.Join(names, ", "))
+		}
+		if !slices.Contains(q.RowFields, field) {
+			q.RowFields = append(q.RowFields, field)
+		}
+	}
+	return nil
+}
+
+// Wants reports whether the caller asked for one row fact.
+func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, field) }
+
+// parseLevel reads the four freshness keys onto the query, through the
+// framework's one grammar for them ([statelog.ParseFreshness]).
+//
+// THE GRAMMAR IS NOT THE TRACKER'S. Every domain's questions read the same four
+// keys, and the parser lived here once — so a bad `read_level` on a chat or a
+// wiki question was refused naming the tracker. What stays here is the
+// tracker's own prefix on a tracker query's refusal, which every other refusal
+// of this grammar carries too.
+func (q *Query) parseLevel(p Params) error {
+	got, err := statelog.ParseFreshness(p)
+	if err != nil {
+		return fmt.Errorf("worklet: %w", err)
+	}
+	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
+	q.Floors = got.Floors
+	return nil
+}
+
+// parseAny reads the one level of disjunction.
+//
+// ONE LEVEL, NEVER NESTED, and the branches carry the same grammar minus the
+// keys that are about the ANSWER rather than about the rows — a branch with its
+// own limit, cursor, sort or grouping would be a second query pretending to be
+// a predicate.
+func (q *Query) parseAny(p Params, now time.Time, loc *time.Location) error {
+	raw := strings.TrimSpace(p.String("any"))
+	if raw == "" {
+		return nil
+	}
+	var branches []map[string]any
+	if err := json.Unmarshal([]byte(raw), &branches); err != nil {
+		return fmt.Errorf("worklet: any is a JSON list of parameter objects: %w", err)
+	}
+	if len(branches) > MaxAnyBranches {
+		return fmt.Errorf("worklet: any carries %d branches and the cap is %d; "+
+			"an N-way OR across indexes is the one shape the planner handles "+
+			"worst", len(branches), MaxAnyBranches)
+	}
+	for i, branch := range branches {
+		// THE ANSWER-SHAPE KEYS TOO, not only the paging ones. `removed`,
+		// `archived`, `show_closed` and `subtasks` decide which tasks the
+		// ANSWER is about — they are the same decision at every branch or
+		// they are incoherent — and a branch carrying one ANDs it inside
+		// the OR, so it narrows what the caller asked for at the top
+		// level rather than widening it. The freshness keys are the
+		// caller's own for the reason [expansionRefused] gives.
+		for _, forbidden := range []string{
+			"any", "limit", "cursor", "group_by", "group_by2", "group",
+			"subgroup", "group_limit", "sort", "view", "preset", "totals",
+			"removed", "archived", "show_closed", "closed_since", "subtasks",
+			"fields", "around",
+			"read_level", "max_lag_seconds", "max_lag_seq", "min_position",
+		} {
+			if _, present := branch[forbidden]; present {
+				return fmt.Errorf("worklet: any branch %d carries %q, which is "+
+					"about the ANSWER rather than about the rows — a branch is a "+
+					"predicate, not a second query", i, forbidden)
+			}
+		}
+		parsed, err := ParseQuery(MapParams(branch), now, loc)
+		if err != nil {
+			return fmt.Errorf("any branch %d: %w", i, err)
+		}
+		q.Any = append(q.Any, parsed)
+	}
+	return nil
+}
+
+// csv splits a comma-separated value, dropping empties.
+func csv(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// MapParams reads a query written as a plain object.
+//
+// TWO CALLERS AND ONE OF THEM IS INSIDE THIS FILE. A disjunction branch is a
+// query written inside a query — the transport's own bag holds the outer one,
+// and the inner one has never been through a query string — and a seat's tool
+// builds one from the arguments a model passed. Both parse through exactly the
+// same grammar as a query typed into a URL, which is the whole point: a filter
+// honoured on one surface and ignored on another is the failure one grammar
+// exists to prevent.
+type MapParams map[string]any
+
+// String is one value. It renders a number or a bool the way the transport's
+// own bag does, because a branch written as `{"limit": 5}` in JSON and
+// `limit=5` in a query string must parse identically.
+func (m MapParams) String(key string) string {
+	switch v := m[key].(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case bool:
+		return strconv.FormatBool(v)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	}
+	return fmt.Sprint(m[key])
+}
+
+// List is every value given for a key that may repeat ([RepeatedKeys]) — see
+// [ListOf].
+func (m MapParams) List(key string) ([]string, bool) { return ListOf(m[key]) }
+
+// ListOf is one parameter's value read as a list, the ONE reading every bag
+// this grammar is parsed from takes of a key that may repeat ([RepeatedKeys]):
+// a string is a list of one, and a list — a JSON array off a socket frame, or
+// the strings a query string repeated, which reach a data node across the
+// estate as that array — is each of its strings. Absent is an empty list.
+// Anything else is false: a number where a position belongs is a request the
+// grammar refuses by the key's name, never one it reads as having named
+// nothing.
+func ListOf(value any) ([]string, bool) {
+	switch v := value.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return []string{v}, true
+	case []string:
+		return slices.Clone(v), true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// Int is one value as a number, or def when it is absent OR unparsable.
+//
+// A BAD VALUE READS AS ABSENT here, deliberately: this bag is filled from a
+// query string, and the parser above refuses an unknown KEY by name while a
+// malformed value for a known one is a caller's typo in a number. Every
+// numeric parameter this grammar takes has a documented default that is safe,
+// so falling back to it is a narrower answer rather than a wrong one.
+func (m MapParams) Int(key string, def int) int {
+	if raw := m.String(key); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// Bool is one value as a boolean, or def when it is absent or unparsable —
+// see [MapParams.Int] for why a malformed value falls back rather than
+// refusing.
+func (m MapParams) Bool(key string, def bool) bool {
+	if raw := m.String(key); raw != "" {
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+// Has reports whether a key was NAMED, however it was spelled.
+//
+// Separate from [MapParams.String] because "set to empty" and "not set" are
+// different requests: `group=` asks for the column holding the rows with no
+// value, and an absent `group` asks for the whole board.
+//
+// It is not every key's rule, which is exactly why the two are told apart
+// HERE rather than by whether a value came back empty: an empty `assignee`
+// narrows nothing, because that key is a comma-separated list and the
+// unassigned work is spelled `assignee=none`.
+func (m MapParams) Has(key string) bool {
+	_, held := m[key]
+	return held
+}
+
+// Keys is every parameter named, SORTED, so a refusal names the same unknown
+// key on every run rather than whichever the map iterated to first.
+func (m MapParams) Keys() []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}

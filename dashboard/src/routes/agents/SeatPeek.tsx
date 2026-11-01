@@ -27,16 +27,16 @@
  * windows all arrive with the org projection and the `agents` push, so they
  * cost nothing. What does cost a read:
  *
- *   * `work_workload` — the seat's open work, for a reader holding Tracker,
+ *   * `work_workload`: the seat's open work, for a reader holding Worklet,
  *     whose question it is;
- *   * `fleet` — which node holds the seat and since when — on Admin, so it
+ *   * `fleet`: which node holds the seat and since when, on Admin, so it
  *     is asked only of an admin; every
  *     other reader is told what the health push says (`heldBy`: this node, by
  *     name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
- *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
- *     only while the seat is working on one, of a Tracker holder.
+ *   * `work_item_turns`: which turn this is on its task ("Turn 2"), asked
+ *     only while the seat is working on one, of a Worklet holder.
  *
  * And for a HUMAN seat, one REST read of the directory (`GET /iam/seats`),
  * which every signed-in reader is answered (masked per reader), and never for
@@ -56,13 +56,15 @@
  * control nested in a control, which neither a keyboard nor a screen reader
  * can reach as itself. So it is the chart's card, then this link.
  *
- * # Message is a task that asks
+ * # Message is a task that asks, and a direct message is chat's
  *
- * There is no person-to-seat chat channel. Message opens the one New task
- * sheet with the seat as assignee and `ask` set, so the question is filed as
- * work the seat owes an answer on, and the answer lands in the asker's Inbox.
- * On the reader's own seat it is held, by the button itself, exactly as on the
- * seat's page — an ask only they could answer.
+ * Message opens the one New task sheet with the seat as assignee and `ask`
+ * set, so the question is filed as work the seat owes an answer on, and the
+ * answer lands in the asker's Inbox. Where the company runs the engine's own
+ * chat and the reader holds it, Direct message beside it opens a conversation
+ * with the seat instead — a remark that obliges nothing, in the room the two
+ * of them share. On the reader's own seat each is held, by the button itself,
+ * exactly as on the seat's page.
  *
  * # Your own seat points at your Account
  *
@@ -88,12 +90,14 @@ import {
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
+import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
+import { WORKLET, accessNames } from "~/lib/access.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -106,6 +110,7 @@ import type { HumanSeat } from "~/contract/identity.ts";
 import {
   activityOf,
   awaitingPerson,
+  failureWords,
   handleLabel,
   heldBy,
   indexOrg,
@@ -169,7 +174,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 7 of 25 · coding run in progress". */
+/** "Turn 2 · round 2 of 4", "Turn 2 · coding run in progress". */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
@@ -235,11 +240,11 @@ function SeatPeekBody({
   const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
-  // THE TRACKER'S TWO, asked only of a company running Crewlet Works.
+  // WORKLET'S TWO, asked only of a company running Worklet.
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const workload = useQuery("work_workload", undefined, {
-    enabled: viewer.tracker && runs.tracker,
+    enabled: viewer.worklet && runs.tracker,
     pollMs: 60_000,
   });
   // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin: asked only of an
@@ -248,7 +253,7 @@ function SeatPeekBody({
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: viewer.tracker && ask.tracker && state === "working" && item !== "" },
+    { enabled: viewer.worklet && ask.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =
@@ -321,15 +326,14 @@ function SeatPeekBody({
       <YourAccount handle={seat.handle} />
 
       {agent?.last_error && (
-        <Callout variant="danger">
-          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
-        </Callout>
+        <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
         // THE ONE THING A READER CAN ACT ON from here: a run parked on a
         // question holds the seat until somebody answers it.
         <Callout variant="warning">
-          A coding run is waiting on a question: {sandbox.question || "(no question recorded)"}
+          A coding run is waiting on a question:{" "}
+          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}
 
@@ -434,23 +438,23 @@ function SeatPeekBody({
           </>
         )}
 
-        {/* CREWLET WORKS' OPEN TASKS, drawn only where the company runs it. */}
+        {/* WORKLET'S OPEN TASKS, drawn only where the company runs it. */}
         {runs.tracker && (
           <>
             <dt>Open work</dt>
             <dd>
               {viewer.loading ? (
                 <EmptyValue label="Checking your access" />
-              ) : !viewer.tracker ? (
-                // NOT ASKED: the open work is the tracker's, and a reader without
+              ) : !viewer.worklet ? (
+                // NOT ASKED: the open work is Worklet's, and a reader without
                 // it is told what would show it rather than a refusal.
-                <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
+                <EmptyValue label={`Needs ${accessNames([WORKLET])} access`} />
               ) : workload.error ? (
                 <EmptyValue label="The tracker did not answer" />
               ) : !workload.data ? (
                 <EmptyValue label="Reading the tracker" />
               ) : load && load.open > 0 ? (
-                <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
+                <a className="t-link" href={href(["worklet", "tasks"], { assignee: seat.handle })}>
                   {plural(load.open, "task")}
                   {load.blocked > 0 && ` · ${load.blocked} blocked`}
                   {load.overdue > 0 && ` · ${load.overdue} overdue`}
@@ -494,6 +498,7 @@ function SeatPeekBody({
           Open profile
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
+        <DirectMessageSeatButton handle={seat.handle} />
         {holding &&
           gestures.map((gesture) => (
             <Button

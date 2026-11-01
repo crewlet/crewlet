@@ -72,10 +72,16 @@ func fanFrom(self node, roster ...string) *eventfan.Fleet {
 	}
 }
 
+// appendTo stores a row in a node's own log as its publish listener would: one
+// the node PUBLISHED, so it names the node as its origin unless the case says
+// otherwise.
 func appendTo(t *testing.T, n node, rec store.EventRecord) {
 	t.Helper()
 	if rec.Payload == nil {
 		rec.Payload = json.RawMessage(`{}`)
+	}
+	if rec.Node == "" {
+		rec.Node = n.id
 	}
 	if err := n.log.Append(t.Context(), rec); err != nil {
 		t.Fatalf("%s: append %s: %v", n.id, rec.ID, err)
@@ -1058,6 +1064,61 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 	})
 }
 
+// A TURN RAN WHERE ITS ROWS SAY, NOT WHERE THEY ARE KEPT.
+//
+// A node without the `data` role keeps no event log: a data node keeps its
+// events in custody (ADR-0025), so the node HOLDING a turn's rows is not, in
+// general, a node it ran on. Here a turn opened on agent-1, a stateless host
+// whose rows node-b keeps, moved to agent-2 — kept by node-b too — for one
+// row, and was resumed on node-a; agent-2's row sits in the middle of node-b's
+// share, past the cap a read returns and before the ending recovered beside
+// it. The turn ran on agent-1, agent-2 and node-a; node-b ran none of it.
+//
+// Mutation: answer `nodes` from which nodes answered with rows — the read this
+// replaced — and node-b is named while neither agent is; derive it from the
+// rows each node RETURNED rather than asking its whole share, and agent-2,
+// whose only row no read returns, goes missing.
+func TestATurnRanWhereItsRowsSayNotWhereTheyAreKept(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	start := time.Now().UTC().Add(-time.Hour)
+	row := func(i int, origin string) store.EventRecord {
+		return store.EventRecord{ID: fmt.Sprintf("r%04d", i), Type: "x", Category: "task",
+			Time: start.Add(time.Duration(i) * time.Millisecond), Node: origin,
+			Tags: map[string]string{"turn_id": "t-moved"}}
+	}
+	i := 0
+	for ; i < store.MaxTurnEvents; i++ {
+		appendTo(t, b, row(i, "agent-1"))
+	}
+	appendTo(t, b, row(i, "agent-2"))
+	i++
+	for range eventfan.TurnClosingEvents {
+		appendTo(t, b, row(i, "agent-1"))
+		i++
+	}
+	appendTo(t, a, row(i, ""))
+
+	turn, coverage, err := fanFrom(a, "node-a", "node-b").Turn(t.Context(), "t-moved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v", coverage)
+	}
+	for _, r := range turn.Rows {
+		if r.Node == "agent-2" {
+			t.Fatalf("the read returned agent-2's row %s, so it no longer tests a node "+
+				"named only by its share", r.ID)
+		}
+	}
+	if want := []string{"agent-1", "agent-2", "node-a"}; !slices.Equal(turn.Nodes, want) {
+		t.Errorf("the turn ran on %v, want %v — every node that published a row of it, "+
+			"and not node-b, which only keeps them", turn.Nodes, want)
+	}
+}
+
 // ONE NODE'S PART IS READ AT ONE INSTANT, so its count is never short.
 //
 // A turn's part is four reads — its oldest rows, how many it holds, its newest
@@ -1265,7 +1326,7 @@ func idsOf(rows []store.EventRecord) []string {
 // has learned it is not its own: until the first settles it, both logs hold the
 // same rows. Summed as two counts, one dropped notification was two. So each
 // node counts what it keeps and names what it holds unsettled, and the asker
-// asks every node which of the named rows it keeps — while both copies are
+// asks every data node which of the named rows it keeps — while both copies are
 // unsettled, once the keeper has settled and the other has not, and once both
 // have — and counts each row once, asked from either node.
 //

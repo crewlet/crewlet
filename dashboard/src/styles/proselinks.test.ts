@@ -45,7 +45,7 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    where: "routes/work/shapes/Grid.tsx",
+    where: "routes/worklet/shapes/Grid.tsx",
     why:
       "The same `N more →` link at the foot of a band, drawn by " +
       "`.crewlet-data-grid__band-foot a` for the reason the board's entry above gives. The " +

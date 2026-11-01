@@ -130,12 +130,10 @@ type Service struct {
 	work         *roomWork
 	stopPresence func()
 
-	// withholding is this node's artifact copies out of service: its
-	// appliers' pushes are withheld until they return ([Service.ArtifactsCopy]).
-	withholding atomic.Bool
-
-	// metrics records the socket's push lag; nil records nothing.
+	// metrics records the socket's push lag, and judge the change
+	// visibility of what a room is pushed; nil records nothing.
 	metrics Metrics
+	judge   Objectives
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -261,6 +259,11 @@ type Options struct {
 
 	// Metrics records the socket's push lag; nil records nothing.
 	Metrics Metrics
+
+	// Objectives records the change visibility of every committed change
+	// this service pushes — an inbox movement, and what the artifact rooms
+	// are pushed ([Objectives]); nil records nothing.
+	Objectives Objectives
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -316,6 +319,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		pushed:    map[string]pushedCall{},
 		rooms:     opts.Rooms,
 		metrics:   opts.Metrics,
+		judge:     opts.Objectives,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -530,7 +534,7 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
 		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
-		"tokens":    s.TokenRollup(),
+		"tokens":    SpendRollup(s.TokenRollup()),
 		"budget":    s.state.Budget(),
 	}
 	// EACH KEY IS WHAT ITS PUSH WOULD CARRY, so a reader receives in the
@@ -732,6 +736,13 @@ type InboxChange struct {
 	UnreadDelta int    `json:"unread_delta"`
 	Subject     string `json:"subject"`
 	Reason      string `json:"reason"`
+
+	// Stored is the broker's instant for the oldest record that moved the
+	// inbox (internal/worklet's InboxMovement.At): what the push is timed from
+	// (change visibility, [Objectives]). NEVER ON THE FRAME — the screen
+	// re-reads the inbox, and the frame names what moved and nothing about
+	// when.
+	Stored time.Time `json:"-"`
 }
 
 // InboxChanged pushes one seat's inbox movement to the clients watching that
@@ -740,13 +751,18 @@ type InboxChange struct {
 // NEVER BLOCKS, for [Hub.Broadcast]'s reason, and its caller is why that
 // matters: this is called from an applier's post-commit half, on the apply
 // loop's own goroutine, with the next batch waiting behind it.
+//
+// TIMED as every committed change this service pushes is ([visible]): from
+// the broker's instant for the records that moved the inbox to the push, and
+// only where some socket watching the seat was handed it.
 func (s *Service) InboxChanged(change InboxChange) {
 	if change.Handle == "" {
 		// NO SEAT, NO AUDIENCE: a seat-routed frame with no address is
 		// refused by the hub, loudly. A movement for nobody is not one.
 		return
 	}
-	s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change, s.now()))
+	visible(s.judge, s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change,
+		s.now())), change.Stored)
 }
 
 // InboxReread tells every watched seat's sockets to read their inbox's source
@@ -840,7 +856,7 @@ func (s *Service) flushTokens() {
 	}
 	rollup := s.TokenRollup()
 	s.tokensDirty.Store(false)
-	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
+	s.hub.Broadcast(Push(KindTokens, SpendRollup(rollup), s.now()))
 }
 
 // TokenRollup folds the live window into the breakdown the `tokens` push and

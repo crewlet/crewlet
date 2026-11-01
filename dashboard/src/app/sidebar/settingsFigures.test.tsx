@@ -19,9 +19,31 @@ function node(over: Partial<FleetNode>): FleetNode {
   return { id: "n", roles: [], broker: "member", seats: 0, ...over };
 }
 
+/** The revision a fleet's pointer names at epoch `target`. */
+const ACTIVE = "01JACTIVE00000000000000000A";
+
+/** A fleet whose pointer names ACTIVE at `target`, or nothing at 0. */
 function fleet(target: number, nodes: FleetNode[]): FleetAnswer {
-  return { nodes, seats: [], duties: [], target_epoch: target } as unknown as FleetAnswer;
+  const activation =
+    target > 0 ? { epoch: target, revision_id: ACTIVE, at: "", summary: "" } : null;
+  return {
+    nodes,
+    seats: [],
+    duties: [],
+    target_epoch: target,
+    activation,
+  } as unknown as FleetAnswer;
 }
+
+/** A node that runs the fleet's revision at `epoch`. */
+const runs = (id: string, epoch: number): FleetNode =>
+  node({
+    id,
+    config_epoch: epoch,
+    config_status: "ok",
+    config_revision_id: ACTIVE,
+    config_serving_revision_id: ACTIVE,
+  });
 
 function retention(kinds: string[], held = 0): RetentionReport {
   return {
@@ -49,15 +71,57 @@ describe("settingsFigures", () => {
       ...NONE,
       health,
       fleet: fleet(4, [
-        node({ id: "a", config_epoch: 4 }),
+        runs("a", 4),
         node({ id: "b", config_epoch: 3 }),
-        // A node that has not reported an apply at all is on epoch 0 — behind.
+        // A node that has not reported an apply at all runs nothing anybody
+        // can name — counted, since nothing says it runs the fleet's revision.
         node({ id: "c" }),
       ]),
     });
     expect(f.nodes?.count?.value).toBe(3);
     expect(f.nodes?.count?.label).toBe("nodes live, 2 behind on config");
     expect(f.nodes?.count?.mark).toBeDefined();
+  });
+
+  // THE EPOCH IS THE ONE A NODE ATTEMPTED. A refusal of the target reports the
+  // target's epoch while the node runs the one before, and so does a node on
+  // another revision once the pointer's count restarted: the epoch-only rule
+  // counted neither, which is what the comment above the figure said it did.
+  test("a refusal and another revision at the target epoch are behind on config", () => {
+    const health = healthFrame({ nodes: 3 });
+    const f = settingsFigures({
+      ...NONE,
+      health,
+      fleet: fleet(4, [
+        runs("a", 4),
+        node({
+          id: "refused",
+          config_epoch: 4,
+          config_status: "error",
+          config_revision_id: ACTIVE,
+          config_serving_revision_id: "01JPREVIOUS000000000000000P",
+        }),
+        node({
+          id: "other",
+          config_epoch: 4,
+          config_status: "ok",
+          config_revision_id: "01JOTHER0000000000000000OO",
+          config_serving_revision_id: "01JOTHER0000000000000000OO",
+        }),
+      ]),
+    });
+    expect(f.nodes?.count?.label).toBe("nodes live, 2 behind on config");
+  });
+
+  test("with no activation no node is behind one", () => {
+    const health = healthFrame({ nodes: 2 });
+    const f = settingsFigures({
+      ...NONE,
+      health,
+      fleet: fleet(0, [node({ id: "a", config_epoch: 3 }), node({ id: "b" })]),
+    });
+    expect(f.nodes?.count?.label).toBe("nodes live");
+    expect(f.nodes?.count?.mark).toBeUndefined();
   });
 
   // THE FIGURE IS READ INTO THE ROW'S NAME, so one node is "Nodes, 1 node

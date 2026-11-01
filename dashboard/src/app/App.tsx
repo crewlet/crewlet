@@ -45,13 +45,15 @@
  */
 
 import { useEffect, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
-import { Skeleton, ToastProvider } from "@crewlethq/ui";
+import { Skeleton } from "@crewlethq/ui";
+import { InsetToastProvider } from "./toastInset.tsx";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import {
   artifactSectionPath,
+  chatViewOf,
   newArtifactPath,
   resolve,
   type Resolved,
@@ -74,13 +76,13 @@ import { ScreenBoundary } from "./boundaries.tsx";
 const Home = lazyScreen("home", (m) => m.Home);
 const Inbox = lazyScreen("inbox", (m) => m.Inbox);
 const MyWork = lazyScreen("me", (m) => m.MyWork);
-const Work = lazyScreen("work", (m) => m.Work);
-const Projects = lazyScreen("work", (m) => m.Projects);
-const SavedViews = lazyScreen("work", (m) => m.SavedViews);
-const History = lazyScreen("work", (m) => m.History);
-const WorkSearch = lazyScreen("work", (m) => m.WorkSearch);
-const Project = lazyScreen("work", (m) => m.Project);
-const WorkItem = lazyScreen("work", (m) => m.WorkItem);
+const Work = lazyScreen("worklet", (m) => m.Work);
+const Projects = lazyScreen("worklet", (m) => m.Projects);
+const SavedViews = lazyScreen("worklet", (m) => m.SavedViews);
+const History = lazyScreen("worklet", (m) => m.History);
+const WorkSearch = lazyScreen("worklet", (m) => m.WorkSearch);
+const Project = lazyScreen("worklet", (m) => m.Project);
+const WorkItem = lazyScreen("worklet", (m) => m.WorkItem);
 const Changes = lazyScreen("code", (m) => m.Changes);
 const ChangePage = lazyScreen("code", (m) => m.ChangePage);
 const Repositories = lazyScreen("code", (m) => m.Repositories);
@@ -95,6 +97,7 @@ const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
 const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
 const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const Chat = lazyScreen("chatlet", (m) => m.Chat);
 const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
 const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
@@ -105,13 +108,13 @@ const ChannelScreen = lazyScreen("live", (m) => m.ChannelScreen);
 const TraceScreen = lazyScreen("live", (m) => m.TraceScreen);
 const Activity = lazyScreen("live", (m) => m.Activity);
 const EventScreen = lazyScreen("live", (m) => m.EventScreen);
-const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
-const Pages = lazyScreen("knowledge", (m) => m.Pages);
-const PageView = lazyScreen("knowledge", (m) => m.PageView);
-const Composer = lazyScreen("knowledge", (m) => m.Composer);
-const Skills = lazyScreen("knowledge", (m) => m.Skills);
-const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
-const Diary = lazyScreen("knowledge", (m) => m.Diary);
+const Doclet = lazyScreen("doclet", (m) => m.Doclet);
+const Pages = lazyScreen("doclet", (m) => m.Pages);
+const PageView = lazyScreen("doclet", (m) => m.PageView);
+const Composer = lazyScreen("doclet", (m) => m.Composer);
+const Skills = lazyScreen("doclet", (m) => m.Skills);
+const Diaries = lazyScreen("doclet", (m) => m.Diaries);
+const Diary = lazyScreen("doclet", (m) => m.Diary);
 const ArtifactGallery = lazyScreen("artifacts", (m) => m.ArtifactGallery);
 const ArtifactPage = lazyScreen("artifacts", (m) => m.ArtifactPage);
 const ArtifactFolders = lazyScreen("artifacts", (m) => m.ArtifactFolders);
@@ -168,15 +171,15 @@ export function screenFor(route: Resolved): ReactNode {
       return <Inbox />;
     case "me":
       return <MyWork section={route.section} />;
-    case "work-projects":
+    case "worklet-projects":
       return <Projects />;
-    case "work-tasks":
+    case "worklet-tasks":
       return <Work />;
-    case "work-views":
+    case "worklet-views":
       return route.id ? <SavedViews key={route.id} id={route.id} /> : <SavedViews />;
-    case "work-history":
+    case "worklet-history":
       return <History />;
-    case "work-search":
+    case "worklet-search":
       return <WorkSearch />;
     case "project":
       return <Project key={route.key} projectKey={route.key} />;
@@ -210,6 +213,24 @@ export function screenFor(route: Resolved): ReactNode {
       return <OrgEdit />;
     case "seat":
       return <SeatScreen key={route.handle} handle={route.handle} />;
+    // CHATLET IS NOT KEYED ON THE ROOM, the one screen with a subject that is
+    // not: its rail and its read-cursor writer belong to the tab rather than
+    // to a room, and a switch between rooms is a flush rather than a new
+    // writer that has forgotten what the last one wrote. The room itself is
+    // keyed one level down, inside the screen.
+    case "chatlet":
+      return <Chat id={route.id} />;
+    case "chatlet-activity":
+    case "chatlet-threads":
+    case "chatlet-drafts":
+    case "chatlet-saved":
+    case "chatlet-search":
+    case "chatlet-browse":
+    case "chatlet-new":
+      // ONE SCREEN TOLD WHICH VIEW TO DRAW, never keyed on it: the frame
+      // above the views (the Rooms panel, the outbox, the cursor writer) is
+      // the tab's, as it is for a room.
+      return <Chat view={chatViewOf(route.screen) ?? undefined} />;
     case "live":
       return <LiveNow />;
     case "turns":
@@ -226,8 +247,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Activity />;
     case "event":
       return <EventScreen key={route.id} eventId={route.id} />;
-    case "knowledge":
-      return <Knowledge />;
+    case "doclet":
+      return <Doclet />;
     case "container":
       return <Pages key={route.key} container={route.key} />;
     case "page":
@@ -417,7 +438,7 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   if (accessRefused !== null && !personalPath(path)) {
     return <AccessRefused reason={accessRefused} />;
   }
-  // AN ITEM SOMEBODY WAS ASKED ABOUT IS OPEN TO THEM, Tracker or not: the
+  // AN ITEM SOMEBODY WAS ASKED ABOUT IS OPEN TO THEM, Worklet access or not: the
   // engine answers the person an open ask names with the item and takes their
   // answer on it, so the link in their inbox notice or chat message has to
   // open — and its own read decides, refusing anybody it names no ask to in
@@ -426,7 +447,7 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   // A WORKSPACE OR SECTION CLOSED TO THE READER is its refusal and nothing
   // else — see `GrantRequired` — decided by the rule every lock the
   // navigation draws is decided by (`nav.ts`'s `closedBy`, over
-  // `sectionOpen`): the workspace's access first (Work is the tracker's), then
+  // `sectionOpen`): the workspace's access first (Worklet needs Worklet access), then
   // the section's (Live › Turns is admin's). Over the frame's one reading of
   // who the reader is and what they hold (`useHeldReading`): the viewer's
   // answer, or the session's where the viewer has not answered — and the
@@ -483,7 +504,10 @@ export function App() {
     // Account link, sign-outs and results could not be tapped. The kit names a
     // host for a FULLSCREEN container only (the org builder keeps its own),
     // since a fullscreen element paints nothing outside itself.
-    <ToastProvider>
+    //
+    // THE STACK KEEPS CLEAR OF THE ASSISTANT, which the frame and the panel
+    // say through `toastInset.tsx`.
+    <InsetToastProvider>
       {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
           ceremony and the one live region are what a sign-in screen and a
           framed one both need, so none may tear them down and none of them
@@ -495,6 +519,6 @@ export function App() {
           `announcer.tsx`. */}
       <AppAnnouncer />
       <Frame />
-    </ToastProvider>
+    </InsetToastProvider>
   );
 }

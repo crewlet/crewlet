@@ -29,15 +29,11 @@ import (
 // seat and a per-node read drew a board that disagreed with itself depending on
 // which node answered.
 //
-// What it deliberately does NOT return is the suspended conversation, the
-// serialised Execute loop a launch keeps beside the row. It is by far the
-// largest thing a run keeps, and every prompt in it is already reachable through
-// the event store — shipping it to a board that renders one line per run would
-// be a page-weight problem in exchange for nothing. The bridged tool log, kept
-// beside the row too, IS returned, to a reader shown the run's body, and read
-// only for a job whose row says its bridge made a call
-// ([sandbox.LaunchRecord.BridgedCalls]): a board of runs that bridged nothing
-// reads no log at all.
+// What it deliberately does NOT return is the execute state, the serialised
+// Execute conversation. It is by far the largest column in the row, and every
+// prompt in it is already reachable through the event store — shipping it to a
+// board that renders one line per run would be a page-weight problem in
+// exchange for nothing.
 
 // PendingRuns is the durable record a sandbox-runs answer reads.
 //
@@ -51,19 +47,15 @@ import (
 // `failed` would be a question whose answer is structurally empty — worse than
 // absent, because an empty board reads as "nothing failed" rather than "this
 // is not where that is recorded". How a run ENDED is on the event stream: the
-// resumed turn's own events, or a `sandbox_run_failed` naming the reason.
+// resumed turn's own events, a `sandbox_run_failed` naming the reason, or a
+// `sandbox_run_stopped` naming the person who stopped it.
 //
 // AND ONE RUN BY ITS TURN, which `sandbox_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the
 // only thing that names it.
-//
-// AND A JOB'S BRIDGED TOOL LOG, which the store keeps beside the row rather
-// than on it, so the row every listing and every box's request reads stays the
-// size of its facts ([sandbox.PendingStore.BridgeLog]).
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
-	BridgeLog(ctx context.Context, turnID, launch string) ([]sandbox.BridgeCall, error)
 }
 
 // SandboxTails answers a running coding run's live output from the node that
@@ -75,8 +67,8 @@ type SandboxTails interface {
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
 // launch while it runs, `launching` while its box is being made, `not_running`
 // with the record's own status once it is not, `box_paused` for a running
-// record whose box is paused, or the owning node NAMED where it did not answer
-// (`owner_silent`).
+// record whose box is paused, `box_gone` for one whose box is gone for good,
+// or the owning node NAMED where it did not answer (`owner_silent`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job
@@ -170,7 +162,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionAuditRead, company.Err)
 	case s.Sandbox == nil:
-		return false, refused("sandbox_tail", company)
+		return false, NewRefusal("sandbox_tail", company)
 	}
 	first := authz.Decide(ctx, principal, authz.ActionSeatTrailRead, authz.Object{
 		Kind: authz.KindPerson, ID: turnID, Owner: unresolvedRunSeat, Unresolved: true,
@@ -184,7 +176,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionSeatTrailRead, first.Err)
 	default:
-		return false, refused("sandbox_tail", first)
+		return false, NewRefusal("sandbox_tail", first)
 	}
 	run, found, err := s.Sandbox.Get(ctx, turnID)
 	switch {
@@ -245,42 +237,16 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		r := reach(run)
-		calls, err := s.bridgeLogFor(ctx, run, r)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, serialiseRun(run, calls, r))
+		out = append(out, serialiseRun(run, reach(run), s.answeredBy(run)))
 	}
 	return map[string]any{"runs": out}, nil
-}
-
-// bridgeLogFor is the bridged tool log of run's job as reader r is shown it:
-// nil for a reader not shown the run's body, and for a job whose bridge made no
-// call — the row counts them ([sandbox.LaunchRecord.BridgedCalls]), so no log
-// is read for a run that has none.
-//
-// A LOG THAT COULD NOT BE READ FAILS THE ANSWER, as a listing that could not be
-// read does: a run drawn with no calls reads as a run that did nothing, which a
-// read that failed must not say.
-func (s Sources) bridgeLogFor(ctx context.Context, run sandbox.PendingRun, r livestate.Reach,
-) ([]sandbox.BridgeCall, error) {
-	if !r.Body || run.Launch.BridgedCalls == 0 {
-		return nil, nil
-	}
-	calls, err := s.Sandbox.BridgeLog(ctx, run.TurnID, run.LaunchID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: the bridged tool log of run %s could not be read: %w",
-			ErrUnavailable, run.TurnID, err)
-	}
-	return calls, nil
 }
 
 // runReach is what the asking principal may read of each coding run: its
 // seat's body where the authority table's `audit.seat.read` admits them to
 // the run's seat — an admin, or its lead — through [Sources.reach], the one
 // decision a seat's live call, its turns and its memory are read under; its
-// work item where they hold the tracker; and their own record, which a run's
+// work item where they hold Worklet; and their own record, which a run's
 // question may be put to.
 //
 // ONE DECISION PER SEAT per answer, however many runs it has: a board of runs
@@ -365,6 +331,11 @@ const (
 	runQuestion
 	// runTracker is the tracker's: a work item, shown to whoever holds it.
 	runTracker
+	// runConfig is the company's configuration: which `providers.llm` entry
+	// the job was launched on, shown to an admin alone
+	// ([livestate.Reach.Config]) — what the live panel's copy of a run
+	// withholds too, and the spend breakdown's entries.
+	runConfig
 )
 
 // runKeys is THE SPLIT of a coding run's row, declared once: every key
@@ -376,7 +347,9 @@ const (
 // makes of the live panel's copy of a run (ADR-0033): what a run was asked
 // (`task_description`), the question it parked on, who is waiting on it
 // (`reply`) and the bridge's call log — every argument and output its agent
-// passed through the seat's tools — are the seat's body.
+// passed through the seat's tools — are the seat's body, and the entry the
+// job was launched on is the company's configuration, which a seat's lead
+// reads its trail without.
 var runKeys = map[string]runShown{
 	"turn_id":             runStatus,
 	"work_key":            runStatus, // a delivery identity (internal/workkey), not a task key
@@ -386,9 +359,13 @@ var runKeys = map[string]runShown{
 	"role":                runStatus,
 	"status":              runStatus,
 	"coding_agent":        runStatus,
+	"provider_key":        runConfig, // which entry's plan the job spends: the company's configuration
+	"model":               runStatus, // the model it runs under: what it is doing
 	"placement":           runStatus,
 	"task_description":    runBody,
 	"question":            runQuestion,
+	"question_context":    runQuestion,
+	"decision":            runQuestion,
 	"audience":            runStatus,
 	"audience_handles":    runStatus,
 	"audience_fallback":   runStatus,
@@ -401,6 +378,10 @@ var runKeys = map[string]runShown{
 	"started_at":          runStatus,
 	"updated_at":          runStatus,
 	"answerable_in_chat":  runStatus,
+	"declined_answers":    runStatus, // delivery ids, never what the answers said
+	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
+	"answered_by":         runStatus,
+	"answered_at":         runStatus,
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
@@ -413,13 +394,12 @@ var runKeys = map[string]runShown{
 // serialiseRun is one coding run's row as reader r receives it: [runRow],
 // with every key [runKeys] does not show them left out — absent rather than
 // empty, because an empty task is a value a board would draw — and
-// `body_withheld` saying whether the body was. calls is the job's bridged tool
-// log as [Sources.bridgeLogFor] read it for r.
+// `body_withheld` saying whether the body was.
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, calls []sandbox.BridgeCall, r livestate.Reach) map[string]any {
-	row := runRow(run, calls)
+func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) map[string]any {
+	row := runRow(run, answeredBy)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -436,6 +416,10 @@ func serialiseRun(run sandbox.PendingRun, calls []sandbox.BridgeCall, r livestat
 			if !r.Tracker {
 				delete(row, key)
 			}
+		case runConfig:
+			if !r.Config {
+				delete(row, key)
+			}
 		default:
 			delete(row, key)
 		}
@@ -444,10 +428,10 @@ func serialiseRun(run sandbox.PendingRun, calls []sandbox.BridgeCall, r livestat
 	return row
 }
 
-// runRow is every fact a coding run's row carries, whoever reads it, with its
-// job's bridged tool log beside them — see [serialiseRun] for what each reader
-// is shown of it.
-func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
+// runRow is every fact a coding run's row carries, whoever reads it — see
+// [serialiseRun] for what each reader is shown of it. answeredBy is who gave
+// the run's recorded answer, as its seal opens ([Sources.answeredBy]).
+func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -455,7 +439,7 @@ func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
 	// reclaim cannot disagree about which boxes are held.
 	heldSince, _ := run.HeldSince()
-	return map[string]any{
+	return withDecision(run, map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
 		// the trigger rather than only to the one execution that detached.
@@ -475,6 +459,12 @@ func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,
+		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
+		// fallback at launch makes it other than the chain's head, and
+		// which entry's plan a job is spending is the first thing an admin
+		// watching a long run asks. The entry is theirs alone ([runConfig]).
+		"provider_key": run.Launch.ProviderKey,
+		"model":        run.Launch.Model,
 		// WHERE the run is, which became an operator question the moment
 		// providers.sandbox became a catalogue: one company now runs some
 		// seats on the engine host and others in a remote box, and "is
@@ -482,14 +472,19 @@ func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 		// provider default.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
+		// THE QUESTION AS IT WAS ASKED (ADR-0068): one sentence and its
+		// Markdown context, always sent, the context empty where it gave
+		// none, as every reader of a run's ask sends them. The choice it
+		// offers is added below where it has one ([withDecision]).
 		"question":         run.Question,
+		"question_context": run.QuestionContext,
 		"audience":         run.Audience,
 		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
 		// run parked, and whether that is a fallback — the seat's lead
 		// chain — because the audience above named nobody the chart has.
 		// Always an array, empty on a run that is not parked on a
 		// question.
-		"audience_handles":  nonNilStrings(run.AudienceHandles),
+		"audience_handles":  nonNil(run.AudienceHandles),
 		"audience_fallback": run.AudienceFallback,
 		"branch":            run.Branch,
 		"trace_id":          run.TraceID,
@@ -503,22 +498,38 @@ func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
+		// arrived in (answer_run answers it as `answer_id`): a person who
+		// answered is told from here that the run could not take their
+		// answer and is waiting on its question again, rather than left
+		// looking at a question that never changes. Always an array.
+		"declined_answers": nonNil(run.DeclinedAnswers),
+		// THE ANSWER RECORDED ON THE RUN, by its deliveries, who gave it and
+		// when: the first recorded answer wins, and a person whose answer
+		// was not that one is told whose was, rather than shown their own
+		// as taken. Empty on a run with no recorded answer; who gave it,
+		// also where its seal does not open on this node.
+		"answer_ids":  answerIDs(run.Answer),
+		"answered_by": answeredBy,
+		"answered_at": answeredAt(run.Answer),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
 		// its trigger — empty means nobody is waiting, which is the safe
 		// half.
 		"reply": run.Reply,
-		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
-		// memory and the turn writes them at the end; a bridged run's are
-		// made by a process outside the engine, minutes or hours apart
-		// and possibly across a restart, so the log its job keeps beside
-		// the row is the only copy there is. `bridge_calls_elided` says
-		// how many were cut from the middle, off the row's own count,
-		// because a log that silently skips is a log that lies about what
-		// the run did.
-		"bridge_calls":        calls,
-		"bridge_calls_elided": run.Launch.BridgedCallsElided(),
+		// THE BRIDGE'S OWN TOOL LOG. Every run's calls are made by a
+		// process outside the engine, over its bridge, minutes or hours
+		// apart and possibly across a restart, so this row is the only
+		// copy there is. `bridge_calls_elided` says how many were cut from the
+		// middle, because a log that silently skips is a log that lies
+		// about what the run did.
+		// ALWAYS AN ARRAY on a row the store answered: every run is
+		// bridged, so an empty log is a run that has called nothing — a
+		// fact the run's page states — and never "not known", which a
+		// reader is told only by the key being absent (a withheld body).
+		"bridge_calls":        nonNil(run.BridgeCalls),
+		"bridge_calls_elided": run.BridgeCallsElided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the coding CLI's own session, the
 		// command the engine launched, and the chain of asks that led
@@ -530,7 +541,41 @@ func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 		// draws "not shown to you" over a run's task rather than a run that
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
+	})
+}
+
+// withDecision adds the choice a run's question offers to its row, and leaves
+// the key ABSENT on an open question, as every reader of a run's ask does:
+// absent is "no choice", never a null a client has to tell from one.
+func withDecision(run sandbox.PendingRun, row map[string]any) map[string]any {
+	if run.Decision != nil {
+		row["decision"] = run.Decision
 	}
+	return row
+}
+
+// answerIDs and answeredAt are the recorded answer's deliveries and instant,
+// empty for a run with none.
+func answerIDs(answer *sandbox.RecordedAnswer) []string {
+	if answer == nil {
+		return []string{}
+	}
+	return nonNil(answer.EventIDs)
+}
+
+// answeredBy is who gave run's recorded answer, which only the answer's seal
+// says: empty for a run with none, and where the seal does not open on this
+// node ([sandbox.OpenedAnswerer]). No copy of it is kept in the clear for a
+// row to read instead.
+func (s Sources) answeredBy(run sandbox.PendingRun) string {
+	return sandbox.OpenedAnswerer(s.RunAnswers, run)
+}
+
+func answeredAt(answer *sandbox.RecordedAnswer) string {
+	if answer == nil {
+		return ""
+	}
+	return isoOrEmpty(answer.RecordedAt)
 }
 
 // answerableInChat reports whether a reply on a chat surface could ever reach
@@ -568,11 +613,11 @@ func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
 }
 
-// nonNilStrings is a list that encodes as `[]` rather than `null` when empty,
-// so a reader indexes it without a presence check.
-func nonNilStrings(list []string) []string {
+// nonNil is a list that encodes as `[]` rather than `null` when empty, so a
+// reader indexes it without a presence check.
+func nonNil[T any](list []T) []T {
 	if list == nil {
-		return []string{}
+		return []T{}
 	}
 	return list
 }

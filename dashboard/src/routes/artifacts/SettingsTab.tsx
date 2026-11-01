@@ -28,6 +28,7 @@ import { QueryState, Section } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime, utf8Bytes } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   ARTIFACT_DESCRIPTION_MAX_BYTES,
@@ -85,6 +86,51 @@ export function SettingsTab({
   );
 }
 
+/** An artifact's details as the panel holds them while they are typed. */
+interface ArtifactDetails {
+  readonly title: string;
+  readonly description: string;
+  readonly icon: string;
+}
+
+/** A detail set to a value its own field would take, or refused in that field's sentence. */
+function detail(
+  key: keyof ArtifactDetails,
+  problem: (text: string) => string | undefined,
+): Pick<DraftFieldSpec<ArtifactDetails>, "read" | "write"> {
+  return {
+    read: (d) => d[key],
+    write: (d, value) => {
+      if (typeof value !== "string") return refuse("A detail is a line of text.");
+      const wrong = problem(value);
+      return wrong ? refuse(wrong) : { ...d, [key]: value };
+    },
+  };
+}
+
+/** The fields of an artifact's details, each held to the bound its field states. */
+export const DETAIL_FIELDS: readonly DraftFieldSpec<ArtifactDetails>[] = [
+  {
+    path: "title",
+    label: "Title",
+    ...detail("title", (t) =>
+      t.trim() === "" ? "An artifact has a title." : overBy(t.trim(), ARTIFACT_TITLE_MAX_BYTES),
+    ),
+  },
+  {
+    path: "description",
+    label: "Description",
+    hint: "One sentence, shown under the title",
+    ...detail("description", (t) => overBy(t.trim(), ARTIFACT_DESCRIPTION_MAX_BYTES)),
+  },
+  {
+    path: "icon",
+    label: "Icon",
+    hint: "One short word, such as chart or calendar",
+    ...detail("icon", (t) => overBy(t.trim(), ARTIFACT_ICON_MAX_BYTES)),
+  },
+];
+
 /** The title, description and icon word. */
 function Details({
   detail,
@@ -134,6 +180,31 @@ function Details({
     }
   };
   const held = access.can ? null : access.reason;
+  // WHAT IS OPEN, for the assistant, to an editor: the details as typed, set
+  // through the panel's own fields and held to their own rules; Save stays
+  // the editor's.
+  useAssistantDraft<ArtifactDetails>(
+    access.can
+      ? {
+          kind: "client",
+          id: detail.id,
+          revision: detail.head_number,
+          step: "details",
+          help:
+            "You can set the title, the one-sentence description and the icon word. Saving " +
+            "renames the artifact for everyone it is shared with, and stays the person's.",
+          scope: `The details of “${detail.title}” (not saved)`,
+          value: { title, description, icon },
+          fields: DETAIL_FIELDS,
+          apply: (next) => {
+            setTitle(next.title);
+            setDescription(next.description);
+            setIcon(next.icon);
+          },
+          blocked: () => (gesture.busy ? "The details are being saved." : null),
+        }
+      : null,
+  );
   return (
     <Section title="Details" hint="Its name in the gallery, a tab and a link">
       <div className="artifact-form">

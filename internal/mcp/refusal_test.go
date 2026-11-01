@@ -54,8 +54,8 @@ func TestEveryRefusalClassIsKnownOnce(t *testing.T) {
 			}
 		}
 	}
-	if len(Refusals) != 16 {
-		t.Errorf("%d classes, want the 16 the write surface's status table maps", len(Refusals))
+	if len(Refusals) != 17 {
+		t.Errorf("%d classes, want the 17 the write surface's status table maps", len(Refusals))
 	}
 }
 
@@ -93,7 +93,7 @@ func TestAFaultIsNotUnavailable(t *testing.T) {
 // write surface answers wrongly and an audit row that disagrees with it.
 func TestEveryClassIsReadOutOfTheCause(t *testing.T) {
 	t.Parallel()
-	underneath := errors.New("tracker: no such task")
+	underneath := errors.New("worklet: no such task")
 	for _, class := range Refusals {
 		t.Run(string(class), func(t *testing.T) {
 			t.Parallel()

@@ -234,9 +234,15 @@ func TestAnAdministratorsDatastoreReadIsRecorded(t *testing.T) {
 }
 
 // THE TRASH STOPS SERVING THE DATASTORE AT ONCE: every question about a
-// trashed sheet is answered not found, to its owner and its editor alike, and
-// reaches nothing. Mutation: drop the status check from Gate.Content and the
-// rows are read.
+// trashed sheet is answered `artifact_trashed`, to its owner, its editor and
+// an administrator alike, and reaches nothing — the answer every artifacts
+// route gives it, because the trash is a state its owner's restore ends. A
+// caller the sheet is not disclosed to is still told it is not there, so the
+// trash discloses nothing the stranger case below does not.
+//
+// Mutation: drop the status check from Gate.Content and the rows are read;
+// answer the trash as not found and the disclosed rows go red; decide the
+// trash before the admission and the stranger's row does.
 func TestATrashedSheetsDataIsNotServed(t *testing.T) {
 	t.Parallel()
 	r, reads, marks := dataRegistryWithMarks(t)
@@ -245,9 +251,16 @@ func TestATrashedSheetsDataIsNotServed(t *testing.T) {
 		for _, what := range dataQuestions {
 			_, err := r.Answer(ctx, what, map[string]any{"id": dataBinned.String(),
 				"collection": "review", "doc": "r1"})
-			if !errors.Is(err, queries.ErrNotFound) {
-				t.Errorf("asking %s about a trashed sheet = %v, want not found", what, err)
+			if !errors.Is(err, queries.ErrArtifactTrashed) || errors.Is(err, queries.ErrNotFound) {
+				t.Errorf("asking %s about a trashed sheet = %v, want artifact_trashed", what, err)
 			}
+		}
+	}
+	for _, what := range dataQuestions {
+		_, err := r.Answer(dataPerson(t, "dana"), what, map[string]any{"id": dataBinned.String(),
+			"collection": "review", "doc": "r1"})
+		if !errors.Is(err, queries.ErrNotFound) {
+			t.Errorf("a stranger asking %s about a trashed sheet = %v, want not found", what, err)
 		}
 	}
 	if len(reads.readings) != 0 || marks.count() != 0 {

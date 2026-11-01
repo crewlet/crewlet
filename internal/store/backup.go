@@ -13,6 +13,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
+
+	turso "turso.tech/database/tursogo"
 )
 
 // Backing this file up ONLINE, and why it is VACUUM INTO.
@@ -201,6 +205,11 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	held, err := d.vacuumInto(ctx, part)
 	if err != nil {
 		_ = removeDatabaseFiles(part)
+		if tempDirRefused(err) {
+			return BackupInfo{}, fmt.Errorf("store: backup %s to %s: couldn't make "+
+				"a directory for the copy's temporary files. %s: %w",
+				d.path, dest, temporaryDirectories(), err)
+		}
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
 	took := now().Sub(started)
@@ -266,7 +275,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// THE DIGEST BEFORE THE RENAME, over the file the rename will place —
 	// after the sidecars are gone and the mode is set, so what is hashed is
 	// byte-for-byte what an operator will ship.
-	digest, err := fileDigest(part)
+	digest, err := FileDigest(ctx, part)
 	if err != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, err
@@ -350,9 +359,9 @@ func verifyBackup(ctx context.Context, path string, want []string) ([]string, er
 	// would migrate forward from the wrong place, whether that number is
 	// zero or twelve.
 	if !slices.Equal(applied, want) {
-		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %v "+
-			"but the database it was copied from has applied %v, so a restore of it "+
-			"would migrate forward from the wrong place", path, applied, want)
+		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %s "+
+			"but the database it was copied from has applied %s, so a restore of it "+
+			"would migrate forward from the wrong place", path, words.And(applied), words.And(want))
 	}
 	return applied, nil
 }
@@ -384,7 +393,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 		return fmt.Errorf("store: integrity check: %w", err)
 	}
 	if len(faults) > 0 {
-		return fmt.Errorf("store: integrity check failed: %v", faults)
+		return fmt.Errorf("store: integrity check failed: %s", words.And(faults))
 	}
 	return nil
 }
@@ -569,6 +578,56 @@ func takeView(ctx context.Context, q interface {
 	return q.QueryRowContext(ctx, viewQuery).Scan(&n)
 }
 
+// tempDirRefused reports a VACUUM INTO that failed because the driver could
+// not make a directory for its temporary files.
+//
+// THE ONE STATEMENT HERE THAT STILL NEEDS ONE, and two things run it: a
+// backup, and the state-log snapshot every data node takes for its peers.
+// Every connection this package opens keeps its temporary storage in memory
+// (see [openPool]), but VACUUM INTO builds the copy on a connection the driver
+// opens for itself, which no session pragma reaches: it keeps a temporary
+// database in a fresh directory under TURSO_TMPDIR, then SQLITE_TMPDIR, then
+// TMPDIR (/tmp unset), and sorts past its buffer into another under TMPDIR,
+// removing both when the copy ends. Measured at the pinned driver, a temporary
+// directory that does not exist fails every copy, a one-table copy included.
+//
+// MATCHED ON THE MESSAGE, because the driver gives an I/O failure no status of
+// its own: it arrives as the generic error carrying `I/O error (tempdir)`,
+// the label upstream gives both of those directories. Matched, the refusal
+// names the variables to change and the directories they hold
+// ([temporaryDirectories]), where the driver's own words name neither.
+func tempDirRefused(err error) bool {
+	return errors.Is(err, turso.ErrTursoGeneric) && strings.Contains(err.Error(), "(tempdir)")
+}
+
+// temporaryDirectories says where the driver puts a copy's temporary files,
+// resolved the way the driver resolves them: the temporary database under the
+// first of TURSO_TMPDIR and SQLITE_TMPDIR that is set, else TMPDIR, and a
+// large sort under TMPDIR whatever the others say.
+//
+// RESOLVED, NEVER TMPDIR ALONE: the driver labels both directories
+// "(tempdir)", so the error cannot say which one refused, and naming TMPDIR's
+// directory where TURSO_TMPDIR's was the missing one pointed an operator at a
+// directory that was fine. So both are named when they differ.
+func temporaryDirectories() string {
+	spill := os.TempDir()
+	for _, name := range []string{"TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+		dir, set := os.LookupEnv(name)
+		if !set {
+			continue
+		}
+		if dir == spill {
+			return fmt.Sprintf("They go under %s and TMPDIR (%s). Make sure "+
+				"the engine's user can write there", name, dir)
+		}
+		return fmt.Sprintf("The temporary database goes under %s (%s) and a "+
+			"large sort under TMPDIR (%s). Make sure the engine's user can "+
+			"write to both", name, dir, spill)
+	}
+	return fmt.Sprintf("They go under TMPDIR (%s). Make sure the engine's "+
+		"user can write there", spill)
+}
+
 // sqlStringLiteral renders s as a SQL string literal.
 //
 // One rule, and it is the whole rule for this dialect: a literal is single
@@ -602,16 +661,22 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// fileDigest is the sha256 of a file, hex-encoded.
-func fileDigest(path string) (string, error) { return FileDigest(path) }
-
 // FileDigest is the SHA-256 of a file, streamed rather than read whole.
 //
-// EXPORTED because a snapshot's manifest carries one and a recipient
-// recomputes it, and the two must be the same digest over the same bytes — a
+// EXPORTED because a snapshot's manifest carries one and a joiner compares it
+// with the digest its transfer took of the bytes as it wrote them (statelog's
+// FetchArtefact), and the two must be the same digest over the same bytes — a
 // second implementation is how one comes to hash the file and the other its
-// path.
-func FileDigest(path string) (string, error) {
+// path, which is why statelog's TestAnArtefactArrivesByteForByte holds the
+// transfer's digest to this one.
+//
+// IT ENDS WHEN ITS CALLER GIVES UP, between one read and the next. The files
+// it hashes are a whole estate — a backup's copy, a donor's snapshot — and a
+// read of tens of gigabytes takes as long as the disk takes: with no context,
+// a snapshot loop asked to stop by a node's drain went on reading until the
+// end of the file, and the stop waited for it, and a backup whose request had
+// gone away finished a checksum nobody would read.
+func FileDigest(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("store: backup: read %s to checksum it: %w", path, err)
@@ -619,8 +684,23 @@ func FileDigest(path string) (string, error) {
 	defer func() { _ = f.Close() }()
 
 	sum := sha256.New()
-	if _, err := io.Copy(sum, f); err != nil {
+	if _, err := io.Copy(sum, readUntilDone{ctx: ctx, r: f}); err != nil {
 		return "", fmt.Errorf("store: backup: checksum %s: %w", path, err)
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// readUntilDone is r, refusing every read once ctx has ended. A wrapper rather
+// than the file itself also keeps [io.Copy] on its own buffered loop — an
+// [os.File] copies through its own WriteTo, which a context cannot reach.
+type readUntilDone struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (u readUntilDone) Read(p []byte) (int, error) {
+	if err := u.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return u.r.Read(p)
 }

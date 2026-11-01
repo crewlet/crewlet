@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A WORK ITEM'S OR A PAGE'S NOTICE IS FROM WHOEVER WROTE IT, as the engine's
@@ -66,9 +66,9 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 		// as a chat message from a removed person is.
 		{name: "a removed seat's", writer: writer{"gone", "agent"}, stranger: true},
 	}
-	for _, source := range []string{tracker.Source, pages.Source} {
+	for _, source := range []string{worklet.Source, doclet.Source} {
 		for _, c := range cases {
-			if c.trackerOnly && source != tracker.Source {
+			if c.trackerOnly && source != worklet.Source {
 				continue
 			}
 			t.Run(source+"/"+c.name, func(t *testing.T) {
@@ -77,16 +77,16 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 				var parser notify.Parser
 				var prompt notify.Prompt
 				switch source {
-				case tracker.Source:
-					payload = workItemNotice(t, c.writer.actor, tracker.AuthorKind(c.writer.kind), "swe")
-					parser, prompt = tracker.NewParser(tracker.ParserOptions{}), tracker.Prompt{}
+				case worklet.Source:
+					payload = workItemNotice(t, c.writer.actor, worklet.AuthorKind(c.writer.kind), "swe")
+					parser, prompt = worklet.NewParser(worklet.ParserOptions{}), worklet.Prompt{}
 				default:
-					payload = pageNotice(t, c.writer.actor, pages.AuthorKind(c.writer.kind), "swe")
-					parser, prompt = pages.NewParser(pages.ParserOptions{}), pages.Prompt{}
+					payload = pageNotice(t, c.writer.actor, doclet.AuthorKind(c.writer.kind), "swe")
+					parser, prompt = doclet.NewParser(doclet.ParserOptions{}), doclet.Prompt{}
 				}
 				evs := []*events.Event{noticeOf(t, reg, parser, prompt, payload, "swe")}
 
-				interactions := e.interactionsOf(evs)
+				interactions := e.interactionsOf(evs, "swe")
 				if got := requesterOf(evs, interactions, "swe"); got != c.requester {
 					t.Errorf("the turn is acting for %q, want %q", got, c.requester)
 				}
@@ -120,21 +120,21 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 
 // workItemNotice is a comment on a work item swe is assigned, written by actor
 // as kind, encoded as the tracker's feed relays it.
-func workItemNotice(t *testing.T, actor string, kind tracker.AuthorKind, assignee string) []byte {
+func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, assignee string) []byte {
 	t.Helper()
-	record := tracker.MutationRecord{
-		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "op-work",
-			Subject: tracker.TaskSubject("t-1"), Op: tracker.OpPatch,
+	record := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			V: worklet.RecordVersion, OpID: "op-work",
+			Subject: worklet.TaskSubject("t-1"), Op: worklet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
-			Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+			Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind,
-		Notify: &tracker.Notify{
-			Kind: tracker.ChangeComment, Excerpt: "can you read the repository for me",
-			Snapshot: tracker.Snapshot{
+		Notify: &worklet.Notify{
+			Kind: worklet.ChangeComment, Excerpt: "can you read the repository for me",
+			Snapshot: worklet.Snapshot{
 				Key: "ENG-1", Project: "ENG", Title: "wire it",
-				Status: tracker.StatusInProgress, Assignee: assignee,
+				Status: worklet.StatusInProgress, Assignee: assignee,
 			},
 		},
 	}
@@ -147,22 +147,22 @@ func workItemNotice(t *testing.T, actor string, kind tracker.AuthorKind, assigne
 
 // pageNotice is a comment on a page that mentions recipient, written by actor
 // as kind, encoded as the knowledge base's feed relays it.
-func pageNotice(t *testing.T, actor string, kind pages.AuthorKind, recipient string) []byte {
+func pageNotice(t *testing.T, actor string, kind doclet.AuthorKind, recipient string) []byte {
 	t.Helper()
-	record := pages.MutationRecord{
-		RecordEnvelope: pages.RecordEnvelope{
-			OpID: "op-page", Subject: pages.PageSubject("p-1"), Op: pages.OpPatch,
+	record := doclet.MutationRecord{
+		RecordEnvelope: doclet.RecordEnvelope{
+			OpID: "op-page", Subject: doclet.PageSubject("p-1"), Op: doclet.OpPatch,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
-			Scope: pages.ScopeSet{Subject: true, Container: "ENG"},
+			Scope: doclet.ScopeSet{Subject: true, Container: "ENG"},
 		},
 		Mutation: json.RawMessage(`{}`), Actor: actor, ActorKind: kind,
-		Notify: &pages.Notify{
-			Kind: pages.ChangeComment, PageID: "p-1", Version: 2,
+		Notify: &doclet.Notify{
+			Kind: doclet.ChangeComment, PageID: "p-1", Version: 2,
 			Mentions: []string{recipient}, Excerpt: "can you read the repository for me",
 			Container: "ENG", Title: "Runbook",
 		},
 	}
-	payload, err := pages.Encode(record)
+	payload, err := doclet.Encode(record)
 	if err != nil {
 		t.Fatalf("encode the page's record: %v", err)
 	}

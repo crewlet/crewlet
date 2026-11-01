@@ -37,7 +37,10 @@ const (
 
 	// TermMinHold is the lowest live hold. A joining node holds the tail
 	// it is about to replay, so a transfer pins what it needs for its
-	// whole duration.
+	// whole duration — and past it, until the node's own position is
+	// published, since a boot's join runs before anything else counts the
+	// node ([AdoptDeps.Hold]). A live hold is one renewed within
+	// [TrimHoldStale] ([HoldTail]).
 	TermMinHold TermName = "min_hold"
 
 	// TermBackupFloor is what has left the host. A company that never
@@ -514,10 +517,32 @@ func (in TrimInputs) feed() Term {
 // forbids.
 const TrimInterval = 15 * time.Minute
 
-// TrimHoldStale is how old a hold may be before it is ignored and deleted.
+// TrimHoldStale is how old a hold may be before the trim ignores it.
 //
 // FOUR HEARTBEATS, the same derivation every other cached coordination fact
 // uses: a holder may miss three beats and still be alive, so a hold older than
-// four is a crashed adopter rather than a slow one — and one that pinned the
-// log for ever would be a single failed join stopping the fleet trimming.
+// four is a crashed holder rather than a slow one — and one that pinned the
+// log for ever would be a single failed join stopping the fleet trimming. A
+// live holder renews on [TrimHoldHeartbeat], a quarter of it ([HoldTail]).
+//
+// IGNORED, NOT DELETED. Nothing removes a stale hold but its owner — its own
+// release, or its next pin under the same owner, which replaces it: the
+// register's one rule is that an owner's key has one writer, and a trim that
+// deleted what it judged stale would race the renewal that proves it was not,
+// removing a live pin until the next beat put it back. What a crashed holder
+// leaves is bounded instead by the key being per OWNER — one per node and
+// purpose ([coord.HoldOwner]) — and costs nothing but the row: the arithmetic
+// reads past it.
 const TrimHoldStale = 4 * coord.ReconcileInterval
+
+// TrimHoldHeartbeat is how often a holder renews its pin on the replay tail
+// ([HoldTail]).
+//
+// A QUARTER OF [TrimHoldStale], which is the derivation every other heartbeated
+// fact in this estate uses: a holder may miss three beats and still be
+// believed. Derived rather than picked, and declared HERE, beside the bound it
+// is derived from, and once for every holder: a heartbeat slower than the
+// bound would have the trim ignore a live pin, which is the hole the pin exists
+// to close — and two holders each declaring their own cadence is how one of
+// them came to have none.
+const TrimHoldHeartbeat = TrimHoldStale / 4

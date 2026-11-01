@@ -28,6 +28,11 @@ const fireHistory = maintenance.ScheduledRunRetention
 // always the whole log.
 func caught() bool { return true }
 
+// unseen is a publisher's view of the fleet's usage generations before the
+// engine has read the positions register — which every case not about a
+// reanchor keeps, so no case starts a pass over every day it did not ask for.
+func unseen() (usage.Generations, bool) { return nil, false }
+
 // openStore is a fresh node with both estates migrated.
 func openStore(t testing.TB) *store.DB {
 	t.Helper()

@@ -237,8 +237,11 @@ func (g *Guard) resolve(w http.ResponseWriter, r *http.Request, open bool) (
 		if answer.presented {
 			if answer.how == iam.Resolved {
 				// A SESSION ENDS ON ITS OWN AT ITS ABSOLUTE DEADLINE,
-				// which no re-issue moves.
-				r = r.WithContext(withLifetime(r.Context(), answer.lifetime))
+				// which no re-issue moves. Its idle deadline rides
+				// beside it for the one reader that bounds by both,
+				// an assistant grant (assist.go).
+				r = r.WithContext(withPresentedSession(
+					withLifetime(r.Context(), answer.lifetime), answer.session))
 			}
 			if answer.tierA != nil && answer.how == iam.Resolved {
 				return g.exchanged(r, *answer.tierA, answer.via)
@@ -263,6 +266,12 @@ func (g *Guard) resolve(w http.ResponseWriter, r *http.Request, open bool) (
 // bearer resolves a request that presented candidate as its bearer: a Tier A
 // entry, a machine token, or nobody.
 func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refusal) {
+	// AN ASSISTANT GRANT BY ITS SHAPE, before any other comparison: it is
+	// accepted only in process and decided by its own arm (assist.go), and
+	// a value of that shape is never anything else.
+	if IsAssistBearer(candidate) {
+		return g.assist(r, candidate)
+	}
 	entry, ok := g.entry(candidate)
 	if !ok && g.machine != nil {
 		// THE THIRD ARM, chosen by the value's SHAPE and never

@@ -153,7 +153,7 @@ const WalkPage = 500
 // move — the walk's first Next answers a refusal naming the table, its
 // standing and the pass, before anything is read, so a pass that forgot to
 // leave such a table out fails on its first page rather than paging somebody
-// about, copying or carrying an object it is not owed (ADR-0051).
+// about, copying or carrying an object it is not owed (ADR-0074).
 func (t ReferenceTable) WalkOf(read RowReader, pass Pass) Walk {
 	return &tableWalk{table: t, read: read, pass: pass}
 }

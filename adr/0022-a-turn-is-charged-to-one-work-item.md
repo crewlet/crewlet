@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/engine`
 - **Enforced-by:** `internal/engine.TestTaskSpendNeverExceedsTheRollup`
-- **Cost-when-tried:** `tracker.Writer.RecordTurn` existed with the applier behind it and had no caller, so every task's `spend_*` columns read zero for every task in every company while the docs promised "spend is on the task". The turn records that should have named the item declared a `task_id` nothing assigned. And the applier gated a purge's marker for the task's own records only: a turn decided while its task existed and landing after the task's purge found no row, which the applier reads as a writer's bug and stops on — on every node, since every node applies the same log in the same order.
+- **Cost-when-tried:** `worklet.Writer.RecordTurn` existed with the applier behind it and had no caller, so every task's `spend_*` columns read zero for every task in every company while the docs promised "spend is on the task". The turn records that should have named the item declared a `task_id` nothing assigned. And the applier gated a purge's marker for the task's own records only: a turn decided while its task existed and landing after the task's purge found no row, which the applier reads as a writer's bug and stops on, on every node, since every node applies the same log in the same order.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -26,8 +26,8 @@ is not charged to the item. A parked segment charged to nothing hands what it
 spent on with the suspended conversation, and the segment that finishes the
 turn pays it when a sole write charges the turn.
 
-Only a **native** item is charged: the counters are rows in the engine's own
-tracker. The write is `tracker.Writer.RecordTurn`, the one additive record,
+Only a **Worklet** item is charged: the counters are rows in Worklet's own
+tables. The write is `worklet.Writer.RecordTurn`, the one additive record,
 which refuses a task the writer cannot see or one that was purged and charges a
 tombstoned one; a turn that lands after its task's purge is read past by the
 deletion gate, never applied.
@@ -45,8 +45,9 @@ which segments were already summed — which is the per-segment id this uses
 instead.
 
 **Summing the turn's completion events into the task at read time** puts a
-scan of the event log behind every board sort by spend, and every node's event
-log holds only what that node ran.
+scan of the event log behind every board sort by spend, and no one node's event
+log holds the company's turns: each data node's holds what it ran and what it
+keeps in custody for nodes without `data` (ADR-0025).
 
 ## Amendment — a segment pays for its auxiliary calls
 
@@ -74,7 +75,7 @@ the seat's day and the company's history.
 
 Two kinds of the turn's own spend happen while **no segment is running**, and
 the segment that resumes from the coding run pays them, as it pays the run's
-own tokens: an agent-mode executor's calls through the tool bridge, which go on
+own tokens: an executor run's calls through the tool bridge, which go on
 after the segment that launched the run has suspended and charged — the
 auxiliary rewrites its tools ask for and the workers it delegates to — and the
 condensation of a collected run's report, failure or question, which the
@@ -90,6 +91,18 @@ reaches the item; a bridged call that finishes after its job was claimed for
 the resume stays on that job's record unpaid, and one that finishes after the
 next launch is not recorded at all. So the item can fall short of the turn's
 cost and never exceed it.
+
+## Amendment: every turn parks on its executor
+
+Since [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md) every
+turn's executor is its coding CLI's own detached run, so every turn completes
+once when it parks at the launch and again each time a run it launched is
+collected: the segments above are every turn's, not only those of a turn that
+chose to detach one. What a parked segment charged to nothing hands on rides
+the turn's parked state (`internal/agent/execstate`, its `Uncharged`), which
+carries no conversation, where the decision above says the suspended
+conversation. And the round-cap judge a segment's tokens include is the
+onboarding pass's, the one pass a judge extends.
 
 ## What this does not decide
 

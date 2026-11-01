@@ -1,0 +1,34 @@
+# A change asked on a screen that has nothing to do with it: Doclet accepts
+# only a search. The assistant makes the change where it lives (the seat's
+# pause) and names the seat by its name, never refusing because of the screen.
+person:
+  apps: [admin]
+  acts: [pause_seat]
+page:
+  screen: doclet
+  title: Doclet
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:2b3c4d5e
+  accepts: [knowledge.search.set]
+question: Pause the QA Engineer until we fix its failing turns.
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: qa, name: QA Engineer, kind: agent}
+  - route: GET /agents/{id}
+    body: {handle: qa, role: QA Engineer, live: {activity: idle, last_turn: {outcome: failed}}}
+script:
+  - call: pause_agent
+    args: {handle: QA Engineer, reason: Its turns keep failing.}
+expect:
+  calls: [pause_agent]
+  never: [propose_page_change]
+  proposals: 1
+  state: waiting_for_approval
+  never_says: [only accepts, this screen cannot]
+  shows: [QA Engineer (qa)]

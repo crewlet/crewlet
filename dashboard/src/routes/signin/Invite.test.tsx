@@ -12,6 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
+import { INVITE_SECRET_HEADER } from "~/contract/identity.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
 import { parseLink } from "./link.ts";
@@ -157,7 +158,7 @@ describe("reading the link", () => {
 
     const view = sent.find((s) => s.url.includes("/auth/invite/"));
     expect(view?.method).toBe("GET");
-    expect(view?.headers["X-Crewlet-Invite-Secret"]).toBe(SECRET);
+    expect(view?.headers[INVITE_SECRET_HEADER]).toBe(SECRET);
     for (const request of sent) expect(request.url).not.toContain(SECRET);
   });
 

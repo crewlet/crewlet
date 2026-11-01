@@ -2,27 +2,34 @@ package queries_test
 
 import (
 	"context"
+	"os"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -35,10 +42,6 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 
 func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
-}
-
-func (memorySandbox) BridgeLog(context.Context, string, string) ([]sandbox.BridgeCall, error) {
-	return nil, nil
 }
 
 // roomQueries is every query kind a room asks for, mapped to the files that
@@ -110,10 +113,11 @@ func everySeam(t *testing.T) queries.Sources {
 		Sandbox:  memorySandbox{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
-		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
-		Config:      surface,
-		Work:        emptyWork{},
-		Pages:       emptyPages{},
+		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
+			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
+		Config: surface,
+		Work:   emptyWork{},
+		Pages:  emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
@@ -138,6 +142,22 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE CODE HOST'S ROWS, which internal/api fills from the code
 		// surface on every node that serves the API.
 		Code: &stubCode{},
+		// THE COMPANY'S OWN CONVERSATION. Three seams rather than one:
+		// a search is asked for a viewer rather than over rooms, and the
+		// badges are coordination's rather than the log's — so a surface
+		// with the rooms and neither of the others is a real shape, and
+		// `chat_search` is gated on its own seam.
+		Chat:       emptyChat{},
+		ChatSearch: emptyChat{},
+		ChatReads:  coordmemory.NewFleet(),
+		// THE MODEL QUESTIONS, each its own seam: what this node resolved
+		// for each model, the fleet's device sign-ins, and the catalogue a
+		// model step suggests from. Every engine that serves the API wires
+		// all three, and Settings › Models reads each. The fakes are
+		// models_test.go's, empty: this sweep is about which names exist.
+		Models:        fakeModels{},
+		DeviceSignIns: fakeDevices{},
+		Catalogue:     fakeCatalogue{},
 	}
 }
 
@@ -151,140 +171,195 @@ func (emptyBroker) List(context.Context) (engine.BrokerView, error) {
 // emptyFiles is a project with no files.
 type emptyFiles struct{}
 
-func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
-	return tracker.FileListing{}, nil
+func (emptyFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing, error) {
+	return worklet.FileListing{}, nil
+}
+
+// emptyChat is the chat reader and its keyword index with nothing in them, on
+// emptyWork's terms: this sweep is about which NAMES exist.
+type emptyChat struct{ noReaderViews }
+
+func (emptyChat) Channels(context.Context, string, chatlet.ChannelsQuery,
+	statelog.Freshness) (chatlet.ChannelListing, error) {
+
+	return chatlet.ChannelListing{}, nil
+}
+
+func (emptyChat) Channel(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (emptyChat) ChannelNamed(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (emptyChat) Messages(context.Context, string, chatlet.TranscriptQuery,
+	statelog.Freshness) (chatlet.Transcript, error) {
+
+	return chatlet.Transcript{}, nil
+}
+
+func (emptyChat) Thread(context.Context, string, chatlet.ThreadQuery,
+	statelog.Freshness) (chatlet.Thread, error) {
+
+	return chatlet.Thread{}, nil
+}
+
+func (emptyChat) RoomNames(context.Context, string,
+	statelog.Freshness) (chatlet.RoomNames, error) {
+
+	return chatlet.RoomNames{}, nil
+}
+
+func (emptyChat) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+
+	return chatlet.Directory{}, nil
+}
+
+func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
+	return estate.ChatSearchAnswer{Hits: []search.ChatHit{}}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
 
-func (emptyWork) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{}, nil
+func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{}, nil
 }
 
-func (emptyWork) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
+func (emptyWork) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
 
-	return tracker.TaskDetail{}, nil
+	return worklet.TaskDetail{}, nil
 }
 
 func (emptyWork) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
+	statelog.Freshness) (worklet.TaskTurns, error) {
 
-	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
+	return worklet.TaskTurns{Turns: []worklet.TaskTurn{}}, nil
 }
 
-func (emptyWork) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (emptyWork) EveryView(context.Context, worklet.EveryViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (emptyWork) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
 func (emptyWork) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	_ worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	return worklet.ParseQuery(worklet.MapParams(params), now, loc)
 }
 
-func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (emptyWork) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (emptyWork) Projects(context.Context, tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
+func (emptyWork) Projects(context.Context, worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
 
-	return tracker.ProjectListing{}, nil
+	return worklet.ProjectListing{}, nil
 }
 
-func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (emptyWork) Project(context.Context, worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 
-	return tracker.ProjectDetail{}, nil
+	return worklet.ProjectDetail{}, nil
 }
 
-func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time,
-	*time.Location) (tracker.WorkloadAnswer, error) {
+func (emptyWork) Workload(context.Context, worklet.WorkloadQuery, time.Time,
+	*time.Location) (worklet.WorkloadAnswer, error) {
 
-	return tracker.WorkloadAnswer{}, nil
+	return worklet.WorkloadAnswer{}, nil
 }
 
-func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
-	tracker.ActivityAnswer, error) {
+func (emptyWork) Activity(context.Context, worklet.ActivityQuery, time.Time) (
+	worklet.ActivityAnswer, error) {
 
-	return tracker.ActivityAnswer{}, nil
+	return worklet.ActivityAnswer{}, nil
 }
 
-func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
-	*time.Location) (tracker.MyWork, error) {
+func (emptyWork) MyWork(context.Context, worklet.MyWorkQuery, time.Time,
+	*time.Location) (worklet.MyWork, error) {
 
-	return tracker.MyWork{}, nil
+	return worklet.MyWork{}, nil
 }
 
-func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (emptyWork) Person(context.Context, worklet.PersonQuery, time.Time) (worklet.PersonState, error) {
+	return worklet.PersonState{}, nil
 }
 
-func (emptyWork) Inbox(context.Context, tracker.InboxQuery, time.Time) (
-	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{}, nil
+func (emptyWork) Inbox(context.Context, worklet.InboxQuery, time.Time) (
+	worklet.InboxAnswer, error) {
+	return worklet.InboxAnswer{}, nil
 }
 
-func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
-	tracker.RoutingAnswer, error) {
-	return tracker.RoutingAnswer{}, nil
+func (emptyWork) Routing(context.Context, worklet.RoutingQuery, time.Time) (
+	worklet.RoutingAnswer, error) {
+	return worklet.RoutingAnswer{}, nil
 }
 
-func (emptyWork) Flow(context.Context, tracker.FlowQuery, time.Time, *time.Location) (
-	tracker.FlowAnswer, error) {
-	return tracker.FlowAnswer{Points: []tracker.FlowPoint{}}, nil
+func (emptyWork) Flow(context.Context, worklet.FlowQuery, time.Time, *time.Location) (
+	worklet.FlowAnswer, error) {
+	return worklet.FlowAnswer{Points: []worklet.FlowPoint{}}, nil
 }
 
-func (emptyWork) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
-	return tracker.FeedPage{Rows: []tracker.FeedRow{}}, nil
+func (emptyWork) CompanyFeed(context.Context, worklet.FeedQuery) (worklet.FeedPage, error) {
+	return worklet.FeedPage{Rows: []worklet.FeedRow{}}, nil
 }
 
-func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *time.Location) (
-	tracker.DecisionsAnswer, error) {
-	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}}, nil
+func (emptyWork) Decisions(context.Context, worklet.DecisionsQuery, time.Time, *time.Location) (
+	worklet.DecisionsAnswer, error) {
+	return worklet.DecisionsAnswer{Asks: []worklet.AskRow{}}, nil
+}
+
+func (emptyWork) AnsweredAsks(context.Context, worklet.DecisionsQuery, time.Time, *time.Location) (
+	worklet.AnsweredAnswer, error) {
+	return worklet.AnsweredAnswer{Asks: []worklet.AnsweredAsk{}}, nil
 }
 
 func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
-	map[string]tracker.TurnPlace, error) {
-	return map[string]tracker.TurnPlace{}, nil
+	map[string]worklet.TurnPlace, error) {
+	return map[string]worklet.TurnPlace{}, nil
 }
 
-func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
-	return tracker.SearchAnswer{}, nil
+func (emptyWork) Search(context.Context, worklet.SearchQuery) (worklet.SearchAnswer, error) {
+	return worklet.SearchAnswer{}, nil
 }
 
-func (emptyWork) Thread(context.Context, tracker.ThreadQuery, statelog.Freshness) (
-	tracker.ResolvedThread, error) {
-	return tracker.ResolvedThread{}, nil
+func (emptyWork) Thread(context.Context, worklet.ThreadQuery, statelog.Freshness) (
+	worklet.ResolvedThread, error) {
+	return worklet.ResolvedThread{}, nil
 }
 
 type emptyPages struct{}
 
-func (emptyPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (emptyPages) List(context.Context, doclet.Filter, statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{}, nil
+func (emptyPages) Get(context.Context, string, statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{}, nil
 }
 
-func (emptyPages) Activity(context.Context, pages.PageActivityQuery) (pages.PageActivity, error) {
-	return pages.PageActivity{}, nil
+func (emptyPages) Activity(context.Context, doclet.PageActivityQuery) (doclet.PageActivity, error) {
+	return doclet.PageActivity{}, nil
 }
 
 func (emptyPages) Revision(context.Context, string, int, statelog.Freshness) (
-	pages.Revision, bool, error) {
-	return pages.Revision{}, false, nil
+	doclet.Revision, bool, error) {
+	return doclet.Revision{}, false, nil
 }
 
-func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
+func (emptyPages) Containers(context.Context, statelog.Freshness) ([]doclet.ContainerListing, error) {
 	return nil, nil
 }
 
@@ -406,8 +481,81 @@ var readOutsideTheDashboard = map[string]string{
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
 	// a person's assistant's), read by a script on the path the reference
 	// prints.
-	"work_inbox": "a script: GET /work/inbox, as docs/reference/api-endpoints.md prints it, and the tracker's " +
+	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+}
+
+// AND THE SWEEP ITSELF CANNOT GO QUIET.
+//
+// Both gates above are only as wide as [everySeam]: Register tests each seam
+// for nil, so a seam the helper does not set registers nothing, and every name
+// behind it disappears from `registeredKinds` without either direction saying
+// a word. That is not hypothetical — it is how the chat family arrived, gated
+// on three seams this helper did not set, and it was caught only because six
+// rooms happened to ask for those names. An operator-only family, or one read
+// over REST from the docs, would have gone in silently and this sweep would
+// have reported a pass over a surface it could not see.
+//
+// So the gating conditions are READ FROM Register ITSELF rather than restated
+// here, on the reasoning the reader gate above takes when it reads the
+// dashboard's own calls through clientsource: a list of seams kept by hand
+// beside the one that matters is the second copy that drifts.
+func TestEverySeamThatGatesAQuestionIsInTheSweep(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("answers.go")
+	if err != nil {
+		t.Fatalf("Register's own source could not be read, so this gate "+
+			"certifies nothing: %v", err)
+	}
+	gates := regexp.MustCompile(`s\.([A-Z][A-Za-z0-9]*) != nil`).
+		FindAllStringSubmatch(registerBody(t, string(source)), -1)
+	if len(gates) == 0 {
+		t.Fatal("Register gates nothing on a seam at all, which it has always " +
+			"done — so this gate certifies nothing")
+	}
+	sweep := reflect.ValueOf(everySeam(t))
+	seen := map[string]bool{}
+	for _, gate := range gates {
+		name := gate[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		field := sweep.FieldByName(name)
+		if !field.IsValid() {
+			t.Errorf("Register gates on Sources.%s and no such field exists — "+
+				"this gate is reading a Register it does not understand", name)
+			continue
+		}
+		if field.IsNil() {
+			t.Errorf("Register gates every name behind Sources.%s on it being "+
+				"non-nil and everySeam leaves it nil, so those names are absent "+
+				"from this sweep and BOTH directions of it go quiet about them",
+				name)
+		}
+	}
+}
+
+// registerBody is Register's own body, which is where a gate on a seam lives.
+//
+// BOUNDED AT THE NEXT TOP-LEVEL DECLARATION rather than read to the end of the
+// file, because the answers below it test their seams for a different reason:
+// a nil `Events` behind a seat's phase history is an empty list rather than an
+// absent question, and reading those as gates would demand seams this sweep
+// has no use for.
+func registerBody(t *testing.T, source string) string {
+	t.Helper()
+	const decl = "\nfunc Register(r *Registry, s Sources) {"
+	from := strings.Index(source, decl)
+	if from < 0 {
+		t.Fatal("Register's declaration was not found, so this gate certifies " +
+			"nothing — it has been renamed or reshaped")
+	}
+	body := source[from+len(decl):]
+	if end := strings.Index(body, "\nfunc "); end >= 0 {
+		return body[:end]
+	}
+	return body
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
@@ -447,7 +595,7 @@ func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	if len(phrased) == 0 {
 		t.Fatal("no phrases were found at all, so this gate certifies nothing")
 	}
-	for _, reason := range tracker.Reasons {
+	for _, reason := range worklet.Reasons {
 		if !phrased[string(reason)] {
 			t.Errorf("the engine writes %q and the client has no phrase for it, "+
 				"so it renders as its own snake_case value on the one screen a "+
@@ -506,6 +654,27 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 		t.Errorf("the screen offers %q and the engine refuses it, so picking it "+
 			"draws no chart at all — a renamed group leaves exactly this behind",
 			leftover)
+	}
+}
+
+// THE SPLITS THE SCREEN KEEPS FROM A READER WHO IS NOT AN ADMIN ARE EXACTLY THE
+// ONES THE ENGINE REFUSES THEM (tokens.AdminGroups). One the engine refuses and
+// the screen still offers is a control that draws a refusal; one the screen
+// hides and the engine answers is a dimension a reader cannot reach.
+//
+// Mutation: add a group to either list alone, and this fails.
+func TestTheScreenOffersAnAdminsSplitsToAnAdminAlone(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal(clientsource.Tree(t), "ADMIN_GROUPS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engine []string
+	for _, g := range tokens.AdminGroups {
+		engine = append(engine, string(g))
+	}
+	if got := clientsource.Strings(block); !slices.Equal(got, engine) {
+		t.Errorf("the screen keeps %v to an admin, the engine refuses %v to everybody else", got, engine)
 	}
 }
 

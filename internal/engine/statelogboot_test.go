@@ -14,8 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A FRESH NODE DOES NOT ASK THE FLEET FOR A SNAPSHOT.
@@ -110,19 +111,18 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T", backends.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := worklet.Domain{}.Stream()
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects,
 		// AT THE FLOOR A BOOT SIZES A LOG TO, not at the ceiling the
 		// domain declares. A ceiling is a reservation the broker grants
 		// in full, and a stream that already exists keeps its own: the
-		// declared sixteen gibibytes is nearly all of a test machine's
-		// broker (three quarters of the volume's free space), so the
-		// boot that follows had a few hundred megabytes left and was
-		// refused the vectors log's reservation — a failure of this
-		// staging, not of the join. The floor is the least the engine
-		// itself creates a log at, so this is a log a peer could have
-		// made on a small disk.
+		// domain's declared ceiling and a fresh node's floor together
+		// are more than a test broker holds (brokertest.StoreMaxBytes),
+		// so the boot that follows would be refused one of the logs it
+		// creates — a failure of this staging, not of the join.
+		// The floor is the least the engine itself creates a log at, so
+		// this is a log a peer could have made on a small disk.
 		MaxBytes:      engine.MinDomainCeiling,
 		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
@@ -133,7 +133,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the tracker's log: %v", err)
 	}
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Scope:   statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
@@ -147,7 +147,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	for _, key := range boot.Secrets.Keys {
 		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
 	}
-	signer, err := statelog.NewSigner(tracker.Domain{}.Name(), ring)
+	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatalf("the peer's signer: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 	t.Parallel()
 	boot, company, backends := joinBackends(t)
-	name := tracker.Domain{}.Name()
+	name := worklet.Domain{}.Name()
 	if err := backends.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 		Domain: name, Generation: 1, BlockedBy: "applied",
 		At: time.Now().UTC(), By: "peer",
@@ -216,7 +216,7 @@ func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Backends) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)
@@ -324,7 +324,7 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		byName[row.Name] = row
 	}
 	// THE TRACKER'S, whose health DOES gate admission.
-	if _, held := byName[tracker.Domain{}.Name()]; !held {
+	if _, held := byName[worklet.Domain{}.Name()]; !held {
 		t.Errorf("no row for the tracker's own log; rows = %+v", rows)
 	}
 	// AND THE VECTOR DOMAIN'S, whose health does not.
@@ -332,10 +332,9 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		t.Errorf("no row for the vector domain, so an operator cannot see the "+
 			"company's embeddings fall behind; rows = %+v", rows)
 	}
-	// AND THE WIKI'S, which is still a projector rather than a domain —
-	// the count is over REPLICATION LOOPS, not over one mechanism.
+	// AND THE KNOWLEDGE BASE'S, a domain's row like every other.
 	if _, held := byName["pages"]; !held {
-		t.Errorf("no row for the wiki's projection; rows = %+v", rows)
+		t.Errorf("no row for the pages domain; rows = %+v", rows)
 	}
 	// AND THE USAGE DOMAIN'S, whose gap is a coverage number too — a node
 	// whose spend history stopped replicating is one the fleet view has to
@@ -346,8 +345,6 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	}
 	for _, row := range rows {
 		switch {
-		case row.Kind != "projection" && row.Kind != "domain":
-			t.Errorf("%s reports kind %q, which is neither", row.Name, row.Kind)
 		case !row.Ready && strings.TrimSpace(row.Detail) == "":
 			t.Errorf("%s is not ready and says nothing about why — an operator "+
 				"reading the fleet view has no next step", row.Name)

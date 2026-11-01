@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY CODE READ SEEKS A NAMED INDEX.
@@ -108,7 +109,7 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 			WHERE id = ?) SELECT id FROM due`, []any{"repo-1"}, ""},
 		"the evictions listing, which scanOK bounds": {evictionsSQL, nil, ""},
 	} {
-		scanned, problems := judgePlan(explain(t, db, tc.sql, tc.args), schema)
+		scanned, problems := judgePlan(storetest.Plan(t, db, tc.sql, tc.args), schema)
 		switch {
 		case tc.wrong == "" && len(problems) > 0:
 			t.Errorf("control %q: the judgement refused a plan that seeks every table: %q", name, problems)
@@ -265,7 +266,7 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 	}
 	scanned := map[string]bool{}
 	for name, st := range judged {
-		plan := explain(t, db, st.sql, st.args)
+		plan := storetest.Plan(t, db, st.sql, st.args)
 		scans, problems := judgePlan(plan, schema)
 		for _, table := range scans {
 			scanned[table] = true
@@ -380,15 +381,7 @@ func judgePlan(plan []string, schema planSchema) (scanned, problems []string) {
 // bound to nothing, since a plan reads no argument's value.
 func plannable(t *testing.T, db store.ReplicatedHandle, text string) (bool, error) {
 	t.Helper()
-	args := make([]any, paramCount(text))
-	// A WRITER'S TRANSACTION, as explain's: a read's refuses to plan a write.
-	err := db.Tx(context.Background(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(context.Background(), "EXPLAIN QUERY PLAN "+text, args...)
-		if err != nil {
-			return err
-		}
-		return rows.Close()
-	})
+	err := storetest.Plannable(t, db, text, make([]any, paramCount(text)))
 	return err == nil, err
 }
 

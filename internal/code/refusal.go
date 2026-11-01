@@ -36,7 +36,7 @@ const (
 	// [RefusalRefConflict]).
 	RefusalReservedRef Refusal = "reserved_ref"
 	// RefusalNotPermitted is a command the principal's grant on the
-	// repository does not cover ([Grant.RefRule], ADR-0058).
+	// repository does not cover ([Grant.RefRule], ADR-0081).
 	RefusalNotPermitted Refusal = "not_permitted"
 	// RefusalBadRef is not a ref.
 	RefusalBadRef Refusal = "bad_ref"
@@ -165,7 +165,7 @@ const (
 	RefusalStoreFull Refusal = "store_full"
 	// RefusalForgedCommitter is a CODING BOX'S push whose pack holds a commit
 	// committed as the engine — `engine@<code.identity_domain>`, the address
-	// only the host's own writes carry (ADR-0062), in whatever case it is
+	// only the host's own writes carry (ADR-0085), in whatever case it is
 	// written — that the repository does not already hold, or more such
 	// commits than one push is checked for: refused whole by the node that
 	// received it before any byte of its bundle was uploaded, so nothing was
@@ -240,7 +240,7 @@ var sentences = map[Refusal]string{
 		"every clone holding one could not fetch the other",
 	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",
 	RefusalAtomic:        "refused with the rest of this --atomic push",
-	RefusalBlobTooLarge:  "a blob is larger than code.limits.max_blob_bytes; keep large binaries in tracker files",
+	RefusalBlobTooLarge:  "a blob is larger than code.limits.max_blob_bytes; keep large binaries in Worklet's project files",
 	RefusalPackTooLarge: "the pack this push stores — completed against the repository and " +
 		"indexed — is larger than one push may store; push fewer commits at once",
 	RefusalBusy: "the repository is taking pushes faster than they are committed; run git push again",

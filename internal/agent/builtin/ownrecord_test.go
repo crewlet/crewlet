@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ownRecordCompany holds a seat whose NAME is an unbound person's login spelt
@@ -101,13 +101,13 @@ func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
 		for _, grants := range [][]iam.Grant{
-			{iam.GrantTracker},
+			{iam.GrantWorklet},
 			{iam.GrantAdmin},
 		} {
 			for _, named := range []string{"", c.caller.Login, c.owner} {
 				person := &personSpy{}
 				surface := ownRecordTools(t, person, &viewStore{})
-				got, err := surface[tracker.SetPrioritiesTool].Call(
+				got, err := surface[worklet.SetPrioritiesTool].Call(
 					as(c.caller, grants...),
 					map[string]any{"handle": named, "items": []any{"ENG-1"}})
 				if err != nil {
@@ -153,13 +153,13 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 		authorize builtin.Authorizer
 		lists     bool
 	}{
-		{"a tracker holder", []iam.Grant{iam.GrantTracker}, nil, true},
+		{"a tracker holder", []iam.Grant{iam.GrantWorklet}, nil, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, nil, true},
 		{"a caller the roster question is refused", []iam.Grant{iam.GrantAdmin},
 			refuseRoster(builtin.Decide(handleChart{})), false},
 	} {
 		surface := ownRecordToolsDecidedBy(t, &personSpy{}, &viewStore{}, c.authorize)
-		got, err := surface[tracker.SetPrioritiesTool].Call(
+		got, err := surface[worklet.SetPrioritiesTool].Call(
 			as(ownRecordCallers[0].caller, c.grants...),
 			map[string]any{"handle": "nobody-by-this-name", "items": []any{"ENG-1"}})
 		if err != nil {
@@ -188,10 +188,10 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
-		views := &viewStore{stored: map[string]tracker.View{}}
+		views := &viewStore{stored: map[string]worklet.View{}}
 		surface := ownRecordTools(t, &personSpy{}, views)
-		got, err := surface[tracker.SaveWorkViewTool].Call(
-			as(c.caller, iam.GrantTracker),
+		got, err := surface[worklet.SaveWorkViewTool].Call(
+			as(c.caller, iam.GrantWorklet),
 			map[string]any{
 				"container": "workspace", "name": "Mine", "type": "list",
 				"personal": true, "protected": true,
@@ -212,7 +212,7 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	// the caller's own, so there is no argument through which to name
 	// somebody else's.
 	for _, tool := range ownRecordTools(t, &personSpy{}, &viewStore{}) {
-		if tool.Name() != tracker.SaveWorkViewTool {
+		if tool.Name() != worklet.SaveWorkViewTool {
 			continue
 		}
 		properties, _ := tool.Parameters()["properties"].(map[string]any)
@@ -284,11 +284,11 @@ func personVerbs() []personVerb {
 		}
 	}
 	return []personVerb{
-		{name: tracker.GetPersonTool, call: tool(tracker.GetPersonTool,
+		{name: worklet.GetPersonTool, call: tool(worklet.GetPersonTool,
 			func(n string) map[string]any { return map[string]any{"handle": n} })},
-		{name: tracker.WorkInboxTool, call: tool(tracker.WorkInboxTool,
+		{name: worklet.WorkInboxTool, call: tool(worklet.WorkInboxTool,
 			func(n string) map[string]any { return map[string]any{"handle": n} })},
-		{name: tracker.SetPrioritiesTool, write: true, call: tool(tracker.SetPrioritiesTool,
+		{name: worklet.SetPrioritiesTool, write: true, call: tool(worklet.SetPrioritiesTool,
 			func(n string) map[string]any {
 				return map[string]any{"handle": n, "items": []any{"ENG-1"}}
 			})},
@@ -346,7 +346,7 @@ func whose(t *testing.T, verb personVerb, person *personSpy, got tools.Result) s
 //
 // Two defects, one cause: the name was never resolved to a record. An
 // administrator naming the unbound `jane.doe` through `set_priorities`, or
-// `PUT /work/people/jane.doe/priorities`, had the login sent through the fuzzy
+// `PUT /worklet/people/jane.doe/priorities`, had the login sent through the fuzzy
 // colleague resolver, which set the priorities of the seat `jane` ("Jane
 // Doe"); and every other verb read or wrote a login LITERALLY, so a person the
 // directory binds to a seat — `j.bound`, who holds `jane` — was read an empty
@@ -369,8 +369,8 @@ func TestSomebodyElsesLoginNamesTheirHoldersRecord(t *testing.T) {
 		}{
 			{"an admin naming an unbound login", as(admin, iam.GrantAdmin), "jane.doe", "jane.doe", false},
 			{"an admin naming a bound person's login", as(admin, iam.GrantAdmin), "j.bound", "jane", false},
-			{"a lead naming their report's login", as(lead, iam.GrantTracker), "dev.person", "dev", true},
-			{"a lead naming somebody they do not lead", as(lead, iam.GrantTracker), "j.bound", "", false},
+			{"a lead naming their report's login", as(lead, iam.GrantWorklet), "dev.person", "dev", true},
+			{"a lead naming somebody they do not lead", as(lead, iam.GrantWorklet), "j.bound", "", false},
 		} {
 			t.Run(verb.name+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
@@ -403,7 +403,7 @@ func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
 			t.Run(verb.name+"/"+typed, func(t *testing.T) {
 				t.Parallel()
 				person, dir := &personSpy{}, &directory{}
-				got := verb.call(as(me, iam.GrantTracker),
+				got := verb.call(as(me, iam.GrantWorklet),
 					personDeps(person, dir), typed)
 				if reached := whose(t, verb, person, got); reached != "jane" {
 					t.Errorf("%s naming %q reached %q, want the caller's own "+
@@ -431,7 +431,7 @@ func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
 		iam.GrantAdmin)
 	colleague := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantTracker)
+		Seat: "lead"}, iam.GrantWorklet)
 	for _, verb := range personVerbs() {
 		for _, c := range []struct {
 			name   string
@@ -532,9 +532,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 	t.Parallel()
 	// `dev` leads nobody in [handleChart]; `lead` leads `dev`.
 	stranger := as(iam.Principal{Kind: iam.KindPerson, Login: "dev.person",
-		Seat: "dev"}, iam.GrantTracker)
+		Seat: "dev"}, iam.GrantWorklet)
 	lead := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantTracker)
+		Seat: "lead"}, iam.GrantWorklet)
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
 		iam.GrantAdmin)
 	blind := func() *directory {

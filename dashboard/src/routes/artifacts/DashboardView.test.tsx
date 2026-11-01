@@ -158,7 +158,7 @@ function answer(dataset: string): {
           version: 1,
           dataset: "work",
           status: "refused",
-          refusal: { dataset: "work", reason: "no_grant", grants: ["tracker"] },
+          refusal: { dataset: "work", reason: "no_grant", grants: ["worklet"] },
           detail: "You cannot read tracker: people and agents holding the tracker.",
         },
       };

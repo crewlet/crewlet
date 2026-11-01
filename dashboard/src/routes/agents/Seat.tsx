@@ -13,10 +13,13 @@
  * Assign task (an existing task handed over conditionally, or a new one),
  * and Pause / Resume — each a `WriteButton`, so a reader who cannot make the
  * change sees the control and the reason rather than a page with no way to
- * act. Pause asks whether to stop the current turn too, and says that
- * without it the turn finishes first. "Events" (an agent's only: a person
- * publishes no events under a seat id for `seat=` to narrow by) and "Edit in
- * org" are the secondary pair, in the bar's "More" menu.
+ * act. Where the company runs the engine's own chat and the reader holds it,
+ * Direct message opens a conversation with the seat beside Message — a remark
+ * rather than an ask (`DirectMessage.tsx`), so it never replaces it. Pause
+ * asks whether to stop the current turn too, and says that without it the
+ * turn finishes first. "Events" (an agent's only: a person publishes no events
+ * under a seat id for `seat=` to narrow by) and "Edit in org" are the
+ * secondary pair, in the bar's "More" menu.
  *
  * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
  * watch link, its Transcript with the phase it is on open — and the Turns tab
@@ -51,10 +54,10 @@
  * # Status for everybody, the rest by access
  *
  * The page is the OVERVIEW's: anybody signed in reads a seat's state, its
- * figures and its schedules. What it is working on is the tracker's, so the
- * open work — the strip's count, the Overview's card, the Work tab — is asked
- * only of a reader holding Tracker. What it SAID — the Turns and Memory tabs,
- * a call's prompt and answer — is its trail, which the engine answers to an
+ * figures and its schedules. What it is working on is Worklet's, so the
+ * open work (the strip's count, the Overview's card, the Work tab) is asked
+ * only of a reader holding Worklet. What it SAID (the Turns and Memory tabs,
+ * a call's prompt and answer) is its trail, which the engine answers to an
  * admin and to whoever leads the seat (`seat/profile.ts`' `mayReadTrail`);
  * every other reader finds those tabs drawn and locked, saying what would
  * open them, and nothing is asked.
@@ -89,6 +92,7 @@ import {
   PauseGlyph,
   PencilGlyph,
   PlusGlyph,
+  SendGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -109,6 +113,10 @@ import {
   MessageSeatButton,
   PauseSeatButton,
 } from "~/components/writes.tsx";
+import { TechnicalDetails } from "~/components/common.tsx";
+import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
+import { waitedOn } from "~/lib/budget.ts";
+import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -122,24 +130,34 @@ import {
   statusOf,
   seatPath,
   seatResolvers,
+  seatWord,
+  shownStateOf,
   stoppedLine,
+  failureWords,
   toneOf,
   useSeatSetup,
   type Seat,
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { ADMIN, TRACKER } from "~/lib/access.ts";
+import { ADMIN, WORKLET } from "~/lib/access.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import {
+  menuHold,
+  useDirectSeatAccess,
+  useMessageSeatAccess,
+  useWriteAccess,
+} from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { Access } from "./seat/Access.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
@@ -149,7 +167,6 @@ import {
   findSeat,
   liveRow,
   mayReadTrail,
-  pillWord,
   seatRun,
   sentence,
   type SeatTab,
@@ -211,8 +228,8 @@ export function SeatScreen({ handle }: { handle: string }) {
       sort: "-priority,updated",
       limit: WORK_PAGE,
     },
-    // THE TRACKER'S QUESTION, asked only of a reader holding it.
-    { enabled: !!seat?.handle && viewer.tracker && ask.tracker, pollMs: 30_000 },
+    // WORKLET'S QUESTION, asked only of a reader holding it.
+    { enabled: !!seat?.handle && viewer.worklet && ask.tracker, pollMs: 30_000 },
   );
   // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
   // doc.
@@ -242,6 +259,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
   // held in the words the inline control is.
   const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
+  const directAccess = useDirectSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu(
@@ -271,7 +289,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          // FILING OR HANDING OVER A TASK is Crewlet Works', and offered only
+          ...(directAccess
+            ? [
+                {
+                  key: "direct",
+                  label: "Direct message",
+                  icon: <SendGlyph size="sm" />,
+                  onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
+                  ...menuHold(directAccess),
+                },
+              ]
+            : []),
+          // FILING OR HANDING OVER A TASK is Worklet's, and offered only
           // where the company runs it, as the inline buttons are.
           ...(runs.tracker
             ? [
@@ -351,25 +380,34 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        {/* THE TRACKER'S TWO WRITES, and their wrappers with them: where the
-            company runs no Crewlet Works the buttons draw nothing, and their
-            empty spans still took the bar's gap. */}
+        {/* WORKLET'S TWO WRITES, Message here and Assign task after
+            chat's door, and their wrappers with them: where the company runs
+            no Worklet the buttons draw nothing, and their empty spans
+            still took the bar's gap. */}
         {runs.tracker && (
-          <>
-            <span className={paused ? "page-action-folds" : undefined}>
-              {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
-                  everywhere the button is drawn. */}
-              <MessageSeatButton handle={seat.handle} />
-            </span>
-            <span className="page-action-folds">
-              <AssignToSeatButton
-                handle={seat.handle}
-                name={seat.name}
-                open={assigning}
-                onOpenChange={setAssigning}
-              />
-            </span>
-          </>
+          <span className={paused ? "page-action-folds" : undefined}>
+            {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+                everywhere the button is drawn. */}
+            <MessageSeatButton handle={seat.handle} />
+          </span>
+        )}
+        {/* CHATLET'S DOOR, beside Message and never inside the tracker's pair:
+            it opens wherever the company runs the engine's own chat, whatever
+            it runs for work, and its span is drawn only where the door is. */}
+        {directAccess && (
+          <span className="page-action-folds">
+            <DirectMessageSeatButton handle={seat.handle} />
+          </span>
+        )}
+        {runs.tracker && (
+          <span className="page-action-folds">
+            <AssignToSeatButton
+              handle={seat.handle}
+              name={seat.name}
+              open={assigning}
+              onOpenChange={setAssigning}
+            />
+          </span>
         )}
         {!human && (
           <span className={paused ? undefined : "page-action-folds"}>
@@ -476,10 +514,10 @@ export function SeatScreen({ handle }: { handle: string }) {
           {tab === "work" &&
             (viewer.loading ? (
               <AccessPending />
-            ) : viewer.tracker ? (
+            ) : viewer.worklet ? (
               <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
             ) : (
-              <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
+              <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
             ))}
           {tab === "turns" &&
             !human &&
@@ -510,6 +548,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               />
             ))}
           {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
+          {tab === "access" && !human && <Access handle={seat.handle} />}
           {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
         </div>
       </div>
@@ -520,7 +559,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 /** The badge, the name, the kind and state, and the line that places the seat. */
 function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
   const human = seat.kind === "human";
-  const state = human ? undefined : activityOf(agent);
+  const state = human ? undefined : shownStateOf(agent);
   const status = human ? undefined : statusOf(state);
   const place = unitPath(seat.unit);
   return (
@@ -544,7 +583,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
               read as two states. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
-              {pillWord(agent)}
+              {seatWord(agent)}
             </Tag>
           )}
         </div>
@@ -594,9 +633,18 @@ function Holder({
 }
 
 /**
- * What stops the seat or waits on somebody, above whichever tab is open: the
- * last error, a pause (who, when, why), another stop, and a coding run parked
- * on a question — with the answer to it one press away.
+ * What stops the seat or waits on somebody, above whichever tab is open: a
+ * pause (who, when, why), another stop, a failed last turn, and a coding run
+ * parked on a question, with the answer to it one press away.
+ *
+ * ONE BANNER PER CAUSE. A stop for a fault and the failed turn that came with
+ * it were two banners ("server: llm chain exhausted ..." over "This seat is
+ * stopped: its model provider is unreachable"), one cause said twice and the
+ * first in the engine's machine words. A fault stop now carries its failure in
+ * its own banner; a pause is a person's decision and a failed turn beside it
+ * is a second cause, so it keeps a banner of its own. Every headline is plain
+ * words (`failureWords`); the engine's raw message is behind the kit's
+ * disclosure ([TechnicalDetails]).
  */
 function Notices({
   seat,
@@ -611,56 +659,88 @@ function Notices({
 }) {
   const sandboxes = useSandboxes();
   if (seat.kind === "human" || !agent) return null;
-  const state = activityOf(agent);
+  const state = shownStateOf(agent);
   const paused = agent.paused ?? null;
+  const failure = agent.last_error ?? null;
   const sandbox = seatRun(sandboxes, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
-  if (!agent.last_error && state !== "stopped" && !asking) return null;
+  if (!failure && state !== "stopped" && state !== "paused" && !asking) return null;
+  // The failed turn's own facts: when, in which phase, and the event that
+  // recorded it. Said inside whichever banner owns the cause.
+  const facts = failure
+    ? [failure.phase && `during ${failure.phase}`, failure.at && relTime(failure.at, now)]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const failureFacts = failure && (
+    <>
+      {facts && ` (${facts})`}
+      <TechnicalDetails text={failure.detail} />
+    </>
+  );
+  const eventLink = failure?.event_id ? (
+    <a className="t-link" href={href(["live", "events", failure.event_id])}>
+      The event
+    </a>
+  ) : undefined;
   return (
     <div className="prof-notices">
-      {agent.last_error && (
-        <Callout
-          variant="danger"
-          action={
-            agent.last_error.event_id ? (
-              <a className="t-link" href={href(["live", "events", agent.last_error.event_id])}>
-                The event
-              </a>
-            ) : undefined
-          }
-        >
-          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
-          {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-          {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
-        </Callout>
-      )}
       {/* THE STATE'S OWN TONE, the pill's and the badge's: a stopped seat is
           the one red state in the seat vocabulary, and a warning callout
           under a danger pill named one fact in two colours. */}
-      {state === "stopped" &&
-        (agent.stopped_reason === "paused" && paused ? (
-          <Callout variant={toneOf(state)}>
-            <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
-            {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
-          </Callout>
-        ) : (
-          <Callout variant={toneOf(state)}>
-            This seat is stopped: {stoppedLine(agent, nameOf)}.
-          </Callout>
-        ))}
+      {state === "paused" && (
+        <Callout variant={toneOf(state)}>
+          {paused ? (
+            <>
+              <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
+              {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
+            </>
+          ) : (
+            <>This seat is paused.</>
+          )}
+        </Callout>
+      )}
+      {state === "stopped" && (
+        <Callout
+          variant={toneOf(state)}
+          action={
+            // A SPENT BUDGET IS RAISED HERE, on the scope refusing the
+            // seat, by whoever may; anybody else is told who can.
+            agent.stopped_reason === "budget" ? (
+              <RaiseBudgetButton
+                handle={seat.handle}
+                name={seat.name}
+                window={waitedOn(agent.budget?.windows, "refusing")}
+              />
+            ) : (
+              eventLink
+            )
+          }
+        >
+          This seat is stopped: {stoppedLine(agent, nameOf)}.
+          {failure && (
+            <>
+              {" "}
+              {failureWords(failure.kind).sentence}
+              {failureFacts}
+            </>
+          )}
+        </Callout>
+      )}
+      {failure && state !== "stopped" && (
+        <Callout variant="danger" action={eventLink}>
+          <strong>The last turn failed.</strong> {failureWords(failure.kind).sentence}
+          {failureFacts}
+        </Callout>
+      )}
       {sandbox && asking && (
         <Callout
           variant="warning"
           icon={<CircleQuestionMarkGlyph size="md" />}
-          action={
-            <AnswerRunButton
-              turnId={sandbox.turn_id}
-              seat={seat.name}
-              question={sandbox.question ?? ""}
-            />
-          }
+          action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          A coding run is waiting on a question: {sandbox.question || "(no question recorded)"}
+          A coding run is waiting on a question:{" "}
+          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}
     </div>

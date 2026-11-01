@@ -59,8 +59,8 @@ type Tombstone struct {
 // # Why every domain answers for its own log
 //
 // An eviction is a record on a log like any other, keyed on a position in that
-// log's own sequence space, so every node applies it into that domain's table
-// and every node's copy is identical — which is what makes the applier's
+// log's own sequence space, so every data node applies it into that domain's
+// table and every node's copy is identical — which is what makes the applier's
 // eviction gate hold when coordination cannot be reached at all. The trim reads
 // the same rows for a different question: a node stops being counted on a log
 // once its tombstone THERE is older than the fence window. Asked of another
@@ -92,8 +92,8 @@ type EvictionRow struct {
 //
 // A LIVE DATA NODE COUNTS FOR EVERY LOG. Every data node runs every domain,
 // the identity estate included, whatever its other roles, so a live data node
-// that has published no position for a log is one between boot and its first
-// heartbeat — never one that declined the log and will never report.
+// that has published no position for a log is one whose heartbeat has not yet
+// written its row — never one that declined the log and will never report.
 type Presence struct {
 	NodeID string
 }
@@ -108,14 +108,24 @@ type Presence struct {
 // is deliberate, and is why an offline node pins the floor rather than
 // vanishing from it.
 //
-// The live data nodes are what catch a node between boot and its first
-// heartbeat — which is exactly a node adopting a snapshot. It counts at
-// position ZERO and blocks every term derived from the set, for at most one
-// heartbeat, and the operator surface renders it as counted with no position
-// yet so the block has a visible cause. DATA nodes, because they are the nodes
-// that apply the log — every one of them applies every log from boot — and a
-// node without `data` applies none: counted at zero, it would pin every log
-// for as long as it ran.
+// The live data nodes are what catch a node that holds a presence lease and
+// whose row has not landed — its heartbeat's first write refused, or not yet
+// made. It counts at position ZERO and blocks every term derived from the set
+// until the row lands, and the operator surface renders it as counted with no
+// position yet so the block has a visible cause. DATA nodes, because they are
+// the nodes that apply the log — every one of them applies every log from boot
+// — and a node without `data` applies none: counted at zero, it would pin
+// every log for as long as it ran.
+//
+// A BOOTING NODE IS NOT ONE OF THEM until after its first row: its heartbeat
+// publishes that row as its state log starts, and it claims its presence lease
+// only later. Between its boot and that row it is counted by the row an
+// earlier run of it left, or by nothing if it never ran — the interval the
+// package doc's write premise states. A node ADOPTING A SNAPSHOT is in that
+// interval for the whole transfer, since its join runs before its heartbeat
+// starts, and what keeps the tail it is about to replay is its own hold,
+// renewed for the whole transfer and kept until a row of its own counts the
+// tail ([AdoptDeps.Hold]).
 //
 // The tombstones are what let an operator advance a floor an absent node is
 // pinning, and they take effect only after the window — because a node that
@@ -130,10 +140,12 @@ func CountedSet(now time.Time, reported []NodePosition,
 	for _, p := range live {
 		if _, known := byID[p.NodeID]; !known {
 			// A LIVE DATA NODE WITH NO POSITION YET COUNTS AT ZERO and
-			// blocks. It is a node between boot and its first report —
-			// which is a node adopting a snapshot — and treating it as
-			// absent would let the trim advance past the tail it is
-			// about to replay.
+			// blocks: it applies every log, and nothing says where it
+			// stands until its row lands, so treating it as absent
+			// would let the trim advance past what it has still to
+			// apply. (A booting node is not live until after its first
+			// row; one adopting a snapshot is kept by its own hold — see
+			// the doc above.)
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}
 	}
@@ -155,8 +167,8 @@ func CountedSet(now time.Time, reported []NodePosition,
 // record an older build cannot even defer.
 //
 // THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
-// applies the log — a node between boot and its first report counts, at zero,
-// because it is about to replay — and a node on an old build that is offline
+// applies the log — a live node whose row has not landed counts, at zero,
+// because it applies the log all the same — and a node on an old build that is offline
 // but not evicted applies the log the moment it returns: a record it cannot
 // read would stop it then, so it holds such a writer back exactly as it holds
 // back the trim, and an operator's eviction releases both.
@@ -174,8 +186,14 @@ type EvictionRefusal struct {
 	Detail string
 }
 
-func (e *EvictionRefusal) Error() string {
-	return fmt.Sprintf("statelog: %s may not be evicted: %s", e.NodeID, e.Detail)
+func (e *EvictionRefusal) Error() string { return "statelog: " + e.Tell() }
+
+// Tell is the refusal as the operator who asked reads it ([Told]).
+func (e *EvictionRefusal) Tell() string {
+	if e.NodeID == "" {
+		return e.Detail
+	}
+	return fmt.Sprintf("%s may not be evicted: %s", e.NodeID, e.Detail)
 }
 
 // PermitEviction decides whether a node may be evicted at all.
@@ -209,10 +227,10 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	held := slices.ContainsFunc(live, func(p Presence) bool { return p.NodeID == nodeID })
 	if held && !force {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
-			"lease, so it is still reaching coordination and almost certainly " +
-			"running — an eviction drops every record it writes on every node and " +
+			"lease, so it's still reaching coordination and almost certainly " +
+			"running. An eviction drops every record it writes on every node and " +
 			"takes its copy of every log it is evicted from out of service, which " +
-			"is the gesture for a node that is not coming back"}
+			"is the gesture for a node that isn't coming back"}
 	}
 	return nil
 }
@@ -230,9 +248,9 @@ func (e *EvictionRefusal) Remedy() GateRemedy {
 	}
 	return GateRemedy{
 		Actions: []GateAction{GateWait, GateForce},
-		Detail: fmt.Sprintf("stop %s and wait for its presence lease to lapse — "+
-			"the retention report stops showing it live — then run the eviction "+
-			"again; or, if it is wedged in a way that still renews its lease, "+
+		Detail: fmt.Sprintf("stop %s and wait for its presence lease to lapse "+
+			"(the retention report stops showing it live), then run the eviction "+
+			"again; or, if it's wedged in a way that still renews its lease, "+
 			"force the eviction past the lease", e.NodeID),
 	}
 }
@@ -297,7 +315,11 @@ type ReadmissionRefusal struct {
 	Bound ReadmissionBound
 }
 
-func (e *ReadmissionRefusal) Error() string {
+func (e *ReadmissionRefusal) Error() string { return "statelog: " + e.Tell() }
+
+// Tell is the refusal as the operator who asked reads it ([Told]), every number
+// it turns on included, since the inequality is the reason.
+func (e *ReadmissionRefusal) Tell() string {
 	gone := fmt.Sprintf("records below %d may already be gone from the %s log "+
 		"(published floor %d, first surviving sequence %d)",
 		e.Bound.Held(), e.Domain, e.Bound.Floor, e.Bound.First)
@@ -310,18 +332,18 @@ func (e *ReadmissionRefusal) Error() string {
 	}
 	switch {
 	case !e.Published:
-		return fmt.Sprintf("statelog: %s may not be readmitted: it has never "+
+		return fmt.Sprintf("%s may not be readmitted: it has never "+
 			"published a position, so as far as the fleet knows it holds "+
 			"nothing, and %s", e.NodeID, gone)
 	case e.Generation < e.Bound.Generation:
-		return fmt.Sprintf("statelog: %s may not be readmitted: its last position "+
+		return fmt.Sprintf("%s may not be readmitted: its last position "+
 			"in %s%s is %d at generation %d and the log is at generation %d, a "+
-			"sequence space that no longer exists — nothing it holds can be "+
+			"sequence space that no longer exists, so nothing it holds can be "+
 			"compared with anything the log still has",
 			e.NodeID, e.Domain, reported, e.Seq, e.Generation, e.Bound.Generation)
 	}
-	return fmt.Sprintf("statelog: %s may not be readmitted: its last position in "+
-		"%s%s is %d and %s — it has to catch up before the fleet counts it again",
+	return fmt.Sprintf("%s may not be readmitted: its last position in "+
+		"%s%s is %d and %s. It has to catch up before the fleet counts it again",
 		e.NodeID, e.Domain, reported, e.Seq, gone)
 }
 
@@ -335,16 +357,40 @@ func (e *ReadmissionRefusal) Error() string {
 func (e *ReadmissionRefusal) Remedy() GateRemedy {
 	return GateRemedy{
 		Actions: []GateAction{GateWait},
-		Detail: fmt.Sprintf("start %s if it is not running: it catches up on its "+
+		Detail: fmt.Sprintf("start %s if it isn't running: it catches up on its "+
 			"own, replaying what the log still holds and adopting a peer's snapshot "+
-			"where it does not — the retention report's snapshots say whether any "+
-			"peer can donate one. Readmit it once it has applied every record up to "+
+			"where it doesn't (the retention report's snapshots say whether any "+
+			"peer can donate one). Readmit it once it has applied every record up to "+
 			"the one just before the higher of the floor and the first surviving "+
 			"sequence this refusal names: its position on that log in the retention "+
 			"report at that bound minus one or above, at the log's current "+
 			"generation", e.NodeID),
 	}
 }
+
+// ReanchorNotApplied is a readmission this node can't judge on one log: the
+// node reports its position there at a later generation than this node runs
+// the log at, so the fleet has re-anchored it and this node hasn't applied
+// that yet. A position in a generation this node doesn't hold compares to
+// nothing it has. It is a CONDITION ([ErrUnavailable]): it clears when this
+// node applies the re-anchor, and a node that already has judges it now, so
+// the remedy is to ask again or to ask another node.
+type ReanchorNotApplied struct {
+	Node   string
+	Domain string
+	// Reported is the generation the node's position is at, and Runs the
+	// one this node runs the log at.
+	Reported, Runs uint32
+}
+
+func (e *ReanchorNotApplied) Error() string {
+	return fmt.Sprintf("statelog: %s reports its %s position at generation %d and "+
+		"this node runs that log at generation %d: the fleet has re-anchored it "+
+		"and this node hasn't applied that yet", e.Node, e.Domain, e.Reported, e.Runs)
+}
+
+// Unwrap is the condition it is: one a wait, or another node, clears.
+func (e *ReanchorNotApplied) Unwrap() error { return ErrUnavailable }
 
 // PermitReadmission decides whether an evicted node may be counted again.
 //
@@ -415,12 +461,8 @@ func PermitReadmission(nodeID string, register []coord.NodePositions,
 		refusal.Generation, refusal.Seq, refusal.ReportedAt = at.Generation, at.Seq, row.At
 		switch {
 		case at.Generation > b.Generation:
-			return fmt.Errorf("statelog: %s reports its %s position at generation %d "+
-				"and this node runs that log at generation %d — the fleet has "+
-				"re-anchored it and this node has not applied that yet, so it cannot "+
-				"judge where %s stands; retry, or readmit through a node that has "+
-				"caught up: %w", nodeID, b.Domain, at.Generation, b.Generation,
-				nodeID, ErrUnavailable)
+			return &ReanchorNotApplied{Node: nodeID, Domain: b.Domain,
+				Reported: at.Generation, Runs: b.Generation}
 		case at.Generation < b.Generation, !Replayable(at.Seq, b.Held()):
 			return refusal
 		}
@@ -474,7 +516,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 			Reason: ReasonSuperseded,
 			Detail: fmt.Sprintf("operation %q's record for %s landed at %s and %s "+
 				"at composed position %d has superseded it, so retrying it is not "+
-				"a new gesture — start one, under a fresh operation id, if %s "+
+				"a new gesture. Start one, under a fresh operation id, if %s "+
 				"should change again", opID, nodeID, held, what, at, nodeID),
 			Position: held,
 			OpID:     opID,
@@ -482,7 +524,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 	}
 	inconsistent := func(detail string) error {
 		return fmt.Errorf("statelog: operation %q's record for %s landed at %s and "+
-			"%s — the row and the ledger were written by the same apply, so this "+
+			"%s. The row and the ledger were written by the same apply, so this "+
 			"estate is not one a retry can be judged against", opID, nodeID,
 			held, detail)
 	}

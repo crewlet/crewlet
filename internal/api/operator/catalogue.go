@@ -1,9 +1,8 @@
-// Package operator serves the company's own tracker and knowledge base — and,
-// where it hosts code, its repositories' read tools, and the deployment's
-// health tools — to the people who run
-// it: ONE catalogue of tools, built for every call from what this node serves
-// at that moment, and every transport that reaches it drawing from that one
-// value through one dispatch.
+// Package operator serves Worklet, Doclet and Chatlet — and, where it hosts
+// code, its repositories' read tools, and the deployment's health tools — to
+// the people who run it: ONE catalogue of tools, built for every call from
+// what this node serves at that moment, and every transport that reaches it
+// drawing from that one value through one dispatch.
 //
 // # Why this exists
 //
@@ -32,16 +31,24 @@
 //
 // # Built for every call, never captured
 //
-// The catalogue is the native halves' — a node's tracker and knowledge base
-// come up with its FIRST COMPANY, which a node that booted with none meets at
-// an apply, long after its API started serving — and the knowledge search
-// beside them is whatever backend the company runs NOW, which an apply can
-// add. So [Options.Halves] is read at the start of every call, and a node that
-// has not met its company answers `503 no_active_revision` while one whose
-// catalogue is empty answers as the route's absence would. A catalogue built
-// once, when the API was wired, served the halves the node had at that moment
-// for the life of the process: none, on the node a company was bootstrapped
-// on.
+// The catalogue is the native halves' — a node's tracker, knowledge base and
+// chat come up with its FIRST COMPANY, which a node that booted with none
+// meets at an apply, long after its API started serving — and the knowledge
+// search beside them is whatever backend the company runs NOW, which an apply
+// can add. So [Options.Halves] is read at the start of every call, and a node
+// that has not met its company answers `503 no_active_revision`. A catalogue
+// built once, when the API was wired, served the halves the node had at that
+// moment for the life of the process: none, on the node a company was
+// bootstrapped on.
+//
+// # Never empty once the company is up
+//
+// The seat controls — answering a parked run, pausing and resuming a seat,
+// steering a running turn — read and write the fleet's own records, which
+// every node reaches whatever backends its company runs. So [New] requires
+// them ([Options.Runs], [Options.Pauses], [Options.Steer]), and a company that
+// keeps none of the native halves is still served those four: there is no
+// empty catalogue for a transport to answer.
 //
 // A [Server] is built ONCE per node and never changed; what changes is the
 // catalogue each call reads off it, and a call is served by the one catalogue
@@ -73,6 +80,17 @@
 // record read one answer, and a directory rebind or a company revision
 // landing while a call runs changes the next request, never this one.
 //
+// CHAT IS THE ONE HALF A CREDENTIAL ACTING AS ITSELF CANNOT USE, and the
+// authority table says so rather than this surface: a room renders its
+// speakers by seat, its membership is seats and a direct conversation is
+// named by their handles, so every chat verb is SEATED and a principal no seat
+// binds is refused it — its reads included — by the table's own row
+// (`unauthorized`, reason `unseated`, no grant named), on every transport and
+// before any tool runs. A pipeline that should post is given a human seat and
+// its credential bound to it. The chat destructions that are said in nobody's
+// voice — an erase, a prune, a room's retention — are no seat's verb, so no
+// tool serves them and they are not in this catalogue.
+//
 // # A retry is the same operations
 //
 // A person has no turn and nothing redelivers their call, but they RETRY: a
@@ -82,9 +100,9 @@
 //   - the act route and the human write surface take it from the
 //     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal
 //     that sent it, and every write the call makes derives its id from that
-//     key — the tracker's through [builtin.Actor.WorkKey], the knowledge
-//     base's through [pages.Actor.OpKey] — so the request sent again is the
-//     first attempt's writes rather than new ones;
+//     key (Worklet's through [builtin.Actor.WorkKey], Doclet's through
+//     [doclet.Actor.OpKey], chat's through [chatlet.Actor.OpKey]), so the
+//     request sent again is the first attempt's writes rather than new ones;
 //   - an MCP client names none, so each of its calls is a new operation, and a
 //     tracker write answers with the `op_id` that operation was, which the
 //     assistant sends back with the same arguments to finish a write that
@@ -133,18 +151,26 @@ import (
 
 var log = logging.Get("api.operator")
 
-// Halves are the company's own tracker, knowledge base and knowledge search as
+// Halves are Worklet, Doclet, Chatlet and knowledge search as
 // ONE call finds them. Their Actor and Authorize fields are this surface's to
 // set and are overwritten: the actor is the request's principal carrying the
 // call's operation, and the decision is [Options.Authorize].
 type Halves struct {
-	// Work and Pages are the native backends. A zero half serves none of
+	// Work and Pages are Worklet and Doclet. A zero half serves none of
 	// its tools — the honest shape for a company on Jira or Confluence.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
 
+	// Chat is the company's own chat: its rooms through the estate router,
+	// their ranked search, and a person's read state. A zero half serves
+	// none of its tools — a company talking on Slack or Mattermost — and a
+	// half holding the read state alone serves `mark_chat_read` alone: a
+	// node in a maintenance mode publishes no chat record, and a person's
+	// read cursor is the fleet's coordination record rather than one.
+	Chat builtin.ChatDeps
+
 	// Knowledge is the company's ranked search, or nil. It is offered
-	// whatever backend the company runs, native or not: ranked search over
+	// whatever backend the company runs, Doclet or not: ranked search over
 	// the company's own wiki is exactly as useful on Confluence.
 	Knowledge builtin.KnowledgeSearcher
 
@@ -190,8 +216,10 @@ type Options struct {
 
 	// Org is the company chart, resolved per call because a config apply
 	// replaces it. An operator has no turn to carry one: `search_knowledge`
-	// is scoped against it, and a pause resolves the seat it names through
-	// it. Nil serves neither.
+	// and `answer_knowledge` are scoped against it, and nil serves neither;
+	// `steer_turn` names the seat a reply comes from through it where it
+	// can. A pause resolves the seat it names through [Options.Pauses]' own
+	// Org, which is required.
 	Org func() *org.Organization
 
 	// Authorize decides whether the party behind a call may make it, and
@@ -202,18 +230,31 @@ type Options struct {
 	// refusal [builtin.OperatorTools] makes of a nil one on every call.
 	Authorize builtin.Authorizer
 
-	// Runs answers a parked coding run by its turn (`answer_run`). A zero
-	// value serves no such tool. Its Actor is set per call.
+	// Runs answers a parked coding run by its turn (`answer_run`). Its
+	// Actor is set per call. REQUIRED (its Desk): see [Options.Steer].
 	Runs builtin.RunDeps
 
 	// Pauses is the fleet's record of which seats a person paused
-	// (`pause_seat`, `resume_seat`). A zero value serves neither tool. Its
-	// Actor is set per call.
+	// (`pause_seat`, `resume_seat`). Its Actor is set per call. REQUIRED
+	// (its Pauses, and the Announce and Org the tools are required with):
+	// see [Options.Steer].
 	Pauses builtin.SeatPauseDeps
 
 	// Steer reaches the node running a turn, so a person can send it a note
-	// (`steer_turn`). A zero value serves no such tool. Its Actor is set per
-	// call.
+	// (`steer_turn`). Its Actor is set per call. REQUIRED (its Asker, and
+	// the Wire and Runs the tool is required with), with [Options.Runs] and
+	// [Options.Pauses]: the three are the fleet's own records, which every
+	// node reaches whatever its company runs, so a surface built without one
+	// is a wiring mistake rather than a company that does not want it — and
+	// they are what keep the catalogue from ever being empty once the
+	// company is up.
+	//
+	// EVERY SEAM A CONTROL IS REQUIRED WITH IS REQUIRED HERE TOO, not only
+	// the one that switches the tool on: [builtin.OperatorTools] offers a
+	// control on its record alone, and a control offered without its
+	// announcer, its chart, its signed wire or its run records refuses every
+	// call as `unavailable` — listed to an assistant, and failing on each use,
+	// which is the catalogue [builtin.OperatorTools] exists to never show.
 	Steer builtin.SteerDeps
 
 	// Answer answers a person's question from the company's knowledge
@@ -237,6 +278,11 @@ type Options struct {
 	// to the company and records nothing about who called it is the one
 	// [New] refuses to build.
 	Audit AuditPublisher
+
+	// Counter counts a call a tool answered outside its schema
+	// ([metrics.ToolArgsOutsideSchema]), the node's recorder. Nil counts
+	// nothing, and the call is still logged.
+	Counter tools.Counter
 }
 
 // Server is the operator surface: the dispatch, and the transports over it.
@@ -250,6 +296,7 @@ type Server struct {
 	answer    builtin.AnswerDeps
 	audit     AuditPublisher
 	listeners *Listeners
+	counter   tools.Counter
 }
 
 // ErrNoAudit refuses a surface that would publish no audit record of the
@@ -265,14 +312,21 @@ var ErrNoAuthorize = errors.New("operator: Options.Authorize is required: " +
 
 // ErrNoHalves refuses a surface with nothing to build a catalogue from.
 var ErrNoHalves = errors.New("operator: Options.Halves is required: every " +
-	"call reads the tracker and knowledge base this node serves as the call " +
-	"finds them")
+	"call reads Worklet, Doclet and Chatlet as this node serves them when the " +
+	"call finds them")
+
+// ErrNoSeatControls refuses a surface built without one of the seat controls,
+// naming which: see [Options.Steer].
+var ErrNoSeatControls = errors.New("operator: the seat controls are required: " +
+	"every node reaches the fleet's records they read and write, whatever " +
+	"its company runs")
 
 // New builds the surface, or refuses a missing required dependency by name.
 //
-// ALWAYS A SURFACE, never the nil an empty one used to be: which tools exist is
-// a question a call asks ([Options.Halves]), and a transport over a catalogue
-// that turns out empty answers in the very bytes its absence would have.
+// ALWAYS A SURFACE, never the nil an empty one used to be: which of the
+// company's tools exist is a question a call asks ([Options.Halves]), and the
+// seat controls beside them are required, so the catalogue a call finds once
+// the company is up is never empty.
 func New(opts Options) (*Server, error) {
 	switch {
 	case opts.Halves == nil:
@@ -281,6 +335,25 @@ func New(opts Options) (*Server, error) {
 		return nil, ErrNoAuthorize
 	case opts.Audit == nil:
 		return nil, ErrNoAudit
+	case opts.Runs.Desk == nil:
+		return nil, fmt.Errorf("%w: Options.Runs.Desk (%s) is nil", ErrNoSeatControls, builtin.AnswerRunTool)
+	case opts.Pauses.Pauses == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (%s, %s) is nil",
+			ErrNoSeatControls, builtin.PauseSeatTool, builtin.ResumeSeatTool)
+	case opts.Pauses.Announce == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Announce (seat_paused, seat_resumed) is nil",
+			ErrNoSeatControls)
+	case opts.Pauses.Org == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Org (the chart a pause names a seat of) is nil",
+			ErrNoSeatControls)
+	case opts.Steer.Asker == nil:
+		return nil, fmt.Errorf("%w: Options.Steer.Asker (%s) is nil", ErrNoSeatControls, builtin.SteerTurnTool)
+	case opts.Steer.Wire == nil:
+		return nil, fmt.Errorf("%w: Options.Steer.Wire (%s's signed envelopes) is nil",
+			ErrNoSeatControls, builtin.SteerTurnTool)
+	case opts.Steer.Runs == nil:
+		return nil, fmt.Errorf("%w: Options.Steer.Runs (the run records %s files a note on) is nil",
+			ErrNoSeatControls, builtin.SteerTurnTool)
 	}
 	listeners := opts.Listeners
 	if listeners == nil {
@@ -289,7 +362,7 @@ func New(opts Options) (*Server, error) {
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,
 		runs: opts.Runs, pauses: opts.Pauses,
-		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit,
+		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit, counter: opts.Counter,
 		listeners: listeners,
 	}, nil
 }
@@ -331,9 +404,10 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb, arts, repos, health := halves.Work, halves.Pages, halves.Artifacts, halves.Code,
-		halves.Health
-	work.Actor, kb.Actor, repos.Actor, health.Code.Actor = workActor, pageActor, workActor, workActor
+	work, kb, arts, talk, repos, health := halves.Work, halves.Pages, halves.Artifacts,
+		halves.Chat, halves.Code, halves.Health
+	work.Actor, kb.Actor, talk.Actor, repos.Actor, health.Code.Actor =
+		workActor, pageActor, chatActor, workActor, workActor
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
@@ -341,9 +415,9 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
-		ArtifactData: halves.ArtifactData, Code: repos, Readers: halves.Readers, Health: health,
-		Org:       s.org,
+		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
+		Artifacts: arts, ArtifactData: halves.ArtifactData, Code: repos,
+		Readers: halves.Readers, Health: health, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})
@@ -422,7 +496,7 @@ type Call struct {
 // ErrNotUp is a call to a node that has not been handed a company yet, which
 // every transport answers `503 no_active_revision`.
 var ErrNotUp = errors.New("operator: this node has not been handed a company " +
-	"yet, so it serves no tracker or knowledge base")
+	"yet, so it serves none of Worklet, Doclet and Chatlet")
 
 // ErrNotServed is a call naming a tool this company's catalogue does not
 // serve. Not a refusal: the call is not one at all, so it is neither made nor
@@ -488,7 +562,17 @@ func (s *Server) run(ctx context.Context, cat catalogue, c Call) (tools.Result, 
 	if !served {
 		return tools.Result{}, fmt.Errorf("%w: %q", ErrNotServed, c.Tool)
 	}
-	result, err := tool.Call(withKey(ctx, c.Key), c.Args)
+	// THE CANONICAL ARGUMENTS ARE MADE HERE, ONCE ([tools.ArgsOf]), and the
+	// call carries them from here on: the tool and the audit record read
+	// the same form, so a retry spelt "Draft" after "draft" is one call.
+	args := tools.ArgsOf(tool, false, c.Args)
+	c.Args = args.Map()
+	// THROUGH [tools.Invoke], as every caller calls a tool: an operator's
+	// call is held to the schema the tool advertises like a seat's
+	// (ADR-0059), a value the tool would misread refused before it runs.
+	result, _, err := tools.Invoke(withKey(ctx, c.Key), tools.Invocation{
+		Name: c.Tool, Tool: tool, Args: args, Where: "operator", Counter: s.counter,
+	})
 	if !readOnly(c.Tool) {
 		s.auditCall(ctx, c, result, err)
 	}

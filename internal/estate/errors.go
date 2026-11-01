@@ -14,25 +14,34 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
-// repeat is not safe for — see [opOnceWrite]. It may have landed.
+// ErrOutcomeUnknown is a write that was sent and never answered. It may have
+// landed.
+//
+// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
+// why the sentence names neither. A write a repeat is not safe for
+// ([opOnceWrite]) is reported at the first node that did not answer, and is
+// read back before it is written again. A write carrying its caller's
+// operation id ([opIdempotentWrite]) is asked of every other data node first,
+// and reported only when none of them ran it either — where repeating it
+// under that SAME id is the safe retry, and a fresh one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
-	"that did not answer, so whether it landed is unknown — read it back " +
-	"before writing again")
+	"that did not answer, so whether it landed is unknown")
 
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {
@@ -57,28 +66,29 @@ var sentinels = []sentinel{
 	{"queue.ErrTooLarge", queue.ErrTooLarge},
 	{"queue.ErrNotLive", queue.ErrNotLive},
 
-	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
-	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
-	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
-	{"tracker.ErrForbidden", tracker.ErrForbidden},
-	{"tracker.ErrInvalid", tracker.ErrInvalid},
-	{"tracker.ErrIndexBuilding", tracker.ErrIndexBuilding},
-	{"tracker.ErrNoChartActivation", tracker.ErrNoChartActivation},
-	{"tracker.ErrNoComment", tracker.ErrNoComment},
-	{"tracker.ErrNoFile", tracker.ErrNoFile},
-	{"tracker.ErrNoProject", tracker.ErrNoProject},
-	{"tracker.ErrNoTask", tracker.ErrNoTask},
-	{"tracker.ErrNoType", tracker.ErrNoType},
-	{"tracker.ErrNotAuthor", tracker.ErrNotAuthor},
-	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},
-	{"tracker.ErrReassignmentBudget", tracker.ErrReassignmentBudget},
-	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
-	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
-	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
-	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
-	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
-	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
-	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
+	{"worklet.ErrAlreadyAnswered", worklet.ErrAlreadyAnswered},
+	{"worklet.ErrBadQuery", worklet.ErrBadQuery},
+	{"worklet.ErrForbidden", worklet.ErrForbidden},
+	{"worklet.ErrInvalid", worklet.ErrInvalid},
+	{"worklet.ErrIndexBuilding", worklet.ErrIndexBuilding},
+	{"worklet.ErrNoChartActivation", worklet.ErrNoChartActivation},
+	{"worklet.ErrNoComment", worklet.ErrNoComment},
+	{"worklet.ErrNoFile", worklet.ErrNoFile},
+	{"worklet.ErrNoProject", worklet.ErrNoProject},
+	{"worklet.ErrNoTask", worklet.ErrNoTask},
+	{"worklet.ErrNoType", worklet.ErrNoType},
+	{"worklet.ErrNotAuthor", worklet.ErrNotAuthor},
+	{"worklet.ErrNothingToRestore", worklet.ErrNothingToRestore},
+	{"worklet.ErrReassignmentBudget", worklet.ErrReassignmentBudget},
+	{"worklet.ErrReparentAcrossProjects", worklet.ErrReparentAcrossProjects},
+	{"worklet.ErrRestoresOthers", worklet.ErrRestoresOthers},
+	{"worklet.ErrStaleVersion", worklet.ErrStaleVersion},
+	{"worklet.ErrState", worklet.ErrState},
+	{"worklet.ErrStepUnresolved", worklet.ErrStepUnresolved},
+	{"worklet.ErrStepUnvouched", worklet.ErrStepUnvouched},
+	{"worklet.ErrTaken", worklet.ErrTaken},
+	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
+	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
 	// THE INBOX RULES', which a person's gesture on a domain's inbox is
 	// decided by on the data node that writes it: a list at its ceiling is
@@ -90,16 +100,17 @@ var sentinels = []sentinel{
 	{"inbox.ErrFull", inbox.ErrFull},
 	{"inbox.ErrInvalid", inbox.ErrInvalid},
 
-	{"pages.ErrBadCursor", pages.ErrBadCursor},
-	{"pages.ErrConflict", pages.ErrConflict},
-	{"pages.ErrInvalid", pages.ErrInvalid},
-	{"pages.ErrNoActivation", pages.ErrNoActivation},
-	{"pages.ErrNotFound", pages.ErrNotFound},
-	{"pages.ErrNotInTrash", pages.ErrNotInTrash},
-	{"pages.ErrParent", pages.ErrParent},
-	{"pages.ErrReserved", pages.ErrReserved},
-	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
-	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+	{"doclet.ErrBadCursor", doclet.ErrBadCursor},
+	{"doclet.ErrConflict", doclet.ErrConflict},
+	{"doclet.ErrInvalid", doclet.ErrInvalid},
+	{"doclet.ErrNoActivation", doclet.ErrNoActivation},
+	{"doclet.ErrNotFound", doclet.ErrNotFound},
+	{"doclet.ErrNotInTrash", doclet.ErrNotInTrash},
+	{"doclet.ErrParent", doclet.ErrParent},
+	{"doclet.ErrReserved", doclet.ErrReserved},
+	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
+	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
+	{"doclet.ErrUnservedOrder", doclet.ErrUnservedOrder},
 
 	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
 	{"search.ErrNoMethods", search.ErrNoMethods},
@@ -145,6 +156,18 @@ var sentinels = []sentinel{
 	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
 	{"code.ErrSuperseded", code.ErrSuperseded},
 
+	{"chatlet.ErrArchived", chatlet.ErrArchived},
+	{"chatlet.ErrConflict", chatlet.ErrConflict},
+	{"chatlet.ErrForbidden", chatlet.ErrForbidden},
+	{"chatlet.ErrInvalid", chatlet.ErrInvalid},
+	{"chatlet.ErrNameTaken", chatlet.ErrNameTaken},
+	{"chatlet.ErrNoActivation", chatlet.ErrNoActivation},
+	{"chatlet.ErrNotFound", chatlet.ErrNotFound},
+	{"chatlet.ErrReactionsFull", chatlet.ErrReactionsFull},
+	{"chatlet.ErrRoomExists", chatlet.ErrRoomExists},
+	{"chatlet.ErrUnknownKind", chatlet.ErrUnknownKind},
+
+	{"statelog.ErrAdoptionUnrecorded", statelog.ErrAdoptionUnrecorded},
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrDonorConnectionClosed", statelog.ErrDonorConnectionClosed},
@@ -152,6 +175,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrExists", statelog.ErrExists},
 	{"statelog.ErrForeignPosition", statelog.ErrForeignPosition},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
+	{"statelog.ErrJoinerFault", statelog.ErrJoinerFault},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
 	{"statelog.ErrLogTruncated", statelog.ErrLogTruncated},
 	{"statelog.ErrNoDecision", statelog.ErrNoDecision},
@@ -172,6 +196,7 @@ var sentinels = []sentinel{
 	// and the identity vocabulary's and the session's, which the questions a
 	// person verb is decided on answer in ([iam.Holders],
 	// [session.ResolveSeat]).
+	{"iamdomain.ErrAssistRefused", iamdomain.ErrAssistRefused},
 	{"iamdomain.ErrCollapsed", iamdomain.ErrCollapsed},
 	{"iamdomain.ErrInvalid", iamdomain.ErrInvalid},
 	{"iamdomain.ErrInvalidLogin", iamdomain.ErrInvalidLogin},
@@ -207,6 +232,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrBrandContrast", artifactsdomain.ErrBrandContrast},
 	{"artifactsdomain.ErrBrandIncomplete", artifactsdomain.ErrBrandIncomplete},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrExists", artifactsdomain.ErrExists},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrFolderCycle", artifactsdomain.ErrFolderCycle},
 	{"artifactsdomain.ErrFolderDepth", artifactsdomain.ErrFolderDepth},
@@ -214,6 +240,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrFolderNameTaken", artifactsdomain.ErrFolderNameTaken},
 	{"artifactsdomain.ErrFolderNotFound", artifactsdomain.ErrFolderNotFound},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
 	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
@@ -255,6 +282,13 @@ type typedKind struct {
 	typ  reflect.Type
 }
 
+// rebuiltByPeer are the typed kinds that cannot be set field by field, each
+// with what rebuilds it. A refusal's person phrasing is the one: its words are
+// rebuilt only here ([caveat.SaidFromPeer]).
+var rebuiltByPeer = map[string]func(typedError) (reflect.Value, bool){
+	"caveat.Said": saidFromPeer,
+}
+
 // typedKinds are every error TYPE a caller may unwrap with errors.As, keyed
 // by the Go identifier for the reason [sentinels] is.
 //
@@ -262,18 +296,24 @@ type typedKind struct {
 // error — the cause a refusal was concluded from — as a nested wire error, so
 // the cause still answers errors.Is on the far side.
 var typedKinds = []typedKind{
-	{"tracker.AlreadyAnsweredError", reflect.TypeFor[*tracker.AlreadyAnsweredError]()},
-	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
-	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
-	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
-	{"tracker.MoveStopped", reflect.TypeFor[*tracker.MoveStopped]()},
-	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
-	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
-	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
-	{"tracker.TextCapError", reflect.TypeFor[*tracker.TextCapError]()},
+	{"worklet.AlreadyAnsweredError", reflect.TypeFor[*worklet.AlreadyAnsweredError]()},
+	{"worklet.ErrAmbiguous", reflect.TypeFor[*worklet.ErrAmbiguous]()},
+	{"worklet.ErrAmbiguousAnswer", reflect.TypeFor[*worklet.ErrAmbiguousAnswer]()},
+	{"worklet.ErrFutureVersion", reflect.TypeFor[*worklet.ErrFutureVersion]()},
+	{"worklet.MoveStopped", reflect.TypeFor[*worklet.MoveStopped]()},
+	{"worklet.Refusal", reflect.TypeFor[*worklet.Refusal]()},
+	{"worklet.SubtreeStopped", reflect.TypeFor[*worklet.SubtreeStopped]()},
+	{"worklet.TagClash", reflect.TypeFor[*worklet.TagClash]()},
+	{"worklet.TagsFull", reflect.TypeFor[*worklet.TagsFull]()},
+	{"worklet.TextCapError", reflect.TypeFor[*worklet.TextCapError]()},
 
-	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
-	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+	{"doclet.ErrFutureVersion", reflect.TypeFor[*doclet.ErrFutureVersion]()},
+	{"doclet.ErrUnknownVersion", reflect.TypeFor[doclet.ErrUnknownVersion]()},
+	{"doclet.InvalidError", reflect.TypeFor[*doclet.InvalidError]()},
+
+	{"chatlet.ErrFutureVersion", reflect.TypeFor[*chatlet.ErrFutureVersion]()},
+	{"chatlet.ErrUnknownVersion", reflect.TypeFor[chatlet.ErrUnknownVersion]()},
+	{"chatlet.InvalidError", reflect.TypeFor[*chatlet.InvalidError]()},
 
 	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
 
@@ -290,18 +330,24 @@ var typedKinds = []typedKind{
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
+	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
+	{"statelog.ReanchorNotApplied", reflect.TypeFor[*statelog.ReanchorNotApplied]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
+	{"statelog.Telling", reflect.TypeFor[*statelog.Telling]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
 
 	{"iamdomain.ErrFutureVersion", reflect.TypeFor[*iamdomain.ErrFutureVersion]()},
 	{"iamdomain.ErrTaken", reflect.TypeFor[*iamdomain.ErrTaken]()},
 	{"iamdomain.ErrUnknownVersion", reflect.TypeFor[iamdomain.ErrUnknownVersion]()},
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
+	{"iamdomain.NotReadBack", reflect.TypeFor[*iamdomain.NotReadBack]()},
+	{"iamdomain.Refusal", reflect.TypeFor[*iamdomain.Refusal]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
+	{"artifactsdomain.AlreadyExists", reflect.TypeFor[*artifactsdomain.AlreadyExists]()},
 	{"artifactsdomain.BrandContrast", reflect.TypeFor[*artifactsdomain.BrandContrast]()},
 	{"artifactsdomain.BrandIncomplete", reflect.TypeFor[*artifactsdomain.BrandIncomplete]()},
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
@@ -314,6 +360,12 @@ var typedKinds = []typedKind{
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
+
+	// A REFUSAL'S WORDS FOR A PERSON, which a writer puts beside its
+	// error (ADR-0060): carried so a write refused on a data node answers
+	// a person on this one with them. A peer that does not send it is
+	// answered with the refusal code's own sentence, never a model's.
+	{"caveat.Said", reflect.TypeFor[*caveat.Said]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.
@@ -475,6 +527,9 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 	if kind == nil {
 		return reflect.Value{}, false
 	}
+	if rebuilt, ok := rebuiltByPeer[t.Code]; ok {
+		return rebuilt(t)
+	}
 	structType := kind.typ
 	if structType.Kind() == reflect.Pointer {
 		structType = structType.Elem()
@@ -503,4 +558,21 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 		return ptr, true
 	}
 	return v, true
+}
+
+// saidFromPeer rebuilds a refusal's person phrasing a peer carried as
+// `{"Words": {"person": "<sentence>", "remedy": {...}}}`, or reports false for
+// one with no words or words it cannot read, which leave the refusal its
+// code's own sentence, as every field of a typed error this router cannot
+// decode does.
+func saidFromPeer(t typedError) (reflect.Value, bool) {
+	raw, ok := t.Fields["Words"]
+	if !ok {
+		return reflect.Value{}, false
+	}
+	said, err := caveat.SaidFromPeer(raw)
+	if err != nil || said == nil {
+		return reflect.Value{}, false
+	}
+	return reflect.ValueOf(said), true
 }

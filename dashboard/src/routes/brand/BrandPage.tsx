@@ -4,8 +4,10 @@
  *
  * # What the page shows
  *
- * The brand an administrator ADOPTED (`brand{}`): one version of the company's
- * brand kit, snapshotted by the engine, which every artifact and agent reads.
+ * The brand an administrator PUBLISHED (`brand{}`, an adoption in the engine's
+ * word, which the routes and the permission keep): one version of the
+ * company's brand kit, snapshotted by the engine, which every artifact and
+ * agent reads.
  * Four cards (Logos, Colours, Typography, Voice) in the main column and a
  * sticky preview beside them. Every reader reads it, downloads a logo and
  * copies a colour: the brand is the company's public face, and this page is
@@ -17,34 +19,44 @@
  * (Edit, then Save or Cancel, one card at a time, the preview drawing every
  * change), and Save publishes a version of the company's kit and adopts it in
  * one gesture, after a dialog that lists what changes, which contrast pairs
- * fall short and what adopting makes public. A version somebody else drafted
- * (an agent, an editor of the kit) is offered for review and adoption from the
- * notice under the header. A reader who may not adopt is handed no control at
- * all.
+ * fall short and what publishing makes public. A version somebody else
+ * drafted (an agent, an editor of the kit) is offered for review and
+ * publishing from the notice under the header. A reader who may not publish
+ * is handed no control at all.
  *
  * # Setting it up
  *
  * The brand is set up on a page of its own (`#/company/brand/setup`, six
  * steps), entered from the empty state, from the notice over a draft a setup
- * left ("Continue setting up") and from the bar ("Run setup again"). A draft
- * that lacks what an adoption requires says so wherever it is offered.
+ * left ("Finish draft", or "Edit draft" once it is ready) and from the bar
+ * ("Run setup again"). A draft that lacks what publishing requires says so
+ * wherever it is offered.
+ *
+ * # A draft in progress
+ *
+ * With none published, a standing draft is drawn in the brand's own cards,
+ * read-only, its preview tagged as a draft, under a notice saying it is not
+ * live, who last changed it and when, and the ONE next step that fits it:
+ * "Publish brand" for an administrator once it is ready, "Finish draft"
+ * while it is not. Its owner or an administrator may discard it, which moves
+ * the kit to the trash (`DELETE /artifacts/{id}`, `artifacts.trash`), where
+ * its owner can restore it until it is purged.
  *
  * # Nothing is claimed before the brand arrives
  *
  * "No brand yet" is a statement about the company, so the page draws a
- * skeleton until the read answers, and only then the cards or the empty state.
+ * skeleton until the read answers, and only then the cards, the draft or the
+ * empty state.
  */
 
 import { useMemo, useState } from "react";
 import {
-  AsideLayout,
   Button,
   ButtonLink,
   Callout,
   Card,
   ConfirmModal,
   EmptyState,
-  HeadingLevelProvider,
   Menu,
   Skeleton,
   Stack,
@@ -57,10 +69,20 @@ import {
   PlusGlyph,
   RotateCcwClockGlyph,
   SwatchBookGlyph,
+  TrashGlyph,
   WandSparklesGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useLeaveGuard, useNavigator } from "~/app/router.tsx";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import {
+  BRAND_ASSISTANT_HELP,
+  applyBrandDraft,
+  brandDraftFields,
+  brandDraftLabel,
+  brandStandingDraftHelp,
+  type BrandDraft,
+} from "~/lib/brand/assistantDraft.ts";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -68,8 +90,9 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
+import { trashArtifact } from "~/lib/artifacts/api.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { actorName } from "~/lib/artifacts/words.ts";
+import { actorName, purgeSentence, roleIncludes } from "~/lib/artifacts/words.ts";
 import { clearBrand } from "~/lib/brand/api.ts";
 import { mayAdoptBrand, serializeBrandDocument, type Adoption } from "~/lib/brand/brand.ts";
 import { draftSource, saveFiles, type BrandEdit } from "~/lib/brand/draft.ts";
@@ -83,16 +106,7 @@ import {
 import { useBrandSave } from "~/lib/brand/useBrandSave.ts";
 import { draftReadiness } from "~/lib/brand/validate.ts";
 import { BRAND_SETUP } from "~/components/brand.tsx";
-import {
-  BRAND_CARDS,
-  BrandCard,
-  ColoursBody,
-  LogosBody,
-  TypographyBody,
-  VoiceBody,
-  type BrandCardEdit,
-  type BrandCardKey,
-} from "./BrandCards.tsx";
+import { BRAND_CARDS, type BrandCardEdit, type BrandCardKey } from "./BrandCards.tsx";
 import {
   ColoursEditor,
   LogosEditor,
@@ -101,7 +115,7 @@ import {
   cardProblem,
   type BrandEditorProps,
 } from "./BrandEditors.tsx";
-import { BrandPreview } from "./BrandPreview.tsx";
+import { BrandBoard } from "./BrandBoard.tsx";
 import { AdoptDialog } from "./AdoptDialog.tsx";
 import { ReviewAdopt } from "./ReviewAdopt.tsx";
 import { useCompanyKit, type CompanyKit } from "./useCompanyKit.ts";
@@ -120,6 +134,31 @@ const EDITORS: Readonly<Record<BrandCardKey, (props: BrandEditorProps) => React.
 interface Editing {
   card: BrandCardKey;
   edit: BrandEdit;
+}
+
+/**
+ * Whether the reader may continue a standing draft's setup: an administrator,
+ * or with none adopted the editor whose kit it is (the company kit is found
+ * among the kits they may write).
+ */
+function mayContinueDraft(canAdopt: boolean, adoption: Adoption | null): boolean {
+  return canAdopt || adoption === null;
+}
+
+/**
+ * Whether the reader is offered discarding a standing draft: only with none
+ * published, since a newer version of the published kit is not a kit of its
+ * own to discard, and only to whoever `artifacts.trash` admits (the kit's
+ * owner or an administrator, a person). The engine decides the write; this
+ * only decides whether the control is drawn.
+ */
+function mayDiscardDraft(
+  viewer: { admin: boolean; kind: string },
+  adoption: Adoption | null,
+  draft: CompanyKit,
+): boolean {
+  if (adoption !== null || viewer.kind !== "human") return false;
+  return viewer.admin || roleIncludes(draft.role, "owner");
 }
 
 /** Whether an edit changes anything from the adopted brand. */
@@ -148,16 +187,62 @@ export function BrandPage() {
   const draft = company?.draft ? company : null;
 
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [confirming, setConfirming] = useState<"save" | "clear" | null>(null);
+  const [confirming, setConfirming] = useState<"save" | "clear" | "discard" | null>(null);
   const [reviewing, setReviewing] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
 
   const base = useMemo(() => (adoption ? adoptionSource(adoption) : null), [adoption]);
-  const shown = useMemo(() => (editing ? draftSource(base, editing.edit) : base), [editing, base]);
+  // WHAT THE CARDS DRAW: the published brand, an edit of it while a card is
+  // changed, or with none published the draft that stands.
+  const standingSource = adoption === null ? (draft?.read.source ?? null) : null;
+  const shown = useMemo(
+    () => (editing ? draftSource(base, editing.edit) : (base ?? standingSource)),
+    [editing, base, standingSource],
+  );
   const assets = useBrandAssets(shown);
 
   const dirty = changed(editing, adoption);
+  // WHAT IS OPEN, for the assistant: the card in edit, its fields set through
+  // the same edit its controls write; Save and its adoption stay the person's.
+  // With no card in edit, a DRAFT A SETUP LEFT that the notice offers to
+  // continue: read-only, as the saved draft it is, its help naming the setup
+  // where it is changed. A page that declared nothing here told the assistant
+  // only "Company › Brand", and it answered that no draft existed.
+  const standing = draft?.read.document;
+  const standingReady = standing ? draftReadiness(standing) === undefined : false;
+  useAssistantDraft<BrandDraft>(
+    editing && adoption
+      ? {
+          kind: "client",
+          id: adoption.kit,
+          revision: adoption.kit_version,
+          step: editing.card,
+          help: BRAND_ASSISTANT_HELP,
+          scope: `${BRAND_CARDS[editing.card].title} you are editing (not saved)`,
+          value: editing.edit,
+          fields: brandDraftFields(new Set([editing.card])),
+          apply: (next) =>
+            applyBrandDraft(
+              editing.edit,
+              next,
+              (change) => setEditing((was) => (was ? { ...was, edit: change(was.edit) } : was)),
+              setNotice,
+            ),
+          blocked: () => (confirming ? "The change is being saved." : null),
+        }
+      : draft && standing && adoption !== undefined && mayContinueDraft(canAdopt, adoption)
+        ? {
+            kind: "server",
+            id: draft.kit,
+            revision: draft.version,
+            help: brandStandingDraftHelp(standingReady),
+            scope: "The brand draft in progress (saved, not published)",
+            value: { document: standing, files: new Map() },
+            fields: brandDraftFields(new Set()),
+          }
+        : null,
+  );
   useLeaveGuard(
     dirty
       ? (_to, leave) => {
@@ -177,10 +262,10 @@ export function BrandPage() {
   const facts: Fact[] = adoption
     ? [
         // TWO FACTS, EACH ONE SHORT LINE: the day and the person as one
-        // value wrapped to three lines in its track ("Adopted / Oct 24, 2026
-        // by / Maya Chen") on a wide page.
-        { label: "Adopted", value: fmtDate(adoption.adopted_at) },
-        { label: "Adopted by", value: actorName(adoption.adopted_by, people.seatName) },
+        // value wrapped to three lines in its track ("Published / Oct 24,
+        // 2026 by / Maya Chen") on a wide page.
+        { label: "Published", value: fmtDate(adoption.adopted_at) },
+        { label: "Published by", value: actorName(adoption.adopted_by, people.seatName) },
         {
           label: "Version",
           value: String(adoption.kit_version),
@@ -230,15 +315,25 @@ export function BrandPage() {
         <DraftNotice
           adoption={adoption}
           draft={draft}
-          by={adoption?.newer_by ? actorName(adoption.newer_by, people.seatName) : ""}
+          edited={draftEdited(draft, adoption, people.seatName)}
           canAdopt={canAdopt}
+          canDiscard={mayDiscardDraft(viewer, adoption, draft)}
           onReview={() => setReviewing(draft.version)}
+          onDiscard={() => setConfirming("discard")}
         />
       ) : null}
       {adoption === undefined || (adoption === null && company === undefined) ? (
         <div aria-busy="true">
           <Card>
             <Skeleton variant="text" rows={6} label="Loading the company's brand" />
+          </Card>
+        </div>
+      ) : adoption === null && standing ? (
+        <BrandBoard document={standing} assets={assets} drawn="draft" />
+      ) : adoption === null && draft?.read.loading ? (
+        <div aria-busy="true">
+          <Card>
+            <Skeleton variant="text" rows={6} label="Loading the brand draft" />
           </Card>
         </div>
       ) : adoption === null ? (
@@ -262,6 +357,17 @@ export function BrandPage() {
           onSaved={(text) => {
             setNotice(text);
             refreshed();
+          }}
+        />
+      ) : null}
+      {confirming === "discard" && draft ? (
+        <DiscardDialog
+          draft={draft}
+          name={standing?.name.trim() ?? ""}
+          onClose={() => setConfirming(null)}
+          onDiscarded={() => {
+            setConfirming(null);
+            draft.refetch();
           }}
         />
       ) : null}
@@ -380,70 +486,127 @@ function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => 
   );
 }
 
+/** Who last changed a standing draft, by name, and when, where the engine said. */
+interface Edited {
+  by: string;
+  at: string | null;
+}
+
 /**
- * A draft of the kit nobody adopted yet: a version newer than the adopted one,
- * or, with none adopted, the draft a setup left. Who published it, whether it
- * is ready to adopt, and the ways on: continuing its setup, and reviewing and
- * adopting it for an administrator once it is ready.
+ * Who last changed the draft: the author of its version and the day it was
+ * published, where the version was read; otherwise who published the newer
+ * version, as the adoption names them to a reader the kit is not read for.
+ */
+function draftEdited(
+  draft: CompanyKit,
+  adoption: Adoption | null,
+  nameOf: (handle: string) => string,
+): Edited | null {
+  const read = draft.read.edited;
+  if (read) return { by: actorName(read.by, nameOf), at: read.at };
+  if (adoption?.newer_by) return { by: actorName(adoption.newer_by, nameOf), at: null };
+  return null;
+}
+
+/**
+ * A draft of the kit nobody published yet: a version newer than the published
+ * one, or, with none published, the draft a setup left. It says that the
+ * draft is not live, who last changed it and when, whether it is ready to
+ * publish, and offers the ONE next step that fits as the primary action:
+ *
+ * - Ready, for an administrator: "Publish brand" (the review, then the
+ *   confirm), with "Edit draft" beside it.
+ * - Not ready, for whoever continues it: "Finish draft", the setup, beside
+ *   the sentence saying what publishing still needs.
+ * - Ready, for an editor who may not publish: "Edit draft", and that an
+ *   administrator publishes it.
+ *
+ * "Discard draft" stays quiet, for its owner or an administrator with none
+ * published.
  */
 function DraftNotice({
   adoption,
   draft,
-  by,
+  edited,
   canAdopt,
+  canDiscard,
   onReview,
+  onDiscard,
 }: {
   adoption: Adoption | null;
   draft: CompanyKit;
-  by: string;
+  edited: Edited | null;
   canAdopt: boolean;
+  canDiscard: boolean;
   onReview: () => void;
+  onDiscard: () => void;
 }) {
   const doc = draft.read.document;
   const readiness = doc ? draftReadiness(doc) : undefined;
-  const who = by ? ` by ${by}` : "";
+  const ready = doc !== null && readiness === undefined;
+  const name = doc?.name.trim() ?? "";
+  const brand = name ? `the ${name} brand` : "the company's brand";
   const what = adoption
-    ? `Version ${draft.version}${who} is newer than the adopted version ${adoption.kit_version}.`
-    : doc
-      ? `A draft of the ${doc.name.trim() || "company"} brand is in progress.`
-      : "A draft of the company's brand is in progress.";
-  // CONTINUING IS AN ADMINISTRATOR'S, or, with none adopted, the editor's
-  // whose draft this is (the company kit is found among the kits they may
-  // write); REVIEWING is held from a draft the engine would refuse.
-  const mayContinue = canAdopt || adoption === null;
-  const mayReview = canAdopt && readiness === undefined;
+    ? `Version ${draft.version} of ${brand} is a draft. Artifacts keep using the published version ${adoption.kit_version} until this one is published.`
+    : `This draft of ${brand} is not published yet, so artifacts still use Crewlet's look.`;
+  const who = edited
+    ? edited.at
+      ? ` Last edited by ${edited.by} on ${fmtDate(edited.at)}.`
+      : ` Last edited by ${edited.by}.`
+    : "";
+  // CONTINUING IS [mayContinueDraft]'s; PUBLISHING is held from a draft the
+  // engine would refuse, and from one not read yet.
+  const mayContinue = mayContinueDraft(canAdopt, adoption);
+  const mayPublish = canAdopt && ready;
+  const label = brandDraftLabel(ready);
+  const actions = (
+    <>
+      {mayPublish ? (
+        <Button size="small" variant="primary" onClick={onReview}>
+          Publish brand
+        </Button>
+      ) : null}
+      {mayContinue ? (
+        <ButtonLink
+          href={href(BRAND_SETUP)}
+          size="small"
+          variant={ready ? "secondary" : "primary"}
+          leadingIcon={ready ? <PencilGlyph size="sm" /> : <WandSparklesGlyph size="sm" />}
+        >
+          {label}
+        </ButtonLink>
+      ) : null}
+      {canDiscard ? (
+        <Button
+          size="small"
+          variant="ghost"
+          leadingIcon={<TrashGlyph size="sm" />}
+          onClick={onDiscard}
+        >
+          Discard draft
+        </Button>
+      ) : null}
+    </>
+  );
   return (
     <Callout
       variant="info"
       icon={<WandSparklesGlyph size="sm" />}
-      action={
-        mayContinue || mayReview ? (
-          <>
-            {mayContinue ? (
-              <ButtonLink href={href(BRAND_SETUP)} size="small" variant="secondary">
-                Continue setting up
-              </ButtonLink>
-            ) : null}
-            {mayReview ? (
-              <Button size="small" variant="secondary" onClick={onReview}>
-                Review and adopt
-              </Button>
-            ) : null}
-          </>
-        ) : undefined
-      }
+      action={mayPublish || mayContinue || canDiscard ? actions : undefined}
     >
       {what}
+      {who}
       {readiness ? ` ${readiness}` : ""}
-      {canAdopt || readiness ? "" : " An administrator can review and adopt it."}
+      {canAdopt || readiness ? "" : " An administrator can review and publish it."}
     </Callout>
   );
 }
 
 /**
- * No brand is adopted: the way to set one up for an administrator, and what
- * that means for everyone else. While a draft is in progress its notice
- * carries the way on, and the empty state offers no second one.
+ * No brand is published and no draft is drawn: the way to set one up for an
+ * administrator, and what that means for everyone else. While a draft is in
+ * progress but cannot be read, its notice carries the way on, and the empty
+ * state offers no second one.
  */
 function NoBrand({ canAdopt, drafting }: { canAdopt: boolean; drafting: boolean }) {
   return (
@@ -458,7 +621,7 @@ function NoBrand({ canAdopt, drafting }: { canAdopt: boolean; drafting: boolean 
         <EmptyState
           icon={<SwatchBookGlyph size="lg" />}
           title="No brand yet"
-          description="Artifacts use Crewlet's look until an administrator adds the company's logo, colours and type."
+          description="Artifacts use Crewlet's look until an administrator publishes the company's logo, colours and type."
           action={
             canAdopt && !drafting ? (
               <ButtonLink
@@ -535,31 +698,16 @@ function Cards({
     };
   };
   return (
-    <AsideLayout
-      asideLabel="Preview"
-      aside={<BrandPreview document={document} assets={assets} draft={editing !== null} />}
-    >
-      {/* ONE LEVEL UNDER THE PAGE'S TITLE: every card's title heads a part of
-          the page the title names. */}
-      <HeadingLevelProvider level={3}>
-        <BrandCard card="logos" edit={cardEdit("logos")}>
-          <LogosBody document={document} assets={assets} />
-        </BrandCard>
-        <BrandCard card="colours" edit={cardEdit("colours")}>
-          <ColoursBody colors={document.colors} />
-        </BrandCard>
-        <BrandCard card="type" edit={cardEdit("type")}>
-          <TypographyBody type={document.type} assets={assets} />
-        </BrandCard>
-        <BrandCard card="voice" edit={cardEdit("voice")}>
-          <VoiceBody voice={document.voice} />
-        </BrandCard>
-      </HeadingLevelProvider>
-    </AsideLayout>
+    <BrandBoard
+      document={document}
+      assets={assets}
+      drawn={editing ? "changes" : "brand"}
+      edit={cardEdit}
+    />
   );
 }
 
-/** Saving one card's change: publish a version of the kit and adopt it, after the adopt dialog. */
+/** Saving one card's change: publish a version of the kit and adopt it, after the publish dialog. */
 function SaveDialog({
   adoption,
   editing,
@@ -569,7 +717,7 @@ function SaveDialog({
   adoption: Adoption;
   editing: Editing;
   onClose: () => void;
-  /** Adopted (no words), or a version saved and not adopted, in its words. */
+  /** Published (no words), or a version saved and not published, in its words. */
   onSaved: (notice: string | null) => void;
 }) {
   const toast = useToast();
@@ -598,7 +746,7 @@ function SaveDialog({
       files,
     });
     if (answer?.kind === "adopted") {
-      toast.ok(`The ${doc.name.trim()} brand is adopted`);
+      toast.ok(`The ${doc.name.trim()} brand is published`);
       onSaved(null);
     } else if (answer?.kind === "published") {
       onSaved(answer.text);
@@ -610,11 +758,11 @@ function SaveDialog({
     <AdoptDialog
       open
       onClose={onClose}
-      title={`Save and adopt this as the ${doc.name.trim()} brand?`}
+      title={`Save and publish this as the ${doc.name.trim()} brand?`}
       before={adoption.document}
       after={doc}
       digests={{ before: logoDigests(base), after: logoDigests(draft) }}
-      confirmLabel="Save and adopt"
+      confirmLabel="Save and publish"
       busy={save.busy}
       answer={
         failed ??
@@ -655,10 +803,57 @@ function ClearDialog({
       message={
         gesture.answer && gesture.answer.kind !== "done"
           ? gesture.answer.text
-          : "Docs and dashboards return to Crewlet's look now, and pages and designs when they are next published. Existing decks keep their look, and the brand kit stays in Artifacts to adopt again."
+          : "Docs and dashboards return to Crewlet's look now, and pages and designs when they are next published. Existing decks keep their look, and the brand kit stays in Artifacts to publish again."
       }
       confirmLabel="Stop using it"
       cancelLabel="Keep it"
+      destructive
+      submitting={gesture.busy}
+    />
+  );
+}
+
+/**
+ * Discarding a standing draft: the kit moves to the trash (`DELETE
+ * /artifacts/{id}`, decided by `artifacts.trash`: its owner's or an
+ * administrator's, a person's), stops opening at once, and is purged after
+ * the trash term unless its owner restores it. Nothing was published, so
+ * artifacts keep Crewlet's look; the next setup continues another brand kit
+ * the reader may write, or starts a new one.
+ */
+function DiscardDialog({
+  draft,
+  name,
+  onClose,
+  onDiscarded,
+}: {
+  draft: CompanyKit;
+  name: string;
+  onClose: () => void;
+  onDiscarded: () => void;
+}) {
+  const toast = useToast();
+  const gesture = useKeyedGesture();
+  const brand = name ? `the ${name} brand draft` : "the brand draft";
+  return (
+    <ConfirmModal
+      open
+      onClose={onClose}
+      onConfirm={async () => {
+        const answer = await gesture.run(trashArtifact(draft.kit));
+        if (answer?.kind === "done") {
+          toast.ok(`Discarded ${brand}`);
+          onDiscarded();
+        }
+      }}
+      title="Discard this draft?"
+      message={
+        gesture.answer && gesture.answer.kind !== "done"
+          ? gesture.answer.text
+          : `This moves ${brand} to the trash in Artifacts. Nothing was published, so artifacts keep Crewlet's look. ${purgeSentence(new Date().toISOString())}`
+      }
+      confirmLabel="Discard draft"
+      cancelLabel="Keep draft"
       destructive
       submitting={gesture.busy}
     />

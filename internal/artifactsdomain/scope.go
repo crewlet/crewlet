@@ -152,7 +152,8 @@ func (t ScopeTerm) Path() string {
 	return pathDomain
 }
 
-// join builds a scope path from its segments. A MISSING SEGMENT IS THE DOMAIN
+// join builds a scope path from its segments through the framework's one
+// spelling of a path ([statelog.ScopePath]). A MISSING SEGMENT IS THE DOMAIN
 // rather than a path with a hole in it: a term whose id is empty cannot be
 // placed, and the widest reading is the only one that is not a guess.
 func join(segments ...string) string {
@@ -161,7 +162,7 @@ func join(segments ...string) string {
 			return pathDomain
 		}
 	}
-	return strings.Join(segments, statelog.ScopeSeparator)
+	return statelog.ScopePath(segments...)
 }
 
 // ScopeSet is the COMPLETE set of objects a record's apply may write.

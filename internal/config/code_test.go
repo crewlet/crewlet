@@ -479,7 +479,7 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		"a direct push nobody knows": {
 			doc:  codeRepos(rule("{branch: main, direct_push: admins}")),
 			path: "code.repos[0].protect[0].direct_push", kind: "unknown_value",
-			says: []string{"admins", "persons, none"},
+			says: []string{"admins", `"persons" or "none"`},
 		},
 		"a path owner owning no path": {
 			doc:  codeRepos(owner("{unit: Engineering}")),
@@ -533,16 +533,16 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		"a merge authority nobody knows": {
 			doc:  codeRepos(rule("{branch: main, merge_by: admins}")),
 			path: "code.repos[0].protect[0].merge_by", kind: "unknown_value",
-			says: []string{"admins", "writers, maintainers, persons"},
+			says: []string{"admins", `"writers", "maintainers" or "persons"`},
 		},
 		"two approvals": {
 			doc:  codeRepos(rule("{branch: main, approvals: two}")),
-			path: "code.repos[0].protect[0].approvals", kind: "unknown_value", says: []string{"none, one"},
+			path: "code.repos[0].protect[0].approvals", kind: "unknown_value", says: []string{`"none" or "one"`},
 		},
 		"no_code_change exempting approvals": {
 			doc:  codeRepos(rule("{branch: main, approvals: one, approvals_unless: [no_code_change]}")),
 			path: "code.repos[0].protect[0].approvals_unless[0]", kind: "conflict",
-			says: []string{"already carries", "whitespace_only, comment_only"},
+			says: []string{"already carries", `"whitespace_only" or "comment_only"`},
 		},
 		"an exempting class nobody knows": {
 			doc:  codeRepos(rule("{branch: main, approvals: one, approvals_unless: [docs_only]}")),
@@ -604,7 +604,7 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		"a landing policy nobody knows": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {policy: on_green}}")),
 			path: "code.repos[0].protect[0].landing.policy", kind: "unknown_value",
-			says: []string{"on_green", "pre_land, post_land"},
+			says: []string{"on_green", `"pre_land" or "post_land"`},
 		},
 		"a queue past its depth": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {depth: 9}}")),
@@ -620,14 +620,14 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		},
 		"a source branch's fate nobody knows": {
 			doc:  codeRepos(rule("{branch: main, delete_source: always}")),
-			path: "code.repos[0].protect[0].delete_source", kind: "unknown_value", says: []string{"seats, none"},
+			path: "code.repos[0].protect[0].delete_source", kind: "unknown_value", says: []string{`"seats" or "none"`},
 		},
 		// A TAG RULE'S GATE IS ONE MISTAKE, refused at the first field it sets
 		// and naming every one.
 		"a merge gate on a tag rule": {
 			doc:  codeRepos(rule("{tag: 'v*', merge_by: persons, checks: [unit]}")),
 			path: "code.repos[0].protect[0].merge_by", kind: "conflict",
-			says: []string{"tag never moves", "merge_by, checks"},
+			says: []string{"tag never moves", `"merge_by" and "checks"`},
 		},
 		"a merge floor nobody knows": {
 			doc:  codeChart + "code:\n  native: true\n  merge_by_floor: admins\n",
@@ -1406,7 +1406,7 @@ func TestAnUnknownVisibilityIsRefused(t *testing.T) {
 		_, err := config.ParseCompany([]byte(codeRepos(web + fmt.Sprintf("      visibility: %q\n", v))))
 		problems := config.Problems(err)
 		if len(problems) != 1 || problems[0].Path != "code.repos[0].visibility" ||
-			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, "company, unit") {
+			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, `"company" or "unit"`) {
 			t.Errorf("visibility %q: problems = %+v, want one unknown value at code.repos[0].visibility "+
 				"naming company, unit", v, problems)
 		}
@@ -1442,7 +1442,7 @@ func TestAnUnknownSearchModeIsRefused(t *testing.T) {
 		_, err := config.ParseCompany([]byte(codeRepos(web + fmt.Sprintf("      search: %q\n", v))))
 		problems := config.Problems(err)
 		if len(problems) != 1 || problems[0].Path != "code.repos[0].search" ||
-			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, "indexed, grep") {
+			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, `"indexed" or "grep"`) {
 			t.Errorf("search %q: problems = %+v, want one unknown value at code.repos[0].search naming "+
 				"indexed, grep", v, problems)
 		}
@@ -1539,21 +1539,22 @@ units:
 	}
 }
 
-// A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED: on a company
-// that hosts no code of its own, a seat has a host that caps anything by its
-// tier only where it has a GitHub App of its own AND the company's GitHub
-// integration is enabled — the only place the engine reconciles that app and
-// mints its tokens — so anywhere else `code.access` reads as a grant and
-// grants nothing, and the warning says which of the two is missing. Every
-// tier, read_only included; not where the company sets code.native or the seat
-// has an app the enabled integration reads; and not on a human seat, whose
-// tier is an admission refusal of its own, nor for a tier validation refuses.
+// A CODE ACCESS TIER NO CODE HOST READS IS WARNED, NEVER REFUSED: the
+// engine's own code host is the only thing a tier caps, so on a company that
+// hosts no code (`code.native` unset) `code.access` reads as a grant and grants
+// nothing, and the warning says where a tier counts. A seat's own GitHub App
+// changes nothing: its access is its own permissions in GitHub's terms, so
+// the app is no second reader of the tier, and the warning points at
+// integrations.github.permissions instead. Every tier, read_only included;
+// not where the company sets code.native; and not on a human seat, whose tier
+// is an admission refusal of its own, nor for a tier validation refuses.
 //
-// Mutation: read only the seat's own app (the company's integration ignored),
-// and both rows without an enabled integration go silent.
+// Mutation: skip a seat with a GitHub App of its own (the retired reading),
+// and the three rows with an app go silent.
 func TestATierNoCodeHostReadsWarns(t *testing.T) {
 	t.Parallel()
 	const ownApp = "    code: {access: review}\n    integrations:\n      github: {repos: [acme/api]}\n"
+	const why = "the only place a tier caps"
 	on := func(github, extra string) string {
 		return "name: Acme\n" + github + "roles:\n  - name: Dev\n    handle: dev\n" + extra
 	}
@@ -1566,19 +1567,17 @@ func TestATierNoCodeHostReadsWarns(t *testing.T) {
 		why   string
 	}{
 		"full_access on no host": {doc: seat("    code: {access: full_access}\n"), warns: "full_access",
-			why: "no GitHub App of its own"},
+			why: why},
 		"read_only on no host": {doc: seat("    code: {access: read_only}\n"), warns: "read_only",
-			why: "no GitHub App of its own"},
-		"no tier at all":          {doc: seat("")},
-		"a seat with its own app": {doc: seat(ownApp)},
-		// THE SEAT'S APP IS READ ONLY WHERE THE COMPANY'S INTEGRATION IS:
-		// the engine reconciles a seat's app and mints its tokens only
-		// under an enabled integrations.github, so an app of its own on a
-		// company without one is a tier nothing reads.
-		"its own app, no github integration": {doc: on("", ownApp), warns: "review",
-			why: "no GitHub integration enabled"},
+			why: why},
+		"no tier at all": {doc: seat("")},
+		// A SEAT'S GITHUB APP IS NO READER OF THE TIER, whether or not the
+		// company's integration drives it: the app holds the permissions it
+		// was registered at, so the tier beside it grants nothing either.
+		"a seat with its own app":            {doc: seat(ownApp), warns: "review", why: "integrations.github.permissions"},
+		"its own app, no github integration": {doc: on("", ownApp), warns: "review", why: why},
 		"its own app, the integration off": {doc: on("integrations:\n  github: {enabled: false}\n", ownApp),
-			warns: "review", why: "no GitHub integration enabled"},
+			warns: "review", why: why},
 		"the native host": {doc: seat("    code: {access: full_access}\n") + "code:\n  native: true\n"},
 		"a human seat, refused instead": {doc: "name: Acme\nroles:\n  - name: Founder\n    kind: human\n" +
 			"    contact: {slack_user_id: U0FOUNDER}\n    code: {access: full_access}\n"},

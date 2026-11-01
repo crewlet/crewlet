@@ -28,10 +28,25 @@
  * take instead. A call that must present something else — the API token
  * exchange at `POST /auth/token` — sets its own `Authorization` header for
  * that one request, and nothing keeps it.
+ *
+ * AND EVERY REQUEST SAYS WHO IT IS FOR — the tab's reader, in the header
+ * `signin.ts` reads it into — unless it is one of the two whose point is to
+ * learn or change who the session is ([RequestOptions.forReader]). The cookie
+ * is the browser's and the screen is the tab's, and a request the engine
+ * would serve to somebody the tab was not drawn for is refused `409
+ * reader_changed` before it runs, which hands the tab over ([noteSession]).
  */
 
-import { confirmStepUp, needSession } from "./signin.ts";
+import {
+  confirmStepUp,
+  needSession,
+  READER_CHANGED,
+  readerHeaders,
+  readerMoved,
+} from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
+import { answeredByEngine, markedByEngine } from "./engineAnswer.ts";
+import { remedyOf, type Remedy } from "./remedy.ts";
 
 /**
  * What the engine said when it refused.
@@ -68,8 +83,21 @@ export class RestError extends Error {
    * which also refuses to read a proxy's header as the engine's.
    */
   readonly retryAfterSeconds: number | null;
+  /**
+   * Whether the answer carried the engine's mark ([markedByEngine]): the one
+   * thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+   * an error built anywhere that forgot to say reads as not the engine's
+   * (an outcome nobody knows), never as a refusal the engine made; [request]
+   * records what the response said.
+   */
+  readonly marked: boolean;
 
-  constructor(status: number, body: Record<string, unknown>, retryAfter: number | null = null) {
+  constructor(
+    status: number,
+    body: Record<string, unknown>,
+    retryAfter: number | null = null,
+    marked = false,
+  ) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
     super(detail || code || `HTTP ${status}`);
@@ -81,6 +109,7 @@ export class RestError extends Error {
     this.sentence = typeof body.message === "string" ? body.message : "";
     this.body = body;
     this.retryAfterSeconds = retryAfter;
+    this.marked = marked;
   }
 
   /**
@@ -101,6 +130,22 @@ export class RestError extends Error {
     return refusedGrants(this.body);
   }
 
+  /** Where the limit that caused the refusal is changed, or null ([remedyOf]). */
+  get remedy(): Remedy | null {
+    return remedyOf(this.body.remedy);
+  }
+
+  /**
+   * The rule a refusal on authority was decided by (the envelope's `reason`),
+   * or "" where the answer named none. Beside [grants] it says whether the
+   * access they name is a way past the refusal, which they cannot say alone:
+   * a stale proof names the grants that admitted the person
+   * (`lib/authorityRemedy.ts` decides by both).
+   */
+  get reason(): string {
+    return typeof this.body.reason === "string" ? this.body.reason : "";
+  }
+
   /**
    * This refusal in the shape `QueryState` renders from — the one the
    * socket's error frame carries, under the same keys and on the same terms:
@@ -113,8 +158,8 @@ export class RestError extends Error {
    * ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
    * with its code standing in for the rule, so a read refused
    * `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
-   * no grant — which says "no grant would change that: the rule asks a
-   * relation the org chart does not hold", a claim about neither.
+   * no grant — which says no access would change it, of a rule that never
+   * decided: a claim about neither.
    */
   get refusal(): QueryRefusal | LogRefusal | null {
     if (
@@ -145,13 +190,11 @@ export class RestError extends Error {
   }
 
   /**
-   * Whether this is NOT the engine's own answer: nothing came back (status
-   * 0), a body that could not be read (`unreadable_body` — a gateway's HTML
-   * page, a 200 cut off part way through), or a status with no engine error
-   * code in it. Every refusal the engine writes is JSON with an `error` code,
-   * its auth guard's included and its router's own `no_route` and
-   * `method_not_allowed` for a route or method it does not serve, so an answer
-   * without one was written by something in front of it.
+   * Whether this is NOT the engine's own answer ([answeredByEngine]): nothing
+   * came back (status 0), an answer without the engine's mark (a gateway's
+   * page or its JSON, whatever the body says), a body that could not be read
+   * (`unreadable_body`, a 200 cut off part way through), or a status with no
+   * engine error code in it.
    *
    * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
    * the engine wrote means nothing was done; this means nobody here knows. A
@@ -161,7 +204,7 @@ export class RestError extends Error {
    * was dropped with it.
    */
   get unanswered(): boolean {
-    return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+    return !answeredByEngine(this.status, this.code, this.marked);
   }
 }
 
@@ -198,14 +241,17 @@ const TYPED_REFUSALS = new Set(["sign_in_refused", "second_factor_required"]);
  * A `401` that is not an answer about typed details is a browser signed in as
  * nobody the engine accepts: never signed in, its session ended, expired or
  * revoked. A `403 second_factor_enrolment_required` is a session that may do
- * nothing but enrol the second factor the deployment requires. Every other
- * refusal is about the REQUEST, and the session is fine.
+ * nothing but enrol the second factor the deployment requires. A `409
+ * reader_changed` is a session that is somebody else's than the tab that
+ * sent the request — whoever signed in in another tab — and the tab is handed
+ * to them. Every other refusal is about the REQUEST, and the session is fine.
  */
 function noteSession(refusal: RestError): void {
   if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
   if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") {
     needSession("second_factor");
   }
+  if (refusal.status === 409 && refusal.code === READER_CHANGED) readerMoved();
 }
 
 /**
@@ -244,7 +290,12 @@ export async function retryHintOf(response: Response): Promise<number | null> {
   const body = (await response.json().catch(() => null)) as unknown;
   const envelope =
     body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
+  return new RestError(
+    response.status,
+    envelope,
+    retryAfterOf(response),
+    markedByEngine(response.headers),
+  ).retryHint;
 }
 
 /**
@@ -285,6 +336,12 @@ function offline(err: unknown): RestError {
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * [pathSegment] is the one rule of what a path segment may be, kept beside
+ * the link builder it shares the check with (`lib/segment.ts`).
+ */
+export { pathSegment } from "../lib/segment.ts";
+
 /** A query-string value. `undefined` leaves the parameter out. */
 export type QueryValue = string | number | boolean | undefined;
 
@@ -322,6 +379,16 @@ export interface RequestOptions {
    */
   read?: "json" | "text";
   /**
+   * Whether this request is made FOR THE TAB'S READER, and so names them
+   * (`readerHeaders`) and is refused `reader_changed` when the browser's
+   * session is somebody else's. True unless the request's whole point is to
+   * learn or change who the session is: the read of who it is, which is how
+   * a tab refused for its reader learns who to be handed to, and the token
+   * exchange, which signs somebody in. Either refused for naming the reader
+   * would leave a tab nothing to be handed over with.
+   */
+  forReader?: boolean;
+  /**
    * How long this request may take before it is abandoned, in milliseconds —
    * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
    * says so here, rather than removing the deadline; the refusal it gets on
@@ -347,6 +414,8 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+  /** Whether the answer carried the engine's mark ([markedByEngine]). */
+  marked: boolean;
 }
 
 /** A deadline as a person would say it: seconds under two minutes, minutes
@@ -518,6 +587,7 @@ async function attempt(
     signal,
     read = "json",
     timeoutMs = REQUEST_TIMEOUT_MS,
+    forReader = true,
   } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
   let encoded: string | Blob | undefined;
@@ -546,6 +616,9 @@ async function attempt(
     headers: {
       ...(contentType ? { "Content-Type": contentType } : {}),
       ...headers,
+      // READ AT EACH ATTEMPT, a step-up's replay included, and LAST, so no
+      // caller's header can name somebody else in its place.
+      ...(forReader ? readerHeaders() : {}),
     },
     ...(encoded === undefined ? {} : { body: encoded }),
   };
@@ -610,7 +683,12 @@ async function attempt(
   answeredAt = Date.now();
 
   if (read === "text" && response.ok) {
-    return { status: response.status, body: text, etag: response.headers.get("ETag") };
+    return {
+      status: response.status,
+      body: text,
+      etag: response.headers.get("ETag"),
+      marked: markedByEngine(response.headers),
+    };
   }
 
   let parsed: unknown = null;
@@ -635,6 +713,7 @@ async function attempt(
             : `a ${response.status} came back without the engine's JSON, so something in front of it answered`,
         },
         response.ok ? null : retryAfterOf(response),
+        markedByEngine(response.headers),
       );
     }
   }
@@ -644,11 +723,21 @@ async function attempt(
   // still current.
   if (!response.ok && response.status !== 304) {
     const body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    const refusal = new RestError(response.status, body, retryAfterOf(response));
+    const refusal = new RestError(
+      response.status,
+      body,
+      retryAfterOf(response),
+      markedByEngine(response.headers),
+    );
     noteSession(refusal);
     throw refusal;
   }
-  return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
+  return {
+    status: response.status,
+    body: parsed,
+    etag: response.headers.get("ETag"),
+    marked: markedByEngine(response.headers),
+  };
 }
 
 /** The body alone, for the callers that need nothing else. */
@@ -709,6 +798,9 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
         cache: "no-store",
         // The whole of how this download is authenticated, as for [request].
         credentials: "same-origin",
+        // MADE FOR THE TAB'S READER, as every request is (see [request]):
+        // the file is one their screen listed.
+        headers: readerHeaders(),
         signal: controller.signal,
       });
     } catch (err) {
@@ -722,7 +814,12 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
       } catch {
         body = { error: "unreadable_body" };
       }
-      const refusal = new RestError(response.status, body, retryAfterOf(response));
+      const refusal = new RestError(
+        response.status,
+        body,
+        retryAfterOf(response),
+        markedByEngine(response.headers),
+      );
       noteSession(refusal);
       throw refusal;
     }
@@ -738,6 +835,132 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
     clearTimeout(timer);
     signal?.removeEventListener("abort", forward);
   }
+}
+
+/** A text stream being read: the next chunk, or null once the engine ended it. */
+export interface TextStream {
+  next: () => Promise<string | null>;
+  /**
+   * The engine answered `204 No Content`: there is nothing to read and
+   * nothing will follow, the event-stream answer that says not to dial again.
+   */
+  noContent: boolean;
+}
+
+/**
+ * A long-lived text answer, read as it arrives: the Dashboard Assistant's
+ * turn stream (`assistant.ts`), whose bytes are server-sent events.
+ *
+ * THE SAME CREDENTIAL AND THE SAME REFUSALS as every request here: the
+ * session cookie and nothing else, the tab's reader named last
+ * ([readerHeaders], so a browser that changed hands is refused
+ * `reader_changed` and the tab handed over), no browser cache in front of it,
+ * and a
+ * refusal read as the engine's JSON ([RestError]), a `401` reaching
+ * [noteSession] exactly as a request's does. Only the STATUS LINE has a
+ * deadline ([REQUEST_TIMEOUT_MS]); the body runs for as long as the engine
+ * keeps it open, and the caller decides when a quiet stream has stalled,
+ * since only the caller knows how often the engine promised to speak.
+ *
+ * NOT COUNTED IN FLIGHT ([whenRequestsSettle]), for a download's reason: a
+ * stream may run for minutes, and it sets no cookie.
+ */
+async function stream(
+  path: string,
+  options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
+): Promise<TextStream> {
+  const { headers = {}, signal } = options;
+  if (signal?.aborted) throw signal.reason;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+  const unanswered = (err: unknown): unknown => {
+    if (signal?.aborted) return signal.reason;
+    return timedOut
+      ? new RestError(0, {
+          error: "unreachable",
+          detail: `the engine did not answer within ${waitWords(REQUEST_TIMEOUT_MS)}`,
+        })
+      : offline(err);
+  };
+  const release = () => signal?.removeEventListener("abort", forward);
+  let response: Response;
+  try {
+    response = await fetch(location.origin + path, {
+      method: "GET",
+      cache: "no-store",
+      // The whole of how this stream is authenticated, as for [request].
+      credentials: "same-origin",
+      headers: { Accept: "text/event-stream", ...headers, ...readerHeaders() },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    release();
+    throw unanswered(err);
+  } finally {
+    clearTimeout(timer);
+  }
+  answeredAt = Date.now();
+  // NO CONTENT IS AN ANSWER, not an unreadable one: a browser hands a 204
+  // no body, and reading it as a failure would dial it again.
+  if (response.status === 204) {
+    release();
+    return { next: async () => null, noContent: true };
+  }
+  if (!response.ok || response.body === null) {
+    let body: Record<string, unknown>;
+    try {
+      body = (await response.json()) as Record<string, unknown>;
+    } catch {
+      body = { error: "unreadable_body" };
+    } finally {
+      release();
+    }
+    const refusal = new RestError(
+      response.ok ? 502 : response.status,
+      body,
+      retryAfterOf(response),
+      markedByEngine(response.headers),
+    );
+    noteSession(refusal);
+    throw refusal;
+  }
+  const reader = response.body.getReader();
+  // AN ABORT ENDS A READ IN FLIGHT: a body whose connection a proxy dropped
+  // without a word never errors, so a caller that judged the stream stalled
+  // must be able to end the read it is waiting on.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      reader.cancel(controller.signal.reason).catch(() => {});
+    },
+    { once: true },
+  );
+  const decoder = new TextDecoder();
+  return {
+    noContent: false,
+    async next() {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        release();
+        throw unanswered(err);
+      }
+      if (chunk.done) {
+        release();
+        const tail = decoder.decode();
+        return tail === "" ? null : tail;
+      }
+      answeredAt = Date.now();
+      return decoder.decode(chunk.value, { stream: true });
+    },
+  };
 }
 
 export const rest = {
@@ -783,4 +1006,6 @@ export const rest = {
     bodyOf("DELETE", path, { body, headers }),
   /** A file's bytes — see [blob]. */
   blob,
+  /** A long-lived text answer, read as it arrives (see [stream]). */
+  stream,
 };

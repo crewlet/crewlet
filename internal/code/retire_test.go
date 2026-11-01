@@ -73,7 +73,7 @@ func (n *node) retiredThrough(repoID string) int {
 	return n.count(`SELECT retired_through FROM code_repos WHERE id = ?`, repoID)
 }
 
-// A RETIRED PACK KEEPS ITS OBJECT FOR THE GRACE (ADR-0051): while its row is in
+// A RETIRED PACK KEEPS ITS OBJECT FOR THE GRACE (ADR-0074): while its row is in
 // code_packs_retired the collector reads its object as named — through the
 // declaration and the statement it builds, as every collection asks — and a
 // sweep removes the row only once the clock it is given puts the row past

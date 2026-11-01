@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -76,7 +77,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
 	// CREATING somebody: a service account, or a person onto the human seat
 	// they will hold, answered with that person's first password link.
-	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
+	mount("POST /iam/people", at(authz.ActionSignInWrite).Creating(), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
 	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
 	// — is an ordinary directory write: admin, a `step_up` proof and a
@@ -93,7 +94,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// does not exist yet would have had to invent an id for them. (A
 	// person who should exist at once is CREATED instead, above, and handed
 	// a link that sets only their password.)
-	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
+	mount("POST /iam/invitations", at(authz.ActionSignInWrite).Creating(), s.PostInvite)
 	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
 	// outstanding invitation is a way into the company, and both halves of
 	// "who can reach us" are this surface's.
@@ -105,15 +106,15 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
-		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+		at(authz.ActionSignInWrite).Destroying(), s.PostMFAReset)
 	// THE SAME VERB AS THE SECOND FACTOR'S RESET, for its reason: both
 	// change how somebody else proves who they are, from outside.
 	mount("POST /iam/people/{id}/password-reset",
-		at(authz.ActionDirectoryWrite), s.PostPasswordReset)
+		at(authz.ActionSignInWrite).Creating(), s.PostPasswordReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
-		ofSubject(authz.ActionCredentialWrite), s.PostCredentials)
+		ofSubject(authz.ActionCredentialWrite).Creating(), s.PostCredentials)
 	// A REVOCATION IS ADMITTED ON THE TOKEN VERB and asks the proof verb
 	// from inside once it has read which credential the id names: a
 	// machine token's revocation is the first, and a password's, a second
@@ -126,7 +127,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// it signs out everybody, irreversibly, so it asks a person present and
 	// a recent proof whoever holds admin.
 	mount("POST /iam/invalidate-all",
-		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
+		at(authz.ActionSessionInvalidate).Destroying(), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
 	// WHO SITS WHERE: every human seat of the running company and who
 	// holds it. EVERYBODY's, as the org chart it draws onto is (ADR-0033):
@@ -190,7 +191,7 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return out, false
 	}
 	return out, true
@@ -342,7 +343,7 @@ func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 
 	log.Log(r.Context(), auth.UnreadLevel(r.Context()), "api_iam_read_failed",
 		"what", what, "error", err)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+	auth.UnavailableIdentity(w, err)
 }
 
 // sequence folds the answers of a gesture that is several records — an edit's
@@ -403,6 +404,24 @@ func ownLanding(result statelog.Result) bool {
 	return landed(result) && !result.Collapsed
 }
 
+// personRemoved is a write about a person somebody removed between the read a
+// route decided on and the record ([statelog.ReasonDeleted], whose only author
+// in the directory is a removal's tombstone). It says REMOVED, the word every
+// screen and page uses for taking somebody out of the directory: the
+// framework's own sentence for a deletion says something was "deleted for
+// good", which nobody does to a person here.
+const personRemoved = "This person was removed, so nothing was written."
+
+// What an administrator is told about a create or an invitation that landed
+// and whose answer this node cannot read back yet ([iamdomain.NotReadBack]).
+const (
+	notReadBackPerson = "They were added, but this node can't show their " +
+		"first password link yet. Send the same request again in a moment " +
+		"to get it."
+	notReadBackInvitation = "The invitation was sent, but this node can't " +
+		"show its link yet. Send the same request again in a moment to get it."
+)
+
 // answerWrite renders one identity write's outcome, `200` on success.
 func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, extra map[string]any) {
@@ -420,9 +439,27 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //     code the authority table's presence rows answer the same request with
 //     at the route — an administrative identity record needs a person
 //     present, and the remedy is to sign in rather than to be granted
-//     anything. Before the authority arm it wraps.
-//   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
-//     often it is retried.
+//     anything. Before the refusal arms below, whose refusal it is.
+//   - THE DASHBOARD ASSISTANT, [iamdomain.ErrAssistRefused]: 403
+//     `unauthorized` with the table's `assist_refused` reason, the answer its
+//     row gives the same request at the route: the person takes the gesture
+//     themselves. Before the refusal arms below, for the token's reason.
+//   - A PERMISSION THE CALLER LACKS, an [iamdomain.Refusal] naming grants:
+//     403 `unauthorized`, reason `no_grant` and the grants that would lift
+//     it — rendered by [authz.RefusalFields], the mapping the authority
+//     table's own refusals take, so its sentence names that permission.
+//   - THE RECORD'S OWN RULE, an [iamdomain.Refusal] naming none — a
+//     person's token asked for by somebody else, a permission the owner does
+//     not hold, an owner who may not act, a name this build does not know:
+//     403 `forbidden`, the domain's sentence in `detail` and no `reason` or
+//     `grants`, because no rule of the authority table decided it and no
+//     permission would change it. Both were one `unauthorized` naming no
+//     grant, so every one of them told an administrator to ask an
+//     administrator for access.
+//   - Neither lands however often it is retried. A bare [iamdomain.ErrRefused]
+//     is none of them: the domain builds every refusal as an
+//     [iamdomain.Refusal], so one that is not is unclassified, and answered
+//     as the fault below.
 //   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
 //     seat, 409 naming who holds it — a person, or an open invitation.
 //   - A PERSON'S SEAT LEFT OUT: a person's gesture naming none, or clearing
@@ -437,6 +474,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //   - A LOST RACE, [statelog.ErrConflict]: 409 `stale`, which the same request
 //     resolves once read again.
 //   - THE PERSON REMOVED between the route's read and the record: 404.
+//   - A WRITE THAT LANDED AND CANNOT BE READ BACK HERE YET,
+//     [iamdomain.NotReadBack]: 503 with the op id and the write's own
+//     outcome (`pending` or `applied`, never `unknown`), saying what landed —
+//     the same request again under the same key hands back what it made.
 //   - AN ESTATE THAT COULD NOT DECIDE: 503 WITH the operation id and the
 //     Retry-After the refusal's own rule gives ([auth.RetryIdentity]). It used
 //     to be a bare 503, which a client cannot tell from a node that is gone
@@ -474,7 +515,9 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 
 	var (
 		taken   *iamdomain.ErrTaken
+		record  *iamdomain.Refusal
 		refused *statelog.Unavailable
+		unread  *iamdomain.NotReadBack
 	)
 	// A REFUSAL CARRIES WHAT THE CALLER PASSED TOO — the id it was about,
 	// and, for an edit refused partway, the steps that landed before it and
@@ -482,7 +525,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	// says. It used to carry none of it, so an edit refused at its last
 	// record answered that record's refusal alone and never said what had
 	// already changed.
+	//
+	// AND THE LOG CARRIES THE REST: the domain's whole error, which names
+	// by id what its sentence names as the caller knows it — an invitation,
+	// a session, the token a request came through ([iamdomain.Refusal.About])
+	// — beside the gesture's key and the path the caller asked on. The answer
+	// carries the sentence alone ([iamdomain.Sentence]).
 	refuse := func(status int, code httpjson.Code, fields httpjson.Detail) {
+		logRefused(r, opID, status, err)
 		for k, v := range extra {
 			if _, taken := fields[k]; !taken {
 				fields[k] = v
@@ -495,13 +545,31 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// THE RECORD LAYER'S LOCK, answered as the route's own would be:
 		// the table's reason and no permission, since none would admit a
 		// token — a person signs in.
-		fields := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
-		fields["detail"] = err.Error()
-		refuse(http.StatusForbidden, httpjson.CodeTokenRefused, fields)
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonTokenRefused})
+		fields["detail"] = iamdomain.Sentence(err)
+		refuse(status, code, fields)
 		return
-	case errors.Is(err, iamdomain.ErrRefused):
-		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
-			httpjson.Detail{"detail": err.Error()})
+	case errors.Is(err, iamdomain.ErrAssistRefused):
+		// THE SAME LOCK FOR THE DASHBOARD ASSISTANT, answered as the
+		// table's own refusal of it: its reason and no permission, since
+		// the person takes the gesture themselves.
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonAssistRefused})
+		fields["detail"] = err.Error()
+		refuse(status, code, fields)
+		return
+	case errors.As(err, &record) && len(record.Grants) > 0:
+		// A PERMISSION WOULD LIFT IT, so it is answered as the authority
+		// table answers a missing one, naming that permission.
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: record.Grants})
+		fields["detail"] = iamdomain.Sentence(err)
+		refuse(status, code, fields)
+		return
+	case errors.As(err, &record):
+		refuse(http.StatusForbidden, httpjson.CodeForbidden,
+			httpjson.Detail{"detail": iamdomain.Sentence(err)})
 		return
 	case errors.Is(err, iamdomain.ErrSeatRequired):
 		// BEFORE THE INVALID ARM IT WRAPS: the remedy is always the same
@@ -524,9 +592,23 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	case errors.Is(err, iamdomain.ErrOperationReused):
 		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
 		// invitation or person, or one no longer open. A conflict the
-		// caller resolves with a new key, never by waiting.
-		refuse(http.StatusConflict, httpjson.CodeBadParams,
-			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+		// caller resolves with a new key, never by waiting — answered as
+		// every surface that takes a key answers one, `409 invalid_input`
+		// naming the header as the field to change: it was `bad_params`
+		// here, whose sentence is about a query parameter, while the act
+		// route said `invalid_input`, so one refusal read two ways under
+		// two codes. Where the STATE LOG refused it rather than the
+		// directory's own decide — an operation the key derives already
+		// names a write to another object — the domain's sentinel carries
+		// the framework's refusal after it, which names the operation and
+		// the subjects, so it is told in [opkey.Reused] as every surface
+		// taking a key tells it.
+		said := iamdomain.Sentence(err)
+		if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
+			said = opkey.Reused
+		}
+		refuse(http.StatusConflict, httpjson.CodeInvalidInput,
+			httpjson.Detail{"detail": said, "field": opkey.Header, "op_id": opID})
 		return
 	case errors.As(err, &taken):
 		refuse(http.StatusConflict, httpjson.CodeInvalid, s.takenDetail(r, taken))
@@ -543,38 +625,74 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// for the same reason.
 		errors.Is(err, iamdomain.ErrInvalid):
 		refuse(http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{"detail": iamdomain.Sentence(err)})
 		return
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE — the write's snapshot kept moving under it — which
 		// the same request resolves once read again. `stale` says exactly
-		// that, as it does on /work; `bad_params` said the request could
-		// never succeed however often it was sent.
-		refuse(http.StatusConflict, httpjson.CodeStale,
-			httpjson.Detail{"detail": err.Error()})
+		// that, as it does on /worklet; `bad_params` said the request could
+		// never succeed however often it was sent. Told in the state log's
+		// words for a person ([statelog.Sentence]): its error names the
+		// subject the race was lost on, a broker path.
+		said, _ := statelog.Sentence(err)
+		refuse(http.StatusConflict, httpjson.CodeStale, httpjson.Detail{"detail": said})
 		return
 	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
 		// THE PERSON WAS REMOVED — between the read this route decided on
 		// and the record — and nothing will ever write them again: the
 		// person this route names does not exist, which is a 404 and not a
 		// 503 sending an administrator to find a node that will take it.
+		// Told as [personRemoved], never the framework's own refusal, which
+		// names the person's broker subject.
 		refuse(http.StatusNotFound, httpjson.CodeNotFound,
-			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+			httpjson.Detail{"detail": personRemoved, "op_id": opID})
+		return
+	case errors.As(err, &unread):
+		// A WRITE THAT LANDED and whose answer this node cannot read back
+		// yet: a person's create whose first password link, or an
+		// invitation's issue whose terms, are rows it has not applied. NOT
+		// A CONDITION, and never told as one: "couldn't do this right now"
+		// told an administrator a create that had landed had not, and a
+		// screen that replaces its key after any answer but an unknown one
+		// sent the retry under a new key, which the address and the seat
+		// the first attempt now hold refused — losing the link. So it says
+		// what landed, carries the write's own outcome beside the op id,
+		// and asks for the SAME request again, which a client keeps its
+		// key for; under the identity estate's hint, since applying the
+		// rows is what clears it.
+		log.InfoContext(r.Context(), "api_iam_write_unread", "op_id", opID,
+			"error", err)
+		outcome := unread.Result.Outcome
+		if outcome == "" {
+			outcome = statelog.OutcomePending
+		}
+		said := notReadBackPerson
+		if unread.Invitation {
+			said = notReadBackInvitation
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
+			withExtra(extra, httpjson.Detail{"detail": said, "op_id": opID,
+				"outcome": string(outcome)}))
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		// THE REFUSAL'S OWN HINT: the identity estate's two seconds for
 		// one that clears here, and NONE for one no wait clears — a
 		// record too large, a full log, a refusal the broker named, an
 		// evicted node — so a client is not sent back to be refused the
-		// same way.
+		// same way. TOLD IN A PERSON'S WORDS for the refusal
+		// ([statelog.ConditionSentence]), whose advice agrees with that
+		// hint, and its own text to the log: it was the detail, so an
+		// administrator read "statelog: unavailable (behind): " and a
+		// position.
 		step := opID
 		if errors.As(err, &refused) && refused.OpID != "" {
 			step = refused.OpID
 		}
 		log.WarnContext(r.Context(), "api_iam_write_unavailable",
 			"op_id", opID, "step_op_id", step, "error", err)
+		said, _ := statelog.ConditionSentence(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
-			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
+			withExtra(extra, httpjson.Detail{"detail": said, "op_id": opID}))
 		return
 	case err != nil:
 		// THE FAULT'S OWN WORDS GO TO THE LOG, which is where the
@@ -616,6 +734,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	}
 }
 
+// logRefused is the log line every refusal [Service.answer] writes: the
+// gesture's key, the path the caller asked on and the domain's whole error,
+// which names by id what the answer's sentence names as the caller knows it.
+func logRefused(r *http.Request, opID string, status int, err error) {
+	log.InfoContext(r.Context(), "api_iam_write_refused", "op_id", opID,
+		"path", r.URL.Path, "status", status, "error", err)
+}
+
 // takenDetail is what an administrator is told about a value somebody else
 // holds: which value, in a sentence of the surface's own, and who holds it —
 // by the login this node's rows give them, and by id beside it.
@@ -638,11 +764,14 @@ func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjs
 		what = fmt.Sprintf("the %s %s", taken.Field, taken.Value)
 	}
 	if taken.Invitation != "" {
+		// THE INVITATION BY ITS FIELD, never in the sentence: its id is
+		// what `DELETE /iam/invitations/{id}` takes, and the sentence is
+		// what a person reads beside a button that cancels it — it named
+		// the id and the route, which no screen offers anybody to type.
 		return httpjson.Detail{"field": string(taken.Field),
 			"invitation": taken.Invitation,
-			"detail": what + " belongs to an open invitation. Cancel it " +
-				"first (DELETE /iam/invitations/" + taken.Invitation + "), or " +
-				"wait for it to expire."}
+			"detail": what + " belongs to an open invitation. Cancel the " +
+				"invitation first, or wait for it to expire."}
 	}
 	holder := "somebody else"
 	if row, err := s.directory.Person(r.Context(), taken.Person); err == nil &&

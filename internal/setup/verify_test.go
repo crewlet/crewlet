@@ -63,7 +63,7 @@ func TestJudgeCallsOnlyTheVendorsOwnRefusalARefusal(t *testing.T) {
 		{"a name that does not resolve", setup.Failure{App: "Acme", Err: dns},
 			setup.VerifyUnreachable, "the address does not resolve"},
 		{"a timeout", setup.Failure{App: "Acme", Err: timeout},
-			setup.VerifyUnreachable, "did not answer within 10 seconds"},
+			setup.VerifyUnreachable, "did not answer within 10s"},
 		{"an answer that is not the API", setup.Failure{App: "Acme",
 			Err: errors.New("decode: invalid character '<'")},
 			setup.VerifyUnreachable, "not its API"},
@@ -104,6 +104,22 @@ func TestJudgeRepeatsOnlyASayableReason(t *testing.T) {
 	}
 	if got := refused("  Invalid\n API key. "); got != "Acme refused it: Invalid API key." {
 		t.Errorf("a short reason was not repeated on one line: %q", got)
+	}
+}
+
+// A PROBE CHECKING SEVERAL CREDENTIALS holds a reason against every one of
+// them, not only the field under check.
+func TestSayableHoldsAReasonAgainstEveryCredential(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ reason, want string }{
+		{"key fake-a is unknown", ""},
+		{"key fake-b is unknown", ""},
+		{strings.Repeat("word ", 60), ""},
+		{"  Forbidden\n ", "Forbidden"},
+	} {
+		if got := setup.Sayable(c.reason, "fake-a", " fake-b ", ""); got != c.want {
+			t.Errorf("Sayable(%q) = %q, want %q", c.reason, got, c.want)
+		}
 	}
 }
 

@@ -1,5 +1,7 @@
 package config
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // Learning configures the agent-learning subsystem: what a seat remembers
 // from a turn, what it distils into reusable skills, and what it eventually
 // forgets.
@@ -95,7 +97,17 @@ type Reflect struct {
 	// entries. Falls back to the raw entries when no auxiliary model
 	// answers. query_episodes' answer is never summarised: a seat that asked
 	// for its turns gets them.
-	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero" desc:"Summarise the turn-start Similar prior work block's hits into one briefing through the auxiliary model (default on); query_episodes is never summarised."`
+	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero"`
+}
+
+// fieldDescriptions is the schema's description of each of Reflect's fields
+// whose text names a tool, which a `desc` tag cannot read from its constant.
+func (Reflect) fieldDescriptions() map[string]string {
+	return map[string]string{
+		"summarize_episodes": "Summarise the turn-start Similar prior work " +
+			"block's hits into one briefing through the auxiliary model " +
+			"(default on); " + toolname.QueryEpisodes + " is never summarised.",
+	}
 }
 
 // Runs reports whether reflection runs, applying the true default.
@@ -338,7 +350,14 @@ type EpisodeLifecycle struct {
 	// ExemplarCount is how many originals stay raw after a cluster is
 	// compacted, so an operator can drill into typical examples without
 	// losing fidelity entirely.
-	ExemplarCount int `yaml:"exemplar_count,omitempty" json:"exemplar_count,omitempty" js:"min=0" desc:"Originals kept raw after a cluster is compacted."`
+	//
+	// AT LEAST ONE. A fold that keeps no original writes a summary nobody
+	// can open, which the lifecycle refuses to do: it reads a count below
+	// one as unset and keeps its own two (internal/learning's
+	// defaultExemplarCount). So a 0 written here never meant "keep none" —
+	// and a stored revision, decoded onto the defaults with every knob
+	// written omitempty, dropped it before the lifecycle ever saw it.
+	ExemplarCount int `yaml:"exemplar_count,omitempty" json:"exemplar_count,omitempty" js:"min=1" desc:"Originals kept raw after a cluster is compacted (at least 1)."`
 
 	// CompactedMaxAgeDays is an optional very-long-tail eviction of the
 	// summaries themselves. 0 keeps them indefinitely, which is the
@@ -375,7 +394,7 @@ func (e *EpisodeLifecycle) validate(path Path) error {
 	p.wrap(positive(path, "compaction_min_cluster_size", e.CompactionMinClusterSize))
 	p.wrap(fraction(path, "compaction_jaccard_threshold", e.CompactionJaccardThreshold))
 	p.wrap(positive(path, "compaction_batch_size", e.CompactionBatchSize))
-	p.wrap(nonNegative(path, "exemplar_count", e.ExemplarCount))
+	p.wrap(positive(path, "exemplar_count", e.ExemplarCount))
 	p.wrap(nonNegative(path, "compacted_max_age_days", e.CompactedMaxAgeDays))
 
 	if e.ExemplarCount >= e.CompactionMinClusterSize && e.CompactionMinClusterSize > 0 {

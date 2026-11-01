@@ -46,10 +46,6 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// was validated, schema'd and documented and read by nobody, so setting
 	// one produced a revision and changed nothing an operator could observe.
 	refinement := c.Config.Learning.SkillRefinement
-	// THE CODE TOOLS' SEAMS, read once for the epoch's builtins — the code
-	// tools below, and run_sandbox's launcher, which resolves a call's
-	// repositories through exactly the seams a code tool reads through.
-	code := CodeToolDeps(e)
 	deps := builtin.Deps{
 		A2A: e.a2aFor(c),
 		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts — what the
@@ -57,7 +53,6 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		// never the process environment, which an engine handed an
 		// environment of its own does not read anywhere else.
 		Env:               e.LookupSecret,
-		Sandbox:           e.sandboxLauncher(c, code),
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
@@ -119,15 +114,38 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// the nodes that hold them. Registered for every seat; the code writes
 	// are offered only to a seat whose code tier writes, and left off every
 	// other seat's surfaces ([Company.withheldFrom]).
-	deps.Code = code
+	deps.Code = CodeToolDeps(e)
 	// AND THE HEALTH TOOLS, on the same deps the operator catalogue builds
 	// per call: registered for every seat, as everything here is, and
 	// offered only to a seat whose role carries the health grant — the
 	// table refuses every other seat, which is what leaves them off its
 	// surfaces ([Company.withheldFrom]).
 	deps.Health = HealthToolDeps(e)
+	// AND THE ROOMS. Without this the nine chat tools were built,
+	// documented and registered against a zero [builtin.ChatDeps] — which
+	// gates every one of them off — so a company on `chat.backend: chatlet`
+	// ran the domain, applied its records and woke its seats about
+	// messages they had no tool to answer with.
+	deps.Chat = e.chatDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
+	}
+	// THE EXECUTOR RUN'S ASK, over the same tracker and knowledge base
+	// the builtins check a decision's evidence against, and the run's row
+	// through whatever sandbox runtime this node holds when it is called.
+	if tool := builtin.NewAskAndWait(builtin.RunAskDeps{
+		Desk: runAsks{engine: e}, Work: deps.Work, Pages: deps.Pages.Reader,
+	}); tool != nil {
+		c.AskTool = tool
+	}
+	// THE EXECUTOR RUN'S CHECKOUT, where the code tools serve on this
+	// epoch: it resolves through the same seams they read through, and
+	// grants on the run's row through whatever sandbox runtime this node
+	// holds when it is called.
+	if deps.Code.Code != nil {
+		if tool := builtin.NewCodeCheckout(runCheckouts{engine: e}); tool != nil {
+			c.CheckoutTool = tool
+		}
 	}
 	// THE SHARED MCP SERVERS, into the same registry and straight after
 	// the builtins, because this is the surface every seat's is cloned
@@ -158,32 +176,6 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}
 	e.embeddings.Store(&embedder)
 	return nil
-}
-
-// sandboxLauncher is the run_sandbox tool's seam for epoch c, or nil where no
-// seat can run code.
-//
-// Nil OMITS the tool rather than registering a broken one: a model shown a
-// tool that always fails learns to distrust the whole catalogue and burns a
-// round finding out each time — and a seat that planned around a box it will
-// never get delivers nothing while looking like it tried.
-//
-// It asks the EPOCH as well as the node. A revision that drops
-// providers.sandbox leaves the runtime running, because the runs already in
-// flight still have to be polled and finished through the backends that made
-// them (see [sandbox.Coordinator.SetManager]) — and a launcher registered against that
-// runtime would mint new boxes on a catalogue the company no longer
-// configures.
-//
-// code is the code tools' seams the epoch is equipped with: what a call's
-// repositories on the company's own code host are resolved through, the zero
-// value where this node serves none.
-func (e *Engine) sandboxLauncher(c *Company, code builtin.CodeDeps) builtin.SandboxLauncher {
-	if e.sandbox.Load() == nil || c == nil || c.Config == nil ||
-		c.Config.Providers.Sandbox == nil {
-		return nil
-	}
-	return &launcher{engine: e, code: code}
 }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.
@@ -305,10 +297,10 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 		// never offered a search its company cannot serve.
 		//
 		// THE BACKEND, not the presence of an `integrations.confluence`
-		// block: a company on the native knowledge base configures no
+		// block: a company on Doclet configures no
 		// vendor at all, and gating on the vendor block would have left
-		// every native company's seats without search_knowledge while
-		// the pages they were meant to find were sitting in the index.
+		// the seats of every company on Doclet without search_knowledge
+		// while the pages they were meant to find were sitting in the index.
 		return nil
 	}
 	return liveKnowledge{engine: e}

@@ -455,7 +455,7 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 //
 // A lease whose heartbeat is shorter than one message's crossing keeps that
 // margin behind no window at all; the window is one there, and the TTL is
-// under the floor `crewlet validate` warns of ([config.LinkLeaseFloor]).
+// under [config.LinkLeaseFloor], which config's lease floor refuses.
 func TestTheLinkWindowCrossesTheFloorWithinAHeartbeat(t *testing.T) {
 	t.Parallel()
 	crossing := func(messages int) time.Duration {
@@ -486,7 +486,7 @@ func TestTheLinkWindowCrossesTheFloorWithinAHeartbeat(t *testing.T) {
 				}
 				if ttl >= config.LinkLeaseFloor {
 					t.Errorf("a %v lease cannot keep its margin behind one message, and is not under "+
-						"the %v floor crewlet validate warns of", ttl, config.LinkLeaseFloor)
+						"the %v floor an upload across a link needs", ttl, config.LinkLeaseFloor)
 				}
 				return
 			}
@@ -511,7 +511,7 @@ func TestTheLinkWindowCrossesTheFloorWithinAHeartbeat(t *testing.T) {
 	}
 }
 
-// THE FLOOR VALIDATE WARNS OF IS THE WINDOW'S OWN ARITHMETIC: three heartbeats
+// THE FLOOR AN UPLOAD ACROSS A LINK NEEDS IS THE WINDOW'S OWN ARITHMETIC: three heartbeats
 // of one message crossing a link at the floor. config states it as a figure,
 // importing none of the packages that make it, so this holds the two together.
 func TestTheLinkLeaseFloorIsOneMessageAHeartbeat(t *testing.T) {

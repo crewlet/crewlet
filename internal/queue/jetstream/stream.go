@@ -127,7 +127,7 @@
 //
 // # Every connection presents a key
 //
-// ADR-0064. Every embedded broker this package starts — a solo member, a
+// ADR-0087. Every embedded broker this package starts — a solo member, a
 // clustered member, a member with a leaf listener, a leaf — installs ONE
 // authenticator (brokerAuth, nats-server's embedding hooks
 // CustomClientAuthentication and, on a clustered member,
@@ -235,12 +235,18 @@ func budgetFor(cfg Config) int {
 	return maxDeliver
 }
 
-// ackWait bounds how long a fetched-unacked message stays invisible.
+// DefaultAckWait bounds how long a fetched-unacked message stays invisible.
 //
 // Sized to a wait behind a running turn plus one worst-case turn. It is a
 // backstop, not the handoff path: a seat that loses its lease Naks
 // explicitly and the successor sees the message in about a millisecond.
-const ackWait = 30 * time.Minute
+//
+// EXPORTED because it is the longest a delivery a node that died was holding
+// stays silent before it is redelivered, which another package's clock is
+// sized against: internal/maintenance's ChannelIdleTimeout, which must not
+// close the channel of a colleague's ask that is about to come round again
+// (internal/engine holds the order between the two).
+const DefaultAckWait = 30 * time.Minute
 
 // defaultEventRetention bounds the audit/event stream.
 //
@@ -728,8 +734,8 @@ func (d DomainStream) spec() streamSpec {
 
 		// A log keeps every record until the trim moves the floor; a
 		// compacted stream keeps one per subject and may bound its own
-		// age, because its rows are durable in SQL on every node and an
-		// expired message therefore deletes nothing.
+		// age, because its rows are durable in SQL on every data node and
+		// an expired message therefore deletes nothing.
 		maxAge:        d.MaxAge,
 		maxPerSubject: d.MaxPerSubject,
 	}

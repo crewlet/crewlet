@@ -236,6 +236,39 @@
   color: var(--color-feedback-warning-ink);
 }
 
+/* A PHASE'S CLI RUNS, each heading the rounds it made (`RunHead` in
+   PhaseCard.tsx). A run is the coarser boundary of the two, so it is a HEAD
+   rather than another rail: its rounds keep their own bracket and tint, and
+   the run's line above them — its name, its entry, its span of rounds and how
+   it ended — reads as the label of the stretch below it. The gap between two
+   runs beats the gap between two rounds, so the hierarchy reads in space. */
+.run-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.run-name {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
 /* ---- A phase's prompt: a map, an outline and one section -----------------
    `PromptDoc.tsx`. The view measures ITSELF (`container: prompt`) rather than
    the window: the card it sits in is as wide as the turn page's column, which
@@ -700,6 +733,13 @@
 }
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
+}
+/* A CALL STILL RUNNING is bordered in the accent the live state wears
+   everywhere else, beside the word and its clock in the row's own head: a
+   round can hold several at once, and which of its calls have answered is
+   the question a reader brings to a slow one. */
+.tool-row.running {
+  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, transparent);
 }
 /* A task's artifacts, the design system's compact cards stacked in the rail.
    ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
@@ -1374,7 +1414,8 @@ a.oc-key:hover {
   flex-direction: column;
   gap: var(--spacing-4);
   min-width: 0;
-  padding: var(--spacing-5) var(--spacing-5) var(--spacing-8);
+  /* THE TAB BAR'S PANEL starts the shared step under it (`--tab-panel-gap`). */
+  padding: var(--tab-panel-gap) var(--spacing-5) var(--spacing-8);
 }
 .prof-notices {
   display: flex;
@@ -1407,7 +1448,7 @@ a.oc-key:hover {
   min-width: 0;
 }
 /* A PAIR WITH ONE CARD LEFT GIVES IT THE ROW: where the company runs no
-   Crewlet Works the seat's Assigned work draws nothing, and Turns per day sat
+   Worklet the seat's Assigned work draws nothing, and Turns per day sat
    in the left track beside a 334px hole. */
 .prof-pair > :only-child {
   grid-column: 1 / -1;
@@ -1836,7 +1877,7 @@ a.prof-row:hover {
     gap: var(--spacing-3);
   }
   .prof-body {
-    padding: var(--spacing-4) var(--spacing-4) var(--spacing-6);
+    padding: var(--tab-panel-gap) var(--spacing-4) var(--spacing-6);
   }
   .prof-name {
     font-size: 20px;
@@ -1964,9 +2005,9 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder --------------------------------------------------------
-   Agents › Edit org (`routes/org/builder/`, at `#/agents/edit`), the one
-   screen that WRITES the org. Its recipes live here beside the chart's
-   because it draws the same chart, and the two must read as one.
+   Org chart › Edit org (`routes/org/builder/`, at `#/company/org/edit`),
+   the one screen that WRITES the org. Its recipes live here beside the
+   chart's because it draws the same chart, and the two must read as one.
 
    Read `routes/org/builder/builderStyles.test.ts` before changing anything
    below — it reads these rules as text and states what each one buys. */
@@ -2269,7 +2310,8 @@ a.prof-row:hover {
   display: grid;
   align-content: start;
   gap: var(--spacing-6);
-  padding: var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  /* THE TAB BAR'S PANEL starts the shared step under it (`--tab-panel-gap`). */
+  padding: var(--tab-panel-gap) var(--spacing-4) var(--spacing-7);
   min-width: 0;
 }
 .node-editor .builder-section[data-depth="0"] {
@@ -2709,10 +2751,10 @@ a.prof-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Knowledge ----------------------------------------------------------
+/* ---- Doclet -------------------------------------------------------------
 
-   THE APPROVED KNOWLEDGE HOME (routes/knowledge/): the spaces in one row at
-   the top of every Knowledge screen, the search in the page bar, and the
+   THE APPROVED DOCLET HOME (routes/doclet/): the spaces in one row at
+   the top of every Doclet screen, the search in the page bar, and the
    screen's own content at the full width of the sheet, with no column of
    navigation beside it. Every size here is a token; the widths a layout
    needs and no token states are rem, named where they are declared. */
@@ -3807,794 +3849,7 @@ a.knowledge-reader-how:hover {
   }
 }
 
-/* ---- Company › Integrations ------------------------------------------------
-   The directory and the column beside it are the kit's (`DirectoryList` in a
-   `ListDetail`), so this screen draws only what fills the detail: a tool's or
-   a service's tabs, its issues, its agents, a feed, and the engine's address
-   at the foot of the directory. No part draws a frame inside a frame: rows are
-   divided by hairlines. */
-
-/* On a phone the detail is the whole page, and this is its way back. */
-.int-back {
-  display: none;
-  align-self: flex-start;
-}
-@media (width < 640px) {
-  .int-back {
-    display: inline-flex;
-  }
-}
-
-.int-detail,
-.int-tab,
-.int-agents,
-.int-service-off {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  min-width: 0;
-}
-.int-agents {
-  gap: var(--spacing-4);
-}
-.int-service-off {
-  max-width: 44rem;
-}
-/* THE COLUMN SPACES ITS PARTS, so prose and headings inside it carry no
-   margin of their own, and a lone control keeps its own width. */
-:where(.int-detail, .int-tab, .int-agents, .int-service-off, .int-before, .int-soon-copy)
-  > :where(p, h3) {
-  margin: 0;
-}
-:where(.int-detail, .int-tab, .int-agents) > :where(a, button) {
-  align-self: flex-start;
-}
-.int-detail h3.t-label,
-.int-before h3.t-label {
-  margin-bottom: var(--spacing-2);
-}
-.int-checks svg {
-  color: var(--color-feedback-success-ink);
-}
-
-.int-row-start {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
-/* What connecting gives the agents, how each gets in, and what to have ready. */
-.int-before {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
-  gap: var(--spacing-5);
-}
-
-/* ONE ISSUE A ROW: what is wrong, who owes the next move, and the control
-   that makes it. */
-.int-issues,
-.int-seats {
-  display: flex;
-  flex-direction: column;
-}
-.int-issues > * + *,
-.int-seats > * + * {
-  border-top: 1px solid var(--color-border-default);
-}
-.int-issue {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) 0;
-}
-.int-issue:has(.int-issue-mark) {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-.int-issue-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.int-issue-problem {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.int-issue-owner {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-}
-.int-issue-act:empty {
-  display: none;
-}
-
-/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
-   and its own step at the app where it has one. */
-.int-seat {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) 0;
-  min-width: 0;
-}
-.int-seat-id {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.int-seat-id .t-caption {
-  overflow-wrap: anywhere;
-}
-.int-seat-act:empty {
-  display: none;
-}
-@media (width < 640px) {
-  .int-issue,
-  .int-issue:has(.int-issue-mark) {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .int-issue:not(:has(.int-issue-mark)) .int-issue-act {
-    grid-column: 1 / -1;
-  }
-  .int-issue:has(.int-issue-mark) .int-issue-act {
-    grid-column: 2;
-  }
-  .int-seat {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  .int-seat-act {
-    grid-column: 2 / -1;
-  }
-}
-
-/* A FEED: one change or one item a line, its time at the end. */
-.int-feed {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.int-feed > * + * {
-  border-top: 1px solid var(--color-border-default);
-}
-.int-feed-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: var(--spacing-3);
-  padding: var(--spacing-2) 0;
-  font-size: var(--font-size-sm);
-}
-/* A line that leads with its app's mark: the mark, the line, its time. */
-.int-feed-row--marked {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--spacing-3);
-}
-.int-feed-mark {
-  display: inline-flex;
-  align-self: center;
-}
-.int-feed-what {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-a.int-feed-what:hover {
-  text-decoration: underline;
-}
-.int-feed-what strong {
-  font-weight: var(--font-weight-semibold);
-}
-.int-feed-at {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-/* CREWLET CHAT, still to come: its mark large on the brand's soft ground. */
-.int-soon {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--spacing-6);
-  align-items: start;
-  padding: var(--spacing-6);
-  border-radius: var(--radius-xl);
-  background: var(--color-brand-accent-soft);
-}
-.int-soon-copy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  min-width: 0;
-}
-@media (width < 640px) {
-  .int-soon {
-    grid-template-columns: minmax(0, 1fr);
-    padding: var(--spacing-4);
-  }
-}
-.int-step-title {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-}
-
-/* THE ADDRESS APPS DELIVER TO, at the foot of the directory: a small label
-   over the address, cut to fit, with the whole of it in its title. */
-/* THE HOME, with nothing chosen: what is in use, in one close column. One
-   small step between its parts, so a section heading reads as the head of what
-   it names rather than a band between two runs of cards. */
-.int-landing {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  min-width: 0;
-}
-.int-landing-foot {
-  padding-top: var(--spacing-3);
-  border-top: 1px solid var(--color-border-default);
-}
-/* AN ITEM'S NAME IS THE WAY TO ITS PAGE, drawn as the title it is: the
-   title's own ink, underlined only under the pointer. */
-.int-tile-link {
-  color: inherit;
-  text-decoration: none;
-}
-.int-tile-link:hover {
-  text-decoration: underline;
-}
-
-.int-engine-address {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
-/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
-   fields, and the actions ruled off at its foot. */
-.int-setup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  min-width: 0;
-  max-width: 44rem;
-}
-.int-setup-title {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-}
-.int-setup-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
-  padding-top: var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-}
-/* A KEY'S CHECK, under its field: the control and the engine's verdict. */
-.int-key-check {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-3);
-  font-size: var(--font-size-sm);
-}
-
-/* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated
-   by a rule rather than by whitespace: stacked as loose lines of prose, a tool
-   with three surfaces read as one paragraph with no edges, and nothing said
-   where Jira stopped and Confluence began. */
-.int-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-.int-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) 0;
-  border-top: 1px solid var(--color-border-default);
-}
-.int-row:first-child {
-  border-top: none;
-}
-
-/* The identity column takes the slack, so every badge in the list lands on
-   the same right edge however long a name or a path is.
-
-   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` — a basis of 0 — the
-   badges never wrapped: flex placement asks whether an item's HYPOTHETICAL
-   size fits, a zero basis always does, and `min-width: 0` then let this
-   column shrink to about ten pixels rather than push them onto a second line.
-   In the peek rail, where a surface's three badges take most of 420px, the
-   sentence beside them came out one word per line. With a real basis the
-   badges wrap instead and the identity gets the width back on its own line;
-   `min-width: 0` stays, for the long paths it has to truncate rather than
-   overflow. */
-.int-row-identity {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1 1 15rem;
-}
-.int-row-name {
-  font-size: var(--font-size-compact);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-.int-row-detail {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  overflow-wrap: anywhere;
-}
-
-/* THE CONNECT FORM, laid out the way the console's is.
-   The field spacing is deliberately wider than the dialog's default stack:
-   these are labelled inputs each carrying a help line, and at the tighter
-   gap a help line sat as close to the NEXT field's label as to the control
-   it belongs to, which is the one ambiguity a form must not have. */
-.int-form-intro {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  line-height: var(--font-line-height-normal);
-  color: var(--color-text-secondary);
-}
-.int-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-}
-/* SENTENCE CASE, scoped to this form.
-   The product's field label is an uppercase micro-label, which reads as a
-   column head: right above a table, wrong above a question. These fields ARE
-   questions, each with a sentence of help under it, and the console asks them
-   in sentence case. Scoped rather than changed globally, because every other
-   form in the dashboard is a settings table where the micro-label belongs.
-
-   THE LABEL IS uilet's `.crewlet-label` NOW — `ui/Field.tsx` draws a
-   `FormField` — and `.field` is the class that file still puts on it, so the
-   selector reaches the same element it always did. Specificity is what makes
-   this land: `(0,2,1)` here against the package's `(0,1,0)`. */
-.int-form .field > label {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: var(--font-letter-spacing-normal);
-  text-transform: none;
-  color: var(--color-text-primary);
-}
-
-/* AN AGENT'S ROW IN A CARD'S ROSTER.
- *
- * The console's shape: the agent's own mark, then a name and one line under
- * it, then what it holds on the right. The mark is what makes the roster read
- * as a list of the company's agents rather than a list of settings, which is
- * the whole reason the roster is there.
- */
-.int-seat-row {
-  align-items: center;
-  gap: var(--spacing-3);
-}
-.int-seat-row .int-row-identity {
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-/* HOW MUCH THIS AGENT MAY DO, beside its name.
- *
- * QUIETER THAN A STATUS TAG, which is the console's own reasoning and the
- * whole of why it sits here: a tier is a standing fact about the agent, not
- * something that needs attention. It was a chip out on the right next to
- * "ready", where two chips on one row read as two verdicts and a reader
- * scanning a roster for what is wrong stopped on "read-only" every time.
- *
- * THROUGH THE TOKENS, all of it: the pill is made small by its PADDING on the
- * smallest step of the type ramp (--font-size-2xs), never by a size of its own,
- * because a step nothing else uses is a scale of ten pretending to be nine.
- */
-.int-seat-tier {
-  margin-left: var(--spacing-2);
-  padding: 0 var(--spacing-1);
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-2xs);
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: var(--font-letter-spacing-wide);
-  text-transform: uppercase;
-  white-space: nowrap;
-  border: 1px solid var(--color-border-hover);
-  /* MUTED, NEVER FAINT. --color-text-muted is decoration only, and the tier is a
-     fact about what this agent may do to a repository. */
-  color: var(--color-text-tertiary);
-}
-
-/* Weight follows trust: full access carries the accent, review a lighter
-   share of it, read-only stays neutral. */
-.int-seat-tier--full_access {
-  border-color: color-mix(in srgb, var(--color-brand-accent) 40%, transparent);
-  color: color-mix(in srgb, var(--color-brand-accent) 65%, var(--color-text-primary));
-}
-.int-seat-tier--review {
-  border-color: color-mix(in srgb, var(--color-brand-accent) 22%, transparent);
-  color: color-mix(in srgb, var(--color-brand-accent) 35%, var(--color-text-secondary));
-}
-
-/* What configures the connection, folded away from what makes it.
- *
- * The console asks three things to connect an app. This engine also receives
- * that app's deliveries and routes them, so it has fields the console has no
- * equivalent for, and seven inputs in one column made connecting an app read
- * as filling in a configuration file. */
-/* An alternative to what the form asked for, so it closes the form rather
-   than sitting among the fields. It carries no rule of its own: where the
-   fold is present that rule already ends the form, and a second one would
-   box the note in. */
-/* SMALL, because it is an aside. The sentence that says what to do is one
-   line, so it sits under the form without competing with the fields for the
-   same attention. */
-.int-form-note {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-2xs);
-  line-height: var(--font-line-height-normal);
-  color: var(--color-text-tertiary);
-}
-/* A PERMANENT UNDERLINE, and it says so in both states. This sits in a
-   sentence, so the underline is its only non-colour cue (base.css, WCAG
-   1.4.1). Stating the hover is what makes that true independently of load
-   order: `.int-form-note a` alone is (0,1,1), the same specificity as the
-   `a:hover` reset base.css now carries, so in the hover state the tie would
-   fall to whichever sheet `main.tsx` imports second. `.int-form-note a:hover`
-   is (0,2,1) and wins outright, so the mark is a property of the rule. */
-.int-form-note a,
-.int-form-note a:hover {
-  text-decoration: underline;
-}
-.int-form-note a {
-  color: inherit;
-}
-.int-form-note a:hover {
-  color: var(--color-text-primary);
-}
-.int-form-more {
-  /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
-     than sitting in the field flow with a hairline through the middle. The
-     parent's own gap already separates it from the last field; a margin on
-     top of that put the rule closer to the fold than to the form it ends. */
-  border-top: 1px solid var(--color-border-default);
-  padding-top: var(--spacing-5);
-}
-/* The disclosure is a control, so it reads as one: the same weight as a
-   field's label, with a marker that says which way it opens. */
-.int-form-more > summary {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-.int-form-more > summary::before {
-  content: "";
-  width: 0;
-  height: 0;
-  border-left: 4px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
-}
-.int-form-more[open] > summary::before {
-  transform: rotate(90deg);
-}
-.int-form-more > summary:hover {
-  color: var(--color-text-primary);
-}
-/* The fields inside carry the form's own rhythm, so opening the fold does
-   not change the spacing of the questions below it. */
-.int-form-more-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  padding-top: var(--spacing-5);
-}
-
-/* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
-   live on the seat. Folded, because the same two questions are asked once per
-   agent: a ten-agent company opened twenty inputs in one scroll with no way
-   to see how many were left, and the dialog now opens as the roster it is. */
-.int-seat-form {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  /* THE RUNG ABOVE ITS GROUND. This block lives inside a modal, and a modal
-   paints the panel rung. */
-  background: var(--color-surface-elevated);
-}
-.int-seat-form + .int-seat-form {
-  margin-top: calc(var(--spacing-3) - var(--spacing-5));
-}
-.int-seat-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) var(--spacing-4);
-  cursor: pointer;
-  list-style: none;
-  border-radius: var(--radius-md);
-}
-.int-seat-summary::-webkit-details-marker {
-  display: none;
-}
-/* The marker says which way it opens, and is the same one the More settings
-   fold draws, so two disclosures in one dialog are one idea. */
-.int-seat-summary::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 0;
-  height: 0;
-  border-left: 4px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  color: var(--color-text-tertiary);
-  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
-}
-.int-seat-form[open] > .int-seat-summary::before {
-  transform: rotate(90deg);
-}
-/* A HOVER IS AN INTERACTION STATE, so it takes the interaction token rather
-   than a structural rung. It used to reach for the rung above the page, which
-   worked only while `.int-seat-form` stood on the page itself; the form is on
-   the raised rung now (it opens inside a modal, and a modal paints the panel
-   one), so naming that same rung here drew the summary in its own parent's
-   colour and the block lost its hover affordance entirely. `--color-surface-hover`
-   is a translucent overlay, so it lifts whatever it lands on — which is what
-   every other hover in the product already uses. */
-.int-seat-summary:hover {
-  background: var(--color-surface-hover);
-}
-/* The badge sits at the far end, so a column of blocks reads down its right
-   edge as a list of what is left to do. */
-.int-seat-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.int-seat-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-5);
-  padding: 0 var(--spacing-4) var(--spacing-4);
-}
-
-/* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
-   FOLDED, because it is forty lines of JSON and the two boxes under it are
-   what the form is for: it is opened once per agent, at the start. */
-/* A ROW OF THE AGENT'S BLOCK, ruled off from the fields above it, never a
-   second bordered box inside the block's own frame. */
-.int-manifest {
-  border-top: 1px solid var(--color-border-default);
-  padding-top: var(--spacing-3);
-}
-/* The label, the aside, and the Copy button on one line: copying is what an
-   operator does with this, and a button below the fold is one they have to
-   open it to reach. */
-.int-manifest-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: auto;
-}
-/* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
-   sign of being one is a line of text somebody has to discover by clicking. */
-.int-manifest-summary::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 0;
-  height: 0;
-  border-left: 4px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  color: var(--color-text-tertiary);
-  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
-}
-.int-manifest[open] > .int-manifest-summary::before {
-  transform: rotate(90deg);
-}
-.int-manifest-summary > span:first-of-type {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.int-manifest > .int-manifest-text {
-  margin-top: var(--spacing-3);
-}
-/* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
-   read against the app they already have, and a dialog that grew to forty
-   lines of JSON would push its own buttons off the screen. */
-.int-manifest-text {
-  width: 100%;
-  max-height: 260px;
-  margin: 0;
-  overflow: auto;
-  padding: var(--spacing-3);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-compact);
-  line-height: 1.5;
-  white-space: pre;
-  -webkit-user-select: all;
-  user-select: all;
-}
-
-/* The link that finishes an agent off, at the far end of its row, so a
-   column of them reads down one edge. */
-.int-row-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.int-row-badges {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex-shrink: 0;
-}
-
-/* A FINDING TAKES THE FULL WIDTH BENEATH ITS ROW rather than squeezing into
-   the detail line: it is a sentence, often a third-party app's own error
-   text, and truncating the one line that says what to do is the opposite of
-   useful. */
-.int-row-note {
-  flex-basis: 100%;
-  display: flex;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  color: var(--color-text-tertiary);
-}
-.int-row-note-text {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  /* THE GAP IS THE STRUCTURE. Its four slots — what is wrong, which things,
-     what to do, and the rest — used to sit at 2px, which is closer than the
-     line spacing inside any one of them, so a paragraph and the disclosure
-     summary beneath it read as one run-on line: `…nothing else can do it.`
-     followed immediately by `1 more finding`. */
-  gap: var(--spacing-2);
-}
-.int-row-note-when {
-  color: var(--color-text-tertiary);
-}
-
-/* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
-   while everything around it is quieter. */
-.int-note-problem {
-  margin: 0;
-  color: var(--color-text-primary);
-}
-
-/* WHAT TO DO: one step down, because it is read second and only once. It is
-   a separate line rather than another clause because an instruction buried
-   mid-paragraph is one a reader has to find. */
-.int-note-remedy {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--spacing-2);
-  color: var(--color-text-tertiary);
-}
-
-/* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
-   drawn at the muted step rather than the faint one: tokens.css marks
-   --color-text-muted decoration only, never a fact, and it falls under the 4.5:1
-   contrast floor on both themes. */
-.int-summary {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-}
-details > summary.int-summary {
-  cursor: pointer;
-  list-style: none;
-  width: fit-content;
-}
-details > summary.int-summary::-webkit-details-marker {
-  display: none;
-}
-
-/* A section heading inside the setup dialog, for a tool the engine reaches
-   over more than one surface. */
-/* A SURFACE'S HEADING in a sheet that sets up several (Atlassian's Jira and
-   Confluence): a real subheading in the words as written, never the
-   uppercase eyebrow, which under "Connect Slack" repeated the vendor. */
-.int-section {
-  margin: 0;
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-normal);
-  color: var(--color-text-primary);
-}
-.int-findings {
-  margin: var(--spacing-1) 0 0;
-  padding-left: var(--spacing-4);
-}
-
-/* WHICH THINGS A FINDING IS ABOUT, as chips.
-
-   A handle or an address is a thing a reader SCANS FOR, not a sentence they
-   read: wrapped in prose inside the finding's own sentence, picking one out
-   meant reading the whole line. Laid out, the same six are one glance.
-
-   Scrolls past a point rather than growing, because thirty-six service
-   accounts is the measured case and a peek is not a page. */
-.int-subjects {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  max-height: 9rem;
-  overflow-y: auto;
-}
-.int-subject {
-  display: inline-block;
-  padding: 1px var(--spacing-2);
-  border: 1px solid var(--color-border-hover);
-  border-radius: var(--radius-sm);
-  /* THE RUNG ABOVE ITS GROUND: a chip sits on a peek's panel, and at the
-     panel's own rung it drew nothing. */
-  background: var(--color-surface-elevated);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-  /* The addresses and URLs this carries have no spaces to break at. */
-  overflow-wrap: anywhere;
-}
-
-/* THE OVERFLOW COUNT EXPANDS IN PLACE. The reason the rest are folded is
-   width rather than secrecy, and the long case is a list somebody is working
-   through — so it must not send them somewhere to read it. */
-.int-subject-more {
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--font-size-xs);
-}
-.int-subject-more:hover {
-  color: var(--color-text-primary);
-  border-color: var(--color-text-muted);
-}
-
-/* ---- The work tracker ---------------------------------------------------
+/* ---- Worklet ------------------------------------------------------------
    The rail, the head, the three shapes, the peek and the item page.
 
    TWO RULES DECIDE MOST OF WHAT IS HERE.
@@ -4622,6 +3877,18 @@ details > summary.int-summary::-webkit-details-marker {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  min-width: 0;
+}
+
+/* THE WORK LIST IS ONE BOX, on Worklet, a project and My work alike: its row
+   of shapes and search, the band that cuts the answer and the answer, stacked
+   with nothing between them. The band's own padding is the space either side
+   of its controls, the dense toolbar's rhythm. Left to its hosts the rows took
+   the host's gap, 20px on My work and 16px on Worklet, and the band stood in
+   28px of empty space above and below its controls. */
+.work-view {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
@@ -4830,19 +4097,6 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 0;
   min-width: 0;
 }
-/* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
-   relation, and the value is the answer — so the value is the only one at full
-   ink. A chip set in one register reads as a label rather than as a sentence. */
-.work-chip-field {
-  color: var(--color-text-secondary);
-}
-.work-chip-verb {
-  color: var(--color-text-tertiary);
-}
-.work-chip-value {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-medium);
-}
 
 /* ---- The two menus: Filter and Display ---------------------------------- */
 
@@ -5010,8 +4264,8 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The body ------------------------------------------------------------
    ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
    second column of this grid, sized here, flipped to a drawer by a media
-   query of its own — and the frame took it over: the shell's sheet carries a
-   track for `--peek-w` and every screen in the product can open one. The
+   query of its own, and the frame took it over: the kit's shell carries a
+   peek column and every screen in the product can open one. The
    rules that sized it here matched `[data-peek="true"]` on THIS element,
    which nothing has ever set: the attribute lives on the shell's root. So
    they were dead the day the peek moved and stayed in the sheet, shipped in
@@ -5452,20 +4706,6 @@ span.list-position-step {
   display: inline-flex;
   min-width: 0;
 }
-/* IN A PROPERTIES RAIL THE VALUE STARTS ON THE COLUMN, picker or not. The
-   trigger is a small ghost button, and its padding and border put Status,
-   Priority, Type and Labels about ten pixels right of Assignee, Due and the
-   record beside them — one column reading as two. The button keeps its box
-   (the hover and the focus ring are its padding); it is only moved back by
-   that padding, and it draws the value in the rail's own size and ink rather
-   than a button label's. Selected by ELEMENT rather than by the kit's class
-   names: the menu's markup is the kit's, and the one button a `.cell-edit`
-   holds is its trigger (the menu's items are portalled out of it). */
-.crewlet-property-list .crewlet-description-list__detail > .cell-edit button {
-  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
-  font-size: inherit;
-  color: inherit;
-}
 
 /* ---- The marks a row and a card share ----------------------------------- */
 
@@ -5658,7 +4898,7 @@ span.list-position-step {
    than the priority mark's — a subgrid item's padding comes out of the first
    track it spans, so a bare width there resolves to nothing and the value
    overflows onto the cell beside it. 20px is two tabular digits at `--font-size-2xs`,
-   which is the whole range a stored queue has (`tracker.MaxPriorities` is 32).
+   which is the whole range a stored queue has (`worklet.MaxPriorities` is 32).
    The priority mark keeps the bare 16px it needs, one column along. */
 .work-rows[data-ordinals="true"] {
   grid-template-columns:
@@ -5861,7 +5101,7 @@ span.list-position-step {
 
 /* The bar under a project's header: the fact line says how much, and this
    splits it — done, active and still to do, over exactly that census, closed
-   work not in the whole. `routes/work/census.tsx` is where that reading is
+   work not in the whole. `routes/worklet/census.tsx` is where that reading is
    argued, and it owns this wrapper so the page and the peek draw one census
    rather than two widths. */
 .work-census {
@@ -6965,6 +6205,16 @@ a.work-cal-chip {
   white-space: normal;
   overflow-wrap: break-word;
 }
+
+/* A WRITTEN LINK, DRAWN INERT (`links: "checked"` in lib/markdown.ts, for an
+   address that is not the company's): the label in the text's own ink, then
+   the place it names in the quiet link ink, never underlined and never a
+   control, so a reader can see where a link would have gone without being
+   able to follow one a model or an agent wrote. */
+.md-link-inert-host {
+  color: var(--color-text-link-quiet);
+  overflow-wrap: anywhere;
+}
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
    siblings. The other way round — a `margin: 0` reset per element type after
    the sibling rule — is how the rhythm died: the shorthand resets margin-top
@@ -7123,7 +6373,7 @@ a.work-cal-chip {
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
    written for a document and can be wider than the column it lands in here.
    SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
-   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   and a Doclet page into uilet's `Document`, and the rich editor names its
    tables `md-table` too, so an unscoped rule here outranked the design
    system's table there (a 12px table in a 14px body, its header in the
    secondary ink). */
@@ -7571,28 +6821,16 @@ a.work-cal-chip {
    what say which. */
 
 /* ---- A write control, and what became of its last press ----------------
-   The button and its refusal sit together: the refusal is drawn where the
-   press was made and stays until the next one (lib/useAct.ts), so it wraps
-   under the button rather than widening the row it sits in. */
+   The button and its refusal sit together: the refusal (the kit's
+   RefusalStrip) is drawn where the press was made and stays until the next
+   one (lib/useAct.ts), so it wraps under the button rather than widening the
+   row it sits in. */
 .write-button {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
-}
-.write-refusal {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  max-width: 40rem;
-  font-size: var(--font-size-compact);
-  color: var(--color-feedback-danger-ink);
-  overflow-wrap: anywhere;
-}
-.write-refusal .t-caption {
-  color: var(--color-text-secondary);
 }
 /* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
    quiet, because it is a standing fact about the reader rather than an answer
@@ -7702,19 +6940,27 @@ a.work-cal-chip {
     grid-column: span 3;
   }
 }
+/* ONE COLUMN, AND EVERY SPAN UNDONE. The reset is written at least as
+   specifically as the spans above it (`:nth-child(n)` matches every figure
+   and weighs what `:nth-child(n + 4)` does): a plain `> *` lost to the wider
+   query's last two spans, which kept `span 3` on a one-track grid, so the
+   grid grew two implicit tracks sized by content and the first figure was
+   drawn 86px wide with its meter past its edge. */
 @container page (width < 640px) {
   .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
   }
-  .home-kpis[data-count] > * {
+  .home-kpis[data-count] > :nth-child(n) {
     grid-column: auto;
   }
 }
 
 /* A CARD'S COUNT sits beside its title, in the state it counts. */
-.home-card-count {
-  margin-inline-start: var(--spacing-2);
-  vertical-align: middle;
+/* THE COUNT ON THE TITLE'S CENTRE LINE, not its baseline, a step after it. */
+.crewlet-card__title:has(> .home-card-count) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 .home-card-caption {
   font-size: var(--font-size-xs);
@@ -8050,7 +7296,7 @@ a.work-cal-chip {
   margin-top: var(--spacing-2);
 }
 
-/* The tracker's widgets (Work, My work, Inbox): a task or a notice as one
+/* Worklet's widgets (Worklet, My work, Inbox): a task or a notice as one
    line of the design system's list, inside the widget's card. */
 /* The rows sit on the card's own inset, under a hairline from its header. */
 .home-tasks {
@@ -8157,26 +7403,32 @@ a.work-cal-chip {
   padding: 0;
   list-style: none;
 }
-.decision-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
+/* ONE ROW A DECISION: its words on the left (the title over one line of what
+   it is about) and its controls on the right, centred on the words. An
+   asker's questions, a parked run and a stopped seat are all drawn this way,
+   each block under its head ([.decision-group-head]). */
+.decision-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: 10px var(--spacing-4);
 }
-.decision-body {
+.decision-item + .decision-item {
+  border-top: 1px solid var(--color-edge-hairline);
+}
+.decision-text {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 .decision-title {
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
 }
+
 .decision-sub,
 .decision-line {
   font-size: var(--font-size-xs);
@@ -8210,47 +7462,45 @@ a.work-cal-chip {
 }
 .decision-actions {
   display: flex;
-  flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 50%;
 }
-/* THE ASKS ONE PERSON PUT, under one head: their badge, their name, and what
-   every ask shares (the item, the role, how long ago). The questions sit under
-   it, indented to the name, each with its answer in place. */
+/* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
+   and what every row under it shares (the item, the role, how long ago). */
 .decision-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3) var(--spacing-4) var(--spacing-2);
   border-top: 1px solid var(--color-border-default);
 }
 .decision-group-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
+  gap: 2px var(--spacing-2);
   min-width: 0;
+  padding: 6px var(--spacing-4);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-inset);
 }
 .decision-group-who {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
 .decision-questions {
   margin: 0;
-  padding: 0 0 0 calc(32px + var(--spacing-3));
+  padding: 0;
   list-style: none;
 }
-.decision-question {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) 0;
+/* THE OPEN ANSWER, the answered line and a refusal take the row's whole
+   width under its words. At rest the row layout's wrapper draws nothing of
+   its own, so Accept and Change are the row's second column. */
+.decision-item > .decision-answer.is-open,
+.decision-item > .decision-answered,
+.decision-answer--row > :not(.decision-answer-actions) {
+  grid-column: 1 / -1;
 }
-.decision-question + .decision-question {
-  border-top: 1px solid var(--color-border-default);
+.decision-answer--row {
+  display: contents;
 }
 /* AT REST, ONE LINE: the recommendation, then Accept and Change at its end. */
 .decision-answer {
@@ -8314,14 +7564,6 @@ a.work-cal-chip {
   white-space: pre-wrap;
 }
 
-.answer-run-question {
-  margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-inline-start: 2px solid var(--color-border-strong);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
-
 /* A NARROW LIST STACKS the buttons under the words, which keep the whole
    width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
    width card and in the Inbox's list column beside its pane, and a page
@@ -8331,20 +7573,11 @@ a.work-cal-chip {
   container: decision-list / inline-size;
 }
 @container decision-list (width < 480px) {
-  .decision-row {
-    flex-wrap: wrap;
-  }
-  .decision-body {
-    flex-basis: calc(100% - 3rem);
+  .decision-item {
+    grid-template-columns: minmax(0, 1fr);
   }
   .decision-actions {
-    flex: 1 1 100%;
-    max-width: none;
     justify-content: flex-start;
-    padding-inline-start: calc(32px + var(--spacing-3));
-  }
-  .decision-questions {
-    padding-inline-start: 0;
   }
 }
 
@@ -8682,7 +7915,7 @@ a.live-row:focus-visible {
 .inbox-thread {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--spacing-3);
 }
 .inbox-thread-earlier {
   align-self: flex-start;
@@ -8690,7 +7923,7 @@ a.live-row:focus-visible {
 .inbox-thread-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -8833,14 +8066,24 @@ a.live-row:focus-visible {
   max-height: 16lh;
 }
 
-/* ONE PANE UNDER THE PHONE WIDTH, with Back. A human teammate answering an
-   ask from their phone is this product's second named reader: the list, then
-   the open row in the list's place. The page scrolls as any other there. */
-@media (width < 640px) {
+/* ONE PANE UNDER 640px OF THE SCREEN'S WIDTH, with Back: on a phone, and
+   beside an assistant the reader opened, where a desktop window can leave the
+   screen a phone's room and a pane beside a 260px list was drawn 130px wide.
+   A human teammate answering an ask from their phone is this product's second
+   named reader: the list, then the open row in the list's place. The screen's
+   JavaScript asks the same width (`useScreenBelow`, Inbox.tsx). */
+@container page (width < 640px) {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* AND THE PHONE'S 16px GUTTER: a row's own 8px inside 8px of list. */
+  .inbox-list {
+    border-right: none;
+  }
+}
+/* ON A PHONE THE PAGE SCROLLS AS ANY OTHER, with the phone's 16px gutter: a
+   row's own 8px inside 8px of list. Beside the assistant on a desktop the
+   screen still fills the window and the one pane keeps its own scroller. */
+@media (width < 640px) {
   .inbox-callout {
     margin-inline: var(--spacing-4);
   }
@@ -8850,11 +8093,10 @@ a.live-row:focus-visible {
   .inbox-list,
   .inbox-pane {
     overflow: visible;
-    border-right: none;
   }
 }
 
-/* ---- Work › Search's form (`routes/work/WorkSearch.tsx`) -----------------
+/* ---- Worklet › Search's form (`routes/worklet/WorkSearch.tsx`) --------------
    THE PHRASE NEVER GIVES WAY. The field, the three modes and Search shared
    one row that did not wrap, and at a phone's width the field shrank to 20px
    — a magnifier with nowhere to read the phrase. The form wraps BY WHAT IT
@@ -8881,7 +8123,7 @@ a.live-row:focus-visible {
   max-width: 100%;
 }
 
-/* ---- The New task sheet (`routes/work/NewTask.tsx`) ----------------------
+/* ---- The New task sheet (`routes/worklet/NewTask.tsx`) ----------------------
    Two short fields side by side — type and status, priority and due — because
    each is a word or a date and a full sheet width of one is a line the eye
    crosses for nothing. They stack at a phone's width, where half a sheet is
@@ -8944,6 +8186,15 @@ a.live-row:focus-visible {
   margin-bottom: -1px;
 }
 .trace-panel {
+  min-width: 0;
+}
+/* WHAT FOLLOWS THE TABS keeps the page's own step between its parts (a
+   coverage note, the cut, what went wrong, the panel); the tabs themselves
+   stand the shared step above it (`.tab-detail`). */
+.trace-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
   min-width: 0;
 }
 
@@ -9061,9 +8312,16 @@ a.live-row:focus-visible {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
 }
-/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a run and the
-   reflection pass read as the headings the rows under them belong to. */
-.wf-row:is([data-kind="turn"], [data-kind="phase"], [data-kind="run"], [data-kind="reflection"])
+/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a CLI run, a
+   coding run and the reflection pass read as the headings the rows under them
+   belong to. */
+.wf-row:is(
+    [data-kind="turn"],
+    [data-kind="phase"],
+    [data-kind="invocation"],
+    [data-kind="run"],
+    [data-kind="reflection"]
+  )
   .wf-name {
   font-weight: var(--font-weight-medium);
 }
@@ -9169,6 +8427,7 @@ a.live-row:focus-visible {
 .span-bar:is(
   [data-kind="turn"],
   [data-kind="phase"],
+  [data-kind="invocation"],
   [data-kind="run"],
   [data-kind="reflection"],
   [data-kind="context"]
@@ -10079,60 +9338,6 @@ a.live-row:focus-visible {
   color: var(--color-text-secondary);
 }
 
-/* ---- Settings › Models & keys ------------------------------------------ */
-
-/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the CLI and the model
-   under it: the key is what a seat's `llm:` names, the CLI and the model are
-   what runs. The second line cuts at its end rather than wrapping a long model
-   id across the row. The sign-in cell is the same pair: the mode over where
-   its credential comes from. */
-.model-name {
-  min-width: 0;
-  gap: 2px;
-}
-
-/* A credential written into the document, in the edit form: the locked
-   sentence stands where the field would be, at THE INPUT'S OWN SIZE (the
-   kit's `compact` step), not the body's — at the body step it read as a
-   different component among the inputs. */
-.model-credential-locked {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: 2.25rem;
-  padding: var(--spacing-1) var(--spacing-1) var(--spacing-1) var(--spacing-3);
-  border: 1px dashed var(--color-border-default);
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
-  line-height: var(--font-line-height-normal);
-}
-.model-credential-locked-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.model-credential-locked > button {
-  flex: none;
-}
-
-/* The variables a model's CLI is handed, one per line: a name and the
-   reference it reads, which wrap at the reference rather than mid-name. */
-.model-env {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-wrap: anywhere;
-}
-
-/* The way out to Configuration, under the sign-in it changes: inside the
-   card's own padding, a step below the list it follows. */
-.model-signin-change {
-  margin: var(--spacing-3) 0 0;
-}
-
 /* ---- Signing in ----------------------------------------------------------
    The screens a browser is on BEFORE it holds a session the frame can use
    (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on
@@ -10557,7 +9762,7 @@ a.live-row:focus-visible {
 }
 
 /* A DOC: its tabs in one bar, then the outline beside the tab on show, laid
-   out by the Knowledge page's own rules (`.doc-read`, under "A page"); one
+   out by the Doclet page's own rules (`.doc-read`, under "A page"); one
    column on a narrow page. */
 .doc-view {
   display: flex;
@@ -10572,7 +9777,7 @@ a.live-row:focus-visible {
   gap: var(--spacing-2) var(--spacing-4);
   min-width: 0;
 }
-.doc-bar > [role="tablist"] {
+.doc-bar [role="tablist"] {
   flex: 1 1 20rem;
   min-width: 0;
 }
@@ -11862,4 +11067,18 @@ a.live-row:focus-visible {
   font-size: var(--font-size-compact);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* ---- The Dashboard Assistant (app/assistant) -----------------------------
+   The one line under the composer, centred, on one line at every width. */
+.assistant-disclaimer {
+  margin: var(--spacing-2) 0 0;
+  text-align: center;
+}
+
+/* The model notice and an attachment refused stand above the composer, the
+   disclaimer's step apart. */
+.assistant-model-notice,
+.assistant-attach-refusal {
+  margin: 0 0 var(--spacing-2);
 }

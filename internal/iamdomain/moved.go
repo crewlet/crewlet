@@ -58,6 +58,13 @@ type Moved struct {
 	// learns, so the login is the one name that reaches it.
 	Logins []string
 
+	// Removed are the persons a committed record REMOVED, by id, each once:
+	// the subset of People whose rows are gone for good. What a person
+	// keeps in another domain that must go with them (their Dashboard
+	// Assistant conversations, ADR-0053) is erased from it, and that domain
+	// cannot read this one, so the engine hands it these ids.
+	Removed []string
+
 	// Sessions are the lineages a committed record ended: a sign-out, a
 	// step-up replacing the session it was made from, an administrator
 	// ending one by name. Each once.
@@ -91,6 +98,13 @@ func (m *Moved) person(id, login string) {
 	}
 	if login != "" && !slices.Contains(m.Logins, login) {
 		m.Logins = append(m.Logins, login)
+	}
+}
+
+// removed records that the person of id was removed.
+func (m *Moved) removed(id string) {
+	if id != "" && !slices.Contains(m.Removed, id) {
+		m.Removed = append(m.Removed, id)
 	}
 }
 

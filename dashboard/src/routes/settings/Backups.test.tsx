@@ -20,11 +20,12 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { BackupsAnswer } from "~/contract/backups.ts";
+import type { BackupPointRow, BackupsAnswer } from "~/contract/backups.ts";
 import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { engineAlarms } from "~/test/retentionAlarms.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -194,7 +195,9 @@ afterEach(() => {
 test("the newest counted point is the engine's, and the others say why they are not", async () => {
   mount();
   await settle();
-  const points = screen.getByText("Newest per owner").closest(".crewlet-card") as HTMLElement;
+  const points = screen
+    .getByText("Newest per node and log")
+    .closest(".crewlet-card") as HTMLElement;
   const row = (text: string) =>
     within(points).getByText(text).closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row("node-a")).getByText("counted · newest")).toBeTruthy();
@@ -206,8 +209,43 @@ test("the newest counted point is the engine's, and the others say why they are 
   ).toBeTruthy();
   // The tile names the same point.
   expect(
-    screen.getByText("Newest counted backup").closest(".crewlet-statcard")?.textContent,
+    screen.getByText("Oldest backup a trim reads").closest(".crewlet-statcard")?.textContent,
   ).toMatch(/node-a/);
+});
+
+// EACH LOG'S ACKNOWLEDGEMENT IS ITS OWN ROW, AND EACH IS READ. Under `operator`
+// an acknowledgement names one log and the register files it under that log,
+// so two acknowledgements share an owner: both rows are drawn, both are what a
+// trim reads, and the tile names the older — the log the alarm names first.
+test("two logs acknowledged in turn are two rows, both read, the older on the tile", async () => {
+  const ack = (stream: string, hours: number): BackupPointRow => ({
+    owner: "operator",
+    kind: "operator",
+    taken_at: hoursAgo(hours),
+    verified: true,
+    covers: [{ stream, generation: 1, seq: 100 }],
+    counted: true,
+    newest: true,
+  });
+  // ONE OWNER, TWO ROWS: a row keyed by its owner alone is two rows React
+  // reconciles as one, and it says so here before it draws the wrong one.
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  mount({
+    policy: "operator",
+    points: [ack("CREWLET_PAGES_LOG", 2), ack("CREWLET_TRACKER_LOG", 50)],
+  });
+  await settle();
+  expect(errors.mock.calls.map((c) => String(c[0])).filter((m) => /same key/.test(m))).toEqual([]);
+  errors.mockRestore();
+  const points = screen
+    .getByText("Newest per node and log")
+    .closest(".crewlet-card") as HTMLElement;
+  expect(within(points).getAllByText("Operator acknowledgement")).toHaveLength(2);
+  expect(within(points).getAllByText("counted · newest")).toHaveLength(2);
+  const tile =
+    screen.getByText("Oldest backup a trim reads").closest(".crewlet-statcard")?.textContent ?? "";
+  expect(tile).toMatch(/2d ago/);
+  expect(tile).toMatch(/oldest of 2/);
 });
 
 // EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one
@@ -289,7 +327,7 @@ test("taking a backup posts the directory and says what was written", async () =
   await settle();
   expect(calls).toEqual(["POST /backup?dir=%2Fvar%2Fbackups%2Ftonight"]);
   expect((await screen.findAllByText("Backup written on node-a")).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/\/var\/backups\/tonight: 2\.0 KB in 4s/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/\/var\/backups\/tonight: 2\.0 KiB in 4s/).length).toBeGreaterThan(0);
   // AND THE HISTORY IS READ AGAIN, so the row it just made appears.
   expect(query.mock.calls.filter(([what]) => what === "backups").length).toBeGreaterThan(1);
 });
@@ -336,7 +374,7 @@ test("a directory the host cannot create is said on the field", async () => {
   // THE FIELD SAYS IT: the message sits in the Directory field, whose paths
   // are drawn as chips — so its text is read whole rather than per node.
   const dialog = screen.getByRole("dialog");
-  const field = screen.getByLabelText(/Directory/).closest(".field, .crewlet-field") as HTMLElement;
+  const field = screen.getByLabelText(/Directory/).closest(".crewlet-form-field") as HTMLElement;
   expect(field?.textContent ?? "").toMatch(/mkdir \/etc\/passwd: not a directory/);
   expect(within(dialog).queryByRole("alert")?.textContent ?? "").not.toMatch(/log/);
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
@@ -424,7 +462,7 @@ test("under StrictMode a refused directory is said on the field", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "Take backup" }));
   await settle();
-  const field = screen.getByLabelText(/Directory/).closest(".field, .crewlet-field") as HTMLElement;
+  const field = screen.getByLabelText(/Directory/).closest(".crewlet-form-field") as HTMLElement;
   expect(field?.textContent ?? "").toMatch(/unusable destination: not empty/);
   expect(screen.getByRole("button", { name: "Take backup" })).toBeTruthy();
   expect(screen.queryByText("No backup was written to /var/backups/full")).toBeNull();
@@ -483,18 +521,12 @@ test("the alarms lead the page, and the backup they ask for is the page bar's on
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
     backup_owner: "platform-oncall",
-    alarms: [
-      {
-        kind: "backup_age",
-        detail: "no verified backup has been recorded",
-        remedy: "Run `crewlet backup` against any node.",
-      },
-    ],
+    alarms: engineAlarms("young"),
   } as RetentionReport;
   mount({}, { retention: report });
   await settle();
   const alarms = document.getElementById("retention-alarms") as HTMLElement;
-  const record = screen.getByText("Newest counted backup");
+  const record = screen.getByText("Oldest backup a trim reads");
   expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // THE OWNER IS A FIGURE OF THE RECORD, named once.
   expect(screen.getByText("platform-oncall")).toBeTruthy();
@@ -542,14 +574,16 @@ describe("arriving for the alarms", () => {
     register_readable: true,
     snapshots: [],
     replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
-    alarms: [
-      {
-        kind: "backup_age",
-        detail: "no verified backup has been recorded",
-        remedy: "Run `crewlet backup` against any node.",
-      },
-    ],
+    // THE ENGINE'S OWN RENDERING of a fleet with no backup yet: one alarm,
+    // every log named beside its one sentence.
+    alarms: engineAlarms("young"),
   } as RetentionReport;
+  /**
+   * The alarm's headline: the measurement every log was taken alike on, as a
+   * sentence, after the logs it names.
+   */
+  const headline =
+    /: No verified backup of this log has been recorded, and the policy asks for one every 24h\.$/;
 
   test("the alarm list is brought into view", async () => {
     location.hash = "#/settings/backups?at=alarms";
@@ -559,16 +593,19 @@ describe("arriving for the alarms", () => {
     // Its rows say the kind in words and what was measured as a sentence,
     // with no dash between them.
     expect(screen.getByText("Backup age")).toBeTruthy();
-    expect(screen.getByText(/No verified backup has been recorded\./).textContent).not.toMatch(
-      /\u2014/,
-    );
+    expect(screen.getByText(headline).textContent).not.toMatch(/\u2014/);
+    // EVERY LOG IS NAMED, each a way to its own page.
+    const alarms = document.getElementById("retention-alarms") as HTMLElement;
+    for (const domain of (report.alarms[0]?.domains ?? []).flatMap((d) => d.domains)) {
+      expect(within(alarms).getByRole("link", { name: domain })).toBeTruthy();
+    }
   });
 
   test("a reader who came for the page is left at its top", async () => {
     location.hash = "#/settings/backups";
     mount({}, { retention: report });
     await settle();
-    expect(screen.getByText(/No verified backup has been recorded\./)).toBeTruthy();
+    expect(screen.getByText(headline)).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
 });

@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -139,7 +140,7 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 		return nil, false, fmt.Errorf("read the sign-in response: %w", err)
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	code, _ := answer["error"].(string)
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -213,7 +214,7 @@ func (m selfMint) send(ctx context.Context, method, path string,
 			m.base+path, err)
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	return answer, resp.StatusCode, raw, nil
 }
 
@@ -223,10 +224,7 @@ func (m selfMint) send(ctx context.Context, method, path string,
 // which this path never sent.
 func selfRefusal(status int, answer map[string]any, raw []byte) error {
 	code, _ := answer["error"].(string)
-	detail, _ := answer["detail"].(string)
-	if detail == "" {
-		detail, _ = answer["message"].(string)
-	}
+	detail := answerWords(answer).said()
 	switch {
 	case code != "" && detail != "":
 		return fmt.Errorf("%s: %s", code, detail)
@@ -315,13 +313,111 @@ func readSecret(stdin io.Reader, lines *bufio.Reader, prompt io.Writer,
 
 // readPiped is the next line of input, without its line ending; the last line
 // may end with none.
+//
+// NO LONGER THAN A PASSWORD IS ([maxPipedPasswordBytes]) once that ending is
+// gone ([pipedPassword]), and a line that runs past the bound and the longest
+// ending is refused without reading the rest: what is piped in is whatever
+// the operator pointed at it, and a line read to its end was a file read up
+// to its first line ending — the whole of a blob with none, into memory — or,
+// from a stream with no line ending, a read that never finished. That read
+// limit is checked a buffer at a time, so a line refused unread is read at
+// most one buffer past it.
 func readPiped(lines *bufio.Reader) (string, error) {
-	line, err := lines.ReadString('\n')
-	// A LAST LINE WITH NO ENDING arrives together with io.EOF, and it is
-	// still the line that was typed.
-	unterminated := errors.Is(err, io.EOF) && line != ""
-	if err != nil && !unterminated {
+	const what = "a password, or the second-factor code after one,"
+	var line []byte
+	for {
+		chunk, err := lines.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > maxPipedLineBytes {
+			return "", pipedPasswordOverran(what)
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			// The line goes on past the reader's buffer: read the next
+			// part of it, which the read limit above still holds.
+			continue
+		case err == nil:
+		case errors.Is(err, io.EOF) && len(line) > 0:
+			// A LAST LINE WITH NO ENDING arrives together with io.EOF,
+			// and it is still the line that was typed.
+		default:
+			return "", err
+		}
+		return pipedPassword(line, what)
+	}
+}
+
+// readPipedPassword is the password piped to `crewlet llm login -username U
+// -password-stdin`: everything piped in, without the line ending a pipe adds,
+// held to [maxPipedPasswordBytes] as a line piped to `crewlet iam token
+// -login` is, and refused without reading the rest past that bound and the
+// longest ending, for the same reason ([readPiped]).
+func readPipedPassword(r io.Reader) (string, error) {
+	const what = "a password"
+	raw, err := io.ReadAll(io.LimitReader(r, int64(maxPipedLineBytes)+1))
+	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	if len(raw) > maxPipedLineBytes {
+		return "", pipedPasswordOverran(what)
+	}
+	return pipedPassword(raw, what)
+}
+
+// pipedPassword is what was piped in as the password, or code, it carries:
+// without the line ending a pipe adds, and refused when what is left is
+// longer than [maxPipedPasswordBytes].
+//
+// MEASURED ONCE THE ENDING IS GONE, because the ending is the pipe's and not
+// the password's: held to the raw bytes, the bound has to allow for `\r\n`,
+// and then a password passes that is past it by as many bytes as its own
+// ending falls short of `\r\n` — one with `\n`, two with none.
+func pipedPassword(raw []byte, what string) (string, error) {
+	password := strings.TrimRight(string(raw), "\r\n")
+	if len(password) > maxPipedPasswordBytes {
+		return "", fmt.Errorf("%w: what arrived is %d bytes without its line ending; %s is at "+
+			"most %d bytes (%d KiB) here. Check what is piped in", errPipedPasswordTooLong,
+			len(password), what, maxPipedPasswordBytes, maxPipedPasswordBytes>>10)
+	}
+	return password, nil
+}
+
+// maxPipedPasswordBytes bounds a password piped to a command that signs in
+// with it, and the second-factor code piped after one, each measured without
+// the line ending a pipe adds ([pipedPassword]).
+//
+// THE ENGINE'S OWN SIGN-IN SETS IT: [authapi.MaxLoginBodyBytes] is the whole
+// body a sign-in reads — the login, the password and a code — so no password
+// longer than that signs anybody in to this engine, and `crewlet iam token
+// -login` has no reason to read one further. A vendor's username and password
+// login (`crewlet llm login -username U -password-stdin`) takes the same kind
+// of secret, typed or generated, and is held to the same bound: four
+// kibibytes is an order of magnitude above any passphrase — 256 characters,
+// [config.MaxPasswordLength], is already the longest floor a deployment may
+// set — and a token is not a password: `-token-stdin` takes one, to the size
+// every store keeps.
+//
+// NOT [secrets.MaxValueBytes], which a value piped to be stored is read to: a
+// password is never stored, so the size every store keeps says nothing about
+// it, and that limit is sized for a PEM key or a service account's JSON.
+const maxPipedPasswordBytes = authapi.MaxLoginBodyBytes
+
+// maxPipedLineBytes is how much is read for one piped password, or code,
+// before it is refused unread: the password at its bound and the longest line
+// ending a pipe adds, `\r\n`. It is the READ's limit and never the
+// password's, which [pipedPassword] measures without the ending.
+const maxPipedLineBytes = maxPipedPasswordBytes + len("\r\n")
+
+// errPipedPasswordTooLong is a piped password, or code, longer than any
+// sign-in carries. Its own sentinel because it is the caller's mistake: what
+// fixes it is piping in the right thing, never a retry.
+var errPipedPasswordTooLong = errors.New("more arrived on stdin than any password is")
+
+// pipedPasswordOverran is [errPipedPasswordTooLong] for a pipe that ran past
+// [maxPipedLineBytes] and was not read further: it names the bound it met,
+// and never the bytes that met it.
+func pipedPasswordOverran(what string) error {
+	return fmt.Errorf("%w: more than %d bytes arrived, so the rest was not read; %s "+
+		"is at most %d bytes (%d KiB) here. Check what is piped in", errPipedPasswordTooLong,
+		maxPipedLineBytes, what, maxPipedPasswordBytes, maxPipedPasswordBytes>>10)
 }

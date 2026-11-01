@@ -1,12 +1,12 @@
 package usage_test
 
 import (
-	"database/sql"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -24,7 +24,7 @@ import (
 // (BenchmarkAUsageWindowInPages, recorded in the package doc).
 //
 // So every statement a page issues, in the shape a page that resumes INSIDE
-// its key issues it, is explained over a seeded window, and each must seek its
+// its key issues it, is planned over a seeded window, through storetest's one reading of a plan,, and each must seek its
 // leading key — a company day with `day = ?`, a page id from the day it resumes
 // on, a day's index head for the walk's next day — with no sorter and no
 // temporary tree anywhere in its plan: rows come back in the read's order as
@@ -45,38 +45,31 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 	shape.seed(t, db)
 	day := shape.span().From
 	statements := usage.PagedStatements(day, "node-01", "seat-0007", "person-02", "page-002", "repo-03")
-	ctx := t.Context()
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		for _, name := range slices.Sorted(maps.Keys(statements)) {
-			s := statements[name]
-			plan := explain(t, tx, s.Text, s.Args)
-			seek := "(day=?)"
-			switch {
-			case strings.HasPrefix(name, "the next day of"):
-				seek = "AND day<=?)"
-			case strings.HasPrefix(name, "a page's reads"):
-				seek = "USING INDEX usage_reads_page_idx (page_id=? AND day>=? AND day<=?)"
-			case strings.HasPrefix(name, "the next principal kind"):
-				seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind>"
-			case strings.HasPrefix(name, "a repository's readers"):
-				// THE PRINCIPAL THE PAGE RESUMES AT IS SOUGHT, never a
-				// filter over every reader before it.
-				seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind=? AND principal>"
-			}
-			if !strings.Contains(plan[0], "SEARCH") || !strings.Contains(plan[0], seek) {
-				t.Errorf("%s does not seek its key %s:\n%s", name, seek, strings.Join(plan, "\n"))
-			}
-			for _, step := range plan {
-				if strings.Contains(step, "SORTER") || strings.Contains(step, "TEMP B-TREE") {
-					t.Errorf("%s sorts before it hands back a row — a page that stops it "+
-						"has read past its own rows:\n%s", name, strings.Join(plan, "\n"))
-				}
+	for _, name := range slices.Sorted(maps.Keys(statements)) {
+		s := statements[name]
+		plan := storetest.Plan(t, db.Replicated(), s.Text, s.Args)
+		seek := "(day=?)"
+		switch {
+		case strings.HasPrefix(name, "the next day of"):
+			seek = "AND day<=?)"
+		case strings.HasPrefix(name, "a page's reads"):
+			seek = "USING INDEX usage_reads_page_idx (page_id=? AND day>=? AND day<=?)"
+		case strings.HasPrefix(name, "the next principal kind"):
+			seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind>"
+		case strings.HasPrefix(name, "a repository's readers"):
+			// THE PRINCIPAL THE PAGE RESUMES AT IS SOUGHT, never a
+			// filter over every reader before it.
+			seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind=? AND principal>"
+		}
+		if !strings.Contains(plan[0], "SEARCH") || !strings.Contains(plan[0], seek) {
+			t.Errorf("%s does not seek its key %s:\n%s", name, seek, strings.Join(plan, "\n"))
+		}
+		for _, step := range plan {
+			if strings.Contains(step, "SORTER") || strings.Contains(step, "TEMP B-TREE") {
+				t.Errorf("%s sorts before it hands back a row — a page that stops it "+
+					"has read past its own rows:\n%s", name, strings.Join(plan, "\n"))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -85,47 +78,16 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 // every repository's days in the range, which is what the head rows' day-first
 // key alone would read.
 //
-// Mutation: drop usage_repo_read_days_repo_idx (replicated 0065), and the plan
+// Mutation: drop usage_repo_read_days_repo_idx (replicated 0088), and the plan
 // seeks the primary key's days and reads every repository's head rows in them.
 func TestARepositorysElidedReadersAreCountedOffItsOwnDays(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		plan := explain(t, tx, usage.RepoReadsElidedStatement, []any{"repo-03", "2026-09-01", "2026-09-30"})
-		if len(plan) != 1 || !strings.Contains(plan[0],
-			"usage_repo_read_days_repo_idx (repo_id=? AND day>") {
-			t.Errorf("the elided count's plan is\n%s\nwant one seek of the repository's days",
-				strings.Join(plan, "\n"))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	plan := storetest.Plan(t, db.Replicated(), usage.RepoReadsElidedStatement,
+		[]any{"repo-03", "2026-09-01", "2026-09-30"})
+	if len(plan) != 1 || !strings.Contains(plan[0],
+		"usage_repo_read_days_repo_idx (repo_id=? AND day>") {
+		t.Errorf("the elided count's plan is\n%s\nwant one seek of the repository's days",
+			strings.Join(plan, "\n"))
 	}
-}
-
-// explain is statement's plan, a step a line.
-func explain(t *testing.T, tx *sql.Tx, statement string, args []any) []string {
-	t.Helper()
-	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
-	if err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var plan []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatal(err)
-		}
-		plan = append(plan, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if len(plan) == 0 {
-		t.Fatalf("no plan for:\n%s", statement)
-	}
-	return plan
 }

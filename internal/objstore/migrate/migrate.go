@@ -7,7 +7,7 @@
 //
 // Every object a Required row names — a file's bytes, what the company holds
 // — and every object a Derived row names, but no object a Retired row keeps:
-// ADR-0051's table of obligations, whose store-move column is
+// ADR-0074's table of obligations, whose store-move column is
 // [objstore.PassMove], read through [collect.Source.Moved]. A derived object
 // is one the engine can build again, which is why no backup carries it: a
 // backup is taken again and again and restored rarely, so carrying one would
@@ -127,7 +127,7 @@ type Report struct {
 	Files []UnreadableFile `json:"unreadable_files,omitempty"`
 
 	// Derived is for the objects Derived rows name, which the engine can
-	// build again (ADR-0051): copied as a file is, so the moved fleet has
+	// build again (ADR-0074): copied as a file is, so the moved fleet has
 	// them without building them. One the source could not give back whole
 	// is counted here and left behind — named nowhere and holding nothing
 	// up, since nothing is lost without it: the engine builds it again.

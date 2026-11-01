@@ -300,16 +300,19 @@ func (s *E2BSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Ex
 		return failed, fmt.Errorf("e2b: the command ended as %q, which names "+
 			"no exit status (sandbox %s)", res.Status, s.id)
 	case res.Trailer != nil:
-		return failed, fmt.Errorf("e2b: the box's agent ended the command's "+
-			"stream with %s (%s) before it reported an exit code (sandbox %s)",
-			res.Trailer.Code, res.Trailer.Message, s.id)
+		// THE BOX'S AGENT GAVE UP ON THE COMMAND, which is the box failing
+		// on its side rather than anything the command or its caller did.
+		return failed, Because(WhyProviderUnavailable, fmt.Errorf("e2b: the box's agent "+
+			"ended the command's stream with %s (%s) before it reported an exit code "+
+			"(sandbox %s)", res.Trailer.Code, res.Trailer.Message, s.id))
 	default:
 		// The stream ended without a verdict or a reason — the box was
 		// paused or reclaimed mid-command. Reported as a failure with what
 		// was captured, because claiming exit 0 would have the caller
 		// treat an abandoned command as a successful one.
-		return failed, fmt.Errorf("e2b: the command's stream ended before it "+
-			"reported an exit code, so the box went away mid-command (sandbox %s)", s.id)
+		return failed, Because(WhyProviderUnavailable, fmt.Errorf("e2b: the command's "+
+			"stream ended before it reported an exit code, so the box went away "+
+			"mid-command (sandbox %s)", s.id))
 	}
 }
 
@@ -327,13 +330,14 @@ func (s *E2BSandbox) StartBackground(ctx context.Context, cmd string, opts ExecO
 	return strconv.Itoa(res.PID), nil
 }
 
-// JobRunning implements [Sandbox]: the handle is a pid inside the VM, so
-// `kill -0` there answers it.
-func (s *E2BSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, s, commandID)
+// Job implements [Sandbox]: the handle is a pid inside the VM, so `kill -0`
+// there answers it, and the VM outlives the engine ([remoteJob]).
+func (s *E2BSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
+	return remoteJob(ctx, s, commandID)
 }
 
-// WriteFile implements [Sandbox].
+// WriteFile implements [Sandbox]: the file is REPLACED whole, never uploaded
+// over in place, which is how envd writes an upload ([envdClient.writeFile]).
 func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte) error {
 	return s.envd.writeFile(ctx, path, content)
 }

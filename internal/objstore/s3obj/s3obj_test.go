@@ -25,7 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // part is the part size every case here runs the backend at.
@@ -88,9 +88,9 @@ func TestEveryFileTheTrackerKeepsFitsOneUploadOfPartsS3Takes(t *testing.T) {
 		t.Errorf("a part of %d bytes is under S3's %d-byte floor, so every "+
 			"multipart upload is refused at completion", s3obj.PartBytes, s3SmallestPart)
 	}
-	if most := int64(s3obj.MaxParts) * int64(s3obj.PartBytes); most < tracker.MaxFileBytes {
+	if most := int64(s3obj.MaxParts) * int64(s3obj.PartBytes); most < worklet.MaxFileBytes {
 		t.Errorf("one upload holds at most %d bytes and a project keeps files of %d",
-			most, int64(tracker.MaxFileBytes))
+			most, int64(worklet.MaxFileBytes))
 	}
 }
 

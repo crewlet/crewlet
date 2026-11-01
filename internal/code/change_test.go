@@ -124,7 +124,7 @@ func classWord(class statelog.TableClass) string {
 // statesClass reports whether one sentence of a `-- Class:` paragraph names
 // table and says word — ONE SENTENCE rather than the paragraph, because a
 // paragraph that classes several tables states each table's class beside its
-// name: 0058's says its three change tables are reproducible and, in the next
+// name: 0081's says its three change tables are reproducible and, in the next
 // sentence, that code_repos stays so, and a paragraph-wide match would still
 // pass with the first sentence calling them anything else.
 func statesClass(paragraph, table, word string) bool {

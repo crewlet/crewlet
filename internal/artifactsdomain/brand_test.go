@@ -346,7 +346,7 @@ func TestASupersededAdoptionIsServedWhileAVersionPinsIt(t *testing.T) {
 
 // lastBrandRecord is the body of the newest brand record on n's log, as a
 // backup opens it before handing it to a declaration's reader: the signed
-// frame verified (ADR-0031, ADR-0052).
+// frame verified (ADR-0031, ADR-0075).
 func (n *node) lastBrandRecord(op artifactsdomain.OpKind) []byte {
 	n.t.Helper()
 	records := statelog.VerifiedLog{Log: n.log, Verifier: n.verifier}
@@ -394,7 +394,7 @@ func (n *node) brandFileRows() map[string]objstore.Object {
 	return out
 }
 
-// AN ADOPTION NAMES THE FILES ITS ROWS NAME (ADR-0052). A backup reads the
+// AN ADOPTION NAMES THE FILES ITS ROWS NAME (ADR-0075). A backup reads the
 // artifacts log past its store copy and carries every object a record names,
 // because a restore replays those records into the rows — so what the
 // declaration's reader says an adoption writes has to be what the applier

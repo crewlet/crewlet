@@ -19,7 +19,7 @@
  * and did not.
  *
  * A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH — the company feed is
- * the tracker's work and the knowledge base's pages — and its read names one
+ * Worklet's work and Doclet's pages — and its read names one
  * `min_position` per listed domain this tab has written (`protocol/session.ts`),
  * which the engine holds each half of the answer to. Listed under one, the
  * half on the other log would be drawn from before the tab's own write there.
@@ -45,8 +45,24 @@ export const SESSION_QUERIES = {
     "company_feed",
     "decisions",
     "inbox",
+    "answered_decisions",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision", "company_feed"],
+  chat: [
+    "chat_channels",
+    "chat_channel",
+    "chat_messages",
+    "chat_thread",
+    "chat_activity",
+    "chat_threads",
+    "chat_saved",
+    "chat_sent",
+    "chat_links",
+    "chat_message",
+    "chat_search",
+    "chat_room_names",
+    "chat_rooms",
+  ],
   code: [
     "code_repos",
     "code_repo",

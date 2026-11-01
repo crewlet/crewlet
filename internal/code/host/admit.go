@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ADMISSION: who is asking, as whom, and of which repository — every git
@@ -362,7 +363,7 @@ func (a admission) floorWords() (shown, instead, principal, scope string) {
 		return "this check was queued at", "a check's box fetches the one commit it checks", checkResyncs,
 			checksResyncs
 	}
-	return "this run has been shown", "it has not been pushed yet, or ask code_resolve", "this run's",
+	return "this run has been shown", "it has not been pushed yet, or ask " + toolname.CodeResolve, "this run's",
 		"this seat's"
 }
 
@@ -372,7 +373,7 @@ func (a admission) floorWords() (shown, instead, principal, scope string) {
 // off the serving epoch (Signer.Committer), and "" for a person, whose push
 // may carry the engine's commits as git carries any. A box runs code nobody
 // vouches for, and the committer is what a cooperating client's history
-// marks the host's own writes by (ADR-0062), so a box's push claiming it is
+// marks the host's own writes by (ADR-0085), so a box's push claiming it is
 // refused forged_committer. An error is a node holding no epoch, which judges
 // no box's push.
 func (a admission) engineCommitter(s Signer) (string, error) {

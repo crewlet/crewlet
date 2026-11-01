@@ -77,7 +77,7 @@ func TestOnlyTheLeadFallbackIsToldWhyItWasRouted(t *testing.T) {
 }
 
 // THE HANDLING BLOCK NEVER CONTRADICTS THE DELIVERY CHECK, AND NEVER HANDS A
-// COLLEAGUE'S ISSUE AWAY — the native tracker's two rules, in Jira's routings.
+// COLLEAGUE'S ISSUE AWAY: Worklet's two rules, in Jira's routings.
 //
 //   - STAYING OUT IS FOR AN UNADDRESSED ROUTING ONLY, through the same rule
 //     [jira.Prompt.Addressed] answers with. A mentioned seat may not end its
@@ -225,7 +225,7 @@ func TestTheTrackerNeverWakesTheActor(t *testing.T) {
 		"jira:issue_created", "jira:issue_updated", "jira:issue_deleted",
 		"comment_created", "comment_deleted",
 	} {
-		if (jira.Prompt{}).WakesActor(event) {
+		if (jira.Prompt{}).WakesActor(notify.Inbound{Source: jira.Backend, EventType: event}) {
 			t.Errorf("%s wakes its own actor", event)
 		}
 	}

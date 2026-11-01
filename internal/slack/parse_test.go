@@ -35,14 +35,18 @@ func (f *follows) key(backend, handle, channel, thread string) string {
 	return backend + "|" + handle + "|" + channel + "|" + thread
 }
 
-func (f *follows) Follow(_ context.Context, backend, handle, channel, thread, reason string, _ time.Time) error {
+func (f *follows) Follow(_ context.Context, backend, handle, channel, thread string, _ time.Time,
+	choose func(string, bool) string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return "", f.err
 	}
-	f.held[f.key(backend, handle, channel, thread)] = reason
-	return nil
+	k := f.key(backend, handle, channel, thread)
+	held, ok := f.held[k]
+	reason := choose(held, ok)
+	f.held[k] = reason
+	return reason, nil
 }
 
 func (f *follows) Following(_ context.Context, backend, handle, channel, thread string) (string, bool, error) {
@@ -53,15 +57,6 @@ func (f *follows) Following(_ context.Context, backend, handle, channel, thread 
 	}
 	reason, ok := f.held[f.key(backend, handle, channel, thread)]
 	return reason, ok, nil
-}
-
-func (f *follows) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := f.key(backend, handle, channel, thread)
-	_, ok := f.held[key]
-	delete(f.held, key)
-	return ok, nil
 }
 
 func (f *follows) reason(handle, channel, thread string) string {
@@ -386,8 +381,82 @@ func TestBeingNamedInAChannelFollowsTheThreadItStarts(t *testing.T) {
 	if got := route(t, parser(t, store), w); len(got) != 1 {
 		t.Fatalf("a mention did not reach the seat: %+v", got)
 	}
-	if store.reason("swe", "C0ENG", "1700000009.000900") == "" {
-		t.Error("the message's own id was not followed")
+	if got := store.reason("swe", "C0ENG", "1700000009.000900"); got != string(notify.FollowMention) {
+		t.Fatalf("the message's own id is followed as %q, want the mention", got)
+	}
+	// The answer arrives under it, reaches the seat and obliges it: the
+	// thread is one the seat was asked something in.
+	answer := route(t, parser(t, store), event("message", map[string]any{
+		"ts": "1700000010.000100", "thread_ts": "1700000009.000900", "text": "here you go",
+	}))
+	if len(answer) != 1 {
+		t.Fatalf("the answer to a question the seat was asked was dropped: %+v", answer)
+	}
+	if !slack.Prompt().Address.Addressed(answer[0].Metadata) {
+		t.Error("a reply in a thread the seat was named in does not oblige an answer")
+	}
+}
+
+// A BROADCAST IN A THREAD THE SEAT WAS NAMED IN STILL OBLIGES IT. The message
+// reached it as a broadcast, and it is in the thread because it was named —
+// which is what the follow key carries, so the rule reads an answer owed.
+func TestABroadcastInANamedThreadStillObliges(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	const root = "1700000020.000100"
+	if got := route(t, p, event("message", map[string]any{
+		"ts": "1700000021.000100", "thread_ts": root, "text": "<@" + botUser + "> can you look",
+	})); len(got) != 1 {
+		t.Fatalf("a mention in a thread did not reach the seat: %+v", got)
+	}
+	got := route(t, p, event("message", map[string]any{
+		"ts": "1700000022.000100", "thread_ts": root, "text": "<!here> any update?",
+	}))
+	if len(got) != 1 {
+		t.Fatalf("a broadcast in a followed thread was dropped: %+v", got)
+	}
+	meta := got[0].Metadata
+	if meta[notify.FollowReasonField] != string(notify.FollowCollective) ||
+		meta[notify.FollowingField] != string(notify.FollowMention) {
+		t.Fatalf("the broadcast reached the seat as %q in a thread it follows as %q",
+			meta[notify.FollowReasonField], meta[notify.FollowingField])
+	}
+	if !slack.Prompt().Address.Addressed(meta) {
+		t.Error("a broadcast in a thread the seat was named in does not oblige an answer")
+	}
+	if held := store.reason("swe", "C0ENG", root); held != string(notify.FollowMention) {
+		t.Fatalf("the broadcast downgraded the follow to %q", held)
+	}
+}
+
+// A BROADCAST'S THREAD IS FOLLOWED AS A BROADCAST. The seat hears the replies
+// under an <!here> — it was in the room — but it owes none of them an answer:
+// recorded as anything stronger, every seat in the channel would be obliged to
+// answer every reply to every broadcast.
+func TestABroadcastsThreadIsFollowedAsABroadcast(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	if got := route(t, p, event("message", map[string]any{
+		"ts": "1700000011.000100", "text": "<!here> standup in five",
+	})); len(got) != 1 {
+		t.Fatalf("a broadcast did not reach the seat: %+v", got)
+	}
+	if got := store.reason("swe", "C0ENG", "1700000011.000100"); got != string(notify.FollowCollective) {
+		t.Fatalf("the broadcast's thread is followed as %q, want collective", got)
+	}
+	reply := route(t, p, event("message", map[string]any{
+		"ts": "1700000012.000100", "thread_ts": "1700000011.000100", "text": "on my way",
+	}))
+	if len(reply) != 1 {
+		t.Fatalf("a reply under a broadcast was dropped: %+v", reply)
+	}
+	if got := reply[0].Metadata[notify.FollowingField]; got != string(notify.FollowCollective) {
+		t.Errorf("the reply rides the follow as %q", got)
+	}
+	if slack.Prompt().Address.Addressed(reply[0].Metadata) {
+		t.Error("a reply under a broadcast obliges every seat in the room to answer it")
 	}
 }
 
@@ -441,5 +510,85 @@ func TestTheMetadataCarriesWhatTheSpineNeeds(t *testing.T) {
 		if meta[key] != want {
 			t.Errorf("%s = %q, want %q", key, meta[key], want)
 		}
+	}
+}
+
+// EVERY KEY THE SPINE REQUIRES IS STAMPED, on every delivery this backend
+// produces. The set is [notify.RequiredChatKeys] rather than a list copied
+// into this file, so a key a reader starts depending on is missing here
+// LOUDLY rather than reading back as "" — which every consumer would take as
+// a message with nothing to say.
+func TestTheParserStampsTheRequiredVocabulary(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	deliveries := map[string]types.RawWebhook{
+		"a top-level channel message": event("message", nil),
+		"a direct message": event("message", map[string]any{
+			"channel": "D0ANA", "channel_type": "im",
+		}),
+		"an app_mention": event("app_mention", map[string]any{
+			"text": "<@" + botUser + "> can you look",
+		}),
+	}
+	for name, w := range deliveries {
+		got := route(t, p, w)
+		if len(got) != 1 {
+			t.Fatalf("%s produced %d notifications", name, len(got))
+		}
+		for _, key := range notify.RequiredChatKeys() {
+			if _, ok := got[0].Metadata[key]; !ok {
+				t.Errorf("%s: %q was not stamped", name, key)
+			}
+		}
+	}
+}
+
+// A FOLLOW KEY CARRIES THE REASON, never "true". Which follow is the whole
+// question: read as a bare marker, every later reply in every thread the
+// seat had ever posted in became a turn that may not end in silence.
+func TestTheFollowKeysCarryAReasonTheRuleCanRead(t *testing.T) {
+	t.Parallel()
+	store := newFollows()
+	p := parser(t, store)
+	named := event("message", map[string]any{
+		"thread_ts": "1700000000.000000",
+		"text":      "<@" + botUser + "> can you look",
+	})
+	got := route(t, p, named)
+	if len(got) != 1 {
+		t.Fatalf("a mention in a thread produced %d notifications", len(got))
+	}
+	for _, key := range []string{notify.FollowReasonField, notify.FollowingField} {
+		reason := notify.FollowReason(got[0].Metadata[key])
+		if !reason.Valid() {
+			t.Fatalf("%s = %q, which is not a reason the engine knows", key, reason)
+		}
+		if reason != notify.FollowMention {
+			t.Errorf("%s = %q, want the mention that established the follow", key, reason)
+		}
+	}
+	// And the rule the prompt and the indicator share agrees, which is the
+	// property the metadata exists to carry: a named seat owes an answer.
+	if !slack.Prompt().Address.Addressed(got[0].Metadata) {
+		t.Error("a message naming the seat does not oblige an answer")
+	}
+
+	// A reply the seat merely PARTICIPATED in is the counterfactual: it
+	// reaches the seat and obliges nothing.
+	quiet := newFollows()
+	quiet.held[quiet.key(slack.Backend, "swe", "C0ENG", "1700000000.000000")] =
+		string(notify.FollowParticipated)
+	ordinary := route(t, parser(t, quiet), event("message", map[string]any{
+		"thread_ts": "1700000000.000000", "text": "thanks all",
+	}))
+	if len(ordinary) != 1 {
+		t.Fatalf("a followed thread's reply produced %d notifications", len(ordinary))
+	}
+	if got := ordinary[0].Metadata[notify.FollowingField]; got != string(notify.FollowParticipated) {
+		t.Fatalf("the reply rides the follow as %q", got)
+	}
+	if slack.Prompt().Address.Addressed(ordinary[0].Metadata) {
+		t.Error("a reply in a thread the seat merely spoke in obliges an answer")
 	}
 }

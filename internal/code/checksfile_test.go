@@ -309,12 +309,13 @@ func TestADirectCheckIsRefused(t *testing.T) {
 			t.Errorf("a check in %s was refused: %v", cell, err)
 		}
 	}
+	// Every placement is a cell a box is built for (config.Placements, each
+	// of which needs a backend); a check runs in each but the engine host's own.
 	for _, p := range config.Placements {
-		runs := p.NeedsBackend() && p != config.PlacementDirect
+		runs := p != config.PlacementDirect
 		if code.CheckCell(p).Valid() != runs {
-			t.Errorf("the sandbox's %s needs a backend: %v; a check runs there: %v — a check runs in "+
-				"every cell a box is built for but the engine host's own", p, p.NeedsBackend(),
-				code.CheckCell(p).Valid())
+			t.Errorf("a check runs in the sandbox's %s: %v, want %v: a check runs in every cell a box "+
+				"is built for but the engine host's own", p, code.CheckCell(p).Valid(), runs)
 		}
 	}
 	for _, cell := range code.CheckCells() {

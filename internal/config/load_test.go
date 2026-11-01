@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -171,6 +172,7 @@ func TestAFileIsRestoredAgainstItsPriorOnlyWhenItCarriesAMask(t *testing.T) {
 	t.Parallel()
 	const doc = `name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: sonnet
@@ -245,14 +247,14 @@ token_budget: {week: -1}
 notification_coalesce_max_batch: 0
 turn_engine:
   max_iterations: 0
-  max_tool_rounds: 0
+  delegation_depth_limit: 0
 `))
 	if err == nil {
 		t.Fatal("expected failures")
 	}
 	for _, want := range []string{
 		"token_budget.week", "notification_coalesce_max_batch",
-		"turn_engine.max_iterations", "turn_engine.max_tool_rounds",
+		"turn_engine.max_iterations", "turn_engine.delegation_depth_limit",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error should name %s; got:\n%v", want, err)
@@ -263,7 +265,7 @@ turn_engine:
 // A FRACTION IN A WHOLE-NUMBER FIELD IS REFUSED, NAMING THE FIELD — never
 // truncated.
 //
-// The decoder read `api.port: 8080.9` as 8080 and `max_tool_rounds: 3.7` as 3
+// The decoder read `api.port: 8080.9` as 8080 and `max_iterations: 3.7` as 3
 // without a word, so a config ran on a value its author never wrote. A number
 // that IS whole in another spelling (`8080.0`, `1e3`) is the number it spells,
 // and a field that takes fractions takes one.
@@ -279,9 +281,9 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 			return err
 		}, "api.port"},
 		{"a Tier B round cap", func() error {
-			_, err := ParseCompany([]byte("name: Acme\nturn_engine:\n  max_tool_rounds: 3.7\n"))
+			_, err := ParseCompany([]byte("name: Acme\nturn_engine:\n  max_iterations: 3.7\n"))
 			return err
-		}, "turn_engine.max_tool_rounds"},
+		}, "turn_engine.max_iterations"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -305,8 +307,104 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 			t.Errorf("api.port: %s = (%v, %v), want 8080 — a whole number in another spelling", whole, cfg, err)
 		}
 	}
-	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
-	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
-		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
+	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 22.5\n"), NewResolver(MapSource{}))
+	if err != nil || cfg.Coordination.LeaseTTLSeconds != 22.5 {
+		t.Errorf("a fractional lease TTL = (%v, %v), want 22.5 — that field takes fractions", cfg, err)
+	}
+}
+
+// A NUMBER THAT IS NOT FINITE IS REFUSED, NAMING THE FIELD, in both tiers and
+// through a Tier A reference.
+//
+// YAML spells NaN and infinity (`.nan`, `.inf`), the decoder reads either
+// into a fractional field faithfully, and NaN then fails every comparison a
+// validator bounds a value with — so `lease_ttl_seconds: .nan` passed "not
+// negative", `notification_coalesce_window_seconds: .nan` passed "0..60",
+// and each became a duration Go leaves undefined. Every spelling the decoder
+// reads as one is asked, and a finite fraction beside them still loads.
+//
+// Mutation: drop refuseNonFinite from decodeNode, and every case loads.
+func TestANumberThatIsNotFiniteIsRefused(t *testing.T) {
+	t.Parallel()
+	parsers := []struct {
+		name  string
+		path  string
+		parse func(value string) error
+	}{
+		{"a Tier A lease TTL", "coordination.lease_ttl_seconds", func(v string) error {
+			_, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: "+v+"\n"),
+				NewResolver(MapSource{}))
+			return err
+		}},
+		{"a Tier A reference", "store.busy_timeout_seconds", func(v string) error {
+			_, err := ParseRunnableBootstrap([]byte("store:\n  busy_timeout_seconds: \"${BUSY}\"\n"),
+				NewResolver(MapSource{"BUSY": v}))
+			return err
+		}},
+		{"a Tier B window", "notification_coalesce_window_seconds", func(v string) error {
+			_, err := ParseCompany([]byte("name: Acme\nnotification_coalesce_window_seconds: " + v + "\n"))
+			return err
+		}},
+	}
+	for _, p := range parsers {
+		for _, value := range []string{".nan", ".NaN", ".NAN", ".inf", "+.Inf", "-.INF"} {
+			t.Run(p.name+"/"+value, func(t *testing.T) {
+				t.Parallel()
+				err := p.parse(value)
+				if !errors.Is(err, ErrShape) {
+					t.Fatalf("%s: %s = %v, want a wrong shape — no setting has a meaning for it",
+						p.path, value, err)
+				}
+				problems := Problems(err)
+				if len(problems) != 1 || problems[0].Path != p.path || problems[0].Line == 0 {
+					t.Fatalf("problems = %+v, want one at %s with its line", problems, p.path)
+				}
+				if !strings.Contains(problems[0].Message, "not a finite number") {
+					t.Errorf("message = %q, want it to say the value is not a finite number",
+						problems[0].Message)
+				}
+			})
+		}
+		if err := p.parse("2.5"); err != nil && errors.Is(err, ErrShape) {
+			t.Errorf("%s: a finite fraction was refused as a wrong shape: %v", p.path, err)
+		}
+	}
+}
+
+// A TURN-ENGINE ZERO THAT MEANS SOMETHING SURVIVES THE STORE.
+//
+// executor_min_budget_tokens: 0 is no launch floor, and
+// onboarding_max_tool_rounds: 0 is no onboarding pass. A stored revision is
+// decoded onto the defaults and an encoder drops a zero int, so either one,
+// held as a plain number, came back from the store as the default the company
+// had turned off — onboarding switched back on, the floor back in place — on
+// the first read after the write. Unset still takes the default.
+func TestATurnEngineZeroSurvivesTheStore(t *testing.T) {
+	t.Parallel()
+	silent := mustCompany(t, "name: Acme\n")
+	if got := silent.TurnEngine.ExecutorFloor(); got != 25000 {
+		t.Errorf("an unset launch floor is %d, want the shipped 25000", got)
+	}
+	if got := silent.TurnEngine.OnboardingRounds(); got != 10 {
+		t.Errorf("an unset onboarding budget is %d, want the shipped 10", got)
+	}
+
+	off := mustCompany(t, "name: Acme\nturn_engine:\n"+
+		"  executor_min_budget_tokens: 0\n  onboarding_max_tool_rounds: 0\n")
+	stored, err := json.Marshal(off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := DecodeCompany(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*Company{"authored": off, "stored": back} {
+		if got := c.TurnEngine.ExecutorFloor(); got != 0 {
+			t.Errorf("%s: an explicit 0 launch floor reads %d", name, got)
+		}
+		if got := c.TurnEngine.OnboardingRounds(); got != 0 {
+			t.Errorf("%s: an explicit 0 onboarding budget reads %d", name, got)
+		}
 	}
 }

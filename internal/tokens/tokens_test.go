@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -537,5 +538,49 @@ func TestANarrowedLiveRollupNamesItsSeatByIDAndItsHandleNow(t *testing.T) {
 		if _, ok := body[absent]; ok {
 			t.Errorf("the whole company's rollup carries %q", absent)
 		}
+	}
+}
+
+// A PHASE RECORD'S CALLS ARE THE PROVIDER CALLS IT COVERS, and an executor's
+// covers none. Every executor is its coding CLI's own run: the engine's record
+// of the phase states the run as one round, and counting that round put a
+// call nobody made on every turn beside the run's own — so the run's calls
+// are its CLI's turns, on the run's `sandbox` record, as the CLI reported them
+// (one where it reported none: the run the engine asked for).
+//
+// Mutations: count the executor's round, or count a coding run as one
+// whatever its CLI reported, and this goes red.
+func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   tokens.PhaseCounts
+		want int
+	}{
+		{"a phase's timed rounds", tokens.PhaseCounts{Phase: "review", Rounds: 3, RoundsUsed: 4}, 3},
+		{"rounds counted but not listed", tokens.PhaseCounts{Phase: "subagent", RoundsUsed: 5}, 5},
+		{"a judge's single call", tokens.PhaseCounts{Phase: "judge"}, 1},
+		{"an executor's collected run", tokens.PhaseCounts{Phase: "execute", Rounds: 1, RoundsUsed: 1}, 0},
+		{"an executor whose launch was refused", tokens.PhaseCounts{Phase: "execute"}, 0},
+		{"a coding run's own turns", tokens.PhaseCounts{Phase: "sandbox", CLITurns: 17}, 17},
+		{"a coding run whose CLI reported none", tokens.PhaseCounts{Phase: "sandbox"}, 1},
+	} {
+		if got := tokens.PhaseCalls(tc.in); got != tc.want {
+			t.Errorf("%s: PhaseCalls(%+v) = %d, want %d", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// THE RULE NAMES PHASES BY THE EVENT CATALOGUE'S WORDS, spelled here so this
+// package stays a leaf — so a renamed phase would silently fall to the
+// default. Held: the executor's record and a coding run's record are the
+// catalogue's own `execute` and `sandbox`.
+func TestPhaseCallsNamesTheCataloguesPhases(t *testing.T) {
+	t.Parallel()
+	if got := tokens.PhaseCalls(tokens.PhaseCounts{Phase: string(types.PhaseExecute), Rounds: 1}); got != 0 {
+		t.Errorf("the catalogue's executor phase counts %d calls, want none", got)
+	}
+	if got := tokens.PhaseCalls(tokens.PhaseCounts{Phase: string(types.PhaseSandbox), CLITurns: 9}); got != 9 {
+		t.Errorf("the catalogue's coding-run phase counts %d calls, want its CLI's 9 turns", got)
 	}
 }

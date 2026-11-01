@@ -119,6 +119,18 @@ func TestContract(t *testing.T) {
 	})
 }
 
+// TestMintingContract runs the held-mid-mint cases over the KV store, held
+// through its test-only mint hook.
+func TestMintingContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {
+		s := openStore(t, nc, coordtest.LongTTL)
+		s.beforeMint = hold
+		return s
+	})
+}
+
 // TestSharedContract runs the shared cases over three handles on one
 // single-member broker — the easy case, since every read is answered by the
 // one copy there is. shared_cluster_test.go is the one that means something:
@@ -160,7 +172,7 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 		"plain",
 		"=",
 		".",
-		"bulk:a project:7",
+		"merge:a project:7",
 	}
 	seen := map[string]string{}
 	for _, r := range resources {
@@ -565,7 +577,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
-		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
+		MaxRateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		StatusFreshness:  time.Minute,
@@ -623,7 +635,7 @@ func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 		{"worker:scheduler", "worker.scheduler"},
 		// A name carrying the separator is MORE segments, never a class
 		// with a colon in it — the class is the leading one either way.
-		{"bulk:proj:7", "bulk.proj.7"},
+		{"merge:proj:7", "merge.proj.7"},
 		// And a name carrying a dot keeps it escaped, because an
 		// unescaped one would add a token the grammar never wrote.
 		{"seat:alice.smith", "seat.alice=2Esmith"},
@@ -737,7 +749,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 				"the broker is not filtering and the membership read is moving "+
 				"every seat in the fleet", c.class, got, c.want)
 		}
-		if got := count(s.epochs, c.class); got != c.want {
+		if got := count(s.counter.kv, c.class); got != c.want {
 			t.Errorf("the %s epoch walk was handed %d records for the %d it wanted; "+
 				"that bucket has no TTL, so an unnarrowed read here grows with "+
 				"the deployment's whole history", c.class, got, c.want)
@@ -1258,7 +1270,7 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
-		RateWindow: time.Minute, MaxClaimTTL: time.Minute,
+		MaxRateWindow: time.Minute, MaxClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
 		FollowRetention: time.Minute, RebaseRetention: time.Minute,
 		StatusFreshness:  time.Minute,

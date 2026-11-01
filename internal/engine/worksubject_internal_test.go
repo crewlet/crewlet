@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
-	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
@@ -22,30 +21,30 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/slack"
-	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Which work item a turn is on — the rules in worksubject.go, driven through
 // the frames that publish a turn's opening and closing records, because what a
 // reader sees is those records rather than the resolver.
 
-// nativeTask is the item the tracker cases wake a seat about.
-var nativeTask = types.WorkItem{
-	Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG",
+// workletTask is the item the Worklet cases wake a seat about.
+var workletTask = types.WorkItem{
+	Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG",
 }
 
-// trackerWake is a native tracker wake about task-1, as the parser writes it.
+// trackerWake is a Worklet wake about task-1, as the parser writes it.
 func trackerWake() *events.Event {
 	return events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "assigned",
+		NotificationSource: worklet.Source, SourceEventType: "assigned",
 		Subject: "ENG-1: fix the build", Addressed: true,
 		Metadata: map[string]string{
-			tracker.MetaTaskID: "task-1", tracker.MetaTaskKey: "ENG-1",
-			tracker.MetaProject: "ENG", tracker.MetaObject: "task",
-			tracker.MetaObjectID: "task-1",
+			worklet.MetaTaskID: "task-1", worklet.MetaTaskKey: "ENG-1",
+			worklet.MetaProject: "ENG", worklet.MetaObject: "task",
+			worklet.MetaObjectID: "task-1",
 		},
 	}, events.TraceContext{})
 }
@@ -98,7 +97,7 @@ func charged(t *testing.T, want types.WorkItem, basis types.WorkItemBasis,
 func TestATrackerWakeNamesItsItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, trackerWake())
-	charged(t, nativeTask, types.BasisTrigger, start, summary, done)
+	charged(t, workletTask, types.BasisTrigger, start, summary, done)
 }
 
 // codeWake is the wake swe is given of a comment that mentions it on a change
@@ -140,7 +139,7 @@ func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
 	}, events.TraceContext{})
 }
 
-// A CODE WAKE NAMES ITS WORK ITEM (ADR-0067): a change implements the item its
+// A CODE WAKE NAMES ITS WORK ITEM (ADR-0090): a change implements the item its
 // owner named, its routing carries it, and every wake about the change names
 // it — so the turn a review request, a mention or a finding's answer starts is
 // charged to the item the change implements, at dispatch, under the trigger
@@ -152,8 +151,8 @@ func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
 func TestACodeWakeNamesItsWorkItem(t *testing.T) {
 	t.Parallel()
 	for name, item := range map[string]types.WorkItem{
-		"a native task": nativeTask,
-		"a jira issue":  {Backend: types.WorkJira, ID: "10042", Key: "ENG-12", Project: "ENG"},
+		"a Worklet task": workletTask,
+		"a jira issue":   {Backend: types.WorkJira, ID: "10042", Key: "ENG-12", Project: "ENG"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -177,9 +176,9 @@ func TestACodeWakeNamesItsWorkItem(t *testing.T) {
 func TestAPersonWakeHasNoItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "prioritised",
+		NotificationSource: worklet.Source, SourceEventType: "prioritised",
 		Metadata: map[string]string{
-			tracker.MetaObject: "person", tracker.MetaObjectID: "ada",
+			worklet.MetaObject: "person", worklet.MetaObjectID: "ada",
 		},
 	}, events.TraceContext{}))
 	if start.WorkItem != nil || summary.WorkItem != nil || done.WorkItem != nil {
@@ -274,12 +273,12 @@ func TestAChatWakeHasNoItemAtDispatch(t *testing.T) {
 // basis, whatever basis the asker had.
 func TestAnAskInheritsTheAskersItem(t *testing.T) {
 	t.Parallel()
-	asked := nativeTask
+	asked := workletTask
 	start, summary, done := turnRecords(t, events.New(types.A2ARequest{
 		ChannelID: "a2a-1", Requester: "lead", Content: "which test is flaky?",
 		WorkItem: &asked, WorkItemBasis: types.BasisTrigger,
 	}, events.TraceContext{}))
-	charged(t, nativeTask, types.BasisAskedBy, start, summary, done)
+	charged(t, workletTask, types.BasisAskedBy, start, summary, done)
 }
 
 // A RESUMED TURN KEEPS THE ITEM IT PARKED WITH.
@@ -292,7 +291,7 @@ func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
 	company := e.Company()
-	parked := nativeTask
+	parked := workletTask
 	if err := e.resumeTurn(t.Context(), resumeInput{
 		Company: company,
 		Run: sandbox.PendingRun{
@@ -307,7 +306,7 @@ func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("resumeTurn: %v", err)
 	}
-	charged(t, nativeTask, types.BasisResume,
+	charged(t, workletTask, types.BasisResume,
 		*only[*types.AgentTurnStarted](t, p, "agent_turn_started"),
 		*only[*types.AgentTurnCompleted](t, p, "agent_turn_completed"),
 		*only[*types.TurnCompleted](t, p, "turn_completed"))
@@ -338,7 +337,7 @@ func completing(t *testing.T, written []types.WorkItem, res turn.Result) (
 // tells a reader it was inferred from what the turn did.
 func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 	t.Parallel()
-	summary, done := completing(t, []types.WorkItem{nativeTask, nativeTask}, turn.Result{})
+	summary, done := completing(t, []types.WorkItem{workletTask, workletTask}, turn.Result{})
 	for name, got := range map[string]struct {
 		item  *types.WorkItem
 		basis types.WorkItemBasis
@@ -346,7 +345,7 @@ func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 		"agent_turn_completed": {summary.WorkItem, summary.WorkItemBasis},
 		"turn_completed":       {done.WorkItem, done.WorkItemBasis},
 	} {
-		if got.item == nil || *got.item != nativeTask || got.basis != types.BasisSoleWrite {
+		if got.item == nil || *got.item != workletTask || got.basis != types.BasisSoleWrite {
 			t.Errorf("%s names %+v (%q), want the one item written, as a sole write",
 				name, got.item, got.basis)
 		}
@@ -357,8 +356,8 @@ func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 // whichever of its items happened to be written first.
 func TestTwoWritesNameNoItem(t *testing.T) {
 	t.Parallel()
-	other := types.WorkItem{Backend: types.WorkNative, ID: "task-2", Key: "ENG-2", Project: "ENG"}
-	summary, done := completing(t, []types.WorkItem{nativeTask, other}, turn.Result{})
+	other := types.WorkItem{Backend: types.WorkWorklet, ID: "task-2", Key: "ENG-2", Project: "ENG"}
+	summary, done := completing(t, []types.WorkItem{workletTask, other}, turn.Result{})
 	if summary.WorkItem != nil || done.WorkItem != nil {
 		t.Errorf("a turn that wrote two items was charged to %+v / %+v",
 			summary.WorkItem, done.WorkItem)
@@ -373,7 +372,7 @@ func TestTwoWritesNameNoItem(t *testing.T) {
 // finished writing: the resumed half may write a second item.
 func TestASuspensionSaysItIsNotAnEnd(t *testing.T) {
 	t.Parallel()
-	summary, done := completing(t, []types.WorkItem{nativeTask}, turn.Result{Suspended: true})
+	summary, done := completing(t, []types.WorkItem{workletTask}, turn.Result{Suspended: true})
 	if !summary.Suspended || !done.Suspended {
 		t.Errorf("suspended = %v / %v, want both records to say the segment parked",
 			summary.Suspended, done.Suspended)
@@ -400,7 +399,7 @@ func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 			TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test", DelegationDepth: 3,
 		},
-		State: execstate.State{Written: []types.WorkItem{nativeTask}},
+		State: execstate.State{Written: []types.WorkItem{workletTask}},
 		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
 			Org: company.Org},
 		Answer:  "done",
@@ -409,7 +408,7 @@ func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 		t.Fatalf("resumeTurn: %v", err)
 	}
 	done := only[*types.TurnCompleted](t, p, "turn_completed")
-	if done.WorkItem == nil || *done.WorkItem != nativeTask ||
+	if done.WorkItem == nil || *done.WorkItem != workletTask ||
 		done.WorkItemBasis != types.BasisSoleWrite {
 		t.Errorf("the finishing segment names %+v (%q), want the item written "+
 			"before the park, as a sole write", done.WorkItem, done.WorkItemBasis)
@@ -481,36 +480,53 @@ func TestAResumeOfAnUnmeasuredParkStatesNoTally(t *testing.T) {
 	}
 }
 
-// writingDetach is run_sandbox for a turn that wrote a task in the same call it
-// detached from — what the real tools report through the turn's write set.
-type writingDetach struct{ suspendingTool }
-
-func (w writingDetach) CallDetached(ctx context.Context, t *turnctx.Turn,
-	args map[string]any,
-) (tools.DetachedResult, error) {
-	t.Written.Add(nativeTask)
-	return w.suspendingTool.CallDetached(ctx, t, args)
+// A SCHEDULED TURN PARKS WITH ITS DEADLINE, and launches its run with it. The
+// fire's cap is fixed when the turn begins, on the turn and not on any one
+// segment: the segment that collects the run reads it off the park, and the
+// run's row carries it for the poll. A turn with no cap carries none.
+func TestAScheduledTurnParksWithItsDeadline(t *testing.T) {
+	t.Parallel()
+	e, _ := indicating(t, notify.StatusAlways)
+	e.Company().Config.TurnEngine.DelegationDepthLimit = 3
+	rig := rigRuns(t, e, nil)
+	began := time.Now().UTC()
+	res, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-fire", WorkSince: began, RunID: "run-fire",
+		Events: []*events.Event{chatTrigger("D0ANA")}, TimeoutSeconds: 1800,
+	})
+	if err != nil || !res.Suspended {
+		t.Fatalf("runTurn = %+v, %v; the turn did not park, so this asserts nothing", res, err)
+	}
+	row := rig.row(t, "run-fire")
+	state, ok, err := execstate.Decode(row.ExecuteState)
+	if err != nil || !ok {
+		t.Fatalf("decode the suspension: ok=%v err=%v", ok, err)
+	}
+	ends := began.Add(30 * time.Minute)
+	if state.Deadline.Before(ends) || state.Deadline.After(ends.Add(time.Minute)) {
+		t.Errorf("the turn parks deadline %v, want its cap from when it began, about %v",
+			state.Deadline, ends)
+	}
+	if !row.Deadline.Equal(state.Deadline) {
+		t.Errorf("the run carries deadline %v, want the turn's %v", row.Deadline, state.Deadline)
+	}
 }
 
-// AND THE PARK WRITES THEM ONTO THE ROW, through the suspended conversation
-// the resume re-enters — the other half of the case above, through the real
-// suspension path.
-func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
+// THE PARK CARRIES WHAT THE TURN ASKED AND SPENT, through the real launch every
+// turn's executor takes: the turn parks the moment its run is launched, and the
+// segment that finishes it is woken by the run's completion — which carries
+// none of this.
+func TestAParkCarriesWhatTheTurnAskedAndSpent(t *testing.T) {
 	t.Parallel()
-	e, _ := indicatingWith(t, notify.StatusAlways, suspendingModel{})
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	e, _ := indicating(t, notify.StatusAlways)
+	// UNDER THE FIXTURE'S DEPTH CAP, so the turn reaches its launch.
+	e.Company().Config.TurnEngine.DelegationDepthLimit = 3
+	rig := rigRuns(t, e, nil)
 	// THE WORK'S OWN START, as every dispatch derives it from the inbox: a
 	// work key with none is a start nobody knows, which reads as older than
 	// the operation ledger and is refused on a node with nowhere to record a
 	// rebase (rebase.go).
 	began := time.Now().UTC()
-	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-code", WorkKey: "wk-code", WorkSince: began, AgentHandle: "swe", Role: "SWE",
-	}, sandbox.Fence{}); err != nil {
-		t.Fatalf("BeginLaunch: %v", err)
-	}
-	equipForCodeWith(t, e, store, writingDetach{})
-
 	res, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-code", WorkSince: began, RunID: "run-code",
 		Events: []*events.Event{chatTrigger("D0ANA")},
@@ -518,33 +534,30 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if err != nil || !res.Suspended {
 		t.Fatalf("runTurn = %+v, %v; the turn did not park, so this asserts nothing", res, err)
 	}
-	row, found, err := store.Get(t.Context(), "run-code")
-	if err != nil || !found {
-		t.Fatalf("the parked row: found=%v err=%v", found, err)
-	}
-	conversation, found, err := store.Conversation(t.Context(), "run-code", row.LaunchID)
-	if err != nil || !found {
-		t.Fatalf("the parked job's conversation: found=%v err=%v", found, err)
-	}
-	state, ok, err := execstate.Decode(conversation)
+	state, ok, err := execstate.Decode(rig.row(t, "run-code").ExecuteState)
 	if err != nil || !ok {
 		t.Fatalf("decode the suspension: ok=%v err=%v", ok, err)
 	}
-	if len(state.Written) != 1 || state.Written[0] != nativeTask {
-		t.Errorf("the suspension carries %+v, want the task written before the park",
-			state.Written)
-	}
-	// AND WHAT THE TURN WAS ASKED, for the segment that finishes it to
-	// record: that segment is woken by the run's completion, whose ask is
-	// not the turn's.
+	// WHAT THE TURN WAS ASKED, for the segment that finishes it to record:
+	// that segment is woken by the run's completion, whose ask is not the
+	// turn's.
 	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
 		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
 	}
-	// AND WHO ASKED IT, for a refresh_memory call in the segment that
-	// finishes the turn: that segment has no interactions to read them off.
-	if want := sendersSpoken(e.interactionsOf([]*events.Event{chatTrigger("D0ANA")})); len(want) == 0 ||
-		!slices.Equal(state.Senders, want) {
-		t.Errorf("the suspension parks the senders %+v, want %+v", state.Senders, want)
+	// AND WHO WROTE IT, for that segment's record of the ask to say so
+	// (ADR-0040): nothing it reads could decide the label again.
+	asked := e.askOf(Request{Handle: "swe", Events: []*events.Event{chatTrigger("D0ANA")}})
+	if want := asked.Label(); want == nil || !reflect.DeepEqual(state.AskProvenance, want) {
+		t.Errorf("the suspension parks the ask's label %+v, want %+v", state.AskProvenance, want)
+	}
+	// AND WHO SAID IT, each body under the label the turn read it with, for
+	// the segment that finishes the turn: its completed-turn event is the one
+	// the post-turn workers that wait for a settled turn read, and its
+	// refresh_memory calls read who asked off these. That segment re-reads no
+	// trigger.
+	if want := e.interactionsOf([]*events.Event{chatTrigger("D0ANA")}, "swe"); len(want) == 0 ||
+		!reflect.DeepEqual(state.Interactions, want) {
+		t.Errorf("the suspension parks the interactions %+v, want %+v", state.Interactions, want)
 	}
 	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
 	// chat wake names no item, so the segment that finishes the turn is the
@@ -561,6 +574,57 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if state.SoFar == nil {
 		t.Errorf("the suspension hands on no measurement of the turn so far, " +
 			"so the record ending it states only its last segment")
+	}
+}
+
+// AND THE PARK CARRIES WHAT THE TURN WROTE, onto the row the segment that
+// finishes the turn seeds its write set from — so "exactly one item written"
+// is judged over the whole turn rather than over its last segment.
+func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
+	t.Parallel()
+	e, _ := starting(t, refusingModels(t))
+	rig := rigRuns(t, e, nil)
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	turnContext := &turnctx.Turn{RunID: "run-code", Seat: seat, Org: company.Org}
+	r, err := company.RunnerFor(t.Context(), "swe", nil, RunnerInput{
+		Reply: turn.NoReply(), Launcher: launcherStub{}, Sessions: e.sessions,
+		Turn: runner.Turn{RunID: "run-code", Context: turnContext},
+	})
+	if err != nil {
+		t.Fatalf("RunnerFor: %v", err)
+	}
+	res, err := turn.Run(t.Context(), r, company.TurnSettings(time.Time{}),
+		turn.Input{RunID: "run-code", Reply: turn.NoReply()})
+	if err != nil || !res.Suspended {
+		t.Fatalf("turn.Run = %+v, %v; the turn did not park", res, err)
+	}
+	// THE ROW THE LAUNCH WOULD HAVE OPENED, which the stub opened none of.
+	if _, err := e.sandbox.Load().pending.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-code", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	written := &turnctx.Written{}
+	written.Add(workletTask)
+	deadline := time.Date(2026, 9, 1, 9, 30, 0, 0, time.UTC)
+	if resumable, err := e.persistSuspension(t.Context(), r, "run-code", turnTelemetry{
+		written: written, ask: "the ask", deadline: deadline,
+	}, segmentCharge{}); err != nil || !resumable {
+		t.Fatalf("persistSuspension = %v, %v; want the run recorded", resumable, err)
+	}
+	state, ok, err := execstate.Decode(rig.row(t, "run-code").ExecuteState)
+	if err != nil || !ok {
+		t.Fatalf("decode the suspension: ok=%v err=%v", ok, err)
+	}
+	// AND WHEN THE TURN'S CAP ENDS: the segment that collects the run is
+	// held to the turn's deadline, not to one measured from its own start.
+	if !state.Deadline.Equal(deadline) {
+		t.Errorf("the suspension carries deadline %v, want the turn's %v", state.Deadline, deadline)
+	}
+	if len(state.Written) != 1 || state.Written[0] != workletTask || state.WrittenMany {
+		t.Errorf("the suspension carries %+v (many %v), want the task written before the park",
+			state.Written, state.WrittenMany)
 	}
 }
 
@@ -583,7 +647,7 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 	if ctx.Written == nil || ctx.Written != tel.written {
 		t.Fatal("the turn context's write set is not the one the completion reads")
 	}
-	if ctx.WorkItem == nil || *ctx.WorkItem != nativeTask || ctx.WorkItemBasis != types.BasisTrigger {
+	if ctx.WorkItem == nil || *ctx.WorkItem != workletTask || ctx.WorkItemBasis != types.BasisTrigger {
 		t.Errorf("the turn context names %+v (%q), want the trigger's item",
 			ctx.WorkItem, ctx.WorkItemBasis)
 	}
@@ -625,12 +689,64 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	}
 }
 
+// A SETTLED TURN'S COMPLETION CARRIES WHO SAID WHAT, though the segment that
+// settles it re-reads no trigger.
+//
+// Every agent seat's executor is a detached run, so every such turn parks at
+// its launch and is settled by the segment that collects the run — woken by the
+// run's completion, not by the person who asked. The post-turn workers that
+// wait for a settled turn read that segment's turn_completed, and the persist
+// decider attributes each fact it keeps to the interaction that stated it: a
+// settling event carrying none attributes nothing to anybody, on every turn.
+//
+// Mutation: park no interactions, and the settling event carries none.
+func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
+	t.Parallel()
+	// A MODEL THAT REVIEWS, so the collected run's review settles the turn.
+	e, _ := indicatingWith(t, notify.StatusAlways, billingModel())
+	// UNDER THE FIXTURE'S DEPTH CAP, so the turn reaches its launch.
+	e.Company().Config.TurnEngine.DelegationDepthLimit = 3
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	trigger := chatTrigger("D0ANA")
+	runToItsEnd(t, e, rig, Request{
+		Handle: "swe", WorkKey: "wk-chat", RunID: "run-chat", WorkSince: time.Now().UTC(),
+		Events: []*events.Event{trigger},
+	})
+
+	want := e.interactionsOf([]*events.Event{trigger}, "swe")
+	if len(want) == 0 {
+		t.Fatal("the trigger resolves to no interaction, so this asserts nothing")
+	}
+	var parked, settled []*types.TurnCompleted
+	for _, ev := range e.backends.Queue.(*memory.Queue).History() {
+		if done, ok := events.DataAs[*types.TurnCompleted](ev); ok && done.TurnID == "run-chat" {
+			if done.Suspended {
+				parked = append(parked, done)
+			} else {
+				settled = append(settled, done)
+			}
+		}
+	}
+	if len(parked) != 1 || len(settled) != 1 {
+		t.Fatalf("published %d parked and %d settled completions for the turn, want one "+
+			"of each: the case needs the turn to park and then settle", len(parked), len(settled))
+	}
+	if !reflect.DeepEqual(parked[0].Interactions, want) {
+		t.Errorf("the park's completion carries %+v, want the dispatch's %+v",
+			parked[0].Interactions, want)
+	}
+	if !reflect.DeepEqual(settled[0].Interactions, want) {
+		t.Errorf("the settling completion carries %+v, want the %+v its turn parked with",
+			settled[0].Interactions, want)
+	}
+}
+
 // WHO ASKED REACHES THE TURN CONTEXT ON EVERY SEGMENT, which is what a
 // refresh_memory call tells the memory filter. A dispatch reads them off its
-// interactions; a resumed segment has none, so it reads the ones its turn
-// parked with — read off the interactions there, every resumed segment told
-// the filter nobody was asking, and a note about one person could be applied
-// to a turn somebody else started.
+// interactions; a resumed segment re-reads no trigger, so it reads them off
+// the interactions its turn parked with — without those, every resumed
+// segment told the filter nobody was asking, and a note about one person could
+// be applied to a turn somebody else started.
 func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))
@@ -648,7 +764,7 @@ func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}
 	resumed, err := e.describeResume(t.Context(), company, resumeInput{
 		Run:   run,
-		State: execstate.State{Senders: spoke},
+		State: execstate.State{Interactions: tel.interactions},
 		Turn:  resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org, turnctx.NewHolds(run.CodeHolds)),
 	})
 	if err != nil {

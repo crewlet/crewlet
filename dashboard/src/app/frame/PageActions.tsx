@@ -48,12 +48,12 @@ export function PageActions({ children }: { children: ReactNode }) {
  * A lens is a different question about the one scope the trail ends on (a
  * project's Tasks, About, History and Files, or All projects' Projects, Tasks
  * and History), so it belongs WITH the name it is a lens on:
- * `Work › ENG Core · Tasks | About | History | Files`. Drawn as a row of its
+ * `Worklet › ENG Core · Tasks | About | History | Files`. Drawn as a row of its
  * own under the bar it cost the first screenful a line (46px, measured
  * against the approved Board, whose lanes start straight under two toolbar
  * rows) and read as a third toolbar over the work.
  *
- * All projects' lenses are Work's SECTIONS, addresses of their own, which the
+ * All projects' lenses are Worklet's SECTIONS, addresses of their own, which the
  * header draws here as the same chips (`renderer: "lenses"` in `nav.ts`); a
  * project's are keys on its address (`lens=`). Every other workspace's
  * sections are tabs under the bar ([SectionTabs]), and the bar never draws

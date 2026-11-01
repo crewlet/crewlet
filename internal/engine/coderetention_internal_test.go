@@ -31,7 +31,7 @@ import (
 // ([Engine.servedFleetRevision]).
 func fleetReconciler(t *testing.T, e *Engine) *Reconciler {
 	t.Helper()
-	r, err := e.NewReconciler(ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
+	r, err := e.NewReconciler(t.Context(), ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
 		Queue: e.backends.Queue, NodeID: "node-purge"})
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
@@ -67,7 +67,7 @@ func activateRevisionAt(t *testing.T, e *Engine, doc string) coord.Activation {
 		t.Fatalf("seal the revision: %v", err)
 	}
 	now := time.Now().UTC()
-	id, err := e.backends.Store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := e.backends.Store.Configs().Insert(t.Context(), store.Revision{
 		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
 		Summary: "revision", Payload: payload, CreatedAt: now,
 	})
@@ -504,7 +504,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 
 // A RETIREMENT IS SWEPT BY A RECORD THE ENGINE RUNS. A retired reference keeps
 // its object from the collector only until its domain deletes the row
-// (ADR-0051), and the code host's retired packs are deleted by a retire_sweep
+// (ADR-0074), and the code host's retired packs are deleted by a retire_sweep
 // record of the code-retention duty — every applier at one position — never
 // by a job of the maintenance worker, whose list
 // (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone and

@@ -7,18 +7,25 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  answerWords,
+  answeredQuestion,
+  answeredRows,
   askContext,
   askQuestion,
   earlierOf,
-  firstSentence,
+  followThrough,
   inboxQuiet,
+  inboxResources,
+  inboxSelection,
   inboxRows,
   nextAfter,
   noticeNote,
   noticeRows,
   noticeTitle,
+  pairAnswered,
   readThrough,
   rowItem,
+  rowKey,
   rowName,
   rowWho,
   snoozePresets,
@@ -26,6 +33,9 @@ import {
 } from "./model.ts";
 import type { DecisionSubject } from "~/lib/decisions.ts";
 import type {
+  AgentRow,
+  AnsweredRun,
+  AnsweredWorkAsk,
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
@@ -232,11 +242,6 @@ describe("what an ask says", () => {
     expect(askQuestion(words)).toBe("Should we ship Friday?");
     expect(askContext(words)).toBe("The webinar moved.");
   });
-
-  test("a heading is the first sentence of a longer text", () => {
-    expect(firstSentence("May I delete it? It holds the fixtures.")).toBe("May I delete it?");
-    expect(firstSentence("v1.2 ships today")).toBe("v1.2 ships today");
-  });
 });
 
 describe("mark all read", () => {
@@ -360,7 +365,7 @@ describe("the quiet sentences", () => {
 });
 
 // A PARKED RUN'S TASK is a turn's: its work item carries no collision flag, so
-// the pane opens, threads and replies by the native task's id, since a key another
+// the pane opens, threads and replies by the Worklet task's id, since a key another
 // task claimed first would read and write the claimant's conversation.
 test("a parked run's task is addressed by its id", () => {
   const run = {
@@ -424,4 +429,326 @@ test("a notice whose key another task claimed is addressed by its task's id", ()
   };
   const item = rowItem(r);
   expect(item && itemAddress(item)).toBe("t-dup");
+});
+
+describe("what Needs you names for the assistant", () => {
+  test("each question's task, each waiting run and each stopped seat, once each", () => {
+    const ask = { kind: "ask", at: "2026-10-26T08:00:00Z", ask: { id: "t1", key: "FAIR-10" } };
+    const collided = {
+      kind: "ask",
+      at: "2026-10-26T08:00:00Z",
+      ask: { id: "t9", key: "FAIR-1", key_collision: true },
+    };
+    const run = { kind: "run", at: "2026-10-26T08:00:00Z", run: { turn_id: "turn-1" } };
+    const budget = { kind: "seat", seat: { row: { handle: "pm" }, window: undefined } };
+    const needs = [
+      { kind: "decision", key: "a", subject: ask, notices: [] },
+      { kind: "decision", key: "b", subject: collided, notices: [] },
+      { kind: "decision", key: "c", subject: run, notices: [] },
+      { kind: "decision", key: "d", subject: budget, notices: [] },
+      { kind: "condition", key: "e", item: { id: "error-x", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "f", item: { id: "stopped-y", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "g", item: { id: "sandbox-turn-2", subject: "run" } },
+      { kind: "condition", key: "h", item: { id: "posture-draining", subject: "engine" } },
+    ] as unknown as InboxRow[];
+    expect(inboxResources(needs)).toEqual([
+      { kind: "task", id: "FAIR-10" },
+      { kind: "task", id: "t9" },
+      { kind: "run", id: "turn-1" },
+      { kind: "seat", id: "pm" },
+      { kind: "seat", id: "qa" },
+      { kind: "run", id: "turn-2" },
+    ]);
+  });
+});
+
+describe("the row the reader opened, for the assistant", () => {
+  test("an ask or a parked run is a decision, an update its task, a stopped seat an agent", () => {
+    const ask = { kind: "ask", ask: { id: "t1", key: "FAIR-10" } };
+    const collided = { kind: "ask", ask: { id: "t9", key: "FAIR-1", key_collision: true } };
+    const run = { kind: "run", run: { turn_id: "turn-1" } };
+    const budget = { kind: "seat", seat: { row: { handle: "pm" } } };
+    const rows = [
+      { kind: "decision", key: "a", subject: ask, notices: [] },
+      { kind: "decision", key: "b", subject: collided, notices: [] },
+      { kind: "decision", key: "c", subject: run, notices: [] },
+      { kind: "decision", key: "d", subject: budget, notices: [] },
+      { kind: "condition", key: "e", item: { id: "stopped-y", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "f", item: { id: "posture-draining", subject: "engine" } },
+      {
+        kind: "notice",
+        key: "g",
+        at: "2026-10-26T08:00:00Z",
+        notice: notice("g", { task: "t-3", subject_key: "FAIR-3" }),
+      },
+      {
+        kind: "answered",
+        key: "h",
+        at: "2026-10-26T08:00:00Z",
+        answered: { ask: { id: "t-4", key: "FAIR-4" } },
+      },
+    ] as unknown as InboxRow[];
+    expect(rows.map(inboxSelection)).toEqual([
+      { kind: "task", id: "FAIR-10", noun: "decision" },
+      { kind: "task", id: "t9", noun: "decision" },
+      { kind: "run", id: "turn-1", noun: "decision" },
+      { kind: "seat", id: "pm", noun: "agent" },
+      { kind: "seat", id: "qa", noun: "agent" },
+      null,
+      { kind: "task", id: "FAIR-3", noun: "update" },
+      { kind: "task", id: "FAIR-4", noun: "decision" },
+    ]);
+  });
+
+  test("no row opened is nothing selected: the Inbox is what a brief is of", () => {
+    expect(inboxSelection(null)).toBeNull();
+  });
+});
+
+describe("what was answered", () => {
+  const ask = {
+    id: "t-20",
+    key: "LEAD-20",
+    project: "LEAD",
+    title: "Q4 release plan",
+    type: "task",
+    status: "todo",
+    comment: "c-20",
+    asked_by: "cto",
+    asked_at: "2026-09-30T10:00:00Z",
+    body: "",
+    decision: {
+      question: "Hold?",
+      options: [
+        { id: "hold", label: "Hold release" },
+        { id: "ship", label: "Ship anyway" },
+      ],
+      recommended: "hold",
+      role: "approver" as const,
+    },
+    open: false,
+  };
+  const answered = (extra: Partial<AnsweredWorkAsk> = {}): AnsweredWorkAsk => ({
+    at: "2026-09-30T11:00:00Z",
+    ask: ask as AnsweredWorkAsk["ask"],
+    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    ...extra,
+  });
+  const index = indexOrg(
+    withDerived({
+      name: "Nimbus",
+      roles: [
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+        { name: "Maya Ops", handle: "maya", kind: "human" },
+        { name: "CTO", handle: "cto", kind: "agent" },
+      ],
+      units: [],
+    }) as never,
+  );
+
+  test("an answer says who gave it: you, or the colleague who answered for you", () => {
+    expect(answerWords(answered(), "jane", index)).toEqual({
+      who: "You",
+      verb: "chose",
+      said: "Hold release",
+      note: "",
+      kind: "choice",
+      recommended: true,
+    });
+    const maya = answered({
+      answer: { by: "maya", by_kind: "human", at: "2026-09-30T11:00:00Z", body: "Not yet." },
+    });
+    expect(answerWords(maya, "jane", index)).toMatchObject({
+      who: "Maya Ops",
+      verb: "replied",
+      said: "Not yet.",
+      kind: "reply",
+    });
+    const resolved = answered({
+      answer: { by: "cto", at: "2026-09-30T11:00:00Z", body: "", resolved: true },
+    });
+    expect(answerWords(resolved, "jane", index).kind).toBe("resolved");
+  });
+
+  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
+  // person's words where they wrote any beside the option, and the option's
+  // label only where they did not. Read as the label alone, the words were
+  // dropped from the row and the pane.
+  //
+  // Mutation: drop `note`, or fill it with the label, and this fails.
+  test("a choice keeps the words written beside it", () => {
+    const withWords = answered({
+      answer: {
+        by: "jane",
+        at: "2026-09-30T11:00:00Z",
+        choice: "hold",
+        body: "Tell support before Thursday.",
+      },
+    });
+    expect(answerWords(withWords, "jane", index)).toMatchObject({
+      verb: "chose",
+      said: "Hold release",
+      note: "Tell support before Thursday.",
+      kind: "choice",
+    });
+  });
+
+  test("how far the asker has got: acted from the tracker, the rest from its seat now", () => {
+    const seat = (extra: Record<string, unknown>) =>
+      ({ handle: "cto", activity: "idle", ...extra }) as unknown as AgentRow;
+    expect(
+      followThrough(
+        answered({ followed_up: { at: "2026-09-30T11:30:00Z", kind: "status" } }),
+        seat({ paused: { at: "x" } }),
+      ),
+    ).toEqual({ state: "acted", at: "2026-09-30T11:30:00Z" });
+    expect(
+      followThrough(
+        answered(),
+        seat({
+          activity: "working",
+          turn: { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+        }),
+      ),
+    ).toEqual({ state: "acting", at: "2026-09-30T11:05:00Z" });
+    // ON ANOTHER TASK IS NOT ON THIS ONE.
+    expect(
+      followThrough(
+        answered(),
+        seat({ activity: "working", turn: { work_item: { id: "t-9", key: "LEAD-9" } } }),
+      ),
+    ).toEqual({ state: "waiting" });
+    expect(followThrough(answered(), seat({ paused: { at: "x" } }))).toEqual({
+      state: "held",
+      reason: "paused",
+    });
+    expect(followThrough(answered(), seat({ activity: "stopped" }))).toEqual({
+      state: "held",
+      reason: "stopped",
+    });
+    // A PERSON WHO ASKED has no seat state to read.
+    expect(followThrough(answered(), undefined)).toBeNull();
+  });
+
+  // A CODING RUN'S QUESTION, ANSWERED, IS ONE OF THE SAME ROWS: who asked is
+  // the run's seat, its task the one the run was on, and the answer reads as
+  // an ask's does. Mutation: read `ask` off a run's item, and every case
+  // here throws.
+  const ranAsk = (extra: Partial<AnsweredRun["run"]> = {}): AnsweredRun => ({
+    at: "2026-09-30T11:00:00Z",
+    run: {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      question: "Which branch should the fix target?",
+      question_context: "The release branch is frozen.",
+      decision: {
+        question: "Which branch should the fix target?",
+        options: [
+          { id: "main", label: "Target main" },
+          { id: "release", label: "Target the release branch" },
+        ],
+        recommended: "main",
+        role: "approver",
+      },
+      asked_at: "2026-09-30T10:55:00Z",
+      work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+      ...extra,
+    },
+    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "main", body: "Target main" },
+  });
+
+  test("a coding run's answered question is a row of its own, as an ask's is", () => {
+    const [row] = answeredRows({ handle: "jane", items: [ranAsk()] });
+    // KEYED BY ITS TURN AND THE LAUNCH THAT ASKED: a turn's run asks again.
+    expect(row!.key).toBe("run:turn-7:q1");
+    expect(rowWho(row!, index)?.name).toBe("CTO");
+    expect(rowKey(row!)).toBe("LEAD-12");
+    // A TURN'S TASK IS ADDRESSED BY ITS ID.
+    expect(itemAddress(rowItem(row!)!)).toBe("t-12");
+    expect(inboxSelection(row!)).toEqual({ kind: "run", id: "turn-7", noun: "decision" });
+    expect(answeredQuestion(ranAsk())).toBe("Which branch should the fix target?");
+    expect(answerWords(ranAsk(), "jane", index)).toEqual({
+      who: "You",
+      verb: "chose",
+      said: "Target main",
+      note: "",
+      kind: "choice",
+      recommended: true,
+    });
+    const inWords = { ...ranAsk(), answer: { by: "jane", at: "x", body: "Neither, hold it." } };
+    expect(answerWords(inWords, "jane", index)).toMatchObject({
+      verb: "replied",
+      said: "Neither, hold it.",
+      kind: "reply",
+    });
+  });
+
+  // ONE QUESTION, ONE ROW. A run's open row is keyed by its turn alone and its
+  // answered row by the launch as well, so the two are paired by the question
+  // they share, never by key. Mutation: pair by key, and the run is listed in
+  // both groups.
+  test("a question is in Needs you or under Answered, never both", () => {
+    const parked = (launch: string): InboxRow => ({
+      kind: "decision",
+      key: "run:turn-7",
+      at: "2026-09-30T10:55:00Z",
+      subject: {
+        kind: "run",
+        at: "2026-09-30T10:55:00Z",
+        run: { turn_id: "turn-7", launch_id: launch } as unknown as SandboxRun,
+      },
+      notices: [],
+    });
+    const answeredRow = answeredRows({ handle: "jane", items: [ranAsk()] });
+    const none = new Map();
+    // ANSWERED ELSEWHERE: the open row the slower read still lists leaves.
+    expect(pairAnswered([parked("q1")], answeredRow, none)).toEqual({
+      needs: [],
+      answered: answeredRow,
+    });
+    // ANSWERED HERE AND SETTLED: the row moves to the head of Answered as the
+    // row that was answered, until the engine lists the question as answered;
+    // then the engine's row stands in its place, the one row for it.
+    const moved = new Map([["run:turn-7", { row: parked("q1"), moved: true as const, order: 1 }]]);
+    expect(pairAnswered([parked("q1")], [], moved)).toEqual({
+      needs: [],
+      answered: [parked("q1")],
+    });
+    expect(pairAnswered([parked("q1")], answeredRow, moved)).toEqual({
+      needs: [],
+      answered: answeredRow,
+    });
+    // HELD HERE (accepted, not settled): it stays in Needs you, and Answered
+    // does not list it.
+    const held = new Map([["run:turn-7", { row: parked("q1") }]]);
+    expect(pairAnswered([parked("q1")], answeredRow, held)).toEqual({
+      needs: [parked("q1")],
+      answered: [],
+    });
+    // THE RUN ASKED AGAIN: its new question still waits.
+    expect(pairAnswered([parked("q2")], answeredRow, none)).toEqual({
+      needs: [parked("q2")],
+      answered: answeredRow,
+    });
+  });
+
+  // NEWEST FIRST BY WHEN EACH ROW MOVED, never by when it was first answered:
+  // a run's answer is held as sent before it settles, so its entry is made
+  // before a row answered and moved in the meantime. Mutation: order by the
+  // entries' insertion, and the run lands under the ask that moved before it.
+  test("Answered's head is in the order the rows moved, newest first", () => {
+    const run: InboxRow = {
+      kind: "decision",
+      key: "run:turn-7",
+      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as SandboxRun },
+      notices: [],
+    };
+    const ask: InboxRow = { kind: "decision", key: "ask:c-12", subject: ASK, notices: [] };
+    const settled = new Map([
+      ["run:turn-7", { row: run, moved: true as const, order: 2 }],
+      ["ask:c-12", { row: ask, moved: true as const, order: 1 }],
+    ]);
+    expect(pairAnswered([], [], settled).answered).toEqual([run, ask]);
+  });
 });

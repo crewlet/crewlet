@@ -1,27 +1,34 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE RUNNING ESTATE IS THE DECLARED ESTATE: its streams, its keys and its
@@ -43,9 +50,9 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	s := e.core.Load().log
 
 	declared := map[string][3]string{
-		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
+		worklet.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
-		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
+		doclet.Domain{}.Name():  {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
 		code.Domain{}.Name():    {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
 		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
@@ -54,6 +61,10 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.ArtifactsLogWildcard},
 		artifactdata.Domain{}.Name(): {topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,
 			topics.ArtifactDataLogWildcard},
+		assistantdomain.Domain{}.Name(): {topics.AssistantLogStream, topics.AssistantLogPrefix,
+			topics.AssistantLogWildcard},
+		chatlet.Domain{}.Name(): {topics.ChatLogStream, topics.ChatLogPrefix,
+			topics.ChatLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {
@@ -149,8 +160,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		if claim == nil {
 			t.Fatalf("the %s duty has no claim on a node running workers in a fleet", duty)
 		}
-		if mine, err := claim(t.Context()); err != nil || !mine {
-			t.Fatalf("the lone node claimed the %s duty = (%v, %v), want it held", duty, mine, err)
+		if err := claimHeld(t.Context(), claim, e.backends.Coord, resource, e.node.Owner()); err != nil {
+			t.Fatalf("the lone node claimed the %s duty: %v, want it held", duty, err)
 		}
 		lease, err := e.backends.Coord.Get(t.Context(), resource)
 		if err != nil || lease == nil || lease.Owner != e.node.Owner() {
@@ -182,7 +193,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
@@ -192,7 +203,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	}
 	var found bool
 	for _, f := range floors {
-		if f.Domain == (tracker.Domain{}).Name() {
+		if f.Domain == (worklet.Domain{}).Name() {
 			found = true
 			floorFields := []string{"at", "blocked_by", "blocked_since", "by", "domain",
 				"floor", "generation", "terms", "trim_to"}
@@ -205,7 +216,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("the tick published no floor under the key %q: %+v", tracker.Domain{}.Name(), floors)
+		t.Errorf("the tick published no floor under the key %q: %+v", worklet.Domain{}.Name(), floors)
 	}
 }
 
@@ -242,4 +253,45 @@ func lastSeq(t *testing.T, js natsjs.JetStream, stream string) uint64 {
 func runsLogs(s *stateLog, running ...*runningLog) *stateLog {
 	s.logs = newLogSet(running)
 	return s
+}
+
+// claimHeld claims a duty as a running node's own scheduler would and reports
+// why it is not held, nil once it is. Shared with dutyclaim_internal_test.go,
+// which pins it.
+//
+// THE RUNNING NODE CLAIMS THE SAME LEASE, under the same owner, on its own
+// duty loop, and a claim is three steps: win the record, mint the fencing
+// epoch, commit. A claim answered while the loop's own is between them is
+// [coord.ErrClaimInFlight], neither a grant nor a refusal; this waits for
+// that sibling to commit (the lease held by owner at an epoch) and claims
+// again, which renews it. Only that answer is waited on: any other error,
+// [coord.ErrUnavailable] from a store that cannot answer included, and a
+// refusal, are returned as they are.
+func claimHeld(ctx context.Context, claim schedule.DutyFunc, backend coord.Backend,
+	resource, owner string) error {
+
+	mine, err := claim(ctx)
+	if errors.Is(err, coord.ErrClaimInFlight) {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			lease, getErr := backend.Get(ctx, resource)
+			if getErr == nil && lease != nil && lease.Owner == owner && lease.Epoch > 0 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("the sibling claim of %s never committed: %w", resource, ctx.Err())
+			case <-tick.C:
+			}
+		}
+		mine, err = claim(ctx)
+	}
+	switch {
+	case err != nil:
+		return err
+	case !mine:
+		return fmt.Errorf("the claim of %s was refused", resource)
+	}
+	return nil
 }

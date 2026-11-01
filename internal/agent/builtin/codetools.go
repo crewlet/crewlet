@@ -19,7 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE CODE READ TOOLS: the company's own repositories (`code.native`), read on
@@ -37,7 +38,7 @@ import (
 //
 // The gate admits every principal (`authz.ClassEverybody`): who may read a
 // repository is a GRANT the serving node derives from its own chart for the
-// repository a call names (ADR-0058), which the gate cannot ask before the
+// repository a call names (ADR-0081), which the gate cannot ask before the
 // repository is read. So each tool names its caller — [CodeAskerOf], the one
 // conversion the REST reads use too — and the data node or the git node that
 // answers holds the read to that caller's grant: a listing leaves out what the
@@ -62,7 +63,7 @@ import (
 // never here against the repository the turn resolved once: the asker's
 // grant is judged afresh at every read, and a ceiling judged on the turn's
 // memo would keep reading for a colleague a later activation shut out. A
-// person passes — every person maintains every repository (ADR-0055) — and a
+// person passes — every person maintains every repository (ADR-0078) — and a
 // call outside any turn, a person's own assistant, reads for nobody but its
 // caller. The requester's authority is a ceiling and never a source: what is
 // read is the seat's own read, judged by its own grant.
@@ -197,10 +198,10 @@ type CodeDeps struct {
 	// the company's code and changes none of it. See codewrite.go.
 	Writer CodeWriter
 
-	// Tasks is the engine's own tracker as one task is read, which resolves
-	// the native work item a change write names by its key to the item's
-	// identity ([CodeDeps.workItemArg]): set where the company runs the
-	// native tracker. Nil resolves none, and a call naming a native item's
+	// Tasks is Worklet as one task is read, which resolves the Worklet item
+	// a change write names by its key to the item's identity
+	// ([CodeDeps.workItemArg]): set where the company runs Worklet. Nil
+	// resolves none, and a call naming a Worklet item's
 	// key is refused, naming the `<backend>:<id>` form every item takes —
 	// never filed under a key nobody resolved.
 	Tasks TaskReader
@@ -328,9 +329,9 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 // readings of one principal, free to judge the same person by two grants.
 func CodeAskerOf(a Actor) code.Principal {
 	switch a.Kind {
-	case tracker.AuthorAgent:
+	case worklet.AuthorAgent:
 		return code.Principal{Kind: code.PrincipalAgent, Seat: a.Handle}
-	case tracker.AuthorHuman:
+	case worklet.AuthorHuman:
 		return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.OperatorID, Seat: a.Handle}
 	}
 	// AN OPERATOR CREDENTIAL, AND THE ENGINE: a credential acting as itself,
@@ -412,7 +413,7 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 // (healthtools.go), whose hot list and one-repository form read repositories
 // through the code tools' resolution — the requester is decided on the verb
 // those reads are, the code host's ([authz.ActionCodeRead]), and NO FURTHER.
-// The requester ceiling holds a repository read (ADR-0058), so every
+// The requester ceiling holds a repository read (ADR-0081), so every
 // repository such a call reads is read for its requester as a code tool's is;
 // what the tool reads beyond the repositories is its own row's, which the
 // call's gate has already decided for the seat, and deciding that row again
@@ -1086,6 +1087,55 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read repository %q: %s. This is NOT an "+
 		"answer about the repository: say you could not read it.", tool, repo, faultSaid))
+}
+
+// codeClass is the class of a refusal the code host decided, by the one rule
+// every native domain's refusals are classed by (internal/mcp's
+// [tools.Refusal]) — the table the person's write surface classes a
+// tool-less code write by ([WriterClass]) and the classes [codeFailure] tells
+// a seat each one in:
+//
+//   - the repository, ref, change, check or object the call is about not
+//     being there is NOT_FOUND;
+//   - the repository refusing the gesture by what it is now — being purged,
+//     within its deleted retention, not deleted, managed by its
+//     configuration — is a CONFLICT: the request is not wrong, and it lands
+//     once somebody changes the repository;
+//   - a snapshot the history moved under is STALE_VERSION: read it again;
+//   - a grant that does not cover the call, or a seat the call is made for
+//     reading nothing of the repository, is FORBIDDEN;
+//   - an argument the domain refuses by field, a cursor or a freshness it
+//     never issued, a read too large to answer whole and a decision past a
+//     record's budget are INVALID: another request lands, the same never;
+//   - and a node that cannot answer now — not serving, its git half unready,
+//     the read's answer due — is UNAVAILABLE, which waiting clears.
+//
+// The rest are no caller's refusal: a configuration apply's own wiring
+// (ErrNoActivation, ErrSuperseded, ErrNotConfigManaged), a proposal or a
+// published layer the domain's own machinery built wrong, a stored object
+// that is not what its row says, and a record a newer build wrote.
+func codeClass(err error) (tools.Refusal, bool) {
+	var unready *code.ErrGitUnready
+	switch {
+	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrRefNotFound),
+		errors.Is(err, code.ErrChangeNotFound), errors.Is(err, code.ErrCheckNotFound),
+		errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree),
+		errors.Is(err, code.ErrNotABlob):
+		return tools.RefusalNotFound, true
+	case errors.Is(err, code.ErrPurging), errors.Is(err, code.ErrNotYet), errors.Is(err, code.ErrNotDeleted),
+		errors.Is(err, code.ErrConfigManaged):
+		return tools.RefusalConflict, true
+	case errors.Is(err, code.ErrSnapshotMoved):
+		return tools.RefusalStaleVersion, true
+	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrAboveCeiling):
+		return tools.RefusalForbidden, true
+	case errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrBadCursor), errors.Is(err, code.ErrBadLevel),
+		errors.Is(err, code.ErrSliceTooLarge), errors.Is(err, code.ErrRecordCap):
+		return tools.RefusalInvalid, true
+	case errors.Is(err, code.ErrNotServing), errors.Is(err, code.ErrAnswerDue), errors.As(err, &unready):
+		return tools.RefusalUnavailable, true
+	}
+	return "", false
 }
 
 // domainWords is a code refusal's own sentence: the words its domain wrote for
@@ -1775,7 +1825,7 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if b := page.Blob; b != nil {
 		// A FILE'S LINES ARE SOMEBODY'S WORDS that nobody this read can name
 		// vouches for: fenced, at the least trust.
-		read.fence(fieldPath{}.key("blob").key("text"), provenance.SourceRepoFile, nil, false, b.Text)
+		read.fenceRepository(fieldPath{}.key("blob").key("text"), provenance.SourceRepoFile, b.Text)
 		narrow = blobNarrowing(b)
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}), narrow)
@@ -1876,7 +1926,7 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	base, head := revs[0], revs[1]
 	renames := true
-	if v, set := args["renames"].(bool); set {
+	if v, set := argval.Bool(args["renames"]); set {
 		renames = v
 	}
 	diff := &code.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
@@ -1892,7 +1942,7 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if d := page.Diff; d != nil && d.Patch != "" {
 		// A PATCH IS SOMEBODY'S WORDS, both sides of it, that nobody this
 		// read can name vouches for: fenced, at the least trust.
-		read.fence(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, nil, false, d.Patch)
+		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, d.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read "+
 			"the file's lines at either commit with %s and a line range instead.", CodeReadTool)
 	}
@@ -1903,24 +1953,30 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // argPaths reads a list of paths EXACTLY as written — never trimmed and never
 // split on a comma, which a path may hold — tolerating the single string a
 // model sends where a list belongs; false for a value that is neither.
+//
+// BY THE CHECK'S OWN READERS rather than [argval.Strings], which would trim
+// each path and split a lone string on its commas: a list is read by
+// [argval.List] and each element by [argval.String], one it reads as no text
+// (a list, an object, a null) refusing the whole list rather than dropping a
+// path, and anything else is the lone path [argval.String] reads.
 func argPaths(args map[string]any, key string) ([]string, bool) {
-	switch v := args[key].(type) {
-	case nil:
+	raw := args[key]
+	if raw == nil {
 		return nil, true
-	case string:
-		return []string{v}, true
-	case []string:
-		return v, true
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
+	}
+	if list, ok := argval.List(raw); ok {
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			s, ok := argval.String(item)
+			if !ok || item == nil {
 				return nil, false
 			}
 			out = append(out, s)
 		}
 		return out, true
+	}
+	if s, ok := argval.String(raw); ok {
+		return []string{s}, true
 	}
 	return nil, false
 }
@@ -2185,8 +2241,8 @@ func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// EACH SUBJECT IS ITS PUSHER'S WORDS, which nobody this read can
 		// name vouches for: fenced, at the least trust.
 		for i, commit := range l.Commits {
-			read.fence(fieldPath{}.key("log").key("commits").index(i).key("subject"), provenance.SourceRepoCommit,
-				nil, false, commit.Subject)
+			read.fenceRepository(fieldPath{}.key("log").key("commits").index(i).key("subject"),
+				provenance.SourceRepoCommit, commit.Subject)
 		}
 	}
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}),
@@ -2283,10 +2339,10 @@ func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// trust.
 		blame := fieldPath{}.key("blame")
 		for i, line := range b.Lines {
-			read.fence(blame.key("lines").index(i).key("text"), provenance.SourceRepoFile, nil, false, line.Text)
+			read.fenceRepository(blame.key("lines").index(i).key("text"), provenance.SourceRepoFile, line.Text)
 		}
 		for id, commit := range b.Commits {
-			read.fence(blame.key("commits").key(id).key("subject"), provenance.SourceRepoCommit, nil, false,
+			read.fenceRepository(blame.key("commits").key(id).key("subject"), provenance.SourceRepoCommit,
 				commit.Subject)
 		}
 	}

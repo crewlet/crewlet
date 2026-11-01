@@ -17,8 +17,8 @@
  * ACCESS, NOT A CREDENTIAL. This used to say "needs an operator credential"
  * and offer to set a token, which was the whole of authority while a Tier A
  * token was the only credential. A person signs in now, and what a signed-in
- * reader lacks is ACCESS — Admin, or an app's (`lib/access.ts`): "Work needs
- * Tracker access. An admin can give it to you." Giving it is somebody else's
+ * reader lacks is ACCESS, Admin or an app's (`lib/access.ts`): "Search needs
+ * Doclet access. An admin can give it to you." Giving it is somebody else's
  * change, an admin's, and the sentence names the access by the word People &
  * access uses for it, so the person can ask for it by name.
  *
@@ -30,9 +30,9 @@
  *
  * THE COMMON NEXT STEP COMES FIRST. Most readers refused a section should go
  * back to their work, so the primary action is Go to Home and Switch account
- * is the secondary one. The title names only the access ("You need Knowledge
- * access"): the page's own name is already in the header, and "Knowledge
- * needs Knowledge access" said it twice. A panel (`compact`) draws the line
+ * is the secondary one. The title names only the access ("You need Doclet
+ * access"): the page's own name is already in the header, and "Doclet needs
+ * Doclet access" said it twice. A panel (`compact`) draws the line
  * alone, with no button, so a small card stays small.
  *
  * A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT REFUSED. `loading` covers a

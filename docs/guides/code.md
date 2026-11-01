@@ -38,7 +38,7 @@ dashboard). Then:
   yet**, the activation that sets `code.native` starts the code host — no
   restart.
 - **On a node whose native runtime is already running** (a company that has run
-  the engine's own tracker or knowledge base on it), turning `code.native` on —
+  Worklet or Doclet on it), turning `code.native` on —
   or off — takes effect at **that node's restart**, and the node says so in its
   log as `native_backend_needs_restart`. Turned on, such a node answers git and
   `/code/` with a `503` naming `native_backend_needs_restart` until it
@@ -491,12 +491,13 @@ secret the company does not allow is `defs_invalid`, and is not queued again.
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through the twenty-nine [code
+repositories through the thirty [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
 names. A seat holds no git credential and needs none. Every seat reads with
 eleven of the tools; a seat whose `role.code.access` is `full_access` also
-changes the repositories with the other eighteen; and a seat whose role has a
-sandbox works in a clone besides. What each may do is its grant, derived from
+changes the repositories with the other nineteen; and a seat's coding run
+checks a repository out into its box with `code_checkout` and works in that
+clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
 ### What your seats read
@@ -703,19 +704,19 @@ landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
 
 ### Working in a clone
 
-A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
-clone, and there it is a git user of the code host as you are, with a
-credential of its run's own rather than yours or any token's. It names the
-repositories in `run_sandbox`'s `repos`, and the engine clones each into the
-coding box before the coding agent starts
+A seat's executor runs in a [box](../concepts/code-sandbox.md), and there it
+also works in a clone: it is a git user of the code host as you are, with a
+credential of its run's own rather than yours or any token's. The engine
+clones each repository the run is given into the coding box before the coding
+agent starts
 ([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)):
 
 - **on the seat's own branch** for the work item its turn is charged to,
-  `seats/<handle>/<the item's key>`, unless the call names another — so every
+  `seats/<handle>/<the item's key>`, unless the run names another — so every
   run on one item continues what the last one pushed. A work item whose key
   changes starts a new branch;
 - **from that branch's head**, or the default branch's where the branch does
-  not exist yet, unless the call names a `base`;
+  not exist yet, unless the run names a `base`;
 - **to push, where the seat may**, else to read: a seat that may not push a
   repository is still given it to look at. The run's credential pushes only
   what the run was given and its seat may push, and ends with the run.
@@ -827,7 +828,7 @@ step that would meet it:
 
 | The import says | What to do |
 |---|---|
-| `blob <id> (<path>) is 812.0 MiB, past code.limits.max_blob_bytes (50.0 MiB)` | Large binaries belong in tracker files. Rewrite the history without them (`git filter-repo --strip-blobs-bigger-than 50M` on a copy) and import that, or raise `code.limits.max_blob_bytes`. |
+| `blob <id> (<path>) is 812.0 MiB, past code.limits.max_blob_bytes (50.0 MiB)` | Large binaries belong in Worklet's project files. Rewrite the history without them (`git filter-repo --strip-blobs-bigger-than 50M` on a copy) and import that, or raise `code.limits.max_blob_bytes`. |
 | `the source's history packs to … as one pack, past code.limits.repo_max_bytes` | Raise `code.limits.repo_max_bytes` — with room for the steps, below — or import a smaller history. |
 | `web would hold … of packs once the next step lands … past code.limits.repo_max_bytes` | The steps store more than the source's own pack (below). Raise `code.limits.repo_max_bytes` and run the same command again: it resumes. |
 | `commit … alone packs to …: it brings in the history of …, and no other branch of the source can carry it` | A merge of a history larger than one step that no other branch reaches. Mirror the source (`git clone --mirror`), give the commit it names a branch there (`git branch`), and import from the mirror: that history is stepped on the branch first. Delete the branch afterwards if you do not want it. |
@@ -876,7 +877,7 @@ Every step, flag and message is in
 owner, default branch and its head, refs, packs, size and last push — and
 `-repo web` shows one in detail with its newest pushes: who made each and what
 became of every ref, `ng` with git's reason where a push was refused. Run it
-beside a node's Tier A file, or anywhere with `-url` and the token exported in
+beside a node's Tier A file, or anywhere with `-api` and the token exported in
 `CREWLET_API_TOKEN`, which needs no Tier A file at all; it reads with the same
 token git uses, as the principal that token acts as:
 
@@ -891,7 +892,7 @@ refs, and git's own connectivity check. The rows and the object store are the
 record and the cache is derived from them, so a damaged copy is one node's —
 but it is what that node serves, so run it:
 
-- **on a schedule on each git node** (`-url` names the node): it exits non-zero
+- **on a schedule on each git node** (`-api` names the node): it exits non-zero
   when any copy is not clean, which is the hook for your cron. A repository the
   node holds no copy of is passed over;
 - **when git prints an error about a repository on one node and not on the
@@ -903,8 +904,8 @@ but it is what that node serves, so run it:
   packs it found whole kept and the rest downloaded again.
 
 ```sh
-crewlet code verify -url https://git-1.internal.example.com:8080
-crewlet code verify -url https://git-1.internal.example.com:8080 -repo web -repair
+crewlet code verify -api https://git-1.internal.example.com:8080
+crewlet code verify -api https://git-1.internal.example.com:8080 -repo web -repair
 ```
 
 A verify is one of the deployment's own controls, as a backup is, so the token

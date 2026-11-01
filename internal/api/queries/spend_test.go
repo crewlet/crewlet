@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"maps"
 	"slices"
@@ -9,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -26,6 +30,7 @@ const spendCompany = `
 name: Acme
 timezone: Asia/Tokyo
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -84,7 +89,7 @@ func (f *spendFixture) agentID(handle string) string {
 }
 
 // day publishes one node's seat-day through the shipped applier — the rows a
-// node's usage publisher would have replicated to every node.
+// data node's usage publisher would have replicated to every data node.
 func (f *spendFixture) day(node, day, handle string, turns, failed int64, cells ...usage.Tokens) {
 	f.t.Helper()
 	f.seq++
@@ -137,10 +142,10 @@ func seriesOf(t *testing.T, r *queries.Registry, params map[string]any) tokens.S
 	return got
 }
 
-// ONE NODE ANSWERS FOR EVERY NODE. The rows node A's publisher replicated are
-// in the estate node B reads, so B's answer carries A's spend — which is the
-// whole point of the domain. Read from B's own event log, this answer
-// described B alone, under the company's name.
+// ONE NODE ANSWERS FOR EVERY DATA NODE. The rows node A's publisher
+// replicated are in the estate node B reads, so B's answer carries A's spend —
+// which is the whole point of the domain. Read from B's own event log, this
+// answer described B alone, under the company's name.
 func TestANamedWindowAnswersEveryNodesSpend(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
@@ -214,8 +219,8 @@ func TestThePreviousWindowIsServedAtSevenThirtyAndNinetyDays(t *testing.T) {
 }
 
 // A WINDOW THAT STARTS BEFORE THE HORIZON IS REFUSED rather than floored: the
-// rows are gone on every node, and an answer floored to what remains would put
-// a heading over fewer days than it names.
+// rows are gone on every data node, and an answer floored to what remains
+// would put a heading over fewer days than it names.
 func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
@@ -223,7 +228,7 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	_, err := r.Answer(everyGrant(t), "token_series", map[string]any{"since": "2026-03-01", "until": "2026-03-10"})
 	if !errors.Is(err, tokens.ErrOutOfRange) || errors.Is(err, tokens.ErrWindowLength) ||
 		!strings.Contains(queries.RefusalDetail(err), "starts 2026-03-01") ||
-		!strings.Contains(queries.RefusalDetail(err), "move since") {
+		!strings.Contains(queries.RefusalDetail(err), "Move since") {
 		t.Errorf("err = %v, want the horizon refusal naming since", err)
 	}
 	// And a custom window's previous half past the floor names days.
@@ -250,8 +255,8 @@ func TestALongWindowInsideTheHistoryIsRefusedForItsLength(t *testing.T) {
 	if errors.Is(err, tokens.ErrOutOfRange) {
 		t.Errorf("err = %v is also the horizon's class, and the window is inside it", err)
 	}
-	const want = "2026-04-26 to 2026-09-24 is 152 days, and a spend window is at most 90 — " +
-		"bring since and until closer together"
+	const want = "2026-04-26 to 2026-09-24 is 152 days, and a spend window is at most 90. " +
+		"Bring since and until closer together"
 	if got := queries.RefusalDetail(err); got != want {
 		t.Errorf("detail = %q, want %q", got, want)
 	}
@@ -535,5 +540,52 @@ func TestANamedWindowHoldsWhatPeopleCost(t *testing.T) {
 	hers := rollupOf(t, r, map[string]any{"days": 7, "seat": "maya"})
 	if hers.Totals.TotalTokens != 84 || len(hers.ByAgent) != 1 {
 		t.Fatalf("maya's own window = %+v, want her 84 alone", hers)
+	}
+}
+
+// THE PER-ENTRY HALF OF SPEND IS AN ADMIN'S. Spend is everybody's question, and
+// its breakdown by `providers.llm` entry names the company's configuration,
+// which only an admin reads (as Settings, Models is): a reader holding every
+// app is answered every figure but that breakdown, told it was withheld, and
+// refused a series banded by entry, while an admin is answered both.
+//
+// Mutation: answer the rollup whole, or band the series by entry, for anybody,
+// and the reader is told the entry's key.
+func TestTheSpendByEntryIsAnAdminsAlone(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	f.day("node-a", "2026-09-24", "lead", 1, 0, spent("execute", "sonnet", 5))
+	r := registryOver(t, f.sources())
+	reader := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.Apps,
+	})
+	for _, params := range []map[string]any{nil, {"days": 7}} {
+		got, err := r.Answer(reader, "tokens", params)
+		if err != nil {
+			t.Fatalf("tokens %v as a reader: %v", params, err)
+		}
+		rollup, _ := got.(tokens.Rollup)
+		if len(rollup.ByProvider) != 0 || !rollup.EntriesWithheld {
+			t.Errorf("tokens %v as a reader = %+v (withheld %v), want no entry, said so",
+				params, rollup.ByProvider, rollup.EntriesWithheld)
+		}
+		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "zulu") {
+			t.Errorf("tokens %v as a reader names the entry: %s", params, raw)
+		}
+	}
+	if whole := rollupOf(t, r, map[string]any{"days": 7}); len(whole.ByProvider) != 1 ||
+		whole.ByProvider[0].ProviderKey != "zulu" || whole.EntriesWithheld {
+		t.Errorf("tokens as an admin = %+v, want the entry", whole.ByProvider)
+	}
+
+	if _, err := r.Answer(reader, "token_series", map[string]any{"days": 7, "group": "provider"}); !errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("token_series by provider as a reader = %v, want an authority refusal", err)
+	}
+	if _, err := r.Answer(reader, "token_series", map[string]any{"days": 7, "group": "model"}); err != nil {
+		t.Errorf("token_series by model as a reader = %v, want it answered", err)
+	}
+	if got := seriesOf(t, r, map[string]any{"days": 7, "group": "provider"}); len(got.ByGroup) == 0 {
+		t.Error("token_series by provider as an admin answered no band")
 	}
 }

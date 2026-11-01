@@ -53,6 +53,8 @@ import {
   FilterChipGroup,
   Select,
   Skeleton,
+  peekClickHandler,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import {
   BrainGlyph,
@@ -62,16 +64,18 @@ import {
   SquareTerminalGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
-import { useAgents, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useEngineHealth, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -82,7 +86,7 @@ import { plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { AgentRow, EventSeries, SandboxRun } from "~/protocol/index.ts";
 
 /**
@@ -149,6 +153,7 @@ export function LiveNow() {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const pushed = useEvents();
+  const engine = useEngineHealth();
   const org = useOrg();
   const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -164,6 +169,33 @@ export function LiveNow() {
   const seatRow = agents.find((a) => a.handle === seat);
   const agentSeats = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index.seats]);
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+
+  // --- assistant page actions (WP12) ---
+  // THE CONTROLS' OWN VOCABULARY: a seat from the menu's agent seats, a phase
+  // from its picker, the one failures switch, and the window from this
+  // screen's offer.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("live.filter.apply", {
+      scope: "Live filters and activity window (view only)",
+      keys: {
+        window: windowKey(STRIP_OFFER, () => now),
+        seat: choiceKey(
+          "Seat",
+          agentSeats.map((s) => ({ value: s.handle, label: s.name })),
+          "filter",
+        ),
+        phase: choiceKey(
+          "Phase",
+          PHASES.map((p) => ({ value: p, label: p })),
+          "filter",
+        ),
+        failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
+      },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
 
   // --- running turns -----------------------------------------------------
   const running = useMemo(
@@ -251,7 +283,7 @@ export function LiveNow() {
           number twice side by side and pushed the shell's chip off a phone's
           page bar. */}
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Activity window" />
+        <TimeRangePicker {...rangePickerProps(range, "Activity window")} />
       </PageActions>
 
       <div className="live-now">
@@ -444,10 +476,16 @@ export function LiveNow() {
               <GrantRequired size="compact" grants={[ADMIN]} reader={viewer.login} />
             ) : (
               <>
-                {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
-                    own latest events, each of which a node can be missing from. */}
+                {/* EVERY READ THIS CARD MAKES OF THE FLEET: the count, and the
+                    latest events — a seat's own, read at query time, or the
+                    push, which this node seeded at boot from every node it
+                    could reach (`seeded_from`) — each of which a node can be
+                    missing from. */}
                 <CoverageNote
-                  coverage={[series.data?.coverage, seat ? seatEvents.data?.coverage : undefined]}
+                  coverage={[
+                    series.data?.coverage,
+                    seat ? seatEvents.data?.coverage : engine?.seeded_from,
+                  ]}
                   what="this activity"
                 />
                 <div className="live-strip">
@@ -556,11 +594,11 @@ function InBoxRow({
 }) {
   return (
     // A REAL LINK to the run's page, peeking on a plain click — the rule
-    // every row in the product follows, written once in `rowPeekHandler`.
+    // every row in the product follows, written once in `peekClickHandler`.
     <a
       className="list-row clickable"
       href={peekHref({ kind: "run", id: run.turn_id })}
-      onClick={rowPeekHandler(onOpen)}
+      onClick={peekClickHandler(onOpen)}
     >
       <RunStatus status={run.status} />
       <span className="col live-box-body">

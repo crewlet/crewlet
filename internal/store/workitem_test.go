@@ -29,7 +29,7 @@ func appendAsWritten(t *testing.T, log *store.EventLog, id, eventType string,
 	}
 }
 
-var nativeItem = map[string]string{
+var workletItem = map[string]string{
 	"backend": "native", "id": "task-7", "key": "ENG-7", "project": "ENG",
 }
 
@@ -42,7 +42,7 @@ var nativeItem = map[string]string{
 // identity across trackers, never its key: a move rewrites the key.
 func TestTheWorkItemIsPromotedFromTheNestedPayload(t *testing.T) {
 	t.Parallel()
-	raw, _ := json.Marshal(map[string]any{"turn_id": "run-1", "work_item": nativeItem})
+	raw, _ := json.Marshal(map[string]any{"turn_id": "run-1", "work_item": workletItem})
 	if got := store.ExtractTags(raw)["work_item"]; got != "native:task-7" {
 		t.Fatalf("work_item tag = %q, want the item's ref native:task-7", got)
 	}
@@ -70,7 +70,7 @@ func TestTheWorkItemIsPromotedFromTheNestedPayload(t *testing.T) {
 	log := open(t).Events()
 	at := time.Now().UTC().Add(-time.Minute)
 	appendAsWritten(t, log, "on", "agent_turn_started", at,
-		map[string]any{"turn_id": "run-1", "work_item": nativeItem})
+		map[string]any{"turn_id": "run-1", "work_item": workletItem})
 	appendAsWritten(t, log, "off", "agent_turn_started", at.Add(time.Second),
 		map[string]any{"turn_id": "run-2"})
 	got, err := log.List(t.Context(), store.ListQuery{WorkItem: "native:task-7"})
@@ -102,7 +102,7 @@ func TestTheTurnListNarrowsToOneItemWithTheWholeTurn(t *testing.T) {
 		"turn_id": "run-1", "phase": "execute", "input_tokens": 5,
 		"output_tokens": 1, "total_tokens": 6})
 	appendAsWritten(t, log, "c2", "turn_completed", at.Add(2*time.Minute), map[string]any{
-		"turn_id": "run-1", "duration_ms": 500, "work_item": nativeItem,
+		"turn_id": "run-1", "duration_ms": 500, "work_item": workletItem,
 		"work_item_basis": "sole_write"})
 	appendAsWritten(t, log, "x", "turn_completed", at.Add(3*time.Minute), map[string]any{
 		"turn_id": "run-other", "duration_ms": 1})

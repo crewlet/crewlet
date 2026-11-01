@@ -1,9 +1,12 @@
 package api
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // NamedRoute is one named read route — its method and pattern, and the
@@ -33,6 +36,29 @@ var NativeAbsent = nativeAbsent
 // Routes is every pattern the app mounted, in mount order, for the listener
 // cases to walk whole. See [routeTable].
 func (a *App) Routes() []string { return slices.Clone(a.routes) }
+
+// Policies is every guarded route's policy, keyed by its pattern. See
+// [routeTable].
+func (a *App) Policies() map[string]authz.Policy { return maps.Clone(a.policies) }
+
+// OverviewRoutes are the reads served from the stream service, by pattern.
+func (a *App) OverviewRoutes() []string {
+	var out []string
+	for _, route := range a.overviewRoutes() {
+		out = append(out, route.pattern)
+	}
+	return out
+}
+
+// NamedReadRoutes are the named read routes' patterns, each with the
+// question it answers.
+func NamedReadRoutes() map[string]string {
+	out := map[string]string{}
+	for _, route := range namedRoutes {
+		out[route.method+" "+route.pattern] = route.what
+	}
+	return out
+}
 
 // ThroughDrainGate is next behind this app's drain gate and nothing else, so a
 // case can hold a git request where the gate counts it, in a handler of its own

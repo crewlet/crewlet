@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -83,9 +85,12 @@ func (e *Engine) RecheckGitHub() {
 // only at the end of construction, after every fleet duty was already armed;
 // see [Engine.Registry] for what that window did.
 //
-// And a store opened with NO width, which is a node that booted with no active
-// revision. It holds no rows, and its first epoch is what tells it how wide
-// its vectors will be. A store that already has a width keeps it
+// And a store opened with NO width, which is a node that booted on no
+// revision: one whose store activated none, which holds no rows, or one
+// started with `-import-company`, which reads none and may hold the stored
+// revision's rows (see [OpenBackends] for why it learns the imported
+// file's). Its first epoch is what tells it how wide its vectors will be. A
+// store that already has a width keeps it
 // ([store.DB.LearnEmbeddingDim] only ever raises from 0), because the width
 // belongs to the rows in the file rather than to the current config, and
 // [Engine.buildEmbedder] has already refused any revision that would change
@@ -147,6 +152,12 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+	// A REVISION CAN DECLARE OR DROP A CELL, or point the e2b key at another
+	// variable: probe again rather than publish the last revision's answer.
+	e.kickRunnerProbe()
+	// AND EACH LOGIN, for the same reason: an entry may have started or
+	// stopped signing in with one.
+	e.kickHostLogins()
 }
 
 // stampActivation records on c the instant the fleet activated the revision it
@@ -193,11 +204,17 @@ func embeddingWidth(c *Company) int {
 
 // Apply publishes a new epoch, reporting what happened to this node.
 //
-// The build comes first and touches nothing: [NewCompany] validates, resolves
-// the org and constructs the providers without reaching the network. So a
-// revision that cannot be built is refused with the previous epoch still
-// current and still correct — there is no rollback path because there was no
-// mutation, which is the point of publishing rather than mutating.
+// The secret snapshot is re-read first, and it is the one thing an apply
+// changes before it can refuse: the store's newest values, which every live
+// ${VAR} lookup on the serving epoch reads too, so a refused revision leaves
+// the node resolving rotated credentials rather than broken ones. Then the
+// build, which touches nothing: [NewCompany] validates, resolves the org and
+// constructs the providers without reaching the network. So a revision that
+// cannot be built is refused with the previous epoch still current and still
+// correct — there is no rollback path because nothing it built was published,
+// which is the point of publishing rather than mutating. A caller that must
+// refuse a revision before even the snapshot moves validates it first, as the
+// reconciler does ([config.Company.ValidateRunnable]).
 //
 // The three outcomes belong to the control plane, not to this function's
 // convenience:
@@ -252,31 +269,39 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// only thing that can have is what its ${VAR} references resolve to.
 	// Rebuilding the epoch without re-reading the store would make that
 	// gesture a no-op and rotation impossible without a restart.
-	e.refreshSecrets(ctx)
+	//
+	// A FAILED READ BUILDS ON THE PREVIOUS SNAPSHOT, and never on none: an
+	// engine holding a store that has never read it would resolve every
+	// ${VAR} from the environment alone and record that epoch as applied.
+	// [New] does not return without a snapshot ([Engine.bootSecrets]), so
+	// this refuses only an engine built some other way, and refuses it
+	// before anything changed.
+	if !e.refreshSecrets(ctx) && e.holdsSecretStore() && e.env.Load() == nil {
+		err := errors.New("this node has never read its secret store, so the " +
+			"revision's ${VAR} references would resolve from the environment alone")
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the revision was refused before anything changed")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	applied = append(applied, "secrets")
-	next, err := NewCompanyWith(cfg, e.resolver())
+	// THE BUILD, which changes nothing: the company and the sandbox catalogue
+	// it configures. See [buildRevision], which is also what a write that
+	// must not land a revision this node cannot build asks ([Buildable]).
+	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.sandboxOtel, e.fakePlay)
+	applied = append(applied, built...)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision was refused before anything changed; "+
-				"this node still serves the previous epoch")
+			"detail", "the revision could not be built and was refused before "+
+				"anything changed; this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
-	applied = append(applied, "company")
-	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
-	// a part of, before anything below mutates this node — because a
-	// catalogue that cannot be built is a revision that cannot be served:
-	// its code-enabled seats would plan around boxes nobody can mint. It was
-	// built only where a coordinator already existed, so on every other
-	// node a broken block was published rather than refused. Nil is a
-	// company that reaches no sandbox cell, which is not a failure.
-	sandboxManager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
-	if err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision's providers.sandbox could not be built; "+
-				"this node still serves the previous epoch")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-	}
+	// THE SPENT PLANS STAY SPENT, with nothing carried: every entry is built
+	// on the node's registry of sign-ins, so one that calls as the same
+	// account finds the window its predecessor was sitting out, and one on a
+	// new credential starts clean ([cliagent.Plans]). What the sweep drops is
+	// a sign-in neither epoch names and that sits nothing out.
+	e.plans.Sweep(append(signIns(e.Company()), signIns(next)...), time.Now())
 	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
 	// tools, which are registered only where they exist, and before the
 	// inbound edge, whose parsers include their own. The state log and the
@@ -287,9 +312,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the native tracker and knowledge base could not be "+
-				"started for this node's first company; the previous epoch is "+
-				"still current")
+			"detail", "Worklet, Doclet and Chatlet could not be started for "+
+				"this node's first company; the previous epoch is still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {
@@ -297,8 +321,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
-	// native halves are: run_sandbox and an agent-mode executor are offered
-	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
+	// native halves are: every executor launches into it, so a seat's turn
+	// has nowhere to run until it exists. See [Engine.startSandbox], and the bug it fixes.
 	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -396,6 +420,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// unconditionally and the other does not.
 		e.reconcileSlack(ctx, next)
 		e.reconcileMattermost(ctx, next)
+		// AND THE ENGINE'S OWN CHAT'S INDICATOR, whose mode is founder
+		// policy edited live and whose surface a revision can switch
+		// on or off. See [Engine.applyChatStatus].
+		e.applyChatStatus(ctx, next)
 	} else if err := e.startInbound(ctx, next); err != nil {
 		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
 		// the reconcilers above to rebuild, and each of them returns
@@ -489,6 +517,81 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		e.node.Host().Resweep()
 	}
 	return configplane.StatusOK, applied, nil
+}
+
+// buildRevision builds what an apply builds from a revision BEFORE it changes
+// anything on this node: the company, over env, and the sandbox catalogue it
+// configures — nil when it reaches no sandbox cell, which is not a failure.
+//
+// THE CATALOGUE BESIDE THE COMPANY it is a part of, because one that cannot be
+// built is a revision that cannot be served: every seat's executor would
+// launch into boxes nobody can mint. It was built only where a coordinator already
+// existed, so on every other node a broken block was published rather than
+// refused.
+//
+// ONE LIST for [Engine.Apply] and [Engine.Buildable]: a stage added to an
+// apply's build and not to the check is a revision the check passes and every
+// apply refuses. The third return is the stages it got through as the apply's
+// trail names them: `company` once the company is built, so a catalogue
+// refused after it is reported past the company, as it always was.
+//
+// What it leaves behind is what an apply's build leaves: a coding CLI's
+// working directory is claimed in this process for the CLI an entry names
+// (the cli-agent backend's workspace registry), so a later revision driving
+// another CLI from the same directory is refused until a restart — as it is
+// after an apply that built and was refused.
+func buildRevision(cfg *config.Company, env *config.Resolver, plans *cliagent.Plans,
+	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
+
+	next, err := newCompany(cfg, env, plans)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	built := []string{"company"}
+	manager, err := buildSandbox(next.Config, env, otel, play)
+	if err != nil {
+		return nil, nil, built, err
+	}
+	// THE EPOCH'S OWN CATALOGUE, pinned on it — see [Company.catalogue].
+	next.catalogue = manager
+	return next, manager, built, nil
+}
+
+// signIns is the sign-in of every coding-CLI entry of an epoch, for
+// [cliagent.Plans.Sweep]: the sign-ins whose records an apply must keep.
+func signIns(c *Company) []cliagent.SignInID {
+	if c == nil || c.Models == nil {
+		return nil
+	}
+	var ids []cliagent.SignInID
+	for _, provider := range c.Models.All() {
+		if cli, ok := provider.(*cliagent.Provider); ok {
+			if id := cli.SignInID(); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// Buildable reports whether cfg builds on this node — the half of an apply
+// that changes nothing ([buildRevision]), over this node's own ${VAR} chain —
+// and discards what it built.
+//
+// It is for a write that must not land a revision this node cannot run.
+// `crewlet run`'s import of its Tier B file activates that file for the whole
+// fleet before any apply builds it — the engine never boots on a file — so
+// without this a company the node could not build was stored and activated
+// first, an override over a company the fleet was running included, and then
+// refused by every apply: the node served no company, and its next boot was
+// refused on the revision it had just written.
+//
+// The resolver is the snapshot this node read at boot ([Engine.bootSecrets]),
+// which an apply moments later re-reads: a value rotated in between is the
+// only difference, and it is the rotation gesture rather than a revision.
+func (e *Engine) Buildable(cfg *config.Company) error {
+	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, e.fakePlay)
+	return err
 }
 
 // seatsMoved reports whether two epochs differ in what placement reads of

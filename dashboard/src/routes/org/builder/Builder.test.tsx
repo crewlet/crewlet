@@ -15,7 +15,7 @@ import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
 import { seatPath } from "~/lib/seats.ts";
-import { FillRequest } from "~/app/fill.tsx";
+import { FillRequest, type FillShape } from "~/app/fill.tsx";
 import {
   company,
   Engine,
@@ -29,6 +29,12 @@ import {
 import { withDerived } from "~/test/org.ts";
 import { CHECK_BACKOFF_BASE_MS, CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
 import { settled } from "~/test/settle.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 
 /** Nobody signed in, as the `viewer` question answers it. */
 const NOBODY = { login: "", owner: "", grants: [] };
@@ -77,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
@@ -186,6 +193,27 @@ describe("the posture table", () => {
     engine.script = () => new Response("<html></html>", { status: 200 });
     mountBuilder({ engine });
     expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
+  });
+
+  // GET /config ANSWERS THE FLEET'S POINTER, so a coordination store between
+  // leaders refuses it with 503 `unavailable`, saying why in `reason`.
+  test("a fleet whose pointer cannot be read says why, with Retry", async () => {
+    const engine = new Engine(company());
+    engine.script = () =>
+      json(
+        {
+          error: "unavailable",
+          message: "The engine cannot serve this right now.",
+          reason: "the fleet's activation could not be read from the coordination store",
+        },
+        503,
+      );
+    mountBuilder({ engine });
+    expect(await screen.findByText("The engine could not serve the configuration")).toBeDefined();
+    expect(
+      screen.getByText("the fleet's activation could not be read from the coordination store"),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 
   test("an engine that never answers is unreachable", async () => {
@@ -539,9 +567,8 @@ describe("what an org push re-checks", () => {
   });
 });
 
-// NO PROVIDER, NO TURN. The dashboard writes none, so the builder says where one
-// comes from rather than leaving agents whose work waits with nothing to say
-// why.
+// NO PROVIDER, NO TURN. The builder writes none, so it says where one comes
+// from rather than leaving agents whose work waits with nothing to say why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
   const without = company();
   delete without.providers;
@@ -552,8 +579,12 @@ test("a company with no model provider is told so, and one with a provider is no
   const caution = (
     await screen.findByText(/No model provider is set, so agents can’t work\./)
   ).closest(".crewlet-callout") as HTMLElement;
-  // And it gives the steps that add one, the card's own: the declaration the
-  // engine walks from a company only the store holds.
+  // It sends the reader to Settings › Models to add one, signed in and tested.
+  expect(within(caution).getByRole("link", { name: "Settings, Models" }).getAttribute("href")).toBe(
+    "#/settings/models?flow=add",
+  );
+  // And it gives the steps that add one from a terminal, the card's own: the
+  // declaration the engine walks from a company only the store holds.
   fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
   expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
@@ -667,7 +698,7 @@ describe("the selection in the URL", () => {
 
     mountBuilder({
       engine: new Engine(company()),
-      viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
+      viewer: () => ({ ...EDITOR, grants: ["worklet", "doclet"], leads: [] }),
     });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
@@ -701,6 +732,49 @@ describe("the selection in the URL", () => {
     );
   });
 
+  // "COULD NOT REACH" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. Every one
+  // of these leaves the draft unchecked and saving allowed; the toolbar says
+  // which happened, and a drain or an engine that failed is not a network.
+  test.each([
+    [
+      "a gateway's page",
+      () => new Response("<html>502</html>", { status: 502 }),
+      "Could not reach the engine to check",
+    ],
+    ...([403, 413] as const).map((status): [string, () => Response, string] => [
+      `a proxy's ${status} in the engine's shape, without its mark`,
+      () =>
+        new Response(JSON.stringify({ error: "forbidden" }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      "Could not reach the engine to check",
+    ]),
+    [
+      "the engine's own 500",
+      () => json({ error: "internal", detail: "store: disk full" }, 500),
+      "The engine failed to check",
+    ],
+    [
+      "a draining node",
+      () => json({ error: "draining", detail: "shutting down" }, 503),
+      "Not checked: this node is draining",
+    ],
+    [
+      "a starting node",
+      () => json({ error: "starting", detail: "recovering" }, 503),
+      "Not checked: this node is starting",
+    ],
+  ])("a check met by %s is labelled as what happened", async (_, fail, label) => {
+    const engine = new Engine(company());
+    const { checkChange } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? fail() : null);
+    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await checkChange();
+    await screen.findByText(label);
+  });
+
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
   // not have; its reports, like any seat's, can still be edited.
@@ -712,7 +786,7 @@ describe("the selection in the URL", () => {
     engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
     await checkChange();
-    await screen.findByText("Could not reach the engine to check");
+    await screen.findByText("The engine failed to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
@@ -850,7 +924,7 @@ describe("somebody else signing in mid-edit", () => {
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    engine.script = () => (who === EDITOR ? null : json({}, 401));
+    engine.script = () => (who === EDITOR ? null : json({ error: "unauthorized" }, 401));
     who = NOBODY;
     reconnect(store);
     expect(
@@ -952,8 +1026,8 @@ describe("a step-up the person declined", () => {
  * does, and still stops saying it on the outline.
  */
 describe("the builder that fills the window", () => {
-  function asked(hash: string): boolean[] {
-    const calls: boolean[] = [];
+  function asked(hash: string): FillShape[] {
+    const calls: FillShape[] = [];
     mountBuilder({
       engine: new Engine(company()),
       hash,
@@ -1104,4 +1178,44 @@ test("a project link to a node that owns one leaves its project as it is", async
   expect(
     (within(editor).getByRole("combobox", { name: /Tracker project/ }) as HTMLInputElement).value,
   ).toBe("CORE");
+});
+
+describe("the draft, for the assistant", () => {
+  test("names the revision it was opened on, what it holds and each change, read only", async () => {
+    setFramePage({
+      screen: "company-org-edit",
+      title: "Org chart › Edit org",
+      path: ["company", "org", "edit"],
+      params: {},
+      query: { view: "visualization" },
+    });
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    expect(await screen.findByText("CEO")).toBeDefined();
+    const open = () => pageSnapshot()!.context;
+    const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+    await waitFor(() =>
+      expect(open().draft).toMatchObject({
+        kind: "client",
+        id: "company",
+        revision: "r1",
+        step: "visualization",
+      }),
+    );
+    expect(field("scope")?.value).toBe("The whole company");
+    expect(field("changes")).toMatchObject({ value: "", kind: "list" });
+    expect(Number(field("seats")?.value)).toBeGreaterThan(0);
+    // STRUCTURE IS CHANGED THROUGH THE BUILDER'S OWN DOOR, never draft.set.
+    expect(open().draft!.fields.some((f) => f.editable)).toBe(false);
+    expect(open().accepts).toContain("org.draft.apply_ops");
+    act(() => {
+      applyPageAction({
+        correlation_id: "c1",
+        action: "org.draft.apply_ops",
+        payload: { ops: [{ op: "rename", seat: "designer", name: "Product designer" }] },
+        source_revision: open().source_revision,
+      });
+    });
+    await waitFor(() => expect(field("changes")?.value).toMatch(/Product designer/));
+  });
 });

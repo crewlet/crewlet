@@ -72,8 +72,8 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 	if !strings.Contains(out, "k2") || !strings.Contains(out, "k1") {
 		t.Errorf("the output does not say what moved where: %q", out)
 	}
-	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the active document
-	// again under the node's active key. PUT /config, which this used to
+	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the fleet's
+	// document again under the node's active key. PUT /config, which this used to
 	// name, stores whatever document it is sent.
 	if !strings.Contains(out, "POST /config/reload") || strings.Contains(out, "PUT /config") {
 		t.Errorf("the output does not name the running fleet's re-seal: %q", out)
@@ -143,7 +143,7 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 }
 
 // plantPlaintextRevision stores the fixture company's settings as an UNSEALED
-// active revision, directly in the store dir holds.
+// revision this node boots on, directly in the store dir holds.
 //
 // No command writes one — every node holds a keyring and every write path
 // seals — so a plaintext revision is one something else wrote into the store,
@@ -161,9 +161,9 @@ func plantPlaintextRevision(t *testing.T, dir string) string {
 	return plantPlaintext(t, dir, document)
 }
 
-// plantPlaintext stores document UNSEALED as the active revision of the store
-// dir holds, and returns its id. See [plantPlaintextRevision] for why a test
-// has to plant one.
+// plantPlaintext stores document UNSEALED as the revision the store dir holds
+// boots on — an offline offer built on nothing — and returns its id. See
+// [plantPlaintextRevision] for why a test has to plant one.
 func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	t.Helper()
 	if secrets.Sealed(document) {
@@ -173,7 +173,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	// state log applies is opened beside it.
 	db := storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
 	defer func() { _ = db.Close() }()
-	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := db.Configs().Offer(t.Context(), store.Offer{}, store.Revision{
 		Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
 		Summary: "written without a seal", Payload: document,
 	})
@@ -187,7 +187,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 // refusal names the import that brings its document back sealed: nothing
 // vouches for who wrote a plaintext payload.
 //
-// AND THE IMPORT IT NAMES WORKS. The import opened the active revision to ask
+// AND THE IMPORT IT NAMES WORKS. The import opened the company it knows to ask
 // whether the file already matched it, and met the same refusal — naming
 // itself — so the remedy every reader gave was a loop. The document imported
 // here is byte for byte the planted one, so an import that compared against
@@ -222,6 +222,47 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 	}
 }
 
+// A CONFIG SEALED IN A FORM THIS BUILD DOES NOT READ IS NEVER REPLACED, by an
+// import or anything else, and no command calls it unsealed.
+//
+// A newer build's seal (a successor's `enc:v2:`) is wrapped as this build's
+// is, and every command took a seal it could not parse for none at all: show
+// and rekey named the import as the way back, and the import, which replaces
+// an unsealed revision reading nothing from it, replaced the newer build's
+// document with the file. It is somebody's sealed document, so each refuses it
+// for what it is, naming the build that sealed it, and nothing is stored.
+//
+// Mutation: answer a seal secrets cannot parse as ErrUnsealedWithKey, and the
+// import replaces it; check a rekey's seal by its key id alone, and the rekey
+// calls it unsealed.
+func TestAConfigSealedInAFormThisBuildDoesNotReadIsNeverReplaced(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newer := plantPlaintext(t, dir,
+		[]byte(`{"__encrypted__":"enc:v2:k2:QUJDREVGR0hJSktMTU5PUA=="}`))
+	keyed := bootstrapWithKeys(t, dir, "k1")
+
+	for _, args := range [][]string{
+		{"rekey"}, {"show"}, {"import", companyFile(t, dir, "company.yaml", nil)},
+	} {
+		_, _, err := configCmd(t, keyed, args...)
+		if !errors.Is(err, secrets.ErrUnknownEnvelope) ||
+			errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Errorf("%s over a newer build's seal = %v, want it refused as a seal "+
+				"this build does not read, never as an unsealed revision", args[0], err)
+			continue
+		}
+		for _, says := range []string{newer, "newer build", "run the build that sealed it"} {
+			if !strings.Contains(err.Error(), says) {
+				t.Errorf("%s: the refusal does not say %q: %v", args[0], says, err)
+			}
+		}
+	}
+	if got := bootRevisionID(t, keyed); got != newer {
+		t.Errorf("this node boots on %s, want the newer build's %s untouched", got, newer)
+	}
+}
+
 // WITHOUT A KEYRING EVERY CONFIG COMMAND SAYS HOW TO GET ONE, rather than
 // failing on a nil cipher somewhere further in — `import` included, which
 // used to store a plaintext revision on a node with no keyring and is now
@@ -249,9 +290,8 @@ func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
 	}
 }
 
-// activeKeyOf reads which key sealed the active revision, via `config
-// revisions` plus the export path — the only reader a test has that does not
-// reach into the store directly.
+// activeKeyOf reads which key sealed the company this node knows, through the
+// commands' own resolution of it ([revisionOrKnown]).
 func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 	t.Helper()
 	ctx := t.Context()
@@ -260,9 +300,9 @@ func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer closeStore()
-	rev, err := revisionOrActive(ctx, cs, "")
+	rev, err := revisionOrKnown(ctx, cs, "")
 	if err != nil {
-		t.Fatalf("active revision: %v", err)
+		t.Fatalf("the company this node knows: %v", err)
 	}
 	return secrets.EnvelopeKeyIDOf(rev.Payload)
 }

@@ -12,6 +12,11 @@
  *    announces is not a comment and the talk around it is what a reader
  *    opens a notice to catch up on.
  *
+ * THE ENGINE PAGES THAT THREAD (`thread`, `with_root`), never the task's
+ * whole stream filtered here: a page of the task's comments kept to one
+ * question's replies carried the TASK's cursor, so a question nobody had
+ * replied to offered "Earlier comments" on any task with more than a page.
+ *
  * PAGED BACKWARDS, never cut. The detail read returns the newest twenty and a
  * cursor nothing followed, so a conversation past twenty was invisible on
  * every screen; each "Earlier" press reads the page before the oldest one
@@ -23,7 +28,7 @@ import { Button, Skeleton, Text } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { CHECKED_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { WorkComment } from "~/protocol/index.ts";
@@ -41,15 +46,15 @@ export type ThreadOf =
     }
   | { kind: "item" };
 
-/** Whether one comment belongs to the thread. */
-export function inThread(of: ThreadOf, c: WorkComment): boolean {
+/** What `work_comments` is asked to narrow its pages to, for one thread. */
+export function threadParams(of: ThreadOf): { thread?: string; with_root?: boolean } {
   switch (of.kind) {
     case "ask":
-      return c.id !== of.comment && (c.answers === of.comment || c.reply_to === of.comment);
+      return { thread: of.comment };
     case "comment":
-      return c.reply_to === of.comment || (!of.whole && c.id === of.comment);
+      return of.whole ? { thread: of.comment } : { thread: of.comment, with_root: true };
     case "item":
-      return true;
+      return {};
   }
 }
 
@@ -137,12 +142,12 @@ function ThreadPage({
 }) {
   const read = useQuery(
     "work_comments",
-    cursor ? { item, cursor, limit: 50 } : { item, limit: 50 },
+    { item, ...threadParams(of), ...(cursor ? { cursor } : {}), limit: 50 },
     // ONLY THE NEWEST PAGE IS POLLED: an older page is history, and a reply
     // lands on the newest.
     cursor ? {} : { pollMs: THREAD_POLL_MS },
   );
-  const comments = (read.data?.comments ?? []).filter((c) => inThread(of, c));
+  const comments = read.data?.comments ?? [];
   const following = read.data ? (read.data.next_cursor ?? null) : undefined;
   const count = comments.length;
   useEffect(() => {
@@ -154,23 +159,27 @@ function ThreadPage({
   }, [title, onTitle]);
   if (read.loading && !read.data)
     return <Skeleton variant="text" rows={2} label="Loading the thread" />;
+  // AN EMPTY PAGE DRAWS NO LIST: an empty <ol> is still a flex item, and the
+  // thread's gap on either side of it pushed "No replies yet." down by one.
   return (
     <QueryState error={read.error} refusal={read.refusal} loading={false}>
-      <ol className="inbox-thread-list">
-        {comments.map((c) => (
-          <ThreadEntry
-            key={c.id}
-            comment={c}
-            chose={
-              c.choice && of.kind !== "item"
-                ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
-                : ""
-            }
-            index={index}
-            now={now}
-          />
-        ))}
-      </ol>
+      {count > 0 && (
+        <ol className="inbox-thread-list">
+          {comments.map((c) => (
+            <ThreadEntry
+              key={c.id}
+              comment={c}
+              chose={
+                c.choice && of.kind !== "item"
+                  ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
+                  : ""
+              }
+              index={index}
+              now={now}
+            />
+          ))}
+        </ol>
+      )}
     </QueryState>
   );
 }
@@ -215,7 +224,7 @@ function ThreadEntry({
           {comment.removed ? (
             <span className="muted">(this comment was removed)</span>
           ) : comment.body.trim() ? (
-            renderMarkdown(comment.body)
+            renderMarkdown(comment.body, CHECKED_WORDS)
           ) : chose ? (
             // AN ANSWER THAT IS ONLY A CHOICE has no words, and the choice
             // is the whole of what it said.

@@ -111,6 +111,8 @@ import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleProblem, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { createDraft, linesOf } from "./assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
 /** Briefs to start from, one press each. */
@@ -149,6 +151,79 @@ const BRIEF_HINT = "What it is for, who it is for, the brand to follow and what 
 
 /** The most a design's brief holds, as a task's description holds it. */
 const DESIGN_BRIEF_MAX_BYTES = 8000;
+
+/** What a new design holds beyond what every create page does. */
+interface DesignState {
+  readonly draft: DesignDraft | null;
+  readonly links: readonly string[];
+}
+
+/** The starting layouts by id, as a value names one. */
+const LAYOUT_IDS: readonly string[] = STARTER_LAYOUTS.map((l) => l.id);
+
+/**
+ * A new design's own fields: its starting layout, picked only before any
+ * board is laid out (a pick lays new boards and drops the old), its
+ * references, each held to the link rule its field holds, and each board's
+ * name and purpose by its place, held to the board's own rules.
+ */
+export function designFields(draft: DesignDraft | null): DraftFieldSpec<DesignState>[] {
+  const board = (
+    i: number,
+    key: "title" | "brief",
+  ): Pick<DraftFieldSpec<DesignState>, "read" | "write"> => ({
+    read: (d) => d.draft?.boards[i]?.[key] ?? "",
+    write: (d, value) => {
+      const now = d.draft?.boards[i];
+      if (!d.draft || !now) return refuse("That board is no longer on the canvas.");
+      if (typeof value !== "string") return refuse("A board's name and purpose are text.");
+      const next = changeBoard(d.draft, now.id, { [key]: value });
+      const wrong = boardProblems(next.boards[i]!)[key];
+      return wrong ? refuse(wrong) : { ...d, draft: next };
+    },
+  });
+  return [
+    {
+      path: "layout",
+      label: "Starting layout",
+      hint: `One of ${LAYOUT_IDS.join(", ")}, picked before any board is laid out`,
+      read: (d) => (d.draft ? "laid out" : ""),
+      write: (d, id) => {
+        if (d.draft) return refuse("Boards are laid out: picking another layout is the person's.");
+        const layout = STARTER_LAYOUTS.find((l) => typeof id === "string" && l.id === id.trim());
+        return layout
+          ? { ...d, draft: draftFrom(layout) }
+          : refuse(`Choose one of the layouts: ${LAYOUT_IDS.join(", ")}.`);
+      },
+    },
+    {
+      path: "references",
+      label: "References",
+      hint: "Web addresses, one per line",
+      read: (d) => d.links,
+      write: (d, value) => {
+        const next = linesOf(value);
+        if (next === null) return refuse("References are web addresses, one per line.");
+        const wrong = next.map(linkProblem).find(Boolean);
+        return wrong ? refuse(wrong) : { ...d, links: next };
+      },
+    },
+    ...(draft?.boards ?? []).flatMap((b, i): DraftFieldSpec<DesignState>[] => [
+      {
+        path: `boards.${i + 1}.name`,
+        label: `Board ${i + 1} name`,
+        hint: sizeWords(b),
+        ...board(i, "title"),
+      },
+      {
+        path: `boards.${i + 1}.purpose`,
+        label: `Board ${i + 1} purpose`,
+        hint: "What the board is for, for the agent who draws it",
+        ...board(i, "brief"),
+      },
+    ]),
+  ];
+}
 
 export function DesignCreate() {
   const nav = useNavigator();
@@ -212,6 +287,40 @@ export function DesignCreate() {
       (builder ? undefined : "Add an agent to the chart to build it.") ??
       (briefBudget.over ? "Shorten the brief." : hold));
   const busy = create.busy || ask.busy;
+  // WHAT IS OPEN, for the assistant: the name, the references, each board's
+  // name and purpose, and the hand-off. A layout is picked as a press of it
+  // would, while nothing is laid out yet; a board's place and size are the
+  // person's, on the canvas.
+  useAssistantDraft(
+    createDraft<DesignState>({
+      what: "design",
+      help:
+        "You can set the design's name, its references, and each board's name and what it " +
+        "is for, and pick a starting layout before any board is laid out. Moving, resizing, " +
+        "adding and removing boards are the person's, and you make no images.",
+      step: panel.open ? "ask" : picking ? "layouts" : "canvas",
+      title,
+      setTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: { draft, links },
+        fields: designFields(draft),
+        apply: (next) => {
+          if (next.draft !== draft) {
+            setDraft(next.draft);
+            if (draft === null) {
+              setSelected(null);
+              setPicking(false);
+            }
+          }
+          if (next.links !== links) setLinks([...next.links]);
+        },
+      },
+      blocked: () => (busy ? "The design is being made." : null),
+    }),
+  );
   // A PHONE'S BAR KEEPS ITS WIDTH FOR THE NAME AND THE ACTION: the board
   // count is the boards list's own there.
   const narrow = useMediaMatch("(width < 40rem)");
@@ -252,7 +361,7 @@ export function DesignCreate() {
         variant: "warning",
         title: "The task was filed, and the design is not on its Artifacts card",
         message: filed.linked,
-        action: { label: "Open the task", href: href(["work", filed.item]) },
+        action: { label: "Open the task", href: href(["worklet", filed.item]) },
       });
     }
     nav.replace(artifactPath(id));

@@ -1034,7 +1034,7 @@ func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
 }
 
 // A PUSH ROW NAMING NO WAY IS REFUSED BY EVERY READER of it, never read as
-// one: the via column's default is no way at all (replicated 0063), so a row
+// one: the via column's default is no way at all (replicated 0086), so a row
 // an apply wrote without it fails the read, naming the push — the history's
 // and the index of pushes' alike — where a default naming a way would have
 // answered every push the engine built as one a client's git sent.

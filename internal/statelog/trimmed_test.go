@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// ---- the trimmed record — ADR-0050 ------------------------------------ //
+// ---- the trimmed record — ADR-0073 ------------------------------------ //
 
 // trimmedEnv is the probe domain's trimmed record naming floor, written by
 // node-a — the probe's envelope IS the framework's, so this is

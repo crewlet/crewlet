@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // countedAppender is a broker that commits every barrier at once, counting
@@ -69,7 +69,7 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 			}
 
 			begun := time.Now()
-			_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+			_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 			took := time.Since(begun)
 			var refusal *statelog.Refused
 			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
@@ -106,7 +106,7 @@ func TestAFloorEveryDataNodeIsBehindIsWaitedForOnce(t *testing.T) {
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 
 	begun := time.Now()
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	took := time.Since(begun)
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) {

@@ -13,6 +13,10 @@ export default defineConfig({
     globals: false,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["./src/test/setup.ts"],
+    // ONE PROCESS PER WORKER (Vitest's default, pinned): the cost cases time a
+    // pass by its process's CPU (`src/test/growth.ts`), which in the `threads`
+    // pool would count every test file sharing the process.
+    pool: "forks",
     // HANG DETECTORS, sized in `src/test/bounds.ts` from what a case and a
     // hook were measured to take beside `go build` and `go vet`, because a
     // duration is CPU work over the share of a CPU its worker gets on a
@@ -30,7 +34,7 @@ export default defineConfig({
     //
     // Berlin rather than a fixed offset: it has both halves of the hazard, a
     // non-zero offset all year and two transitions, and it is the zone
-    // `internal/tracker`'s own date suite already resolves against.
+    // `internal/worklet`'s own date suite already resolves against.
     env: { TZ: "Europe/Berlin" },
     // THE DESIGN SYSTEM IS TRANSFORMED RATHER THAN EXTERNALISED, because its
     // components import their own stylesheets as a side effect and Node has no

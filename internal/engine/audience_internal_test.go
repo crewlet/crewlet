@@ -3,14 +3,17 @@ package engine
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // noAudience resolves every question to nobody: the coordinators built with
@@ -20,6 +23,17 @@ type noAudience struct{}
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
+
+// testAnswers is the seal a coordinator a case builds by hand seals and opens
+// answers under ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for
+// every such coordinator, as a fleet shares one.
+var testAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return seal
+})
 
 // audienceChart is a founder over one unit: its lead, the seat whose runs ask
 // the questions, a person beside it, and another agent.
@@ -47,7 +61,7 @@ func audienceChart(t *testing.T) *org.Organization {
 	return o
 }
 
-// EVERY LABEL THE ASK SHIM DOCUMENTS RESOLVES TO THE SEATS IT MEANS, and one
+// EVERY AUDIENCE `ask_and_wait` TAKES (`to`) RESOLVES TO THE SEATS IT MEANS, and one
 // that names nobody the chart has falls back to the seat's lead chain — SAYING
 // it fell back, because "put to me" and "reached me because nobody else could
 // be named" are different things to the person reading it.
@@ -100,16 +114,31 @@ func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	}
 }
 
-// THE CODING AGENT IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES. The
-// roster and the manager it is given are handles, so a `--to` copied from
-// either resolves exactly rather than falling back.
+// THE CODING AGENT IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES, AND TO
+// GIVE ITS OPTIONS AS OPTIONS. The roster and the manager it is given are
+// handles, so a `to` copied from either resolves exactly rather than falling
+// back; and a run told only to ask wrote its choices into the question as
+// prose, which a person could not answer with a press.
 func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	t.Parallel()
 	o := audienceChart(t)
 	seat := o.SeatByHandle("swe")
 	brief := askBrief(o, seat)
-	if !strings.Contains(brief, "crewlet-ask") {
+	if !strings.Contains(brief, "`"+builtin.AskAndWaitTool+"`") {
 		t.Fatalf("the brief does not tell the coding agent how to ask:\n%s", brief)
+	}
+	for _, field := range []string{"`options`", "`recommended`", "`rationale`", "`branch`"} {
+		if !strings.Contains(brief, field) {
+			t.Errorf("the brief does not tell the coding agent to fill %s:\n%s", field, brief)
+		}
+	}
+	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
+	// is asked with the seat's own tools and answered in its next turn, so a
+	// run told only of the park parks, holding its box, on every question.
+	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
+		!strings.Contains(brief, runner.SubmitWorkTool) {
+		t.Fatalf("the brief does not tell the coding agent to ask with its tools and "+
+			"finish when it can go on without the answer:\n%s", brief)
 	}
 	if !strings.Contains(brief, "Teammates you can name: cto, ada, qa.") ||
 		!strings.Contains(brief, "Your manager: cto.") {
@@ -117,7 +146,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	}
 	for _, name := range []string{"cto", "ada", "qa"} {
 		if got := resolveAudience(o, nil, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
-			t.Errorf("a --to %q copied from the brief fell back", name)
+			t.Errorf("a `to` %q copied from the brief fell back", name)
 		}
 	}
 }
@@ -168,29 +197,9 @@ func TestTheRequesterIsWhoseWakeStartedTheTurn(t *testing.T) {
 // paths share — the park that resolves "requester" reads nothing else.
 func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	t.Parallel()
-	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE")
+	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE", nil)
 	if ref.Requester != "ada" {
 		t.Fatalf("the run's turn reference names requester %q, want ada", ref.Requester)
-	}
-}
-
-// A NODE WITH A COORDINATOR ROUTES AN ANSWER BY TURN TO IT. Left unwired, the
-// dispatcher hands every such answer back for a coordinator it does not have,
-// and a parked run is never answered however many times a person tries.
-func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
-	t.Parallel()
-	e, _ := starting(t, refusingModels(t))
-	equipForCode(t, e, sandbox.NewCoordStore(memory.NewFleet()))
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, e.backends)
-	if d.AnswerByTurn == nil {
-		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")
-	}
-	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main",
-		LaunchID: "launch-1"}
-	disposition, err := d.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{}))
-	if err != nil || disposition != sandbox.AnswerNotMine {
-		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",
-			disposition, err)
 	}
 }
 

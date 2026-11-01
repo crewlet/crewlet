@@ -148,7 +148,6 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  withoutContact,
   writeId,
   phase,
   onSave,
@@ -163,8 +162,6 @@ export function ReviewSaveDialog({
   warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  /** Human seats holding no contact identity, by name: a notice, never a block. */
-  withoutContact: readonly string[];
   writeId: string;
   phase: SavePhase;
   onSave: (summary: string) => void;
@@ -262,25 +259,10 @@ export function ReviewSaveDialog({
           ))}
         </ul>
       )}
-      {status === "unreachable" && (
+      {status === "unchecked" && (
         <Callout variant="warning" icon={<PlugGlyph />}>
           Couldn’t check this draft. Saving still validates it.
         </Callout>
-      )}
-
-      {withoutContact.length > 0 && (
-        <section className="col gap-1" aria-label="Seats with no contact identity">
-          <strong>These human seats have no contact identity</strong>
-          <span className="t-caption">
-            No agent can mention them, and the person is reached through the dashboard only, until
-            one is added in the seat's editor.
-          </span>
-          <ul className="org-builder-list">
-            {withoutContact.map((name, i) => (
-              <li key={i}>{name}</li>
-            ))}
-          </ul>
-        </section>
       )}
 
       <section className="col gap-1" aria-label="Changes">

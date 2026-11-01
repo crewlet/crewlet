@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHECKS A REPOSITORY DEFINES: `.crewlet/checks.yaml` at the root of its
@@ -519,7 +520,7 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		case "env":
 			def.Env, ok = p.texts(field, value, envList)
 		default:
-			p.fault(field, keyNode, config.ErrUnknownField, "a check takes %s", strings.Join(checkKeys, ", "))
+			p.fault(field, keyNode, config.ErrUnknownField, "a check takes %s", words.And(checkKeys))
 			return
 		}
 		failed[key] = !ok
@@ -726,7 +727,7 @@ func (p *checksParser) report(path config.Path, n *yaml.Node) (CheckReport, bool
 			r.SARIF, read = p.text(field, value)
 		default:
 			p.fault(field, keyNode, config.ErrUnknownField, "a check's report is %s",
-				strings.Join(reportKeys, " or "))
+				words.Or(reportKeys))
 		}
 		ok = ok && read
 	})
@@ -849,7 +850,7 @@ func defFaults(d CheckDef) []defFault {
 		if why := config.CodeCheckCellRefusal(config.Placement(d.RunIn)); why != "" {
 			add(config.Path{"run_in"}, config.ErrUnknownValue, "a check never runs in %s: %s", d.RunIn, why)
 		} else {
-			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %v", d.RunIn, CheckCells())
+			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %s", d.RunIn, words.Or(CheckCells()))
 		}
 	}
 	if co := d.Checkout; co.None && len(co.Cone) > 0 {

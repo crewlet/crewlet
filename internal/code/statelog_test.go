@@ -19,11 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the eighth domain
-// to run it, and the sixth that claims identity: every promise the framework
+// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the tenth domain
+// to run it, and the eighth that claims identity: every promise the framework
 // makes about a strict log (stamping, deferral, the gates, the eviction
-// census, the trimmed record) is held here by the cases that hold it for the
-// tracker and the knowledge base, never by a copy of them.
+// census, the trimmed record) is held here by the cases that hold it for
+// Worklet and Doclet, never by a copy of them.
 func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {

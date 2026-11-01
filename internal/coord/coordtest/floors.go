@@ -93,29 +93,6 @@ var floorCases = []fleetCase{{
 		}
 	},
 }, {
-	// FORGETTING IS AN ANSWER: a domain that no longer exists reads as one
-	// the trim never wrote for — absent, not an error — or every write to a
-	// subject's first record would be refused `floor_unknown` for a log
-	// that was removed on purpose.
-	name: "a forgotten floor is absent rather than unknown",
-	fn: func(h *fleetHarness) {
-		h.putFloor("tracker", 1, 40)
-		h.putFloor("pages", 1, 60)
-		if err := h.f.ForgetFloor(h.ctx, "tracker"); err != nil {
-			h.t.Fatalf("ForgetFloor: %v", err)
-		}
-		if row, found := h.floorOf("tracker"); found {
-			h.t.Fatalf("a forgotten floor still reads back: %+v", row)
-		}
-		if row, found := h.floorOf("pages"); !found || row.Floor != 60 {
-			h.t.Fatalf("forgetting tracker's floor took pages' with it: (%+v, %v)",
-				row, found)
-		}
-		if err := h.f.ForgetFloor(h.ctx, "tracker"); err != nil {
-			h.t.Fatalf("ForgetFloor of a floor already forgotten: %v", err)
-		}
-	},
-}, {
 	// A LATER TICK REPLACES THE ROW WHOLESALE, and the read answers the
 	// newest: the floor never moves down within a generation, so a read that
 	// returned an older row would clear a node the newer one counts below

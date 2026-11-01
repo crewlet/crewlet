@@ -33,14 +33,14 @@ import (
 // company: the instance, the org account it reads it with, the key the hook
 // signs with (minted when it resolves empty), and each seat's own Jira
 // credential, whose account it reports ([jira.SeatCredentialReads]) — the
-// names a running node is asked to reveal ([companyResolver]).
+// names a running node is asked to reveal ([companyStore.resolver]).
 func jiraProvisionReads(cfg *config.Jira, o *org.Organization) []string {
 	return unionReads(
 		fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token, cfg.WebhookSecret),
 		jira.SeatCredentialReads(o))
 }
 
-func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("jira provision", flag.ContinueOnError)
@@ -49,7 +49,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhook", false,
+	recreate := addFreshSwitch(fs, "recreate-webhook",
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
@@ -62,7 +62,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stderr,
 			"usage: crewlet jira provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhook] [-dry-run]")
+				"[-recreate-webhook] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -81,14 +81,37 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 
+	// RESOLVED BEFORE ANYTHING IS PRINTED, a -dry-run's included: a dry
+	// run reads the instance with the org token and reports the webhook
+	// secret it would register, so it reads the store as a real run does
+	// and is refused where a real run would be. Its webhook secret's
+	// whole ${VAR}, which a real run's sink reads back before it mints,
+	// is in the reads already. A real run's sink is chosen before that, for
+	// the reason GitLab's command gives.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		jiraProvisionReads(cfg, organization), *sinks.bootstrap,
-		*sinks.api, stdout)
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
+		"crewlet jira provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, jiraProvisionReads(cfg, organization), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
+	hookBase := webhookBase(*publicURL, boot)
+	if !*dryRun {
+		if err = sinks.refuseOutranked(ctx, companySecrets, "Jira",
+			webhookMintsInto(cfg.WebhookSecret, recreate.value().Asked(), env.Value, hookBase), stdout); err != nil {
+			return err
+		}
+	}
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -99,8 +122,8 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
 		return fmt.Errorf(
-			"jira: integrations.jira.token (%q) resolved empty — the org "+
-				"account is what this run reads the instance with", cfg.Token)
+			"jira: integrations.jira.token (%q) resolved empty. Set it: this run "+
+				"reads the instance as the org account it belongs to", cfg.Token)
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -111,25 +134,25 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 
 	// THE SINK IS OPENED FOR A REAL RUN ONLY. A dry run reads the instance
-	// and registers nothing, so it has nothing to record — and opening the
-	// secret store to write nothing would prompt for a passphrase on a
-	// command that promised to touch nothing.
+	// and registers nothing, so it has nothing to record, and so it needs
+	// no sink flag at all — and opening one is not free: an env file is
+	// created at open, before anything is in it, which would leave an
+	// empty file behind a command that promised to touch nothing.
 	opts := jira.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,
-		RecreateWebhook: *recreate,
+		RecreateWebhook: recreate.value(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBase = hookBase
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 
@@ -160,7 +183,7 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 			fmt.Fprintf(w, "  %-16s %-10s %s\n", seat.Handle, where, seat.Account)
 			continue
 		}
-		fmt.Fprintf(w, "  %-16s %-10s NO ACCOUNT — %s\n", seat.Handle, where, seat.Reason)
+		fmt.Fprintf(w, "  %-16s %-10s NO ACCOUNT: %s\n", seat.Handle, where, seat.Reason)
 	}
 
 	if len(res.Projects) > 0 {
@@ -170,7 +193,7 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 			case !p.Exists:
 				// BOTH HALVES: Jira answers 404 for a project that is not
 				// there and for one this credential may not browse.
-				fmt.Fprintf(w, "  %-10s NOT VISIBLE — no such project, or "+
+				fmt.Fprintf(w, "  %-10s NOT VISIBLE: no such project, or "+
 					"this credential may not browse it\n", p.Key)
 			case p.Agrees():
 				fmt.Fprintf(w, "  %-10s %s (lead %s)\n", p.Key, p.Name, p.OrgLead)

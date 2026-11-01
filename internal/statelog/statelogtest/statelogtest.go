@@ -1,7 +1,7 @@
 // Package statelogtest is the contract suite every statelog domain must pass.
 //
-// One suite, every domain — the engine's own work tracker, the compacted
-// vector domain, anything a later build registers. A domain the suite has not
+// One suite, every domain: Worklet, the compacted vector domain, anything a
+// later build registers. A domain the suite has not
 // certified does not exist as far as the framework is concerned, and a
 // divergence between two domains becomes a failing test here rather than a
 // production-only surprise on the one node that happens to run the other.
@@ -22,13 +22,13 @@
 // and the reserve every other write is held to — the anchors a trimmed record
 // removes below the trim floor and the zero fence a write to one of their
 // subjects then has to pass, because a log whose anchors nothing removes grows
-// a row for every subject it ever wrote (ADR-0050) — the read index's barrier,
+// a row for every subject it ever wrote (ADR-0073) — the read index's barrier,
 // which must change no row, because a linearizable read is released on it
 // before its transaction commits — and the domain that gates
 // seat admission, which must replay strictly, because a compacted domain's gap
 // is a coverage number that would otherwise withhold every seat claim on a
 // node. Whether a domain's copy is JUDGED is not a declaration and has no case
-// here: every domain's is (ADR-0049).
+// here: every domain's is (ADR-0072).
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -70,6 +70,15 @@
 // has no control domain of its own, so it bends the candidate's own reader and
 // domain each way either could break its rule and requires every bend to be
 // reported.
+//
+// [RunEvictionGates] is that family for a domain whose ONLY apply-nowhere gate
+// is the eviction window — no deletion marker on any object — and it holds the
+// window half of the same rule on the same terms, plus the node-gate answer to
+// every other gate the domain installs. Two entry points rather than one with
+// a hook a domain may leave nil, because a hook a domain may omit is one a
+// domain that has a marker can forget with nothing failing. This package's own
+// tests run it over a control whose one gate is the window, which is what says
+// its cases can come back clean.
 package statelogtest
 
 import (
@@ -144,7 +153,7 @@ type Candidate struct {
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 
 	// EncodeTrimmed is the domain's own encoder of the trim's trimmed record
-	// (ADR-0050) — the production function the engine hands the trim, never
+	// (ADR-0073) — the production function the engine hands the trim, never
 	// a fixture. Required exactly when the domain's log arbitrates a kind,
 	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
 	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].

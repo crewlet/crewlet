@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -161,31 +160,34 @@ func TestStoppedByIsWhoAskedTheSeatsWorkToStop(t *testing.T) {
 	}
 }
 
-// A SEAT'S STOP REACHES BOTH OF A DETACHED RUN'S WRITE EDGES ONE WAY: the code
+// A SEAT'S STOP REACHES BOTH OF A DETACHED RUN'S EDGES ONE WAY: the code
 // host's view of the runs (codeBoxRuns, which it refuses a box's push by) and
-// the session a launch opens on the tool bridge (agentLauncher.bridgeSession,
-// whose Stopped refuses the run's bridged writes) answer ONE reading of ONE
-// pause record — the person who stopped the seat; "" for a seat not paused,
-// for a pause that did not stop its running work and for a seat resumed; and
-// the same unknown on a node that has not read the pauses — so a box's pushes
-// and its run's bridged writes are refused, and let through again, together.
+// the fence the session a launch opens on the tool bridge asks before and
+// after every bridged call (Engine.seatFence, mcpbridge.Session.Fence) read
+// ONE pause record the same way — the person who stopped the seat; nobody for
+// a seat not paused, for a pause that did not stop its running work and for a
+// seat resumed — so a box's pushes and its run's bridged calls are refused,
+// and let through again, together. A node that has not read the pauses is the
+// code host's alone to answer, as unknown: no turn runs there to ask the
+// fence, since the screening defers its delivery.
 //
-// Mutations: open the session with a stop check of its own that answers
-// nobody — the stopped seat's bridged writes read not stopped — red; open it
-// with none, which the bridge refuses — red.
+// Mutations: let the code host read StopRunning off anything but the pause
+// the fence reads — the stopped seat's pushes read not stopped — red.
 func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
 	t.Parallel()
 	// The two edges as the engine builds them: what the code host is
-	// handed (codehost.go) and the session LaunchExecutor opens.
+	// handed (codehost.go) and the fence LaunchExecutor gives the session.
 	edges := func(t *testing.T, e *Engine) (box, bridge func(context.Context, string) (string, error)) {
 		t.Helper()
-		ceo := e.Company().Org.AgentSeatByHandle("ceo")
-		launcher := &agentLauncher{engine: e, turn: &turnctx.Turn{RunID: "run-1", Seat: ceo}, seat: ceo}
-		session := launcher.bridgeSession("", nil, nil)
-		if session.Stopped == nil {
-			t.Fatal("the session a launch opens carries no stop check, and the bridge opens none without one")
+		fence := e.seatFence("ceo")
+		return e.codeBoxRuns(slog.Default()).Stopped, func(context.Context, string) (string, error) {
+			err := fence()
+			var stop *stopError
+			if errors.As(err, &stop) {
+				return stop.pause.By, nil
+			}
+			return "", err
 		}
-		return e.codeBoxRuns(slog.Default()).Stopped, session.Stopped
 	}
 	agree := func(t *testing.T, e *Engine, what, want string, wantErr error) {
 		t.Helper()
@@ -199,7 +201,9 @@ func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
 	}
 
 	unread, _ := engineOn(t)
-	agree(t, unread, "a node that has not read the pauses", "", errPausesUnread)
+	if by, err := unread.codeBoxRuns(slog.Default()).Stopped(t.Context(), "ceo"); by != "" || !errors.Is(err, errPausesUnread) {
+		t.Errorf("a node that has not read the pauses: the code host reads it stopped by %q (%v), want unknown", by, err)
+	}
 
 	e, _, fleet := pausingEngine(t)
 	ctx := t.Context()

@@ -91,22 +91,40 @@ test("a call is read by its arguments' values, the one running first", () => {
             success: true,
           },
         ],
-        running_call: {
-          round: 2,
-          name: "sandbox.run",
-          arguments: '{"cmd":"make"}',
-          started_at: "",
-        },
+        running_calls: [
+          {
+            id: "call-1",
+            round: 2,
+            name: "sandbox.run",
+            arguments: '{"cmd":"make"}',
+            started_at: "",
+          },
+        ],
       }),
     ),
   ).toBe("sandbox.run make");
+  // SEVERAL IN FLIGHT: the one running longest, which the turn is waiting
+  // on, and how many more run beside it — never a call dropped from the count.
+  const side = (body_withheld: boolean) =>
+    lastCallLine(
+      row({
+        body_withheld,
+        running_calls: [
+          { id: "c1", round: 2, name: "sandbox.run", arguments: '{"cmd":"make"}', started_at: "" },
+          { id: "c2", round: 2, name: "read_file", arguments: '{"path":"a"}', started_at: "" },
+          { id: "c3", round: 2, name: "read_file", arguments: '{"path":"b"}', started_at: "" },
+        ],
+      } as Partial<LiveCall>),
+    );
+  expect(side(false)).toBe("sandbox.run make · 2 more running");
   // A WITHHELD CALL SAYS SO, never reading as one handed nothing.
   expect(
     lastCallLine(
       row({
         body_withheld: true,
-        running_call: { round: 2, name: "sandbox.run", started_at: "" },
+        running_calls: [{ round: 2, name: "sandbox.run", started_at: "" }],
       } as Partial<LiveCall>),
     ),
   ).toBe("sandbox.run (details hidden)");
+  expect(side(true)).toBe("sandbox.run (details hidden) · 2 more running");
 });

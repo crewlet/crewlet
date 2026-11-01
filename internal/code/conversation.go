@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHANGE'S CONVERSATION: what is said ABOUT a change, as records on the
@@ -552,7 +553,7 @@ func anchorProblem(a CommentAnchor) string {
 	case a.Revision < 1:
 		return fmt.Sprintf("revision: %d; a change's revisions count from 1", a.Revision)
 	case !a.Side.Valid():
-		return fmt.Sprintf("side: %q is not one of %v", a.Side, Sides())
+		return fmt.Sprintf("side: %q is not one of %s", a.Side, words.Or(Sides()))
 	case a.Line < 1:
 		return fmt.Sprintf("line: %d; a file's lines count from 1", a.Line)
 	case !gitref.ValidOID(a.BlobOID):
@@ -582,7 +583,7 @@ func findingProblem(f Finding) string {
 	case validGitPath(f.Path, false) != "":
 		return "path: " + validGitPath(f.Path, false)
 	case !f.Side.Valid():
-		return fmt.Sprintf("side: %q is not one of %v", f.Side, Sides())
+		return fmt.Sprintf("side: %q is not one of %s", f.Side, words.Or(Sides()))
 	case f.LineStart < 1 || f.LineEnd < f.LineStart:
 		return fmt.Sprintf("lines %d to %d: a finding's lines count from 1, the last at or past the first",
 			f.LineStart, f.LineEnd)
@@ -591,9 +592,9 @@ func findingProblem(f Finding) string {
 	case !gitref.ValidOID(f.BlobOID):
 		return fmt.Sprintf("blob_oid: %q is not a whole object id", f.BlobOID)
 	case !f.Severity.Valid():
-		return fmt.Sprintf("severity: %q is not one of %v", f.Severity, Severities())
+		return fmt.Sprintf("severity: %q is not one of %s", f.Severity, words.Or(Severities()))
 	case !f.Category.Valid():
-		return fmt.Sprintf("category: %q is not one of %v", f.Category, Categories())
+		return fmt.Sprintf("category: %q is not one of %s", f.Category, words.Or(Categories()))
 	}
 	switch {
 	case strings.TrimSpace(f.Title) == "":

@@ -1,7 +1,9 @@
 package workapi_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,8 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // assertMintedWith holds one operation id a write was published under to the
@@ -69,16 +72,16 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items",
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}},
-		{"somebody's record", http.MethodPut, "/work/people/ana/pins",
+		{"somebody's record", http.MethodPut, "/worklet/people/ana/pins",
 			map[string]any{"items": []string{}}},
-		{"a rank move", http.MethodPost, "/work/items/ENG-1/rank",
+		{"a rank move", http.MethodPost, "/worklet/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}},
 		{"a purge", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
-		{"a page's trash", http.MethodDelete, "/pages/p-1", nil},
-		{"a page written through its tool", http.MethodPost, "/pages",
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+		{"a page's trash", http.MethodDelete, "/doclet/pages/p-1", nil},
+		{"a page written through its tool", http.MethodPost, "/doclet/pages",
 			map[string]any{"container": "ENG", "title": "Notes", "body": "text"}},
 	} {
 		for _, key := range []string{"k-1", "0192f00d-0000-4000-8000-000000000001"} {
@@ -130,7 +133,7 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			}
 			r := newRig(t, chart{})
 
-			created := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+			created := r.do(as(admin("ana")), http.MethodPost, "/worklet/items",
 				map[string]any{"title": "rotate the key", "project": "ENG"},
 				headers...)
 			answeredKey, _ := created.body["op_id"].(string)
@@ -150,14 +153,14 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			}
 
 			ranked := r.do(as(admin("ana")), http.MethodPost,
-				"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}, headers...)
+				"/worklet/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}, headers...)
 			rankKey, _ := ranked.body["op_id"].(string)
 			if ranked.status != http.StatusOK {
 				t.Fatalf("the rank move answered %d: %v", ranked.status, ranked.body)
 			}
 			assertMintedWith(t, r.writes.opIDs[len(r.writes.opIDs)-1], rankKey)
 
-			page := r.do(as(admin("ana")), http.MethodDelete, "/pages/p-1", nil,
+			page := r.do(as(admin("ana")), http.MethodDelete, "/doclet/pages/p-1", nil,
 				headers...)
 			if page.status != http.StatusOK {
 				t.Fatalf("the trash answered %d: %v", page.status, page.body)
@@ -200,10 +203,10 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items",
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		for _, unvouched := range []bool{false, true} {
 			name := c.name + "/a lost acknowledgement"
@@ -239,31 +242,85 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 	}
 }
 
+// A WRITE NO DATA NODE ANSWERED IS UNKNOWN, CARRYING ITS KEY — never a
+// refusal saying nothing ran.
+//
+// The estate's router asks every data node under the request's operation, and
+// each that stayed silent may have run it, so it answers
+// [estate.ErrOutcomeUnknown]. Told it as the estate unserved — `503
+// unavailable` and no outcome — a client read "nothing ran" and sent the
+// request again under a NEW key: a second purge, a second item. The answer is
+// the unknown every lost acknowledgement gets, settled by the same request
+// under the same key, and in fixed words, since the router's names the nodes.
+//
+// Mutation: drop ClassifyWrite's unknown arm and the purge's row goes red;
+// drop writeFailure's and the tool-backed row does.
+func TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+	}{
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}},
+		{"a write this surface makes", http.MethodPost,
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.writes.err = fmt.Errorf("%w (tracker.purge, asked of data-b, data-c)",
+				estate.ErrOutcomeUnknown)
+			key := statelog.NewOpID(time.Now(), "")
+			got := r.do(as(admin("ana")), c.method, c.target, c.body, opkey.Header, key)
+			if got.status != http.StatusServiceUnavailable ||
+				got.body["outcome"] != httpjson.OutcomeUnknown {
+				t.Fatalf("answered %d %v, want 503 saying its outcome is unknown",
+					got.status, got.body)
+			}
+			assertOperationOf(t, got, key)
+			if raw, _ := json.Marshal(got.body); strings.Contains(string(raw), "data-b") {
+				t.Errorf("the router's node list reached the answer: %s", raw)
+			}
+		})
+	}
+}
+
 // WHAT A PURGE DESTROYED IS NOT FOUND, NOT UNAVAILABLE.
 //
 // A write refused because its object carries a permanent deletion marker will
 // be refused on every node for ever; answered 503 it sent a client looking for
-// a node that would take it.
+// a node that would take it. And it carries none of the framework's words,
+// which name the subject it met: nobody has worded it for a person, so its
+// code's own message stands alone (ADR-0060).
 //
-// Mutation: drop the deletion arm and both answer 503.
+// Mutation: drop the deletion arm and both answer 503; tell it in the
+// writer's or the tool's sentence again and both name the refusal.
 func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
+		{"a tool-backed route", http.MethodPatch, "/worklet/items/ENG-1",
 			map[string]any{"status": "done"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
 			r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonDeleted,
 				Detail: "ENG-1 was purged"}
-			if got := r.do(as(admin("ana")), c.method, c.target, c.body); got.status != http.StatusNotFound {
-				t.Errorf("answered %d %v, want 404", got.status, got.body)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusNotFound ||
+				got.body["error"] != string(httpjson.CodeNotFound) {
+				t.Errorf("answered %d %v, want 404 not_found", got.status, got.body)
+			}
+			if detail, has := got.body["detail"]; has ||
+				strings.Contains(fmt.Sprint(got.body), "purged") {
+				t.Errorf("answered %v (detail %v), want the code's own message alone",
+					got.body, detail)
 			}
 		})
 	}
@@ -282,9 +339,9 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	r.writes.err = &tracker.SubtreeStopped{Verb: "removal", Root: "t-1",
-		Followed: 2, Of: 5, OpID: "op", Err: tracker.ErrStepUnvouched}
-	got := r.do(as(admin("ana")), http.MethodDelete, "/work/items/ENG-1",
+	r.writes.err = &worklet.SubtreeStopped{Verb: "removal", Root: "t-1",
+		Followed: 2, Of: 5, OpID: "op", Err: worklet.ErrStepUnvouched}
+	got := r.do(as(admin("ana")), http.MethodDelete, "/worklet/items/ENG-1",
 		map[string]any{"subtree": true})
 	stopped, _ := got.body["subtree_stopped"].(string)
 	if got.status != http.StatusOK || stopped == "" {
@@ -308,7 +365,7 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 // is refused, because the root is already in the target and that operation's
 // ledger never put it there. Where this node cannot vouch for the step it
 // stopped at, the same key here stops there again, and the answer sends the
-// client to another node or to the tracker duty; where a task in the trash
+// client to another node or to the Worklet duty; where a task in the trash
 // holds the walk, to its restore.
 //
 // AND IT SAYS WHERE THE KEY IS. These requests send none, so the key is the
@@ -321,26 +378,26 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		stop tracker.MoveStopped
+		stop worklet.MoveStopped
 		want []string
 	}{
 		"a refused step": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 2, Of: 5, Err: errors.New("refused")},
 			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
 				"SAME " + opkey.Header, "send op_id back",
 				"A new key is refused"},
 		},
 		"a task in the trash": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
-			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
+			want: []string{"ENG-9 is in the trash", "/worklet/items/ENG-9/restore",
 				"SAME " + opkey.Header, "send op_id back"},
 		},
 		"a step this node cannot vouch for": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
-				Followed: 1, Of: 5, Err: tracker.ErrStepUnvouched},
-			want: []string{"cannot vouch", "another node", "tracker duty",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 1, Of: 5, Err: worklet.ErrStepUnvouched},
+			want: []string{"cannot vouch", "another node", "the Worklet duty",
 				"send op_id back"},
 		},
 	} {
@@ -349,7 +406,7 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 			r := newRig(t, chart{})
 			stop := tc.stop
 			r.writes.err = &stop
-			got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+			got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 				map[string]any{"project": "OPS"})
 			said, _ := got.body["move_stopped"].(string)
 			if got.status != http.StatusOK || said == "" || got.body["key"] != "OPS-7" {
@@ -380,14 +437,14 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 func TestAMoveIsServedHere(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 		map[string]any{"project": "OPS"})
 	if got.status != http.StatusOK || got.body["project"] != "OPS" ||
 		len(r.writes.targets) != 1 || r.writes.targets[0] != "OPS" {
 		t.Fatalf("answered %d %v with the tracker asked %v, want the move into OPS",
 			got.status, got.body, r.writes.targets)
 	}
-	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+	if got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 		map[string]any{"project": "OPS", "status": "done"}); got.status != http.StatusBadRequest {
 		t.Errorf("a move carrying another route's argument answered %d, want 400",
 			got.status)
@@ -407,8 +464,8 @@ func TestAnOperationIDInABodyIsTheCallersToChange(t *testing.T) {
 	for _, c := range []struct {
 		name, method, target string
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items"},
-		{"somebody's record", http.MethodPut, "/work/people/ana/pins"},
+		{"a tool-backed route", http.MethodPost, "/worklet/items"},
+		{"somebody's record", http.MethodPut, "/worklet/people/ana/pins"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -433,19 +490,21 @@ func TestAnOperationIDInABodyIsTheCallersToChange(t *testing.T) {
 // object ([statelog.ReasonOpReused]) — a key sent back with a request it was
 // not answered for — and nothing is written. A new key settles it and no wait
 // does, so it is 409 naming the header, where it was the 503 every refusal
-// was.
+// was — told in words of its own, never the framework's refusal, which names
+// the operation and both subjects.
 //
-// Mutation: drop the arm and both rows answer 503.
+// Mutation: drop the arm and both rows answer 503; put the refusal's sentence
+// back in front of the arm's words and both carry the framework's.
 func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
+		{"a tool-backed route", http.MethodPatch, "/worklet/items/ENG-1",
 			map[string]any{"status": "done"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -458,6 +517,10 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 			if got.status != http.StatusConflict || got.body["field"] != opkey.Header {
 				t.Errorf("answered %d %v, want 409 naming %s", got.status, got.body,
 					opkey.Header)
+			}
+			if detail, _ := got.body["detail"].(string); detail != opkey.Reused {
+				t.Errorf("the detail is %q, want the arm's own words alone: %q", detail,
+					opkey.Reused)
 			}
 			assertOperationOf(t, got, key)
 		})
@@ -476,7 +539,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
 	r.writes.result = statelog.Result{Outcome: statelog.OutcomeUnknown}
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/rank",
 		map[string]any{"after": "ENG-2", "if_match": 3})
 	if got.status != http.StatusServiceUnavailable || got.body["item"] != "ENG-1" ||
 		got.body["error"] != string(httpjson.CodeUnavailable) {
@@ -493,7 +556,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 // elsewhere, a remark rewritten, a purge for another reason, each reported as
 // made and silently dropped. The tools behind the other routes already put a
 // digest of their arguments in every id they derive, and the knowledge base
-// binds every id to what its write says (internal/pages holds that); the
+// binds every id to what its write says (internal/doclet holds that); the
 // writes this surface makes itself are held to the same rule here: the same
 // request under the same key is the same operation (the retry), and any other
 // request under it is another.
@@ -509,25 +572,25 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 		op func(r *rig) []string
 	}{
 		{name: "a rank move", method: http.MethodPost,
-			target: "/work/items/ENG-1/rank",
+			target: "/worklet/items/ENG-1/rank",
 			first:  map[string]any{"after": "ENG-2", "if_match": 3},
 			second: map[string]any{"before": "ENG-2", "if_match": 3},
 			op:     func(r *rig) []string { return r.writes.opIDs }},
 		{name: "a remark's edit", method: http.MethodPatch,
-			target: "/work/items/ENG-1/comments/c-1",
+			target: "/worklet/items/ENG-1/comments/c-1",
 			first:  map[string]any{"body": "second"},
 			second: map[string]any{"body": "third"},
 			op:     func(r *rig) []string { return r.writes.opIDs }},
 		{name: "a purge", method: http.MethodPost,
-			target: "/work/items/t-1/purge?confirm=ENG-1&reason=",
+			target: "/worklet/items/t-1/purge?confirm=ENG-1&reason=",
 			first:  "an erasure request", second: "a retention request",
 			op: func(r *rig) []string { return r.writes.opIDs }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
-			r.reader.addComment("t-1", tracker.Comment{ID: "c-1", Task: "t-1",
-				Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 			key := statelog.NewOpID(time.Now(), "")
 			send := func(body any) {
 				t.Helper()
@@ -565,12 +628,82 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 	}
 }
 
+// A WRITE THIS SURFACE MAKES ITSELF IS KEYED BY THE ONE RULE.
+//
+// The remark's edit, the purge and chat's erase and prune publish under the id
+// [statelog.KeyedOpID] derives from the request's key, the verb, the object
+// and what the request asks — the rule the knowledge base's and chat's stores
+// derive every keyed write by — and never a spelling of this surface's own. A
+// second spelling had a namespace the stores' did not and read the key's
+// instant without asking whether it carried one; one rule cannot answer one
+// key two ways.
+//
+// Mutation: restore a namespace in [keyedOp]'s derivation and every row goes
+// red.
+func TestAWriteThisSurfaceMakesIsKeyedByTheOneRule(t *testing.T) {
+	t.Parallel()
+	cutoff := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	erasePath, eraseBody := eraseOf("2", []string{"m-2", "m-1"}, "a key was pasted")
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+		verb, object         string
+		asks                 map[string]any
+		published            func(r *rig) string
+	}{
+		{name: "a remark's edit", method: http.MethodPatch,
+			target: "/worklet/items/ENG-1/comments/c-1",
+			body:   map[string]any{"body": "second"},
+			verb:   "comment-edit", object: "c-1",
+			asks:      map[string]any{"body": "second"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "a purge", method: http.MethodPost,
+			target: "/worklet/items/t-1/purge?confirm=ENG-1&reason=retention",
+			verb:   "purge", object: "t-1",
+			asks:      map[string]any{"confirm": "ENG-1", "reason": "retention"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "an erase", method: http.MethodPost, target: erasePath, body: eraseBody,
+			verb: "chat-erase", object: theRoom,
+			asks: map[string]any{"message_ids": []string{"m-1", "m-2"},
+				"reason": "a key was pasted"},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+		{name: "a prune", method: http.MethodPost,
+			target: pruneAt(cutoff.Format(time.RFC3339), cutoff.Format(time.RFC3339)),
+			verb:   "chat-prune", object: theRoom,
+			asks:      map[string]any{"cutoff": cutoff.UnixNano()},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
+			got := r.do(as(admin("ana")), c.method, c.target, c.body,
+				opkey.Header, statelog.NewOpID(time.Now(), ""))
+			if got.status != http.StatusOK {
+				t.Fatalf("answered %d: %v", got.status, got.body)
+			}
+			// THE KEY THE ANSWER NAMES, which is the caller's scoped by who
+			// sent it — the key every id the request writes derives from.
+			key, _ := got.body["op_id"].(string)
+			want, err := statelog.KeyedOpID(key, c.verb, c.object, c.asks)
+			if err != nil {
+				t.Fatalf("KeyedOpID: %v", err)
+			}
+			if published := c.published(r); published != want {
+				t.Errorf("the write was published as %q, want %q — the id the "+
+					"one keyed rule derives from the request's key", published, want)
+			}
+		})
+	}
+}
+
 // THE KNOWLEDGE BASE IS HANDED THE REQUEST'S OPERATION: the caller's key,
 // scoped by who sent it, and nothing derived from the request beside that.
 //
 // It binds every operation it derives to what the write says — the title, the
 // body, the reason — so the same key sent with another request is another
-// operation there (internal/pages' own suite holds that). Bound here as well,
+// operation there (internal/doclet's own suite holds that). Bound here as well,
 // through the request's arguments, it was a second binding of one rule that
 // could only drift from the first, over a key the store then dated and
 // derived from: this surface's job is to hand over the request's operation —
@@ -586,11 +719,11 @@ func TestTheKnowledgeBaseIsHandedTheRequestsOperation(t *testing.T) {
 		headers              []string
 	}{
 		{name: "a page's rename", method: http.MethodPost,
-			target: "/pages/p-1/rename", body: map[string]any{"title": "Runbook v2"}},
+			target: "/doclet/pages/p-1/rename", body: map[string]any{"title": "Runbook v2"}},
 		{name: "a page saved through its tool", method: http.MethodPut,
-			target: "/pages/p-1", headers: []string{"If-Match", "2"},
+			target: "/doclet/pages/p-1", headers: []string{"If-Match", "2"},
 			body: map[string]any{"body": "new steps"}},
-		{name: "a page trashed", method: http.MethodDelete, target: "/pages/p-1"},
+		{name: "a page trashed", method: http.MethodDelete, target: "/doclet/pages/p-1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

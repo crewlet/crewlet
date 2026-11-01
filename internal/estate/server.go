@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("estate")
@@ -57,7 +57,7 @@ type ServerOptions struct {
 
 // Serve makes this node answer the fleet on its own subjects, one a [lane],
 // from its own copy of the estate — and `out_of_service` for the operations of
-// a domain whose copy is wrong (ADR-0049). The returned withdrawal ends every
+// a domain whose copy is wrong (ADR-0072). The returned withdrawal ends every
 // lane.
 //
 // EVERY DATA NODE SERVES, whether or not any other node asks yet, and from
@@ -168,8 +168,8 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
 			"held", s.env.heldKeys(), "detail", admitted.Why+"; nothing in it ran")
 		out.Request, out.Unserved, out.Detail = admitted.ID, unservedUnauthenticated, fmt.Sprintf(
-			"%s does not hold the key the request is signed under (it holds %v)",
-			s.self, s.env.heldKeys())
+			"%s does not hold the key the request is signed under (it holds %s)",
+			s.self, words.And(s.env.heldKeys()))
 		return s.encodeReply(out)
 	case signedask.Undecodable:
 		out.Err = encodeError(fmt.Errorf("estate: %s could not decode a request the "+
@@ -406,27 +406,27 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 func worse(ctx context.Context, self string, spec *opSpec, b Backend) (unservedReason, string) {
 	var (
 		reason unservedReason
-		why    []string
+		why    []words.Said
 	)
 	if b.Current != nil && !b.Current() {
 		reason = unservedBehindConfig
-		why = append(why, fmt.Sprintf("%s is behind the company's configuration — the "+
+		why = append(why, words.Said(fmt.Sprintf("%s is behind the company's configuration — the "+
 			"control plane has confirmed it behind the revision the fleet activated, so "+
 			"the chart, the units and the limits it would answer by are the ones the "+
-			"fleet replaced", self))
+			"fleet replaced", self)))
 	}
 	if b.Answers != nil && !b.Answers(ctx) {
 		if reason == "" {
 			reason = unservedLagging
 		}
-		why = append(why, fmt.Sprintf("%s's copy of %s lags its log — it has not drained "+
+		why = append(why, words.Said(fmt.Sprintf("%s's copy of %s lags its log — it has not drained "+
 			"it since it started, or has fallen past the snapshot slack of its end", self,
-			spec.domain))
+			spec.domain)))
 	}
 	if reason == "" {
 		return "", ""
 	}
-	return reason, strings.Join(why, "; and ") + " — so it answers only when no data " +
+	return reason, words.And(why) + " — so it answers only when no data " +
 		"node that is a better one to ask takes the request"
 }
 
@@ -495,7 +495,7 @@ func deadlineOf(ctx context.Context) time.Time {
 	return d
 }
 
-// writtenItems is the [tracker.WriteLog] a served write reports into on behalf
+// writtenItems is the [worklet.WriteLog] a served write reports into on behalf
 // of an asking node's turn — see [reply.Written]. A walking gesture's writer
 // may report one item more than once; the set keeps it once, in the order it
 // was first reported.
@@ -504,7 +504,7 @@ type writtenItems struct {
 	items []types.WorkItem
 }
 
-// Add implements [tracker.WriteLog].
+// Add implements [worklet.WriteLog].
 func (w *writtenItems) Add(item types.WorkItem) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

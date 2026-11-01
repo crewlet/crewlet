@@ -1,6 +1,6 @@
 // Package compact keeps a repository's pack count bounded, its bitmap
 // published and what no ref reaches dropped when a person asks: the
-// MAINTAINER's three loops (ADR-0060, ADR-0061, and the expunge's two records
+// MAINTAINER's three loops (ADR-0083, ADR-0084, and the expunge's two records
 // that internal/code decides).
 //
 // Every push stores one pack, so a busy repository's pack count grows with
@@ -116,7 +116,7 @@
 // different snapshots may each retire the pack the other relied on, and both
 // land. So no push decided against the inputs can land a ref whose closure a
 // compaction removed, and nothing fences a compaction against a push: what
-// drops objects is an expunge, never this (ADR-0060). A PUBLISHED PACK IS
+// drops objects is an expunge, never this (ADR-0083). A PUBLISHED PACK IS
 // NEVER A COMPACTION'S INPUT: a node's chain loads only over every pack it
 // names, so the plan leaves every pack a layer names out, and a published
 // repository's small packs are merged by its publications' repacks instead.
@@ -234,7 +234,7 @@
 // refusal in its own cache (cache.Cache.Damaged) whether or not the repository
 // has a tail, and REPAIRS it: the plan replaces the refused layer and every
 // layer above it, paced by PublishMinInterval alone. A restore carries no
-// layer (ADR-0061), so every node serves in own mode until each repository's
+// layer (ADR-0084), so every node serves in own mode until each repository's
 // maintainer publishes again. None of this alarms: a lost layer costs a
 // publication, never data.
 //

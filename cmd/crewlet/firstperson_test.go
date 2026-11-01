@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -37,8 +38,8 @@ import (
 // password they chose, acting as that seat.
 //
 // `-grants admin` STORES EVERY APP BESIDE IT, as the dashboard's picker does,
-// so the founder's row lists admin, tracker and knowledge — and taking admin
-// away from them later leaves them the apps.
+// so the founder's row lists admin and every app, and taking admin away from
+// them later leaves them the apps.
 //
 // Mutation: make the directory write require an enrolled administrator rather
 // than the grant, and the invitation is refused; drop a grant from what the
@@ -160,7 +161,7 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 		t.Fatalf("iam create on a seat: %v\n%s", err, errs.String())
 	}
 	for _, want := range []string{"login jane.founder, on seat founder",
-		"password link for", "-idempotency-key"} {
+		"password link for", "-op-id"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the create printed no %q:\n%s", want, out.String())
 		}
@@ -189,7 +190,7 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("X-Crewlet-Reset-Secret", secret)
+	req.Header.Set(authapi.ResetSecretHeader, secret)
 	res, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("open the link: %v", err)

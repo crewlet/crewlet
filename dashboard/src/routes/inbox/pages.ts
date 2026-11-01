@@ -15,17 +15,17 @@
  * a poll later. The poll stays, because a frame lost to a reconnect is never
  * sent again.
  *
- * UNTIL "SHOW MORE". The next page starts after the last notice the first was
- * answered with, and the first read again under a newer notice pushes that
- * one out of both, so from the press the first page is HELD: neither its poll
- * nor a push asks it again. A mark made from this tab still does, and the
- * pages shown are then read again from it, so the mark is drawn wherever the
- * notice is. It was one reader per page, each its own `useQuery` asked again
- * from its own fixed cursor — the hole, on every page boundary.
+ * THE FIRST PAGE STAYS LIVE PAST "SHOW MORE". The next page starts after the
+ * last notice the first was answered with, and the first read again under a
+ * newer notice pushes that one off its foot; the pager reads the gap and joins
+ * the pages before it draws them (`lib/usePaged.ts`), so a mark or a snooze is
+ * drawn wherever the notice is and nothing falls between two pages. It was one
+ * reader per page, each its own `useQuery` asked again from its own fixed
+ * cursor — the hole, on every page boundary.
  */
 
 import { useClient } from "~/lib/store-hooks.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { InboxAnswer, InboxNotice, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
@@ -33,7 +33,7 @@ import type { InboxAnswer, InboxNotice, LogRefusal, QueryRefusal } from "~/proto
 export interface Paged {
   /** Every page's notices in the order read, or null until the first answers. */
   notices: InboxNotice[] | null;
-  /** The first page's answer, for what it says about the whole: the one held, while one is. */
+  /** The first page's answer, for what it says about the whole. */
   first: InboxAnswer | null;
   /** More lie past the last page read. */
   more: boolean;
@@ -67,16 +67,14 @@ export function usePagedInbox(params: Params | undefined, pollMs: number, inboxO
   // THE PAGES BELONG TO ONE QUESTION. Asked a different one (another person,
   // another scope), the cursors of the last are meaningless and are dropped.
   const asked = params ?? NO_PARAMS;
-  const hold = usePageHold<InboxAnswer>(asked);
   const first = useQuery("inbox", asked, {
     enabled: params !== undefined,
     pollMs,
     refetchOnInboxOf: inboxOf,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    asked,
     (cursor) => socket.query("inbox", withFloor("inbox", JSON.stringify({ ...asked, cursor }))),
     noticesOf,
     noticeIdOf,
@@ -89,6 +87,6 @@ export function usePagedInbox(params: Params | undefined, pollMs: number, inboxO
     more: params !== undefined && paged.more,
     error: paged.error ?? paged.pageError,
     refusal: paged.error ? paged.refusal : null,
-    next: paged.older,
+    next: paged.next,
   };
 }

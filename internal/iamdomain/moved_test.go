@@ -73,7 +73,7 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 			_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 				PersonID: person, OpID: "op-narrow", Reason: "audit role",
 				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-					p.Grants = []iam.Grant{iam.GrantTracker}
+					p.Grants = []iam.Grant{iam.GrantWorklet}
 					return p, nil
 				},
 			})
@@ -140,7 +140,7 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 			_, err := rig.writer.Remove(t.Context(), other, "op-remove", "left")
 			return err
 		}, iamdomain.Moved{Seats: true, People: []string{other},
-			Logins: []string{"noor.aziz"}}},
+			Logins: []string{"noor.aziz"}, Removed: []string{other}}},
 	} {
 		if err := rig.draining(step.do); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
@@ -153,7 +153,8 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 		if got.Seats != step.want.Seats || got.Everyone != step.want.Everyone ||
 			!slices.Equal(got.People, step.want.People) ||
 			!slices.Equal(got.Logins, step.want.Logins) ||
-			!slices.Equal(got.Sessions, step.want.Sessions) {
+			!slices.Equal(got.Sessions, step.want.Sessions) ||
+			!slices.Equal(got.Removed, step.want.Removed) {
 			t.Errorf("%s: the batch said %+v, want %+v", step.name, got, step.want)
 		}
 	}

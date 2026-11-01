@@ -11,9 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE TRIM AND THE GATE COUNT ONLY THE NODES THAT HOLD DATA. A node without it
@@ -63,8 +63,8 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 	} {
 		e := &Engine{mode: mode, backends: &Backends{}}
 		n := &native{
-			writer: &tracker.Writer{}, pages: &pages.Store{},
-			trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
+			writer: &worklet.Writer{}, pages: &doclet.Store{},
+			trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{},
 		}
 		e.native.Store(n)
 		b := e.estateBackend(&core{}, n)
@@ -91,9 +91,9 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 	t.Parallel()
 	written := &turnctx.Written{}
 	actor := builtin.Actor{
-		Handle: "ops-token", Kind: tracker.AuthorOperator,
+		Handle: "ops-token", Kind: worklet.AuthorOperator,
 		OperatorID: "tok-1", TurnID: "run-1", Chain: []string{"cto", "swe"},
-		Thread:  &tracker.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
+		Thread:  &worklet.Origin{Surface: "slack", Conversation: "C0FOUNDER/1700000000.000100"},
 		Written: written,
 	}
 	got := remoteActor(actor)
@@ -107,7 +107,7 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 			t.Errorf("the provenance crossed without its %s", provenance.Type().Field(i).Name)
 		}
 	}
-	want := tracker.Provenance{OperatorID: "tok-1", TurnID: "run-1",
+	want := worklet.Provenance{OperatorID: "tok-1", TurnID: "run-1",
 		Chain: []string{"cto", "swe"}, Origin: actor.Thread, Written: written}
 	if !reflect.DeepEqual(got.Provenance, want) {
 		t.Errorf("the provenance crossed as %+v, want %+v", got.Provenance, want)

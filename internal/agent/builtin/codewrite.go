@@ -19,13 +19,14 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE CODE WRITE TOOLS: a seat's and a person's assistant's changes to the
 // company's own repositories, made through a tool rather than a clone — five
 // that change a branch (code_commit_files, code_revert, code_cherry_pick,
 // code_create_branch, code_delete_branch), each an ENGINE WRITE the code host
-// builds on the repository's git node and lands as one push (ADR-0062), and
+// builds on the repository's git node and lands as one push (ADR-0085), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
 // LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
@@ -37,7 +38,7 @@ import (
 //
 // The gate admits every principal (`authz.ClassEverybody`), as it admits a
 // push at the git transport: whether a caller may move a branch or change a
-// repository is its GRANT on that repository (ADR-0058), which the node that
+// repository is its GRANT on that repository (ADR-0081), which the node that
 // decides judges from its own chart — the git node and the repository's
 // committer for an engine write, the data node for a lifecycle request — and
 // which no row keyed on the verb can answer before the repository is read. A
@@ -72,8 +73,8 @@ import (
 //
 // A seat's write names the run behind it on its push (code.RunProvenance):
 // the turn, the work item it is charged to and the model the call was made on
-// ([toolloop.CallModel]) — a native round's, or the model an agent-mode run's
-// launch pointed its coding CLI at, so one run's pushes name one model
+// ([toolloop.CallModel]) — an engine-driven round's, or the model the seat's
+// coding run's launch pointed its CLI at, so one run's pushes name one model
 // whichever path made them.
 //
 // # A scratch repository a turn names is held first
@@ -199,7 +200,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // colleague SEAT rides on the write as its ceiling, and on every read the call
 // makes too ([codeCaller.ceiling]), so nothing a write tool reads is shown for
 // a colleague who could not read it; and a PERSON bounds nothing, since a
-// person maintains every repository (ADR-0055).
+// person maintains every repository (ADR-0078).
 //
 // JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
 // request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a
@@ -514,14 +515,14 @@ func (t *codeBranchWrite) args(args map[string]any) (code.EngineWrite, revArgs, 
 // refusal of one no write could take. A `content` present and empty is an
 // empty file, so presence is read apart from the value.
 func fileOpsArg(tool string, args map[string]any) ([]code.FileOp, *tools.Result) {
-	raw, _ := args["files"].([]any)
+	raw, _ := argval.List(args["files"])
 	if len(raw) == 0 {
 		r := failed(fmt.Sprintf("%s needs `files`: one operation a path — put, edit, delete, move or mode.", tool))
 		return nil, &r
 	}
 	out := make([]code.FileOp, 0, len(raw))
 	for i, entry := range raw {
-		m, ok := entry.(map[string]any)
+		m, ok := argval.Object(entry)
 		if !ok {
 			r := failed(fmt.Sprintf("%s: files[%d] is not an object of `op`, `path` and the fields its op "+
 				"takes.", tool, i))
@@ -530,11 +531,14 @@ func fileOpsArg(tool string, args map[string]any) ([]code.FileOp, *tools.Result)
 		op := code.FileOp{Op: code.FileOpKind(argString(m, "op")), Path: argString(m, "path"),
 			BlobOID: argString(m, "blob_oid"), Old: argString(m, "old"), New: argString(m, "new"),
 			To: argString(m, "to"), Mode: argString(m, "mode")}
+		// A NULL `content` IS NO CONTENT, as argval.Object reads every member
+		// that is null, and an op that needs one is refused by the write's
+		// rule for it; a list or an object is no text.
 		if content, present := m["content"]; present {
-			text, ok := content.(string)
+			text, ok := argval.String(content)
 			if !ok {
 				r := failed(fmt.Sprintf("%s: files[%d].content is the file's text; a binary file is put by "+
-					"`blob_oid` or made in run_sandbox.", tool, i))
+					"`blob_oid`, or committed in a clone and pushed.", tool, i))
 				return nil, &r
 			}
 			op.Content = &text
@@ -653,7 +657,7 @@ func conflictedWrite(ctx context.Context, turn *turnctx.Turn, c codeCaller, tool
 	render := func(k int) (json.RawMessage, error) {
 		read := newForeignRead(turn, c.asker.Seat)
 		for i, conflict := range res.Conflicts[:k] {
-			read.fence(fieldPath{}.key("conflicts").index(i).key("marked"), provenance.SourceRepoFile, nil, false,
+			read.fenceRepository(fieldPath{}.key("conflicts").index(i).key("marked"), provenance.SourceRepoFile,
 				conflict.Marked)
 		}
 		paged := out
@@ -989,19 +993,23 @@ func createRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 // archive or unarchive, or a rename, since each is a record of its own.
 func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *tools.Result) {
 	var change code.RepoChange
-	if v, ok := args["description"].(string); ok {
-		change.Description = &v
+	// PRESENCE IS THE ASK, each read by the check's own text reader: a null
+	// never reaches a tool (the entry leaves it out, toolargs.Of), and an
+	// empty description is one cleared.
+	if _, held := args["description"]; held {
+		description := argString(args, "description")
+		change.Description = &description
 	}
-	if v, ok := args["default_branch"].(string); ok {
-		v = strings.TrimSpace(v)
-		change.DefaultBranch = &v
+	if _, held := args["default_branch"]; held {
+		branch := strings.TrimSpace(argString(args, "default_branch"))
+		change.DefaultBranch = &branch
 	}
-	if v, ok := args["visibility"].(string); ok {
-		visibility := code.Visibility(strings.TrimSpace(v))
+	if _, held := args["visibility"]; held {
+		visibility := code.Visibility(strings.TrimSpace(argString(args, "visibility")))
 		change.Visibility = &visibility
 	}
-	if v, ok := args["search"].(string); ok {
-		search := code.SearchMode(strings.TrimSpace(v))
+	if _, held := args["search"]; held {
+		search := code.SearchMode(strings.TrimSpace(argString(args, "search")))
 		change.Search = &search
 	}
 	owner, given, refusal := ownerArg(tool, "owner", args)
@@ -1020,7 +1028,7 @@ func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 		}
 		change.PathOwners = &owners
 	}
-	_, archive := args["archived"].(bool)
+	_, archive := argval.Bool(args["archived"])
 	rename := strings.TrimSpace(argString(args, "rename_to"))
 	settings := change != (code.RepoChange{})
 	asked := 0

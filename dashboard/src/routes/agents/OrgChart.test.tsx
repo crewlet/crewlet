@@ -37,6 +37,7 @@ import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -134,7 +135,7 @@ beforeEach(() => {
 /** Every grant an operator holds. */
 const OPERATOR = {
   login: "ops",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   acts: [],
@@ -177,7 +178,7 @@ async function mount(viewer: Record<string, unknown> = { login: "", owner: "", a
   act(() => LayoutObserver.settle());
   // What the laid-out chart asks (the directory's listing) lands too.
   await afterMicrotasks();
-  return { asked };
+  return { asked, store };
 }
 
 /**
@@ -223,7 +224,9 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(card("SWE").getAttribute("data-state")).toBe("working");
   expect(caption("FE")).toBe("Needs you");
   expect(caption("PM")).toBe("Stopped");
-  expect(card("PM").getAttribute("title")).toBe("Stopped · budget · @pm");
+  expect(card("PM").getAttribute("title")).toBe(
+    "Stopped: its token budget is spent until the window resets or the ceiling is raised · @pm",
+  );
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
@@ -261,7 +264,7 @@ test.each([
 // CONTROL is a browser nobody has signed in on, who is asked nothing. Mutation:
 // gate the listing on Admin again and the tracker reader reads "Human seat".
 test("every signed-in reader reads who holds a human seat, and only an admin acts on it", async () => {
-  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await mount({ ...OPERATOR, grants: ["worklet"] });
   expect(fetched).toContain("/iam/seats");
   expect(caption("Jane Founder")).toBe("Open seat");
   expect(controls("Jane Founder")).toEqual([]);
@@ -282,7 +285,10 @@ test("every signed-in reader reads who holds a human seat, and only an admin act
 test("a directory that did not answer an administrator is said over the chart", async () => {
   seatsRefused = new Response(
     JSON.stringify({ error: "unavailable", message: "This node cannot answer yet." }),
-    { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
+    {
+      status: 503,
+      headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", "Retry-After": "2" },
+    },
   );
   await mount(OPERATOR);
   expect(screen.getByText("Couldn’t load who holds each seat.")).toBeTruthy();
@@ -331,7 +337,7 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
   expect(screen.getByRole("dialog", { name: "Add someone as Jane Founder" })).toBeTruthy();
   cleanup();
 
-  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await mount({ ...OPERATOR, grants: ["worklet"] });
   const read = card("Jane Founder");
   expect(caption("Jane Founder")).toBe("Open seat");
   read.focus();
@@ -383,7 +389,7 @@ test("an invited human card's menu cancels its invitation, and a held one has no
 // THE STRUCTURE IS THE BUILDER'S: the company at the root, each unit with its
 // type and the project its work is filed under, and its lead in a pill.
 test("the structure draws the company, and each unit with its project and its lead", async () => {
-  await mount({ login: "jane.doe", grants: ["tracker"], owner: "jane", acts: [] });
+  await mount({ login: "jane.doe", grants: ["worklet"], owner: "jane", acts: [] });
   expect(caption("Acme")).toBe("Company");
   expect(caption("Core")).toBe("Unit · ENG");
   expect(card("Core").getAttribute("title")).toBe("2 seats. Projects: ENG");
@@ -392,9 +398,9 @@ test("the structure draws the company, and each unit with its project and its le
   expect(leadOf("Leadership")).toBe("Lead");
   cleanup();
 
-  // THE PROJECT IS THE TRACKER'S: a reader without Tracker is not asked a
+  // THE PROJECT IS WORKLET'S: a reader without Worklet is not asked a
   // question the engine would refuse, and a unit's node carries its type alone.
-  const { asked } = await mount({ login: "sam", grants: ["knowledge"], owner: "sam", acts: [] });
+  const { asked } = await mount({ login: "sam", grants: ["doclet"], owner: "sam", acts: [] });
   expect(asked).not.toContain("work_projects");
   expect(caption("Core")).toBe("Unit");
   expect(leadOf("Core")).toBe("Lead: CTO");
@@ -431,7 +437,9 @@ test("the legend's figures are the activity counts", async () => {
   const counts = stateCounts(indexOrg(CHART_ORG), AGENTS);
   const legend = screen.getByRole("group", { name: "Seats by what they are doing" });
   expect(legend.textContent).toBe(
-    `Working ${counts.working}Needs you ${counts.needs}Stopped ${counts.stopped}Idle ${counts.idle}`,
+    // A GROUP keyed on the engine's `stopped` holds the paused seats as well
+    // as the ones a fault stopped, and its word says both.
+    `Working ${counts.working}Needs you ${counts.needs}Paused or stopped ${counts.stopped}Idle ${counts.idle}`,
   );
   expect(counts).toEqual({ working: 2, needs: 1, stopped: 1, idle: 2 });
 });
@@ -467,7 +475,7 @@ test("Add seat is held with its reason for a reader nobody has signed in", async
 test("an operator's Add seat goes to the builder, adding an agent", async () => {
   await mount({
     login: "ops",
-    grants: ["admin", "tracker", "knowledge"],
+    grants: ["admin", "worklet", "doclet"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -481,7 +489,7 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
 test("a lead's Add seat goes to the builder, adding to the unit they lead", async () => {
   await mount({
     login: "cto.person",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "cto",
     owner: "cto",
     acts: [],
@@ -504,7 +512,7 @@ test("Add seat is held with the managed sentence for a reader who is not a write
 
   await mount({
     login: "cto.person",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "cto",
     owner: "cto",
     acts: [],
@@ -582,6 +590,32 @@ test("the seat the peek opens on is inside the canvas after the peek narrows it"
   standCanvasAt(420);
   await settleChart();
   const drawn = onScreen("DevRel");
+  expect(drawn.left).toBeGreaterThanOrEqual(0);
+  expect(drawn.right).toBeLessThanOrEqual(420);
+});
+
+// A SEAT THAT APPEARS IS REVEALED. Held at its legible zoom in a narrow canvas
+// (beside the assistant) the chart is wider than the canvas, and a seat the
+// reader just asked the assistant to add landed past the edge, unseen.
+test("a seat added while the chart is open is brought into view", async () => {
+  standCanvasAt(420);
+  const { store } = await mount();
+  await settleChart();
+  // The same company with a Tech Writer added beside DevRel, as the engine
+  // answers once the write lands.
+  type Seatful = { id: string; roles?: { name: string; handle: string }[]; children?: Seatful[] };
+  const added = structuredClone(CHART_ORG) as unknown as {
+    units: Seatful[];
+    derived: { seats: Record<string, unknown>[]; units: { id: string; seats: string[] }[] };
+  };
+  added.units[2]!.children![1]!.roles!.push({ name: "Tech Writer", handle: "tw" });
+  added.derived.seats.push({ ...added.derived.seats[6]!, handle: "tw", name: "Tech Writer" });
+  added.derived.units.find((u) => u.id === "developer-relations")!.seats.push("tw");
+  await act(async () => {
+    store.applyOrg(added as never);
+  });
+  await settleChart();
+  const drawn = onScreen("Tech Writer");
   expect(drawn.left).toBeGreaterThanOrEqual(0);
   expect(drawn.right).toBeLessThanOrEqual(420);
 });

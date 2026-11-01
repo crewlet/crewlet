@@ -4,9 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // CallLog is what one RUN of a turn has called so far, kept to answer one
@@ -15,13 +18,13 @@ import (
 // # Why a run needs it
 //
 // A write a turn makes derives its operation id from the unit of work, the
-// verb, the object and a digest of the call's own arguments, so a re-run —
-// which makes the same call again — collapses onto the first copy instead of
-// writing twice. That identity names WHAT a call asks for and not WHEN, so a
-// run that moved an item to `in_progress`, then to `done`, then back to
-// `in_progress` derived one id for the first and the third: the third was
-// answered as the first's retry, `applied` at the first's position, and the
-// item stayed `done` while the tool reported otherwise.
+// tool, the verb, the object and a digest of the call's own arguments, so a
+// re-run — which makes the same call again — collapses onto the first copy
+// instead of writing twice. That identity names WHAT a call asks for and not
+// WHEN, so a run that moved an item to `in_progress`, then to `done`, then
+// back to `in_progress` derived one id for the first and the third: the third
+// was answered as the first's retry, `applied` at the first's position, and
+// the item stayed `done` while the tool reported otherwise.
 //
 // So an id also carries [CallLog.Ordinal]: how many earlier calls to the same
 // tool in this run asked for something ELSE. The first and third calls above
@@ -39,6 +42,25 @@ import (
 // call to the tool can only raise a count, and a raised count is a fresh
 // operation: the cost is that an identical repeat separated by a call to the
 // same tool about something else writes again, which is what was asked.
+//
+// # Unless two tools write one state
+//
+// A count kept per tool cannot see a call to ANOTHER tool, and that is a hole
+// wherever two tools write one piece of state in opposite directions —
+// joining a room and leaving it are two tools and one membership. A run that
+// joined, left and joined again counted the second join 0, exactly as the
+// first: the leave between them was another tool's call. So the second join
+// derived the first one's id and was answered as its retry — `applied`, at the
+// first join's position, with nothing published — and the seat stayed outside
+// the room while the tool reported it inside. The `in_progress` → `done` →
+// `in_progress` hazard above, back again because one object has two tools.
+//
+// Such tools are a FAMILY and are counted together ([CallLog.OrdinalAmong]):
+// every earlier call in the family that is not this same call raises the
+// count. The family is declared by the domain that owns the tools, because
+// only it knows which of them write the same thing; a family drawn too wide
+// can only raise counts, which is the safe direction for the reason above,
+// and one drawn too narrow is this hole.
 //
 // # What it holds, and for how long
 //
@@ -85,24 +107,32 @@ func NewCallLog() *CallLog { return &CallLog{} }
 //
 // AFTER THE CALL, because a count is about EARLIER calls: the call being made
 // reads its own count before it is recorded.
-func (l *CallLog) Record(tool string, args map[string]any) {
+//
+// THE CANONICAL ARGUMENTS ([toolargs.Args]), the form the tool reads and
+// derives its operation id from with [CallLog.Ordinal], so a retry spelt
+// "Draft" after "draft" is the same call here as it is to the tool.
+func (l *CallLog) Record(tool string, args toolargs.Args) {
 	if l == nil {
 		return
 	}
-	digest := ArgsDigest(args)
+	digest := ArgsDigest(args.Map())
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
 }
 
-// SeededCall is one call a run made before this log held it.
+// SeededCall is one call a run made before this log held it, by the
+// canonical arguments its tool read ([toolargs.Args]): a resumed run's record
+// of a call made before this segment (the bridge's log of its executor run's
+// calls, a closed round) holds the model's spelling, which a count read
+// against the canonical form would take for another call.
 type SeededCall struct {
 	Tool string
-	Args map[string]any
+	Args toolargs.Args
 }
 
 // Seed records calls the run made before this log existed — a resumed run's
-// calls from before its suspension.
+// calls from before this segment, by their canonical arguments.
 func (l *CallLog) Seed(calls ...SeededCall) {
 	for _, call := range calls {
 		l.Record(call.Tool, call.Args)
@@ -112,6 +142,18 @@ func (l *CallLog) Seed(calls ...SeededCall) {
 // Ordinal is how many calls to tool earlier in this run asked for something
 // other than args — the count a derived operation id carries. See [CallLog].
 func (l *CallLog) Ordinal(tool string, args map[string]any) int {
+	return l.OrdinalAmong(nil, tool, args)
+}
+
+// OrdinalAmong is [CallLog.Ordinal] counted across a FAMILY of tools that
+// write one state: how many calls earlier in this run, to tool or to any tool
+// in family, were not this same call — another tool of the family, or tool
+// with other arguments. See [CallLog] for why a family exists.
+//
+// tool is counted whether or not family lists it, so a nil family is
+// [CallLog.Ordinal]. A call repeated with nothing different in the family
+// between keeps its count, exactly as there.
+func (l *CallLog) OrdinalAmong(family []string, tool string, args map[string]any) int {
 	if l == nil {
 		return 0
 	}
@@ -120,7 +162,12 @@ func (l *CallLog) Ordinal(tool string, args map[string]any) int {
 	defer l.mu.Unlock()
 	n := 0
 	for _, entry := range l.entries {
-		if entry.tool == tool && entry.digest != digest {
+		if entry.tool == tool && entry.digest == digest {
+			// THIS SAME CALL, made before: a repeat, which keeps
+			// the count rather than raising it.
+			continue
+		}
+		if entry.tool == tool || slices.Contains(family, entry.tool) {
 			n++
 		}
 	}
@@ -137,6 +184,36 @@ func (l *CallLog) Fork() *CallLog {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+}
+
+// Admit records one call the moment it is ADMITTED and returns the log that
+// call counts from: this run's calls before it, as a fork ([CallLog.Fork]).
+//
+// FOR CALLS THAT RUN SIDE BY SIDE. [CallLog.Record] after each call returns is
+// the rule for calls made one after another, where the order they return in is
+// the order they were made in. A coding CLI makes a response's calls at once
+// and they return in whatever order their tools finish, so a count read
+// against a log their returns are recorded into would depend on which sibling
+// finished first — and a re-run, making the same calls, would not reproduce
+// it. Recorded at admission instead, in the order the calls arrived, every
+// count is a function of that order alone.
+//
+// ONE LOCK FOR BOTH HALVES, so two admissions cannot each take a fork before
+// the other's record and both count as the run's first of their kind.
+//
+// The fork is the call's own: whatever the call records on it is handed back
+// with [CallLog.Absorb] once the call has returned. A nil log admits nothing
+// and returns nil, which counts every call as the first of its kind.
+func (l *CallLog) Admit(tool string, args toolargs.Args) *CallLog {
+	if l == nil {
+		return nil
+	}
+	digest := ArgsDigest(args.Map())
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fork := &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
+	return fork
 }
 
 // Absorb records the calls made on a fork, once the worker that made them is

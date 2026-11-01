@@ -32,20 +32,21 @@
  * revision would call such a write not landed, and the conflict flow would
  * then replay every operation onto a document that already holds them.
  *
- * AN UPDATE WAITS FOR THE NODE TO CATCH UP. A 409 names the revision the node
- * holds, and the document the draft is rebased onto has to be that revision
- * or a later one. A node behind a load balancer, or one still applying, can
- * answer `GET /config` with an older document, and rebasing onto that would
- * lose the very change the conflict was about. [readyToUpdate] reads the
- * active document and accepts it only when it is the conflict's revision or a
- * descendant of it.
+ * AN UPDATE WAITS FOR THE READ TO CATCH UP. A 409 names the fleet's revision
+ * that won, and the document the draft is rebased onto has to be that
+ * revision or a later one. `GET /config` answers the fleet's pointer on every
+ * node, but a read that raced the winning write — sent before it landed, or
+ * answered by a node whose view of the pointer trails it — can still answer
+ * the document before it, and rebasing onto that would lose the very change
+ * the conflict was about. [readyToUpdate] reads the active document and
+ * accepts it only when it is the conflict's revision or a descendant of it.
  *
  * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is Admin's,
  * which a lead editing their unit (`scope.ts`) does not hold, so neither walk
  * is open to them. Their lost answer is settled by
  * reading the unit back ([settleUnknownWrite]), and their update accepts the
- * unit the node serves now, which a node that is behind can only make an
- * older one — and an update onto an older revision ends at the save, whose
+ * unit the read answers now, which a read that trails the winning write can
+ * only make an older one — and an update onto an older revision ends at the save, whose
  * `If-Match` the engine refuses, rather than in a lost change.
  */
 
@@ -60,7 +61,7 @@ import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
 import { isRecord, jsonEqual } from "./json.ts";
 import type { KeySource } from "./keys.ts";
 import { fromDocument, toDocument } from "./document.ts";
-import { classifyCheck, type CheckOutcome } from "./scheduler.ts";
+import { classifyCheck, uncheckedSentence, type CheckOutcome } from "./scheduler.ts";
 import {
   checkRequest,
   revisionOfEtag,
@@ -168,7 +169,7 @@ export function classifySave(
       : typeof body.error === "string"
         ? body.error
         : "";
-  if (refusal.kind === "unreachable") {
+  if (refusal.kind === "unsettled") {
     return { kind: "unknown", currentRevisionId: null, detail };
   }
   if (afterUnknown && refusal.kind === "conflict") {
@@ -321,7 +322,7 @@ export type UpdateReadiness =
        */
       readonly derived: Derived;
     }
-  /** The node still serves the draft's base or an older revision. */
+  /** The read still answers the draft's base or an older revision. */
   | { readonly kind: "behind" }
   | { readonly kind: "unknown"; readonly detail: string };
 
@@ -383,8 +384,8 @@ export async function readyToUpdate(
   return {
     kind: "unknown",
     detail:
-      checked.status === "unreachable"
-        ? checked.detail || "The engine could not be reached."
+      checked.status === "unchecked"
+        ? uncheckedSentence(checked)
         : "The engine did not describe the organization.",
   };
 }

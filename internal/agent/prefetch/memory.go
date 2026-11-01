@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Personal memory: what this seat has learned and kept.
@@ -134,7 +135,7 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVect
 	}
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
-		bullets = append(bullets, renderMemory(entry))
+		bullets = append(bullets, renderMemory(r.Boundary, entry))
 	}
 	return joinBullets(bullets)
 }
@@ -251,16 +252,23 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 // every chat turn. What the brief adds that the filter needs is the surface,
 // and the ask carries it in the notification's subject ("Slack message", an
 // issue's key and title).
+//
+// THE TASK ARRIVES FENCED, under a token minted for this call ([Ask]): the
+// filter's answer decides which of the seat's own memories the seat is shown,
+// so a task that addresses the filter must read as somebody's words. The
+// sender line is a display name somebody chose and is neutralised under the
+// same token.
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
+	token := provenance.NewBoundary()
 	var b strings.Builder
-	b.WriteString("Agent's current task:\n" + r.Ask + "\n")
+	b.WriteString("Agent's current task:\n" + r.Ask.For(token) + "\n")
 	// THE SENDER, STRUCTURED. Without it the filter has only whatever
 	// platform ids appear in the task body to reason from, and rule 3 —
 	// the one hard subject filter — becomes unenforceable: it cannot tell
 	// a preference about the person asking from a preference about
 	// somebody else entirely.
 	if line := senderLine(r.Senders); line != "" {
-		b.WriteString(line + "\n")
+		b.WriteString(provenance.Neutralise(token, line) + "\n")
 	}
 	b.WriteString("\nStored memories:\n")
 	for i, entry := range candidates {
@@ -269,8 +277,12 @@ func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 		// the filter could SEE, so a rule whose scope clause sat past the
 		// cut was judged on its opening and excluded — and the seat then
 		// behaved as if it had never been written.
+		//
+		// NEUTRALISED under the call's token: a memory is what a model
+		// wrote after reading other people's words, and no line of it may
+		// open or close the task's fence.
 		b.WriteString(strconv.Itoa(i) + ". " + memoryKindLabel(entry) +
-			collapse(entry.Content) + "\n")
+			provenance.Neutralise(token, collapse(entry.Content)) + "\n")
 	}
 	b.WriteString("\nRelevant indices (JSON array):")
 	return b.String()
@@ -308,9 +320,12 @@ func memoryKindLabel(entry learning.DiaryEntry) string {
 	return ""
 }
 
-// renderMemory renders one selected memory as a bullet.
-func renderMemory(entry learning.DiaryEntry) string {
-	content := collapse(entry.Content)
+// renderMemory renders one selected memory as a bullet, neutralised under b,
+// the turn's token (ADR-0040): a memory is what a post-turn model concluded
+// from other people's words, or what the seat noted mid-turn, and it is
+// shown beside the turn's fences, which nothing in it may open or close.
+func renderMemory(b provenance.Boundary, entry learning.DiaryEntry) string {
+	content := provenance.Neutralise(b, collapse(entry.Content))
 	if content == "" {
 		return ""
 	}

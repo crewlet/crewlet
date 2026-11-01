@@ -32,7 +32,7 @@ import (
 // interior removal impossible. Each of them fails silently if it drifts: an
 // age bound or a per-subject limit turns the log into a keyed table and the
 // strict loop stalls on the first ordinary write; a delete or a rollup erases
-// a committed record from under every node's applier; a discard-old policy
+// a committed record from under every data node's applier; a discard-old policy
 // drops the oldest record to accept a new one, which is the company's own
 // history going quietly missing under load.
 func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
@@ -70,7 +70,7 @@ func TestMutationStreamCannotRemoveInteriorSequences(t *testing.T) {
 		t.Error("the log permits message deletion — a key-value bucket gets " +
 			"DenyDelete for free and a plain stream does not, so without it any " +
 			"client holding the API can erase a committed record from under " +
-			"every node's applier")
+			"every data node's applier")
 	}
 	if cfg.AllowRollup {
 		t.Error("the log permits a rollup — a rollup is a delete of everything " +

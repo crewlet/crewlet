@@ -45,7 +45,7 @@ func TransitionChanges() []TransitionChange {
 func (c TransitionChange) Valid() bool { return slices.Contains(TransitionChanges(), c) }
 
 // AlarmTransition is one alarm instance changing on one node's tracker — the
-// record a wake about it is derived from (ADR-0065).
+// record a wake about it is derived from (ADR-0088).
 //
 // ONE PER INSTANCE, as the log lines are: a per-log alarm standing on two logs
 // is two instances, and the second log joining it is a transition of its own

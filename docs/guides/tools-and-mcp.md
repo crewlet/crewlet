@@ -6,7 +6,7 @@ Agents interact with external systems and internal engine operations through too
 
 ## Built-in Tools
 
-The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no sandbox) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
+The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no A2A channel) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
 
 | Tool | Description |
 |------|-------------|
@@ -19,21 +19,20 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages (offered to the onboarding pass) |
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 | `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. `mode` picks the ranking — `hybrid` by default, `keyword` or `semantic` (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)) — and an answer ranked other than it was asked says so in a sentence: a `semantic` search with nothing to rank by meaning runs nothing, and says that tells the seat nothing about whether a page exists. Registered wherever the company has a knowledge backend at all |
-| `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key |
-| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md). Where this node serves the company's code host it also takes `repos`: the repositories to clone into the box, each granted to the run for the seat and for whoever woke the turn (see [Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)) |
+| `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key. A key nobody published is answered with the near keys ("did you mean") and the keys that exist, at most 30 |
 
 `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
-### The native tracker and knowledge base
+### Worklet and Doclet
 
-Twenty-three more, registered **only where the company runs the engine's own backends**
-(`tracker.backend: native` / `knowledge.backend: native`, which are the
+Twenty-three more, registered **only where the company runs Worklet or Doclet**
+(`tracker.backend: worklet` / `knowledge.backend: doclet`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
 learns to distrust the whole catalogue. The seventeen below are the item, file and page
 tools; the other six read the catalogue, the projects and the activity feed,
-and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists the tracker's
+and [Worklet](worklet.md#what-a-seat-can-do) lists the tracker's
 eighteen in full.
 
 | Tool | Description |
@@ -52,7 +51,7 @@ eighteen in full.
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage — the project lead's, as removing an item is |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
+| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/doclet/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
 | `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
@@ -66,14 +65,15 @@ A body sent back to a write still wrapped in the fence it was read in is
 stored without it.
 
 The writes on each side count as a **delivery** for the turn's own
-did-this-reach-anybody gate, and each waits for its own write to reach this
-node's projection before answering — so a turn that files an item and then
+did-this-reach-anybody gate, and each raises the floor the turn's next read
+carries, so whichever copy answers that read — this node's or another data
+node's — has applied the write first: a turn that files an item and then
 lists the project sees what it just filed.
 
-Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
-[three values every write has](replication.md#a-write-has-three-outcomes) — and
-the `position` it is durable at. A write whose outcome is **unknown** is never
-answered with the id, key, version or revision of something that may not
+Every write answers with its `outcome` — `applied`, `pending` or `unknown`,
+the [three values every write has](replication.md#a-write-has-three-outcomes)
+— and the `position` it is durable at. A write whose outcome is **unknown** is
+never answered with the id, key, version or revision of something that may not
 exist, on any write tool on either surface: the call fails, saying that the
 write may have landed and may not, under which operation, and what to do. That
 includes `create_work_item`, whose unknown answer names the key this attempt
@@ -86,23 +86,28 @@ after. And the `version` an update answers with is always the item's own and
 its newest — the one to send back as `if_match` — never another item's that
 the same call wrote, and never one its own dependency change has already moved
 the item past, when a call changes both; its `position` is likewise the call's
-last write, so waiting for it waits for all of them.
+last write, so waiting for it waits for all of them. A write that **a data
+node never answered**, and no other ran, is unknown too, never a refusal: the
+node that stayed silent may have run it, so it is not "not made", and the
+answer says what settles it for that call — the same operation again where the
+call carried one, a read before writing again where it did not.
 
 Where this node's operation ledger cannot vouch for the operation — it was
-minted before the ledger may have lost rows, a seat woken by a backlog trigger
-just after its node adopted a snapshot — the answer says this node cannot
-tell, because the same operation asked here answers the same way until the
-write reaches this node, and tells the caller to look before writing it again;
-a gesture that stopped part of the way through at such a step is not told to
-repeat itself either. A seat's own write under a plain lost acknowledgement is
-told to repeat the call with exactly the same arguments, before any different
-call to the same tool — that is the same operation, and it lands once.
-Reworded, it is a new one. Where the ledger cannot vouch for it, that same
-repeat is still safe — it publishes nothing this node cannot vouch for — but it
-answers the same way until the write reaches this node, so looking says sooner.
-The two writes that state a whole value rather than change one —
-`write_project` and `write_work_catalogue` — say instead that repeating them is
-harmless: each call is a new operation stating the same thing.
+minted before the ledger may have lost rows, as an `op_id` your assistant sends
+back more than thirty days after the write that first answered with it — the
+answer says this node cannot tell, because the same operation asked here
+answers the same way until the write reaches this node, and tells the caller to
+look before writing it again; a gesture that stopped part of the way through at
+such a step is not told to repeat itself either. A seat's own write under a
+plain lost acknowledgement is told to repeat the call with exactly the same
+arguments, before any different call to the same tool — that is the same
+operation, and it lands once. Reworded, it is a new one. Where the ledger
+cannot vouch for it, that same repeat is still safe — it publishes nothing this
+node cannot vouch for — but it answers the same way until the write reaches
+this node, so looking says sooner. The two writes that state a whole value
+rather than change one — `write_project` and `write_work_catalogue` — say
+instead that repeating them is harmless: each call is a new operation stating
+the same thing.
 
 A create or an update that declares its labels first (`labels_create_missing`)
 and cannot tell whether that declaration landed stops there too, and is
@@ -130,17 +135,21 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Five more are a
+itself is recorded beside either as the write's `operator_id`. Seven more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
-running turn, decided once a probe of the fleet names the turn's seat — a
+running turn, decided on the seat its coding run's record names once the run
+is out, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
 or an administrator; `answer_run`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
 asks the company's knowledge a question on the auxiliary model of the asker's
-seat, so it needs either app — it searches the pages only for a `knowledge`
-holder and the board only for a `tracker` holder — **and** a credential bound
-to a seat. That set
+seat, so it needs either app (it searches the pages only for a `doclet`
+holder and the board only for a `worklet` holder) **and** a credential bound
+to a seat; and, where the company hosts its code, `code_repo_readers`, who
+read a `visibility: unit` repository, an administrator's audit, and
+`code_mark_inbox`, a person's marks over their own code notices, served beside
+the code writes (a seat is woken, never shown an inbox). That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
@@ -168,7 +177,7 @@ argument beside it: the key is scoped to the principal that sent it, so a
 retry is the same request sent again with the same key, and a key somebody
 else learned names a different operation for them.
 
-Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
+Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page: `write_page` on Doclet, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
 **On a vendor tracker there are still no task builtins.** `create_task`,
 `assign_task`, `update_task` and `list_tasks` are not registered against Jira
@@ -178,19 +187,20 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Sixteen more, registered on every node that takes artifact uploads (one with
-an object store, a coordination store and a data node to reach), whatever
-tracker or knowledge base the company runs: twelve for artifacts, their folders
-and the company's brand, and four for an artifact's datastore. Each tool is
-named for its authority row, and the operator catalogue serves the same
-sixteen, so an operator's own assistant publishes, files and writes rows exactly
-as a seat does.
+Seventeen more, registered on every node that takes artifact uploads (one
+with an object store, a coordination store and a data node to reach), whatever
+tracker or knowledge base the company runs: thirteen for artifacts, their
+folders and the company's brand, and four for an artifact's datastore. Each tool
+is named for its authority row, and the operator catalogue serves the same
+seventeen, so an operator's own assistant publishes, files and writes rows
+exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|
 | `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time (`max_keys`, `continuation_token`). Folders read as S3 prefixes: `prefix` is a folder's path (`Marketing/Q4/`, empty for the top level), and with `delimiter: "/"` the answer is that one level, its artifacts in `contents` and its subfolders in `common_prefixes`. Every row names its `folder` |
 | `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
 | `list_dashboard_sources` | The engine sources a dashboard's `engine` datasets may read: each one's parameters, columns, who may read it and how it refreshes. Holds no row; a source is answered as each board's viewer |
+| `get_artifact_format` | The exact format a kind's files are checked against at publish (`brand`, `slides`, `doc`, `design`, `dashboard`): every key of its index with its type and rule, its bounds and closed sets, and for a brand kit an example that reads clean. Generated by each format package from the form its strict decode reads with, so it cannot drift from what a publish admits. Holds no row; readable by everybody |
 | `get_company_brand` | The company's adopted brand: its colours by role (light and dark, each with the kit token that carries it), its typefaces, its logos as the kit's `crewlet-logo` markup and as ready `from_brand` copies, the brand slide theme's colours, the version adopted and by whom, the artifact kit version to link, and its voice, fenced under the `company` trust. `brand` is null when none is adopted. Readable by everybody, under every ceiling |
 | `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, the adopted brand's logos and faces (`from_brand`), a build in the turn's coding run (`source.sandbox`), or for a deck a `starter` plan (a theme, `brand` among them, and the slides it opens with). `folder` files it in a folder that exists, by id or path. When a person asked for it, they are made its editor |
 | `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one; `from_brand` copies a logo or a face), a build's whole `source`, or `restore_version` |
@@ -294,15 +304,35 @@ are declared to an upload the publish pipeline reserves first, each file is put
 through the engine, and the version is decided only after every byte is read
 back verified. A sandbox is never handed an upload URL; the engine lists the
 directory through the box itself, holds every path to the workspace, and
-refuses one file more than a version holds rather than truncating. A box is
-readable after `run_sandbox` returns and until the Execute phase ends.
+refuses one file more than a version holds rather than truncating. The engine
+reads a box only for the run working in it — a call the run makes over its own
+bridge while its record reads `running` — attached as a reader, never resumed.
+A call from another seat's turn, or from a run parked on a question, collected
+or torn down, is refused `not_running`; a caller that is not an agent seat is
+refused `forbidden`; and a seat's call on a node that runs no sandbox is refused
+`unavailable`
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)). So a
+seat's executor publishes a build larger than the inline bound from its box
+before it finishes.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and
 told to stop and report. A file whose bytes the object store has no room for
 is refused [`store_full`](#when-a-tool-refuses), naming the file: nothing is
 published, and the same call is refused the same until an operator makes
-room. File text another principal wrote is
+room. A version outside its policy or its format is refused
+with every finding at once, the first 20 listed and the rest counted, and a
+closed format's refusal points at `get_artifact_format`. Any write tool (an
+artifact's or another) that answers a policy refusal (`invalid`) four times in
+a row on one target (an artifact, a work item; the whole tool where a call
+names none) appends a plain instruction to stop retrying, raise a blocker on
+the work item if there is one or tell whoever asked, and end the branch; a
+success on that target ends the run. The run is logged as
+`tool_policy_refusal_loop` and counted once in
+`crewlet.tools.policy_refusal_loops` when it reaches the limit
+([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md));
+the call itself still runs, so a version that is
+finally right still publishes. File text another principal wrote is
 [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
 is condensed by the seat's auxiliary model unless the call passes `offset`.
 **Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
@@ -316,10 +346,76 @@ own assistant, installed as the
 [`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
 is (copy the directory into your assistant's skills folder).
 
+### Chatlet
+
+Nine more, on the same terms and on the third axis: they are registered **only
+where the company runs the engine's own chat** (`chat.backend: chatlet`, the
+default). A company on Slack or Mattermost gets none of them and reaches its
+workspace through that vendor's own MCP tools instead, for the reason the
+tracker section gives — a seat offered a tool against a surface its company
+does not run reaches for it and fails at the call. They are the `chatlet` app's
+([Identity and access](../concepts/identity-and-access.md)), which every seat
+holds.
+
+| Tool | Description |
+|------|-------------|
+| `post_message` | Say something new in a room, as a top-level message. `@handle` reaches one colleague; `@channel` in the text is what addresses the whole room, and the receipt says so back |
+| `reply_in_thread` | Answer a message under its own thread, beside the question. Threads are one level deep, so a reply to a reply carries the same root |
+| `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
+| `read_channel` | Read a room, newest first, or one thread in it, oldest first. The rest of the room is not handed to a seat at turn start, so it reads it here when its answer depends on what was said before |
+| `list_channels` | The rooms this seat is in, most recently active first, with what each is for and the last thing said in it |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — at most forty to an answer, twenty unless asked — and an answer from an index still being built says so rather than reading as nothing said. `read_channel` is the other half: one room, in order, from a point you name |
+| `react_to_message` | Put one emoji on a message (`message_id`), or take yours back |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
+
+Every tool that takes a `channel` takes the room's id or its **name** — `#eng`
+and `eng` are the same room. A name is the room's address, unique across the
+company, so it resolves for any room the seat may read whether or not it is
+in it: a public room, or a unit's own room, which is where a decision's
+outcome is often promised. A private room's name resolves only for its
+members, and to anybody else answers exactly as a name nobody holds.
+
+A message's `links`, at most eight on `post_message`, `reply_in_thread` and
+`send_dm`, are each an absolute `http`, `https` or `mailto` address, kept
+exactly as sent. A relative reference, a dashboard route (`#/...`) or any
+other scheme is refused, naming every entry that is not one (`links[1]`): no
+reader of the message could open it as it stands.
+
+What `read_channel`, `search_messages` and `list_channels` hand back that
+somebody said — every message and snippet, under its author, and a room's
+topic and purpose as the room's own label — arrives
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a body
+sent back to `post_message`, `reply_in_thread` or `send_dm` still wrapped in
+the fence it was read in is posted without it.
+
+**Three of them count as a delivery** for the turn's did-this-reach-anybody
+gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is
+*source-scoped*: a turn woken in a room owes an answer **in** a room. A
+reaction is deliberately not one of them. It wakes nobody and discharges
+nothing, because a seat that could answer every obligation with a thumb would.
+A turn's write is made once however often the turn is re-run: its key is
+derived from the turn's unit of work and the call, and a join after a leave is
+a new join rather than the first one's retry.
+
+The same nine are served to **your** AI assistant and to the dashboard over the
+[operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
+as the seat the person behind the call holds, and eight more that no seat is
+given:
+`create_channel`, `open_dm`, `update_channel`, `add_channel_members`,
+`set_channel_members`, `edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
+said by replying rather than rewriting it; a room, its settings and its
+membership are the company's furniture; and a read cursor is a person's
+attention, which a seat — woken rather than reading — does not have. Every one
+of them is made as a seat, so a credential acting as itself is refused them
+all, the reads included.
+
+See [Chatlet](../concepts/chatlet.md) for who a message wakes, which of them owes a
+reply, and the two things the axis deliberately does not do.
+
 ### The company's code
 
-Twenty-nine more — eleven that read, two of them a repository's changes, and
-eighteen that change a branch, a repository or a change — registered wherever
+Thirty more — eleven that read, two of them a repository's changes, and
+nineteen that change a branch, a repository or a change — registered wherever
 the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
@@ -328,7 +424,7 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same twenty-nine, so an operator's own
+and the operator catalogue serves the same thirty, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold. The eleven reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
@@ -369,7 +465,7 @@ every round.
 | `code_delete_repo` | A repository deleted, restorable until its purge |
 | `code_restore_repo` | A deleted repository brought back as it was, before its purge |
 | `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) set — `direct_push` (`persons`, as when it is left out, or `none`), `allow_force` and `allow_delete`, whole — or taken away (`remove`); and a branch's [merge gate](../concepts/code-host.md#merge-gates) changed a field at a time — `merge_by`, `approvals`, `approvals_unless`, `human_paths`, `checks`, `landing`, `owners_approve`, `delete_source`, `auto_revert`, `agents_edit_checks`, each replacing that field and the rest kept — or taken away (`remove_gate`). It answers the rule as it now stands. A seat tightens a protection and only a person loosens one ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)) |
-| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a native item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version` |
+| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a Worklet item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version` |
 | `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
 | `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
 | `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person may always be asked ([Asking for review](../concepts/code-host.md#asking-for-review)) |
@@ -378,6 +474,19 @@ every round.
 | `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/code-host.md#findings)) |
 | `code_apply_suggestions` | The suggestions of the `findings` named (at most 64) — each a finding of the change that still stands, suggests lines and is on the new side — put in place of the lines they are anchored to on the change's source branch at the head the caller read (`expected_head`), as ONE commit of the caller's (`message`, a sentence naming the change by default): each where its finding was shown, all of them or none — an outdated one (`stale_version`, naming it) or two that overlap (`invalid`) apply nothing ([A review's suggestions applied](../concepts/code-host.md#a-reviews-suggestions-applied)). Then each finding is answered `resolved` with the commit, in a second write; the applier becomes an author of the change, whose approval no longer counts |
 | `code_rebase_change` | The change rebased onto its target's tip from the head the caller read (`expected_head`): its commits the target does not hold replayed oldest first, each keeping its author and author date, and its branch moved to them by one forced push of the caller's, held to the branch's protections as a force-push is. The first commit that conflicts stops it with nothing changed (`invalid`, naming the commit and each conflicted path); a change of more than 1 000 such commits, or holding a merge commit, is refused (`invalid`) ([A change rebased](../concepts/code-host.md#a-change-rebased)) |
+
+**One more is not in that table: `code_checkout`,** which an executor's run
+alone is offered, beside `ask_and_wait`, and only on a node that serves the
+code host. Neither the registry nor the operator catalogue holds it, so no
+other phase and no person can call it. It checks one repository (`repo`) out
+into the run's box, on a `branch` from a `base` (the seat's own branch from
+its head by default), to `read` or `write` (`access`, by default write where
+the seat may push the branch), with an optional cone of `paths`, a `change` to
+work on, or an `open_change` to open from what the run pushes once it
+succeeds. The repository is granted on the run's record before the call
+answers, with the commands that clone it, and the box's git reaches nothing
+the run did not check out ([Code
+Sandbox](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
@@ -548,7 +657,7 @@ to a script.
 code writes: a person's own marks over their code notices — the ones the
 `inbox` question answers under `source: "code"` — read, unread, snoozed, or
 read through a position on the code log, one gesture at a time, exactly as
-`mark_inbox` marks the tracker's. Each domain keeps the marks over its own
+`mark_inbox` marks Worklet's. Each domain keeps the marks over its own
 notices on its own log, so each has its tool. It writes the caller's own record
 and nobody else's, and a seat is never offered it: a seat is woken, never shown
 an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
@@ -570,7 +679,7 @@ See [The health tools](fleet.md#the-health-tools).
 
 ### Per-Role MCP Servers (GitHub)
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ### Where a tool comes from
 
@@ -655,6 +764,51 @@ and how many arguments its schema declares. A tool whose server advertised
 nothing shows as `unknown` rather than as a read — which is the row to check
 before granting a seat a new server.
 
+### A call is held to the schema its tool advertises
+
+Every call to one of the engine's own tools is checked against the JSON schema
+that tool hands the model, before the tool runs, whoever makes it (a seat's
+executor run over the tool bridge, a phase on the engine's host, a worker, an
+operator's assistant over `/operator/mcp`, or the work API), with
+every finding named in one pass by its path and the shape the tool reads there
+([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)).
+A third-party MCP server holds its own schema and is not checked here.
+
+- **A value the tool would misread is refused before anything runs.** That
+  covers:
+  - a string or a number where `true` or `false` belongs;
+  - an object or a list where a string belongs;
+  - a fraction where a whole number belongs;
+  - `"5 days"` where a number belongs;
+  - a number spelt outside decimal notation (`"0x10"`, `"1_000"`);
+  - a word where a number belongs;
+  - anything but a list or a string where a list belongs.
+
+  Each of these was read as something else (`"true"` as false, 2.5 as 2), so
+  it would write wrong data. The refusal (`invalid`) lists every finding of
+  the call, so one corrected call answers them all.
+- **What the tool decides on itself runs as before.** That covers a missing
+  required argument, a value outside a closed set, a number past its bound and
+  a list too long. A refusal from the tool carries every finding of the call.
+- **An argument the tool does not take is refused at the top level,** as the
+  engine's own tools always refused one (and the refusal carries every
+  finding). An unknown key inside an object argument is noted, not refused. If
+  the tool answers successfully while something was not read as sent, a note
+  names it. A model or an MCP client reads the note after the answer. An act
+  or work API answer, which a person reads, never carries it. The call is logged as `tool_args_outside_schema` and
+  counted in `crewlet.tools.args_outside_schema`, by tool.
+- **An argument sent as `null` is one nobody sent,** to the check and to the
+  tool alike: the call reads as though it were left out, so it changes
+  nothing, and a `null` for an argument the tool does not take is not
+  refused. A `null` is a value only where the tool's schema declares it one,
+  and there it clears what it names: an update's `due`, `start`,
+  `estimate_minutes` and `points`, and a project's `target_date`. Inside an
+  object argument a `null` is the object's to read, as a custom field's value
+  in `fields` is cleared by one.
+- **The lenient readings are kept.** A number or a boolean where a string
+  belongs, one string or a comma-separated one where a list belongs, and a
+  numeric string where a number belongs are read exactly as before.
+
 ### When a tool refuses
 
 A tool that cannot do what it was asked answers with a **failed result** rather
@@ -669,30 +823,36 @@ a model acts on:
 
 | Class | What it means | What a caller should do |
 |---|---|---|
-| `invalid` | An argument is wrong, and the sentence names which | Send something different |
+| `invalid` | The request is wrong — an argument outside its grammar, a value past a limit of its own, or an argument naming *another* object that cannot take part (a parent in the trash, an archived task type) — and the sentence names which | Send something different |
 | `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
 | `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
 | `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
-| `conflict` | The write lost its race to other writers, or the object's state moved under it | Read it again; a retry may land |
+| `conflict` | The write lost its race to other writers, or the object the call is about is in a state that refuses it until somebody changes it — a room or a project archived, an item frozen in the trash, an artifact in the trash or being purged, a restore with nothing in the trash, or its own contents at their cap (a message carrying all its emoji, a label another version holds, a project keeping all its tags) — which the sentence names | Read it again; a race clears on its own, and a state is changed by whoever the sentence names, after which the same call lands |
 | `exists` | What the call would create is already there | Edit the existing one |
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `quota_exceeded` | The write would take what is kept past a limit on it: the company's storage — an artifact's bytes, a datastore's footprint — which the sentence names with the setting an operator raises, or a cap on what one datastore holds — a collection's rows, one participant's rows, a store's collections and documents — which the sentence names. No permission lifts it | Remove what is no longer needed, or ask whoever sets the limit to raise it |
+| `notes_full` | The running turn a note is for already holds as many notes as may wait unread | Send it again once the turn has read them, at its next step |
+| `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
-| `paused` | A person paused the seat the call acts as and stopped its running work, so a call that may change something was not made: a [detached coding run's](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) call of a tool not marked read-only. The sentence names who stopped it | Change nothing more; reads still answer, and the call lands once somebody resumes the seat |
-| `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
-| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to turn over, or raise its ceiling |
+| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |
 | `store_full` | The object store has no room for the content the call would store — the fleet's NATS bucket holds as many bytes as it [reserves](../concepts/object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](../concepts/object-store.md#an-s3-bucket--s3) — so nothing was stored or recorded. Waiting alone does not clear it | Tell an operator, who makes the room the sentence names — on NATS, moves the files to a bucket, raises the bucket's reservation on an external broker, or lets the collector remove what nothing names; on S3, frees space or raises the quota on the bucket's provider, or lets the collector remove what nothing names; the same call is refused the same until then |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |
 
 An argument that merely *names* something missing — a `parent`, a `waiting_on`
 item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
-argument, and the call is not about that object.
+argument, and the call is not about that object. The same holds for a state: a
+`parent` in the trash is `invalid`, the argument to change, while editing the
+item that is in the trash is `conflict`, its state. That is the
+[one rule](../reference/api-endpoints.md#which-class-a-refusal-is) every
+domain's refusals are classed by, on every surface.
 
-**`invalid` is claimed, never assumed.** A write the work tracker refuses on
-what it was asked — a field value it will not round, a tombstoned item, a cap
-the object would pass — is marked as such where the refusal is written. Any
+**`invalid` is claimed, never assumed.** A write Worklet refuses on
+what it was asked — a field value it will not round, a parent in the trash, a
+value past its cap — is marked as such where the refusal is written, and so is
+one the item or project it is about refuses by its state, which is `conflict`. Any
 failure that is *not* marked is read as the node's, in one of two ways: a
 condition waiting clears — the log refused the append, the coordination store
 or the event broker did not answer, this node's store was busy with other
@@ -912,16 +1072,72 @@ roles:
         SLACK_MCP_XOXB_TOKEN: "${ALICE_SLACK_BOT}"   # same token, the Slack MCP subprocess
         SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/alice-channels.json"   # this seat's own
       github:
-        Authorization: "Bearer ${ALICE_GH_TOKEN}"
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"   # its own GitHub App
 ```
 
-A Slack-enabled agent names its bot token in **both** `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`: the two are different consumers — the notification transport vs. the Slack MCP subprocess — and both reference the same `${VAR}`, so no secret is duplicated. Beside the token, each Slack seat names a channel cache no other seat uses: the Slack server keeps the channels its bot can see in a file named after the workspace alone, so seats that name none share one, and each is shown the private channels and DMs of whichever bot wrote it last ([Slack](../integrations/slack.md#configure-in-yaml) has the detail). The Atlassian token (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN`) and the GitHub PAT (`Authorization: Bearer …`) likewise live wherever the consuming MCP server reads them. `mcp-atlassian` takes an API token only beside the account it belongs to (`JIRA_USERNAME` / `CONFLUENCE_USERNAME`): given a token alone it starts with none of that product's tools, and says why only on its stderr. A Data Center personal access token goes under `JIRA_PERSONAL_TOKEN` / `CONFLUENCE_PERSONAL_TOKEN` instead, on its own.
+The GitHub entry names a token the engine issues rather than one an operator
+stores: `${GITHUB_APP_TOKEN_<HANDLE>}` is the installation token of the seat's
+own GitHub App, answered for that seat's servers alone and renewed before it
+expires, by restarting the servers that carry it. See [Acting as the
+app](../integrations/github.md#acting-as-the-app-the-seats-token).
+
+A Slack-enabled agent names its bot token in **both** `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`: the two are different consumers — the notification transport vs. the Slack MCP subprocess — and both reference the same `${VAR}`, so no secret is duplicated. Beside the token, each Slack seat names a channel cache no other seat uses: the Slack server keeps the channels its bot can see in a file named after the workspace alone, so seats that name none share one, and each is shown the private channels and DMs of whichever bot wrote it last ([Slack](../integrations/slack.md#configure-in-yaml) has the detail). The Atlassian token (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN`) and a GitHub credential (`Authorization: Bearer …`) likewise live wherever the consuming MCP server reads them. `mcp-atlassian` takes an API token only beside the account it belongs to (`JIRA_USERNAME` / `CONFLUENCE_USERNAME`): given a token alone it starts with none of that product's tools, and says why only on its stderr. A Data Center personal access token goes under `JIRA_PERSONAL_TOKEN` / `CONFLUENCE_PERSONAL_TOKEN` instead, on its own.
 
 When the engine launches a per-role MCP server instance, it merges the base server config with the role's `mcp_env` (applied as **env vars** for `stdio` servers, **HTTP headers** for `http` servers).
 
+### Seat credentials the engine binds
+
+For an integration the engine manages an account on (Atlassian, Datadog,
+GitHub, GitLab, Mattermost, Slack), a seat's own credential is never named in
+`mcp_env`. The engine seals it under a name it derives from the handle and
+binds it to every per-seat server (`shared: false`) that reads that
+integration's credential, whatever the server is called, for each seat that is
+on at that integration. The binding wins over any value a unit or seat wrote
+for the same key.
+
+Which variable or header a server reads is the server's own, so the
+`mcp_servers` entry says it under `seat_credentials`:
+
+```yaml
+mcp_servers:
+  - name: tracker
+    transport: http
+    shared: false
+    url: "https://mcp.example.com/"
+    seat_credentials:
+      - kind: atlassian          # atlassian | datadog | github | gitlab | mattermost | slack
+        field: EMAIL             # optional: Atlassian's TOKEN or EMAIL; empty is the credential itself
+        key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
+      - kind: atlassian
+        key: Authorization
+        prefix: "Bearer "        # text before the value
+        as: header               # optional; must match the transport
+```
+
+An entry that declares nothing is bound by what the engine recognises it as,
+by its command or its address:
+
+| Server | Recognised by | Reads |
+|---|---|---|
+| Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
+| GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
+| GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| `glab mcp serve` | the `glab` command with `mcp` | `GITLAB_TOKEN` |
+| GitLab's community servers | `server-gitlab` or `gitlab-mcp` | `GITLAB_PERSONAL_ACCESS_TOKEN` |
+| `slack-mcp-server` | the package name | `SLACK_MCP_XOXB_TOKEN` |
+| The Mattermost server | `mcp-server-mattermost` | `MATTERMOST_TOKEN` |
+| `mcp-atlassian` | the package or image name | `JIRA_API_TOKEN`, `JIRA_USERNAME`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_USERNAME` |
+
+A declaration replaces the recognised keys rather than adding to them. A
+per-seat server named after one of these integrations that neither declares
+nor is recognised is reported on the integration as **tool declared but no
+credential binding**: it would start for every agent and act as nobody. The
+integration's Agents tab reports each seat's tool as live, waiting for its
+credential, or missing because no per-seat server reads it.
+
 ### Per-Unit Config
 
-A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a native project and container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
+A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a Worklet project and a Doclet container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
 
 ```yaml
 units:
@@ -1012,15 +1228,15 @@ What the engine does depends on whether anything will fill the variable:
 |---|---|---|
 | Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP Tools** the server's row counts it as *waiting*, the server reads *Waiting for credentials* where nothing else is wrong, and its page lists what each node's instance waits for |
 | Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
-| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
+| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one), which a running node re-activates the company for as it stores it (`POST /config/reload` for a value stored with the engine stopped), or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value, which a running node re-activates the company for; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 
 Which variables a pass mints is read from the plan the pass mints by — each
 provisioning pass's run takes its plan from the one place the engine reads it
 from — so the two cannot disagree. None of these is retried on the restart
 schedule below: nothing about a held-back server changes until the secret
 snapshot does, and every change to the snapshot runs the seat's pass again,
-and reconciles the shared servers — a revision, the reload a `crewlet secrets
-set` is followed by, the re-activation a provisioning pass makes, and (for a
+and reconciles the shared servers — a revision, the re-activation a `crewlet
+secrets set` through a running node makes, the re-activation a provisioning pass makes, and (for a
 seat) the pass the sealing node asks for itself, which does not wait on that
 re-activation. A shared server held back is therefore never handed to its
 bridge, whose supervision would retry it, and starts on the apply that follows
@@ -1270,22 +1486,22 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions. The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 
 1. **Per-role MCP tools** — checked first (role-specific credentials)
 2. **Global tools** — builtin tools + global MCP tools
 
-**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated**: a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the turn-start prefetch blocks (personal memory, similar prior work — but for a recalled turn's ask and its account of what it did, each past 600 bytes where the bullets are shown or past about 11 KB where the episode summary reads them, below — synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
+**Tool output is returned to the LLM in full, as the tool wrote it.** A binary body is described in one line rather than inlined, and nothing else is rewritten — results are **never length-truncated**: a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the turn-start prefetch blocks (personal memory, similar prior work — but for a recalled turn's ask and its account of what it did, each past 600 bytes where the bullets are shown or past about 11 KB where the episode summary reads them, below — synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
 
 **Where a bound is genuinely unavoidable, the engine never just cuts the text.** A cut keeps an opening, and a reader — a model or a person — takes an opening for the whole: a message's greeting for the message, a report's summary for the report. So text somebody acts on is carried whole where it is bounded upstream, and where it is not, one of four shapes applies, chosen deliberately:
 
 | Shape | Where | Why |
 |---|---|---|
-| **Condense** | the prior-work ledger's payloads past their budget (an argument value, a failed call's error, a round's produced text) and a conversation's older turns; a long chat thread's middle at turn start; the round-cap judge's view of the task and the last text; a delegated worker's answer past its share of the next task; a source document `answer_knowledge` reads; a turn card's one-line account; a recalled turn's ask and its account of what it did, each past 600 bytes (`## Similar prior work` when its bullets are shown rather than summarised, and `query_episodes`) or past about 11 KB — a sixth of one auxiliary call's input, so three turns' asks and accounts fit one call — before the episode summary reads them (`learning.summarize_episodes` on), every rewrite of one answer held to one thirty-second deadline; an episode's long task or outcome before the monthly compaction; a coding run's report, failure or question past what its record carries (a question none of whose lines fits is not asked at all) | The text has to fit, and what fits must still be what the text **said**. It is rewritten by the seat's own auxiliary model (`llm_auxiliary`, falling back to `llm`) through `internal/compact`, charged to the seat like any auxiliary call, labelled as condensed wherever it is shown, and cached per text. Where no model can condense it, the fallback is never a cut: whole entries are left out and counted, a size and a digest stand in its place, or it is carried whole |
-| **Refuse** | `reflect_and_persist` and `mark_onboarded` notes, `refine_skill` bodies and reasons, a `secrets` value, a Slack app manifest name, a counterparty trait, a search or `answer_knowledge` query past 400 bytes, a purge reason too long for its one-line record, a coding run's report, question or result line read back from its box past 32 MiB (its event and error streams are read as streams and from their end instead, and the refused piece is described by its size); in the dashboard, a title, a view's name, a question or a save note past the engine's cap, said under the field before the press | The value is *stored* or *sent on*, so half of it is a lasting half-fact. The caller can shorten it and retry, and the refusal names the field and the limit |
-| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every node; it says what moved and by how much, and the change record beside it holds the text |
+| **Condense** | the prior-work ledger's payloads past their budget (an argument value, a failed call's error, a round's produced text) and a conversation's older turns; a long chat thread's middle at turn start; the round-cap judge's view of the task and the last text; a delegated worker's answer past its share of the next task; a source document `answer_knowledge` reads; a turn card's one-line account; a recalled turn's ask and its account of what it did, each past 600 bytes (`## Similar prior work` when its bullets are shown rather than summarised, and `query_episodes`) or past about 11 KB (a sixth of one auxiliary call's input, so three turns' asks and accounts fit one call) before the episode summary reads them (`learning.summarize_episodes` on), every rewrite of one answer held to one thirty-second deadline; an episode's long task or outcome before the monthly compaction; a coding run's report or failure past what its record carries | The text has to fit, and what fits must still be what the text **said**. It is rewritten by the seat's own auxiliary model (`llm_auxiliary`, falling back to `llm`) through `internal/compact`, charged to the seat like any auxiliary call, labelled as condensed wherever it is shown, and cached per text. Where no model can condense it, the fallback is never a cut: whole entries are left out and counted, a size and a digest stand in its place, or it is carried whole |
+| **Refuse** | `reflect_and_persist` and `mark_onboarded` notes, `refine_skill` bodies and reasons, a `secrets` value, a Slack app manifest name, a counterparty trait, a search or `answer_knowledge` query past 400 bytes, a purge reason too long for its one-line record, a coding run's `ask_and_wait` question past 300 bytes, or its context past 16 KiB, refused to the run before anything is recorded so it rewrites them; a coding run's report or result line read back from its box past 32 MiB (its event and error streams are read as streams and from their end instead, and the refused piece is described by its size); in the dashboard, a title, a view's name, a question or a save note past the engine's cap, said under the field before the press | The value is *stored* or *sent on*, so half of it is a lasting half-fact. The caller can shorten it and retry, and the refusal names the field and the limit |
+| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every data node; it says what moved and by how much, and the change record beside it holds the text |
 | **Say it, in whole units** | a coding run's transcript (whole lines from its start and its end, 64 KiB and 192 KiB, its middle counted — the plan opens it and a crash explains itself at the bottom), the end of its error stream (2 MiB, its unread start said by size) and its delivered refs (16 KiB of whole refs, the rest counted); an MCP server's stderr tail and a control command's output (whole lines, counted); error text on an event (`events.ClipDiagnostic`, 64 KiB, head kept); a vendor refusal past 2 KiB (marked); a knowledge snippet or an inbox excerpt (a preview of something one click away, marked) | The full text genuinely cannot travel — an unbounded subprocess, or an event the queue would REFUSE, which costs the operator the whole record rather than its tail — or it is a preview of something the reader can open; so it carries a marker, and where a reader can get the rest, says how |
 
 The embeddings input — the text a provider turns into a vector — is the one bound on what a machine is given rather than what a reader sees. The bound is the embedding *model's* own, carried per model with the vendor's documented limits ([Configuration § Providers](../getting-started/configuration.md#providers)), and the provider refuses an input past it before sending anything. What a longer text becomes is each caller's choice: the knowledge corpus embeds a document's opening, because the opening is what a search for the document is about, while a turn's ask, an episode and a diary note are split between words into pieces whose vectors are pooled into one, so all of the text is represented. Either way only the vector's input is bounded; the stored and displayed text stays complete.

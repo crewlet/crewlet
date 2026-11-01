@@ -26,7 +26,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
@@ -37,7 +36,7 @@ import (
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
 // ([auth.Public] names neither): a repository is the company's
 // source, and a person reaches it with their own bound token — the third person
-// transport beside the act route and the operator's MCP (ADR-0055). On a git
+// transport beside the act route and the operator's MCP (ADR-0078). On a git
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
@@ -315,7 +314,7 @@ func servesGit(b *config.Bootstrap) bool {
 //     ([authz.ActionCodeGit]), as the code questions do ([authz.ActionCodeRead]):
 //     what each may fetch or push is the per-repository grant the serving node
 //     derives from the chart once the repository is read (code.GrantOf,
-//     ADR-0058), which no route can ask before it.
+//     ADR-0081), which no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
 //     that reads every byte of it and holds a maintenance slot, and with a
@@ -377,7 +376,14 @@ func (a *App) mountCode(mux authz.Mux) error {
 		"POST /code/repos/{name}/verify":     a.serveCodeVerify,
 		"GET /code/repos/{name}/verify/{id}": a.serveCodeVerification,
 	} {
-		mount(rest, pattern, deploymentPolicy(pattern), h)
+		policy := deploymentPolicy(pattern)
+		if strings.HasPrefix(pattern, http.MethodPost+" ") {
+			// WHAT IT DOES, as every POST says ([authz.Effect]): it starts a
+			// verification of this node's copy, which the read beside it
+			// names by its id — a new record, whatever it finds or repairs.
+			policy.Effect = authz.EffectCreates
+		}
+		mount(rest, pattern, policy, h)
 	}
 	return errors.Join(failures...)
 }
@@ -385,19 +391,25 @@ func (a *App) mountCode(mux authz.Mux) error {
 // gitRefusal renders a request a git route's router did not admit in the one
 // form git prints — a line of text, never the JSON envelope, which git shows
 // nothing of — under the status and the code a JSON route answers the same
-// decision with ([authz.RefusalCode]), so the two cannot drift apart. A
-// decision this node could not make says when to come back, as the envelope's
-// 503 does. Every verb a git route is mounted on admits everybody the guard
-// resolved, so what reaches this is a principal whose stage may not act, or a
-// node that could not decide.
+// decision with: the authority table's one mapping ([authz.RefusalFields]),
+// and for a decision this node could not make the 503 [authz.EnvelopeRefusal]
+// answers it with, saying when to come back — so the two cannot drift apart.
+// Every verb a git route is mounted on admits everybody the guard resolved, so
+// what reaches this is a principal whose stage may not act, or a node that
+// could not decide.
 func gitRefusal(w http.ResponseWriter, _ *http.Request, _ authz.Policy, d authz.Decision) {
-	status, refused := authz.RefusalCode(d)
-	sentence := strings.TrimSuffix(refused.Message(), ".") + " (" + string(refused) + ")"
 	if d.Unknown() {
-		auth.GitUnavailable(w, authz.RetryUndecidedSeconds, sentence)
+		auth.GitUnavailable(w, authz.RetryUndecidedSeconds, gitSentence(httpjson.CodeUnavailable))
 		return
 	}
-	auth.GitText(w, status, sentence)
+	status, refused, _ := authz.RefusalFields(d)
+	auth.GitText(w, status, gitSentence(refused))
+}
+
+// gitSentence is a refusal's code as git prints it: the code's own sentence
+// with the code a client branches on beside it.
+func gitSentence(refused httpjson.Code) string {
+	return strings.TrimSuffix(refused.Message(), ".") + " (" + string(refused) + ")"
 }
 
 // gitRoute serves one of the host's git handlers, resolved for this request,
@@ -480,8 +492,8 @@ func unservedGit(w http.ResponseWriter, why error) {
 // repository nobody declared, and every 503 is written by
 // [httpjson.UnavailableWith], which sets its Retry-After — or, where waiting
 // clears nothing, none — with the envelope.
-func codeNotServed(w http.ResponseWriter, what string, why error) {
-	writeQueryError(w, what, codeUnserved(why).question(why))
+func codeNotServed(w http.ResponseWriter, r *http.Request, what string, why error) {
+	writeQueryError(w, r, what, codeUnserved(why).question(why))
 }
 
 // verificationView is a verification as the API answers it: the operation's
@@ -554,7 +566,7 @@ func verificationPath(v host.Verification) string {
 func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	g, why := a.code.GitRoutes()
 	if why != nil {
-		codeNotServed(w, "code_verify", why)
+		codeNotServed(w, r, "code_verify", why)
 		return
 	}
 	repair := false
@@ -571,10 +583,10 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	// THE CALLER'S FLOOR, where it names one: a position on the code log it
 	// read at, which the copy is brought to with no barrier (see
 	// host.Server.StartVerify). Read by the read grammar's own rule
-	// ([tracker.ParseFloors]: `min_position` names one floor per log), so a
+	// ([statelog.ParseFloors]: `min_position` names one floor per log), so a
 	// floor on any log but the code log is refused naming it, as every read
 	// of one log refuses it, rather than every floor but the first dropped.
-	floors, err := tracker.ParseFloors(queries.FromQuery(r.URL.Query()))
+	floors, err := statelog.ParseFloors(queries.FromQuery(r.URL.Query()))
 	asked := statelog.Freshness{Floors: floors}
 	if err == nil {
 		err = asked.OnlyOn(topics.CodeLogStream)
@@ -634,7 +646,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(queries.ClassifyFailure(err), queries.ErrUnavailable):
 		// What clears by waiting — the code log unreadable here, no data
 		// node serving the resolve — with the refusal's own Retry-After.
-		writeQueryError(w, "code_verify", queries.ClassifyFailure(err))
+		writeQueryError(w, r, "code_verify", queries.ClassifyFailure(err))
 	default:
 		// The sentence too, for viewOf's reason: a node whose memory
 		// cannot hold the check names the node to run it on.
@@ -652,7 +664,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveCodeVerification(w http.ResponseWriter, r *http.Request) {
 	g, why := a.code.GitRoutes()
 	if why != nil {
-		codeNotServed(w, "code_verification", why)
+		codeNotServed(w, r, "code_verification", why)
 		return
 	}
 	name := r.PathValue("name")

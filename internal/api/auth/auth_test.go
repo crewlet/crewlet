@@ -112,13 +112,13 @@ func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 //   - /operator: the operator MCP surface, which files and moves work and
 //     writes the knowledge base. Deliberately not under /mcp/, which is exempt
 //     wholesale for the sandbox bridge.
-//   - /work and /pages: the human write surface over the tracker and the
+//   - /worklet and /doclet/pages: the human write surface over the tracker and the
 //     knowledge base. A write there with nobody behind it would be a record
 //     with no author, which is the one thing it exists never to write.
 func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{
-		"/config", "/secrets", "/setup", "/operator", "/work", "/pages",
+		"/config", "/secrets", "/setup", "/operator", "/worklet", "/doclet/pages",
 	} {
 		for _, path := range []string{
 			prefix, prefix + "/", prefix + "/anything",
@@ -717,8 +717,9 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 // and this fails.
 func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	t.Parallel()
-	every := append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)
-	apps := slices.Clone(iam.Apps)
+	// EVERY APP THIS BUILD DECLARES, read from the declaration rather than
+	// spelled: an app added to internal/iam is one more an admin confers.
+	every, apps := iam.AllGrants, iam.Apps
 	for _, tc := range []struct {
 		posture iam.AdminPosture
 		listed  []iam.Grant
@@ -726,8 +727,8 @@ func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	}{
 		{iam.AdminServe, []iam.Grant{iam.GrantAdmin}, every},
 		{iam.AdminRefuse, []iam.Grant{iam.GrantAdmin}, apps},
-		{iam.AdminServe, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
-		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{iam.AdminServe, []iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantWorklet}},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantWorklet}},
 		{"sometimes", []iam.Grant{iam.GrantAdmin}, []iam.Grant{}},
 	} {
 		g := guard(t, func(a *config.APIAuth) {

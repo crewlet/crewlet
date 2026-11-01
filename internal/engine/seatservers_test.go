@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -50,6 +51,7 @@ func convergingCompany(ceo map[string]string) string {
 	return fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -93,7 +95,7 @@ func sealingOptions(t *testing.T, doc string) engine.Options {
 	return engine.Options{
 		Company: parsedCompany(t, doc),
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Secrets = config.Secrets{
 				ActiveKeyID: "k1",
 				Keys: []config.SecretKey{{
@@ -199,7 +201,9 @@ func TestASeatChildWhoseCredentialIsSealedAfterTheClaimStartsOnceItIs(t *testing
 func provisioningCompany(starts string) string {
 	return fmt.Sprintf(`
 name: Acme
+seat_access_migrated: [atlassian]
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -207,6 +211,9 @@ integrations:
   atlassian:
     org_id: "${ATLASSIAN_ORG_ID}"
     api_key: "${ATLASSIAN_ORG_KEY}"
+  jira:
+    url: https://acme.atlassian.net
+    token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
     shared: false
@@ -222,10 +229,12 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    integrations:
+      jira: {enabled: true, project_role: "10101"}
     mcp_env:
       atlassian:
-        JIRA_USERNAME: "${CEO_ATLASSIAN_EMAIL}"
-        JIRA_API_TOKEN: "${CEO_ATLASSIAN_TOKEN}"
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
 `, os.Args[0],
 		toolServerModeEnv, toolServerEchoEnv, toolServerRequireEnv,
 		toolServerLaunchesEnv, starts,
@@ -278,8 +287,8 @@ func TestASeatChildWaitsForItsProvisionedCredentialUnstarted(t *testing.T) {
 			"held back for its credential, waiting or failed naming the pass", row)
 	}
 
-	seal(t, e, "CEO_ATLASSIAN_EMAIL", "agent-ceo@example.com")
-	seal(t, e, "CEO_ATLASSIAN_TOKEN", "ceo-minted")
+	seal(t, e, "ATLASSIAN_EMAIL_CEO", "agent-ceo@example.com")
+	seal(t, e, "ATLASSIAN_TOKEN_CEO", "ceo-minted")
 	reactivateAndSettle(t, e, doc)
 
 	if got := describes(t, e, "ceo", "atlassian_probe"); got != "JIRA_API_TOKEN=ceo-minted" {

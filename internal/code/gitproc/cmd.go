@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Class is which lane a process waits in and the attribute it is counted
@@ -683,8 +684,8 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	}
 	if c.Class == ClassTransfer && !c.Share.Valid() {
 		return prepared{}, fmt.Errorf("%w: git %s in the transfer lane carries no valid Cmd.Share (class %q, a principal of %d bytes): "+
-			"every transfer is charged to the credential that asked for it, one of the classes %v with a principal of 1 to %d bytes and no NUL",
-			ErrInvalid, c.Args[0], textcut.Ellipsis(string(c.Share.Class), 64), len(c.Share.Principal), ShareClasses(), maxSharePrincipal)
+			"every transfer is charged to the credential that asked for it, one of the classes %s with a principal of 1 to %d bytes and no NUL",
+			ErrInvalid, c.Args[0], textcut.Ellipsis(string(c.Share.Class), 64), len(c.Share.Principal), words.Or(ShareClasses()), maxSharePrincipal)
 	}
 	if c.Class != ClassTransfer && c.Share != (Share{}) {
 		return prepared{}, fmt.Errorf("%w: git %s in the %s lane carries a Cmd.Share: only a transfer is scheduled by share",

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -85,7 +86,9 @@ func newClusterName() string {
 // StartCluster starts an n-member embedded cluster and waits for it to form.
 //
 // Each member gets its own store directory and its own stable server name,
-// exactly as n separate processes would. Streams default to n replicas, so a
+// exactly as n separate processes would, and a store sized at
+// [brokertest.StoreMaxBytes] rather than from the runner's free disk, unless
+// base declares a size of its own. Streams default to n replicas, so a
 // publish is quorum-durable before Publish returns — which is the property
 // that makes "sync truth, async cache" true rather than aspirational.
 //
@@ -683,6 +686,14 @@ func memberConfig(base js.Config, cluster string, i, n, clusterPort int, routes 
 func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int) error {
 	t.Helper()
 	cfg.StoreDir = t.TempDir()
+	// SIZED WITH ITS DIRECTORY, for brokertest's reason: a member left to
+	// derive its cap takes three quarters of the runner's free space, and a
+	// case reserving gibibytes on every member — a log at three replicas
+	// lands one on each — then passes or fails on how full the machine's
+	// disk is. A base that declares a size of its own keeps it.
+	if cfg.StoreMaxBytes == 0 {
+		cfg.StoreMaxBytes = brokertest.StoreMaxBytes
+	}
 	// PROBED IMMEDIATELY BEFORE THE SERVER BINDS IT, because the interval
 	// between reserving a port and using it is what got long: this harness
 	// reserves twelve at once and then starts n(n-1) relays before the

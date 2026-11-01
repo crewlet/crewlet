@@ -10,7 +10,7 @@
 // the code it asserted that full-text search was unavailable (the engine ships
 // its own BM25 index), that Confluence was the knowledge implementation (the
 // engine ships its own pages) and that task state lived in an external tool
-// under a heading that said so (the native tracker is the default).
+// under a heading that said so (Worklet is the default).
 //
 // None of that is a formatting problem, and no template field would have
 // caught it. What the register lacked was an ANCHOR: a reason for anybody

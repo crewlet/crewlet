@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // SubjectPrefix prefixes every serving node's subject.
@@ -212,8 +213,8 @@ func (l lane) String() string {
 
 // Actor is who a write is attributed to, as it crosses the wire: the author
 // (Handle), what sort of author it is (Kind), and in its provenance the
-// CREDENTIAL the write was made through ([tracker.Provenance.OperatorID]) —
-// the triple every record carries, as [iam.ActorFor] writes it — beside the
+// CREDENTIAL the write was made through ([worklet.Provenance.OperatorID]):
+// the triple every record carries, as [iam.ActorFor] writes it, beside the
 // turn and chain that produced it.
 //
 // The tracker's rule is that a writer acts as exactly one party, derived from
@@ -225,12 +226,12 @@ func (l lane) String() string {
 // can name one.
 type Actor struct {
 	Handle     string             `json:"handle"`
-	Kind       tracker.AuthorKind `json:"kind"`
-	Provenance tracker.Provenance `json:"provenance"`
+	Kind       worklet.AuthorKind `json:"kind"`
+	Provenance worklet.Provenance `json:"provenance"`
 
 	// Records asks the serving node to answer which work items the write
 	// committed to ([reply.Written]), because the asker's provenance holds
-	// a turn's [tracker.WriteLog] — a set in the asking process that no
+	// a turn's [worklet.WriteLog], a set in the asking process that no
 	// wire carries. Set by the router itself wherever that log is present.
 	Records bool `json:"records,omitempty"`
 }
@@ -254,7 +255,9 @@ const (
 	// is one a node answered `unvouched` ([statelog.Result.Unvouched]):
 	// that node's ledger cannot say whether the operation landed, and
 	// another node's may, so the answer is not final until every node has
-	// been asked.
+	// been asked. One that no node ran, where some node never answered, is
+	// [ErrOutcomeUnknown], never [ErrUnserved]: a node that did not answer
+	// may have run it.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.
@@ -385,7 +388,7 @@ const (
 	// node evicted, its rows below the log), so it answers none of that
 	// domain's operations until the copy recovers, while every other
 	// domain's copy keeps serving and its own seats' calls on this one go to
-	// the other data nodes ([LocalBackends.For], ADR-0049).
+	// the other data nodes ([LocalBackends.For], ADR-0072).
 	unservedOutOfService unservedReason = "out_of_service"
 
 	// unservedUnauthenticated: the request's envelope does not verify on
@@ -449,7 +452,7 @@ type reply struct {
 	// Written is every work item the operation's writes COMMITTED to on
 	// this node, for a request whose actor asked ([Actor.Records]) — what a
 	// writer in the asking process would have reported into the turn's
-	// [tracker.WriteLog] itself. Reported whatever the answer, an error
+	// [worklet.WriteLog] itself. Reported whatever the answer, an error
 	// included, since a walking gesture's earlier steps committed whether
 	// or not a later one failed.
 	Written []types.WorkItem `json:"written,omitempty"`
@@ -468,7 +471,7 @@ type opSpec struct {
 
 	// domain is the domain whose COPY the operation reads — the verdict the
 	// router and the server ask before running it here ([LocalBackends.For],
-	// ADR-0049) — or [SeatCopy] for admission's ping. floorStream is that
+	// ADR-0072) — or [SeatCopy] for admission's ping. floorStream is that
 	// domain's log, the one log its floors are on ([Router.floorsFor],
 	// [ready]), or empty for an operation that carries no floor
 	// ([op.floorless]): what it reads is not the log's rows at a position
@@ -572,6 +575,32 @@ func (o op[A, R]) attemptBy(of func(A, Timing) time.Duration) op[A, R] {
 // so a new operation's types are checked the moment it is declared.
 var registry = map[string]*opSpec{}
 
+// WriteDomains is every domain this router carries a write for, by its
+// state-log name, sorted — read off the operation table, so a domain whose
+// first write operation is declared is in it from that line on.
+//
+// EXPORTED for the gates that must cover every routed domain: a surface
+// that classes a writer's refusal or names a write's object outside a tool
+// (internal/agent/builtin's WriterClass and ObjectArgs) declares each domain
+// once, and a domain routed here and not declared there is a person's
+// content refusal answered as a fault.
+func WriteDomains() []string {
+	seen := map[string]bool{}
+	for _, spec := range registry {
+		domain := spec.domain
+		if domain == GitCopy {
+			// A GIT WRITE lands on the code log, as a push the code host
+			// proposes ([opCodeGitWrite]), so its refusals are the code
+			// domain's: no state log is named "git".
+			domain = codeDomain
+		}
+		if spec.class != opRead && domain != SeatCopy {
+			seen[domain] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
 // define declares an operation, with the domain whose copy it reads — and
 // whose log its floor is on, unless it is declared [op.floorless] — or
 // [SeatCopy] for one that asks about the copy a seat is served by, or
@@ -649,7 +678,7 @@ func (o op[A, R]) floorless() op[A, R] {
 // the verdict of each is asked before it runs here, and a node whose copy of
 // any of them is out of service answers `out_of_service` naming that copy,
 // which sends the asker on to a node whose copies of all of them serve
-// (ADR-0049). Routed on its own domain alone, it answered from a copy the node
+// (ADR-0072). Routed on its own domain alone, it answered from a copy the node
 // had stopped serving. Its FLOOR stays on its own domain's log: a second
 // floor would hold it to an applier its answer does not wait on.
 func (o op[A, R]) alsoReads(domains ...string) op[A, R] {
@@ -709,12 +738,12 @@ func (o op[A, R]) ungated() op[A, R] {
 }
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
-// arguments say so: a page write whose actor carries the caller's own
-// operation key ([pages.Actor.OpKey]) — or a comment carrying its turn's
-// ([pages.NewComment.TurnKey]) — derives its operation id, and a create its
-// page's id, from that key and what the write says rather than minting one per
-// call, so a repeat under it is the same operation and the ledger answers it
-// with the first copy's outcome. Such a call fails over as an
+// arguments say so: a page or chat write whose actor carries the caller's own
+// operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its operation
+// id — and a create its page's or its room's id, a post its message's — from
+// that key and what the write says rather than minting one per call, so a
+// repeat under it is the same operation and the ledger answers it with the
+// first copy's outcome. Such a call fails over as an
 // [opIdempotentWrite] does; one without a key is still never repeated
 // ([opOnceWrite]). A property of the ASKING side, since the class is what the
 // asker may do with an unanswered request, and the server runs the operation
@@ -743,7 +772,7 @@ func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 }
 
 // keyedOnGit declares an operation on a repository's GIT OBJECTS, asked of the
-// git nodes rather than the data nodes (ADR-0059): in [rendezvous.Order] of
+// git nodes rather than the data nodes (ADR-0082): in [rendezvous.Order] of
 // key(args) over every live git node — the repository's HOME first, its
 // runner-up next — with a node that ran nothing for it asked last for
 // [suspectFor] and one that went silent last of all, no sticky node, and this
@@ -778,7 +807,7 @@ func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] 
 
 // judgesGrant declares an operation that JUDGES A GRANT from the serving
 // node's chart wherever pred holds of its decoded arguments — a read whose
-// asker is a seat, whose grant on a repository is the chart's (ADR-0058). On
+// asker is a seat, whose grant on a repository is the chart's (ADR-0081). On
 // a node CONFIRMED behind the company's configuration ([Backend.Current]
 // false: shed or stuck, never lag alone) such an operation is answered
 // [errDecidesNoGrant] before it runs — `behind_config`, saying it decides no

@@ -1,11 +1,9 @@
 package slideformat
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"slices"
 	"sort"
@@ -14,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the files ------------------------------------------------------------ //
@@ -203,17 +203,24 @@ func (r *Refused) Unwrap() error { return ErrRefused }
 // first.
 const MaxFindings = 50
 
-// Read reads a whole deck: the index, every slide it orders, and every file
-// the slides and faces name. A deck outside the format is a [*Refused]; an
-// error reading a file is answered as itself.
-func Read(src Source) (Deck, error) {
+// Read reads a whole stored deck: the index ([jsonform.Stored], so a
+// deck accepted before ADR-0059 tightened its keys reads as it did), every
+// slide it orders, and every file the slides and faces name. A deck outside
+// the format is a [*Refused]; an error reading a file is answered as itself.
+func Read(src Source) (Deck, error) { return read(src, jsonform.Stored(jsonform.UntilEOF)) }
+
+// Check is [Read] as a publish holds a deck whose index it writes: the index
+// read strictly ([ParseIndex]).
+func Check(src Source) (Deck, error) { return read(src, jsonform.Decode) }
+
+func read(src Source, decode jsonform.Reader) (Deck, error) {
 	var found []Finding
 	add := func(f ...Finding) { found = append(found, f...) }
 	raw, err := src.Read(IndexPath)
 	if err != nil {
 		return Deck{}, fmt.Errorf("slideformat: read %s: %w", IndexPath, err)
 	}
-	idx, problems := ParseIndex(raw)
+	idx, problems := parseIndex(raw, decode)
 	add(problems...)
 	if idx == nil {
 		return Deck{}, &Refused{Findings: found}
@@ -287,22 +294,27 @@ var faceKeyRE = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 })
 
-// ParseIndex reads `deck.json`, answering nil with the findings where it
-// cannot be read at all.
-func ParseIndex(raw []byte) (*Index, []Finding) {
+// IndexForm is every key `deck.json` may carry and the type of each, derived
+// from [Index] ([jsonform.Of]): what [ParseIndex] admits and [Reference] lists.
+var IndexForm = jsonform.Of[Index]()
+
+// ParseIndex reads `deck.json` as a publish holds it, answering nil with the
+// findings where it cannot be read at all.
+func ParseIndex(raw []byte) (*Index, []Finding) { return parseIndex(raw, jsonform.Decode) }
+
+func parseIndex(raw []byte, decode jsonform.Reader) (*Index, []Finding) {
 	var found []Finding
 	bad := func(format string, args ...any) {
 		found = append(found, Finding{Path: IndexPath, Rule: RuleIndex, Message: fmt.Sprintf(format, args...)})
 	}
 	var idx Index
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&idx); err != nil {
-		bad("deck.json is not the deck index: %v", err)
-		return nil, found
+	// EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]): an unknown key
+	// names the keys its object takes, a wrong type the shape read there.
+	d := decode(raw, IndexForm, jsonform.Subject{File: IndexPath, Format: "the deck index"}, &idx)
+	for _, f := range d.Faults {
+		found = append(found, Finding{Path: IndexPath, Line: f.Line, Rule: RuleIndex, Message: f.Message})
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		bad("deck.json holds more than one JSON value")
+	if len(d.Faults) > 0 {
 		return nil, found
 	}
 	switch {
@@ -312,7 +324,7 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 		bad("title is longer than %d bytes", MaxTitleBytes)
 	}
 	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && idx.Theme != BrandTheme && !ok {
-		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, strings.Join(themeIDs(), ", "))
+		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, words.Or(themeIDs()))
 	}
 	if idx.Lists != "" && idx.Lists != "css" {
 		bad("lists is %q, and the only list style is css", idx.Lists)

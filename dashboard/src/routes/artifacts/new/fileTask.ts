@@ -13,7 +13,7 @@
  *
  * The create is the tracker's own `create_work_item`, sent as the signed-in
  * person, so it is held, refused and reported exactly as the New task sheet's
- * is (`useAct`): the person's tracker access decides, and a refusal is drawn
+ * is (`useAct`): the person's Worklet access decides, and a refusal is drawn
  * beside the control that sent it.
  */
 
@@ -47,7 +47,7 @@ export interface ArtifactTaskRequest {
 
 /** The task that was filed. */
 export interface FiledArtifactTask {
-  /** The task's address in the dashboard (`#/work/<item>`), as the receipt names it. */
+  /** The task's address in the dashboard (`#/worklet/<item>`), as the receipt names it. */
   item: string;
   /** Its tracker key ("DES-12"), which an artifact's `work_item` names. */
   key: string;

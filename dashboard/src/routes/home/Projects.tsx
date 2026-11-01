@@ -14,16 +14,16 @@ import { useMemo } from "react";
 import { Card, SegmentedMeter, StatusDot } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER, needsWords } from "~/lib/access.ts";
+import { WORKLET, needsWords } from "~/lib/access.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { projectPath } from "~/lib/work.ts";
+import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** How many projects the card draws before "All projects". */
 export const PROJECT_ROWS = 3;
@@ -33,14 +33,14 @@ export const PROJECT_ROWS = 3;
 const PROJECTS_PAGE = 200;
 
 export function Projects() {
-  // THE TRACKER'S LIST, asked only of a reader holding Tracker, of a company
-  // running Crewlet Works (the card is not drawn elsewhere).
+  // WORKLET'S LIST, asked only of a reader holding Worklet, of a company
+  // running Worklet (the card is not drawn elsewhere).
   const viewer = useViewer();
   const ask = useServicesAsk();
   const read = useQuery(
     "work_projects",
     { limit: PROJECTS_PAGE },
-    { pollMs: 120_000, enabled: viewer.tracker && ask.tracker },
+    { pollMs: 120_000, enabled: viewer.worklet && ask.tracker },
   );
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -69,18 +69,28 @@ export function Projects() {
       >
         <Card.Title as="h3">Projects</Card.Title>
       </Card.Header>
-      {!viewer.loading && !viewer.tracker ? (
-        <p className="home-card-note">{needsWords("Projects", [TRACKER])}</p>
+      {!viewer.loading && !viewer.worklet ? (
+        <p className="home-card-note">{needsWords("Projects", [WORKLET])}</p>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={read.error}
           refusal={read.refusal}
           loading={read.loading && !read.data}
+          gaps={[
+            ...gapsOf([read.data]),
+            // THE BUSIEST ARE CHOSEN FROM WHAT WAS READ, so past the page a
+            // busier project may be one this card never saw.
+            ...(read.data?.truncated
+              ? [
+                  `Only the first ${PROJECTS_PAGE} projects were read, so a busier one may be missing.`,
+                ]
+              : []),
+          ]}
           empty={
             read.data && rows.length === 0
               ? {
                   title: "No projects yet",
-                  hint: "Add one with New project in Work.",
+                  hint: "Add one with New project in Worklet.",
                 }
               : undefined
           }
@@ -100,11 +110,13 @@ export function Projects() {
             ))}
           </ul>
           {rows.length > PROJECT_ROWS && (
-            <a className="home-card-more t-link" href={href(["work"])}>
-              {`All ${plural(rows.length, "project")}`}
+            <a className="home-card-more t-link" href={href(["worklet"])}>
+              {read.data?.truncated
+                ? `All ${rows.length.toLocaleString()}+ projects`
+                : `All ${plural(rows.length, "project")}`}
             </a>
           )}
-        </QueryState>
+        </WidgetQuery>
       )}
     </Card>
   );

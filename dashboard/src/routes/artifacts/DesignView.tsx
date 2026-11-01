@@ -81,6 +81,7 @@ import {
   type CanvasMerge,
   type DesignCanvas,
 } from "~/lib/artifacts/canvas.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { FrameView } from "./FrameView.tsx";
 import type { PresenceReport } from "./presence.ts";
 
@@ -95,6 +96,31 @@ interface DesignViewProps {
   bridgeStores: Set<ArtifactDataStore>;
   /** Absent for a secondary drawing (a side of a compare): read only, and silent to the room. */
   onPublished?: ((version: number) => void) | undefined;
+}
+
+/**
+ * The fields of a canvas's edit: its boards, read as their titles and sizes,
+ * and each note's text by its place, set as typing on the canvas sets it.
+ */
+export function canvasFields(canvas: DesignCanvas): DraftFieldSpec<DesignCanvas>[] {
+  return [
+    {
+      path: "boards",
+      label: "Boards",
+      read: (c) => boardItems(c).map((b) => `${b.title} (${b.w} by ${b.h})`),
+    },
+    ...(canvas.notes ?? []).map((note, i): DraftFieldSpec<DesignCanvas> => ({
+      path: `notes.${i + 1}`,
+      label: note.kind === "title" ? `Title ${i + 1}` : `Sticky ${i + 1}`,
+      read: (c) => c.notes?.[i]?.text ?? "",
+      write: (c, text) => {
+        const now = c.notes?.[i];
+        if (!now || now.id !== note.id) return refuse("That note is no longer on the canvas.");
+        if (typeof text !== "string") return refuse("A note's text is text.");
+        return changeNote(c, { ...now, text });
+      },
+    })),
+  ];
 }
 
 export function DesignView(props: DesignViewProps) {
@@ -187,6 +213,29 @@ function Design({
   const change = useCallback(
     (fn: (c: DesignCanvas) => DesignCanvas) => setDraft((d) => fn(d ?? base.canvas)),
     [base.canvas],
+  );
+
+  // WHAT IS OPEN, for the assistant, while the canvas is edited: its boards,
+  // read, and the text of its titles and stickies, set through the canvas's
+  // own note change; moving boards and Save stay the editor's.
+  useAssistantDraft<DesignCanvas>(
+    editing
+      ? {
+          kind: "client",
+          id: detail.id,
+          revision: base.number,
+          step: "canvas",
+          help:
+            "You can set the text of the canvas's titles and stickies. Boards are read here: " +
+            "moving, resizing and drawing them are the person's and the agents', and you make " +
+            "no images. Saving makes a new version as them.",
+          scope: `Your edit of “${detail.title}” (not saved)`,
+          value: shown,
+          fields: canvasFields(shown),
+          apply: setDraft,
+          blocked: () => (saving ? "The design is being saved." : null),
+        }
+      : null,
   );
 
   const print = useCallback((path: string) => {

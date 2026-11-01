@@ -25,7 +25,8 @@
  * # Older is the engine's cursor
  *
  * "Load 60 older" asks `phases` again with the `next` the last page carried,
- * and from that press the first page is held still (`lib/usePaged.ts`).
+ * and the pager joins the first page to the older ones whenever it moves
+ * (`lib/usePaged.ts`).
  * It used to page the event LIST and then read every row back one `event` at
  * a time, because the listing carries no payload: sixty-one round trips for
  * sixty rows, filtered by a role name the listing matched against the actor.
@@ -43,6 +44,7 @@ import {
   TableDateCell,
   TableEntityCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -50,12 +52,12 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { DataGridColumn } from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
-import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { eventHistoryLabel, plural, fmtCount } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -67,6 +69,7 @@ import {
 } from "~/lib/phases.ts";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import type { EventRecord, PhasesPage } from "~/protocol/index.ts";
+import { failureWords } from "~/lib/seats.ts";
 
 /**
  * How many phases one page carries — the first and every "older" one.
@@ -129,16 +132,12 @@ export function RecentPhases({
   // response, no tool calls and no decision.
   const asked = useMemo(() => ({ limit: PHASE_PAGE, ...(seat ? { seat } : {}) }), [seat]);
   // A DIFFERENT SEAT IS A DIFFERENT LIST, and its pages are never appended to
-  // this one; and from the press of "older" the first page is HELD
-  // (`lib/usePaged.ts`): it is read again on a reconnect, and read again
-  // under phases that finished since it would push its last ones out of both
-  // pages — finished before the tab opened, they are not among those the
-  // push brings either.
-  const hold = usePageHold<PhasesPage>(asked);
-  const first = useQuery("phases", asked, { hold: hold.holding });
+  // this one; a first page read again on a reconnect, under phases that
+  // finished since, is joined to the pages under it (`lib/usePaged.ts`).
+  const first = useQuery("phases", asked);
   const paged = usePaged(
-    hold,
     first,
+    asked,
     (cursor) => socket.query("phases", { ...asked, ...phasesCursor(cursor) }),
     phasesOf,
     phaseIdOf,
@@ -190,7 +189,7 @@ export function RecentPhases({
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek, nav],
   );
@@ -225,7 +224,7 @@ export function RecentPhases({
         header: "Outcome",
         cell: (r) =>
           r.failed ? (
-            <Tag variant="danger">{r.errorKind || "failed"}</Tag>
+            <Tag variant="danger">{failureWords(r.errorKind).tag}</Tag>
           ) : r.decision ? (
             // THE WORD, WITH THE SENTENCE ON IT: a pill has a fixed line box,
             // and the gloss inside one would set this column's width for
@@ -274,6 +273,7 @@ export function RecentPhases({
       },
       {
         key: "when",
+        align: "right",
         header: "When",
         shrink: true,
         cell: (r) => <TableDateCell value={r.at} now={now} />,
@@ -337,7 +337,7 @@ export function RecentPhases({
             <Button
               size="small"
               variant="secondary"
-              onClick={paged.older}
+              onClick={paged.next}
               disabled={paging || !paged.more}
               loading={paging}
             >
@@ -348,9 +348,6 @@ export function RecentPhases({
         )}
         {/* BESIDE THE CONTROL, which asks the page again. */}
         {pageError && <PageFailed error={pageError} />}
-        {/* SAID ONLY ONCE IT IS TRUE: until then a reconnect reads the first
-            page again. */}
-        {paged.held && <span className="t-caption">Paused while you page back.</span>}
       </div>
     </Card>
   );

@@ -138,7 +138,7 @@ func (d AnswerDisposition) Valid() bool {
 // THE THIRD CLAUSE IS TIME, and it is the run's own: see [answerWindow].
 //
 // PER NODE AND PER PROCESS, deliberately: every failure that reaches here is a
-// statement about THIS node — no resumer, a suspended conversation this build
+// statement about THIS node — no resumer, a parked turn's state this build
 // cannot decode, a seat that is not in this node's company — so a restart or a
 // seat handoff is exactly the event that makes a further attempt worth making,
 // and both reset the count. It is also why the run is NOT settled when the

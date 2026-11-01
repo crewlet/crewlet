@@ -132,7 +132,7 @@ type OrgProjection struct {
 	// gives; how much of each window is spent is the /budgets answer.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
-	// Services is which tracker and which knowledge base the company runs,
+	// Services is which tracker, knowledge base and chat the company runs,
 	// and whether the engine hosts its code, as the engine resolves them:
 	// see [OrgServices].
 	Services *OrgServices `json:"services,omitempty"`
@@ -160,24 +160,32 @@ type OrgProjection struct {
 	Derived *config.Derived `json:"derived,omitempty"`
 }
 
-// OrgServices is which tracker and which knowledge base the company runs, each
-// as [config.Company.TrackerBackendFor] and [config.Company.KnowledgeBackendFor]
+// OrgServices is which tracker, which knowledge base and which chat the
+// company runs, each as [config.Company.TrackerBackendFor],
+// [config.Company.KnowledgeBackendFor] and [config.Company.ChatBackendFor]
 // resolve it: the backend the document names, else the vendor whose block is
-// connected, else the engine's own — and whether the engine hosts the
-// company's git repositories, `code.native` ([CodeHosts]).
+// connected, else the engine's own: Worklet, Doclet and Chatlet (`chatlet`) —
+// and whether the engine hosts the company's git repositories, `code.native`
+// ([CodeHosts]).
 //
 // AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
-// `knowledge:` and `code:` blocks being guarded. What decides which of the
-// dashboard's own surfaces exist is whether the company runs the engine's
-// tracker, knowledge base and git host at all: a company on Jira or on none
-// has no Work, no My work and no task to file, one that hosts no code has no
-// Code workspace, and a reader shown those surfaces is shown screens whose
-// every question is refused. Every reader learns the first half already, from
-// that refusal, and the vendor's name is the one fact a screen needs to say
-// where the work went instead. NOTHING ELSE of those blocks reaches this
-// audience: no project or space key, no site, no URL, no credential, no
-// repository and no limit, which is what the blocks were guarded for (see the
-// classification test).
+// `knowledge:`, `chat:` and `code:` blocks being guarded. What decides which
+// of the dashboard's own surfaces exist is whether the company runs Worklet,
+// Doclet, Chatlet and the engine's git host at all: a company on Jira or on
+// none has no Worklet, no My work and no task to file, one on Slack has no
+// Chat, one that hosts no code has no Code workspace, and a reader shown those
+// surfaces is shown screens whose every question is refused. Every reader
+// learns the first half already, from that refusal, and the vendor's name is
+// the one fact a screen needs to say where the work went instead. NOTHING ELSE
+// of any block reaches this audience: no project or space key, no site, no
+// URL, no room policy, no credential, no repository and no limit, which is
+// what the blocks were guarded for (see the classification test).
+//
+// CHAT NAMES A POSTURE, NOT A PRODUCT: `vendor` is a company talking on the
+// Mattermost or Slack it declares, either or both, so which of them is not a
+// closed set this field could carry. A reader holding Chat is told the
+// vendors on the `viewer` answer (`chat_vendors`); nobody else needs them,
+// since the place they would be named is hidden from everybody.
 //
 // A CLOSED SET on the wire, each member the backend's own constant: the
 // document's `backend` is refused at parse outside it, a derived one is one of
@@ -185,10 +193,12 @@ type OrgProjection struct {
 // every running company and absent only on `{}`, so a reader tells "not known
 // yet" from "none".
 type OrgServices struct {
-	// Tracker is `native`, `jira` or `none`.
+	// Tracker is `worklet`, `jira` or `none`.
 	Tracker string `json:"tracker"`
-	// Knowledge is `native`, `confluence` or `none`.
+	// Knowledge is `doclet`, `confluence` or `none`.
 	Knowledge string `json:"knowledge"`
+	// Chat is `chatlet`, `vendor` or `none`.
+	Chat string `json:"chat"`
 	// Code is `native` or `none`: [CodeHost].
 	Code string `json:"code"`
 }
@@ -197,8 +207,8 @@ type OrgServices struct {
 // [OrgServices.Code] carries it.
 //
 // THE PROJECTION'S OWN CLOSED SET, because the document says it with a
-// boolean (`code.native`) rather than a backend: the tracker's and the
-// knowledge base's sets are the document's own `backend` values, which the
+// boolean (`code.native`) rather than a backend: the tracker's, the knowledge
+// base's and chat's sets are the document's own `backend` values, which the
 // schema offers and the validator holds, and this one is spelled where the
 // one value carrying it is built. It names no vendor beside the engine's own:
 // a company's repositories on GitHub or GitLab are integrations its seats
@@ -237,6 +247,7 @@ func servicesOf(c *config.Company) *OrgServices {
 	return &OrgServices{
 		Tracker:   string(c.TrackerBackendFor()),
 		Knowledge: string(c.KnowledgeBackendFor()),
+		Chat:      string(c.ChatBackendFor()),
 		Code:      string(codeHostOf(c)),
 	}
 }

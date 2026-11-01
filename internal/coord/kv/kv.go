@@ -25,7 +25,7 @@
 //
 //   - crewlet_duties, holding every OTHER lease: the `worker:` leases of the
 //     fleet singletons, and every class a caller leases under a name of its
-//     own (the tracker's `move:`, `merge:` and `bulk:` claims). Named for the
+//     own (the tracker's `move:` and `merge:` claims). Named for the
 //     duties, which are why it exists. See "Two lease buckets" below for why
 //     none of them can share the first.
 //
@@ -33,6 +33,8 @@
 //     the monotonic counter and the placement hint, for both lease buckets.
 //     Measured to survive the lease key's expiry, which is the entire fencing
 //     invariant. Gaps in the counter are harmless; resets are not.
+//     It is also the counter a single node's in-process leases mint from,
+//     because its tokens outlive that process too ([Epochs], epochs.go).
 //
 // # Per-key TTL cannot be used for this
 //
@@ -60,16 +62,15 @@
 // and so is a node's presence. Every other lease is sized from the work it
 // guards: a duty is re-claimed once per tick, and a tick runs from ten seconds
 // to an hour; a tracker walk's claim is renewed on the walk's own heartbeat
-// and lasts a minute; a bulk admission lasts twice the rows it projects. So
-// their TTLs run up to coord.MaxDutyTTL. One bucket cannot serve both. Its age
-// at the seat TTL refused every duty longer than 45 seconds, which is how the
-// retention sweep, the integration reconcile, the learning passes and every
-// integration pass never ran on any fleet — and, once the duties had moved
-// and the rest had not, every tracker walk claim, which is how every
-// cross-project move and merge failed on every fleet. Its age at the longest
-// duty would put a clock read under every seat renew, and a dead node's seats
-// would sit claimable only by deadline arithmetic rather than by the broker
-// reaping them.
+// and lasts a minute. So their TTLs run up to coord.MaxDutyTTL. One bucket
+// cannot serve both. Its age at the seat TTL refused every duty longer than 45
+// seconds, which is how the retention sweep, the integration reconcile, the
+// learning passes and every integration pass never ran on any fleet — and,
+// once the duties had moved and the rest had not, every tracker walk claim,
+// which is how every cross-project move and merge failed on every fleet. Its
+// age at the longest duty would put a clock read under every seat renew, and a
+// dead node's seats would sit claimable only by deadline arithmetic rather
+// than by the broker reaping them.
 //
 // So WHICH BUCKET is decided by the class, and by the one rule coord states
 // for it (coord.HeldToSeatTTL): seats and presence in the seat lease bucket,
@@ -190,10 +191,14 @@
 //
 // A lease's read-back, a renew's and a release's read, Get, the epoch and
 // hint reads, and every record the fleet store reads by key (fleet.go, the
-// mailboxes, the positions, the follows, the secrets) go
-// through ONE read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only
-// the stream leader answers ([leaderReader], [getLatest]). NONE is the bucket
-// handle's own Get, and none may be.
+// mailboxes, the positions, the follows, the secrets, the token counters, the
+// object store's records, the seat pauses, the chat read state) go through ONE
+// read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only the stream
+// leader answers ([leaderReader], [getLatest]). NONE is the bucket handle's own
+// Get, and none may be — TestNothingReadsAKeyThroughADirectGet reads this
+// package's source for one, because the partition case below holds only the
+// call sites it reads through, and every other read is a call site of its
+// own.
 //
 // That Get is a DIRECT get, and a direct get is answered by whichever replica
 // the broker picks — the one on the caller's own member first — from its own
@@ -323,6 +328,10 @@ var log = logging.Get("coord.kv")
 // third answer — "no answer" — which a caller retries loudly instead of acting
 // on a lie about a peer that does not exist.
 var (
+	// errNoJetStream is every opener's refusal of a missing client.
+	errNoJetStream = errors.New("coord/kv: a JetStream client is required, built " +
+		"over the stream's own connection in the API its broker speaks " +
+		"(see internal/jsapi)")
 	errNoOwner    = errors.New("coord/kv: owner is required")
 	errBadTTL     = errors.New("coord/kv: ttl must be positive")
 	errTTLTooLong = fmt.Errorf("coord/kv: ttl exceeds the seat lease bucket's age, "+
@@ -411,25 +420,26 @@ type Config struct {
 }
 
 func (c *Config) normalize() error {
-	if c.BucketPrefix == "" {
-		c.BucketPrefix = defaultBucketPrefix
-	}
-	if c.Replicas == 0 {
-		c.Replicas = 1
-	}
 	switch {
 	case c.TTL <= 0:
 		return fmt.Errorf("coord/kv: Config.TTL is required")
 	case c.TTL < minBucketTTL:
 		return fmt.Errorf("coord/kv: Config.TTL %v is below the broker's %v floor on a bucket TTL",
 			c.TTL, minBucketTTL)
-	case c.Replicas < 0 || c.Replicas > maxReplicas:
-		return fmt.Errorf("coord/kv: Config.Replicas %d is outside 1..%d", c.Replicas, maxReplicas)
-	case !validBucketName.MatchString(c.BucketPrefix + leasesSuffix):
-		return fmt.Errorf("coord/kv: Config.BucketPrefix %q is not a valid bucket name "+
-			"(letters, digits, '-' and '_' only)", c.BucketPrefix)
 	}
+	buckets := c.buckets()
+	if err := buckets.normalize(); err != nil {
+		return err
+	}
+	c.BucketPrefix, c.Replicas = buckets.BucketPrefix, buckets.Replicas
 	return nil
+}
+
+// buckets is the part of the configuration the epochs bucket shares with the
+// lease buckets: ONE prefix and one replica count, so a store and a counter
+// opened from the same deployment name the same bucket (see [OpenEpochs]).
+func (c *Config) buckets() EpochsConfig {
+	return EpochsConfig{Clustered: c.Clustered, Replicas: c.Replicas, BucketPrefix: c.BucketPrefix}
 }
 
 // lane is one lease bucket and the rule its records expire by.
@@ -472,10 +482,9 @@ type Store struct {
 	// duties holds every other lease this build claims: every duty, and
 	// every class a caller leases (see [Store.laneFor]).
 	duties *lane
-	epochs jetstream.KeyValue
-	// epochRead is the epochs bucket's leader read, as [lane.read] is a
-	// lease bucket's.
-	epochRead *leaderReader
+	// counter is the epochs bucket: every fencing token this store mints,
+	// and every placement hint it keeps (epochs.go).
+	counter *Epochs
 
 	ttl time.Duration
 
@@ -483,9 +492,17 @@ type Store struct {
 	// which is what every gated claim and FleetProtocolFloor judge instead
 	// of listing the fleet's leases.
 	gate *gateView
+
+	// beforeMint, set only by this package's tests, is called as a claim
+	// that won its record is about to advance the counter: how the shared
+	// conformance suite holds a claim mid-mint. Nil in every running store.
+	beforeMint func(ctx context.Context, resource string)
 }
 
 var _ coord.Backend = (*Store)(nil)
+
+// Epochs is the counter this store mints its tokens from.
+func (s *Store) Epochs() *Epochs { return s.counter }
 
 // Open creates or adopts the three buckets and returns the backend.
 //
@@ -529,9 +546,7 @@ var _ coord.Backend = (*Store)(nil)
 // internal/engine's attachCoordination.
 func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, error) {
 	if js == nil {
-		return nil, errors.New("coord/kv: a JetStream client is required — built " +
-			"over the stream's own connection, in the API its broker speaks " +
-			"(see internal/jsapi)")
+		return nil, errNoJetStream
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
@@ -557,23 +572,10 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 		return nil, err
 	}
 
-	epochs, epochFacts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
-		Bucket: cfg.BucketPrefix + epochsSuffix,
-		Description: "Crewlet fencing epochs and placement hints; NO TTL, this must survive " +
-			"the lease key's expiry or the counter resets",
-		Replicas: cfg.Replicas,
-	})
+	counter, err := openEpochs(ctx, js, cfg.buckets())
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+epochsSuffix, err)
+		return nil, err
 	}
-	// THE SHARPEST RETENTION IN THIS STORE, and until this line nothing
-	// compared it: an epoch bucket with an age at all is a fencing counter
-	// that resets, which hands the next owner of a resource a token a
-	// zombie from the previous tenure is still writing under. A peer that
-	// created it with one is reported here rather than refused, for
-	// [reportRetention]'s reason — a booting node does not rewrite a bucket
-	// — and the remedy it names is the one that fixes this.
-	reportRetention(ctx, epochs.Bucket(), 0, epochFacts)
 
 	// THE TTL IN FORCE, which is the bucket's and not this node's config
 	// whenever a peer created it first. Reported at WARN rather than
@@ -592,15 +594,15 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 				"the bucket while the fleet is down so the next boot re-creates it")
 	}
 
-	var readers [3]*leaderReader
-	for i, bucket := range []jetstream.KeyValue{leases, duties, epochs} {
+	var readers [2]*leaderReader
+	for i, bucket := range []jetstream.KeyValue{leases, duties} {
 		if readers[i], err = newLeaderReader(js, bucket); err != nil {
 			return nil, fmt.Errorf("coord/kv: address %s's leader: %w", bucket.Bucket(), err)
 		}
 	}
 
 	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "duties", duties.Bucket(),
-		"epochs", epochs.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
+		"epochs", counter.kv.Bucket(), "ttl", leaseFacts.age, "max_duty_ttl", coord.MaxDutyTTL)
 	s := &Store{
 		js: js,
 		// The seat lease bucket's ceiling is the age IN FORCE on it, never
@@ -624,9 +626,8 @@ func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Store, erro
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
 		},
-		epochs:    settled(js, epochs),
-		epochRead: readers[2],
-		ttl:       leaseFacts.age,
+		counter: counter,
+		ttl:     leaseFacts.age,
 	}
 	s.gate = newGateView(s)
 	return s, nil
@@ -855,6 +856,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
+	// sibling is whether the last round met this owner's own claim still
+	// minting, which names the answer if every round is spent: each round
+	// that reaches the record sets it before it can go round again.
+	var sibling bool
 	for range casAttempts {
 		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
@@ -890,7 +895,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				return nil, coord.RefusedProtocol, nil
 			}
 		}
-		if held && mine.value.Epoch == claimingEpoch {
+		sibling = held && mine.value.Epoch == claimingEpoch
+		if sibling {
 			// One of THIS owner's own concurrent claims holds the record
 			// and has not committed its token yet. There is no epoch to
 			// keep, and taking it over would fence this owner against
@@ -940,7 +946,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// the persistent record FIRST, so the epoch bucket is
 				// never behind the lease bucket — that ordering is what
 				// lets PreferredResources read one bucket.
-				if err = s.pinHint(ctx, resource, opts.Preferred); err != nil {
+				if err = s.counter.pin(ctx, resource, opts.Preferred); err != nil {
 					return nil, "", err
 				}
 			}
@@ -1022,7 +1028,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// settle's read-back (that sees the COMMIT, and the committed
 		// value has to carry the stamp already or the first renewal,
 		// which copies the value, would have nothing to carry). One read
-		// per change of tenure, never per heartbeat. Before bumpEpoch, so
+		// per change of tenure, never per heartbeat. Before the counter advances, so
 		// a record already taken from us costs no token.
 		acquiredAt, taken, err := s.claimedAt(ctx, l, resource, rev)
 		if err != nil {
@@ -1042,7 +1048,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// value.Preferred, not opts.Preferred: a claim that names no node
 		// carries forward the hint the lapsed record held, and passing that
 		// through re-pins it on the persistent record if the two ever drift.
-		epoch, hint, err := s.bumpEpoch(ctx, resource, value.Preferred)
+		if s.beforeMint != nil {
+			s.beforeMint(ctx, resource)
+		}
+		epoch, hint, err := s.counter.advance(ctx, resource, value.Preferred)
 		if err != nil {
 			// No token was handed out, and one the counter did take is
 			// a gap, which is harmless. What must not stay is the
@@ -1075,6 +1084,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			return nil, "", err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
+	}
+	if sibling {
+		// THE LAST ROUND MET THIS OWNER'S OWN CLAIM STILL MINTING: the
+		// unknown arm, named for what it is (see coord.ErrClaimInFlight).
+		return nil, "", fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight, resource, opts.Owner)
 	}
 	return nil, "", contended("TryAcquire", resource)
 }
@@ -1517,114 +1531,6 @@ func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	return s.gate.floor(ctx)
 }
 
-// --- the epochs bucket ----------------------------------------------------
-
-// bumpEpoch CAS-increments a resource's counter and returns the new token
-// together with the placement hint that now stands.
-//
-// Called only by a claimant that already holds the lease record in the claiming
-// state, so it is normally uncontended — the CAS loop is here for the one case
-// that is not: a claimant whose claiming record lapsed under it while a peer
-// took over. The counter is only ever incremented and the record is never
-// deleted; gaps are harmless, resets are not.
-//
-// A claim that names no node leaves the stored hint alone: the hint records the
-// last DELIBERATE placement, not who happens to hold the resource. That is also
-// how a hint outlives the lease key it was set through — this record has no
-// TTL, and the lease bucket's does the reaping.
-func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int64, string, error) {
-	key := encodeResource(resource)
-
-	for range casAttempts {
-		kve, err := s.epochRead.live(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			next := resourceValue{Resource: resource, Epoch: 1, Preferred: preferred}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			data, err := encodeValue(next)
-			if err != nil {
-				return 0, "", err
-			}
-			if _, err := s.create(ctx, s.epochs, key, data); err != nil {
-				if errors.Is(err, jetstream.ErrKeyExists) {
-					continue
-				}
-				return 0, "", unavailable("mint epoch "+resource, err)
-			}
-			return next.Epoch, next.Preferred, nil
-		}
-		if err != nil {
-			return 0, "", unavailable("read epoch "+resource, err)
-		}
-
-		var cur resourceValue
-		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
-			// Restarting the counter at 1 would be the one unrecoverable
-			// mistake this bucket exists to prevent, so an unreadable
-			// record is UNKNOWN and the claim does not proceed.
-			return 0, "", fmt.Errorf("%w: decode epoch record for %s: %w",
-				coord.ErrUnavailable, resource, err)
-		}
-		next := resourceValue{Resource: resource, Epoch: cur.Epoch + 1, Preferred: cur.Preferred}
-		if preferred != "" {
-			next.Preferred = preferred
-		}
-		data, err := encodeValue(next)
-		if err != nil {
-			return 0, "", err
-		}
-		if _, err := s.epochs.Update(ctx, key, data, kve.Revision()); err != nil {
-			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
-				continue
-			}
-			return 0, "", unavailable("bump epoch "+resource, err)
-		}
-		return next.Epoch, next.Preferred, nil
-	}
-	return 0, "", contended("bumpEpoch", resource)
-}
-
-// pinHint records a placement hint without moving the counter — the case where
-// a live holder is re-placed mid-tenure.
-func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
-	key := encodeResource(resource)
-
-	for range casAttempts {
-		kve, err := s.epochRead.live(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Only reachable if the persistent record vanished under a
-			// live lease, which nothing in this backend does. The lease
-			// record still carries the new hint, so there is nothing to
-			// fail the claim over.
-			return nil
-		}
-		if err != nil {
-			return unavailable("read epoch "+resource, err)
-		}
-		var cur resourceValue
-		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
-			return fmt.Errorf("%w: decode epoch record for %s: %w",
-				coord.ErrUnavailable, resource, err)
-		}
-		if cur.Preferred == preferred {
-			return nil
-		}
-		cur.Preferred = preferred
-		cur.Resource = resource
-		data, err := encodeValue(cur)
-		if err != nil {
-			return err
-		}
-		if _, err := s.epochs.Update(ctx, key, data, kve.Revision()); err != nil {
-			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
-				continue
-			}
-			return unavailable("pin hint "+resource, err)
-		}
-		return nil
-	}
-	return contended("pinHint", resource)
-}
-
 // --- reading --------------------------------------------------------------
 
 // snapshot is what one claim decision reads: the record it is about, and the
@@ -1734,11 +1640,11 @@ func (s *Store) scanResourcesIn(ctx context.Context, class coord.Class) ([]resou
 		return nil, err
 	}
 	byResource := map[string]resourceValue{}
-	err := s.eachUnder(ctx, s.epochs, class, "the "+string(class)+" placement hints",
+	err := s.eachUnder(ctx, s.counter.kv, class, "the "+string(class)+" placement hints",
 		func(kve jetstream.KeyValueEntry) error {
 			resource, ok := decodeResource(kve.Key())
 			if !ok {
-				log.WarnContext(ctx, "coord_kv_undecodable_key", "bucket", s.epochs.Bucket(), "key", kve.Key())
+				log.WarnContext(ctx, "coord_kv_undecodable_key", "bucket", s.counter.kv.Bucket(), "key", kve.Key())
 				return nil
 			}
 			var v resourceValue
@@ -1748,7 +1654,7 @@ func (s *Store) scanResourcesIn(ctx context.Context, class coord.Class) ([]resou
 			// one costs a seat its stickiness, where failing the read would
 			// stop the sweep placing any seat at all.
 			if err := json.Unmarshal(kve.Value(), &v); err != nil {
-				log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", s.epochs.Bucket(), "key", kve.Key())
+				log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", s.counter.kv.Bucket(), "key", kve.Key())
 				return nil
 			}
 			v.Resource = resource
@@ -1924,6 +1830,16 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 // unavailable turns a transport failure into the contract's third answer.
 func unavailable(what string, err error) error {
 	return fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
+}
+
+// writeUnknown is a write this store sent and heard no answer to: unavailable,
+// and marked [coord.ErrWriteUnknown] because it may have landed.
+//
+// For the methods that read before they write, whose caller cannot otherwise
+// tell this failure from the read's — after which nothing was written — and
+// would tell a person a change that may have happened did not.
+func writeUnknown(what string, err error) error {
+	return fmt.Errorf("%w: %w: %s: %w", coord.ErrUnavailable, coord.ErrWriteUnknown, what, err)
 }
 
 // contended reports a compare-and-swap that never settled.

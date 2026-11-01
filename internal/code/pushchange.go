@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHANGE OPENED BY A PUSH: `git push -o change` opens a change on the one
@@ -257,10 +258,7 @@ func ChangeSource(cmds []Command) (int, ChangeRefusal, string) {
 	case 1:
 		return source, "", ""
 	}
-	named := strings.Join(branches[:min(len(branches), 2)], " and ")
-	if len(branches) > 2 {
-		named = fmt.Sprintf("%s and %d more", strings.Join(branches[:2], ", "), len(branches)-2)
-	}
+	named := words.AndMore(branches, 2)
 	return -1, ChangeRefusalAmbiguousSource, fmt.Sprintf("this push sets %d branches (%s), and a change "+
 		"proposes one: push the change's branch alone with -o change", len(branches), named)
 }

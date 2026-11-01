@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,14 +59,6 @@ type Workspace struct {
 	// retries is when the next sweep may try a seat whose open generation
 	// it could not carry out, by seat slug ([Workspace.sweep]). Guarded by mu.
 	retries map[string]carryRetry
-
-	// sharedMu is the in-process half of the shared login's lock, which
-	// every write to the shared directory holds ([Workspace.lockShared]).
-	// The other half is an flock, for the `crewlet llm` commands that write
-	// the same directory from processes of their own; the mutex is what
-	// queues this process's seats behind each other rather than having each
-	// poll the file.
-	sharedMu sync.Mutex
 }
 
 // seatState is one seat's share of a workspace.
@@ -465,15 +458,18 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 // openKeyGeneration is the first call into a key home taking its generation
 // lock and emptying the home of every credential file and volatile path —
 // whatever an earlier generation's CLI wrote down, a process that ended
-// mid-call included — before the home's own settings are seeded. On success
-// the lock is the seat's to hold until its last call is out.
+// mid-call included — before the home's own settings are seeded: the
+// profile's, then a key home's own over them
+// ([cliprofile.Profile.KeySeedFiles]). On success the lock is the seat's to
+// hold until its last call is out.
 func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
 	release, err := w.lockSeat(ctx, dir)
 	if err != nil {
 		return err
 	}
 	home := filepath.Join(dir, "home")
-	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome)); err != nil {
+	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome),
+		writeSeeds(home, w.profile.KeySeedFiles)); err != nil {
 		release()
 		return err
 	}
@@ -517,14 +513,13 @@ func (w *Workspace) openGeneration(
 	if err = w.prune(home); err != nil {
 		return err
 	}
-	seeded, err := w.seed(ctx, home, cache, store)
+	gen, err := w.seed(ctx, home, cache, store, syncRefresh)
 	if err != nil {
 		return err
 	}
 	// RECORDED ONLY ONCE THE SEED HAS LANDED: a generation is open from here,
 	// and a record left by a seed that failed half way would have the next
 	// call carry a half-imported database out over the shared login.
-	gen := generation{Mode: syncRefresh, Seeded: seeded}
 	if err = writeGeneration(record, gen); err != nil {
 		return err
 	}
@@ -591,6 +586,47 @@ func (c *Checkout) Release(ctx context.Context) error {
 	}
 	pruneErr := c.ws.prune(c.Home)
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
+}
+
+// carryRefreshed carries a login the CLI refreshed WHILE ITS CALL GOES ON back
+// to the shared directory, and moves the generation's baseline to the login
+// the shared directory then holds — on disk too, so a later carry-out compares
+// against it.
+//
+// A call is a seat's whole phase now, its CLI alive through every tool it
+// calls, and a generation stays open for as long as any call of the seat runs:
+// carried out only at the last release, a token the CLI refreshed an hour into
+// a phase would sit in this home while every other seat seeded from the shared
+// login the vendor had already rotated away, and failed its own refresh. So it
+// is carried at each tool call the CLI makes, which is when its process waits
+// on the engine rather than writing to its home.
+//
+// THE BASELINE MOVES WITH THE WRITE, WHOLE: the shared login now holds what
+// this home holds, and the next carry — another refresh, or the release — is
+// judged against that login, under the same compare-and-swap of the whole
+// login ([Workspace.carry]). Left on the old baseline, the release would find
+// the shared login changed since the seed, by this very write, and drop the
+// second refresh as superseded. A carry a newer login superseded moves
+// nothing, so this home's next refresh is dropped as that one was.
+//
+// A key home carries nothing ([Workspace.AcquireForKey]).
+func (c *Checkout) carryRefreshed(ctx context.Context) error {
+	if c == nil || c.keyed || c.released {
+		return nil
+	}
+	c.seat.mu.Lock()
+	defer c.seat.mu.Unlock()
+	_, landed, err := c.ws.carryChanged(ctx, c.Home, c.Cache, c.store, c.seat.gen)
+	if err != nil || landed == nil {
+		return err
+	}
+	gen := c.seat.gen
+	gen.Seeded = landed
+	if err := writeGeneration(c.record, gen); err != nil {
+		return err
+	}
+	c.seat.gen = gen
+	return nil
 }
 
 // seatState returns the share of the home in a seat directory, creating it
@@ -674,20 +710,28 @@ func (w *Workspace) emptyLoginHome() error {
 		clearGeneration(filepath.Join(w.root, loginGenerationFile)))
 }
 
-// seed copies the shared login into a home, and reports what it seeded the
-// home from — the [generation]'s baseline: the SHA-256 of each shared
-// credential file copied in and of the document imported, by name, a name
-// left out being a file that was absent.
+// seed copies the shared login into a home, and opens the home's [generation]
+// under mode — its baseline: the SHA-256 of each shared credential file copied
+// in and of the document imported, by name, a name left out being a file that
+// was absent; and, for a command that makes a login, the operator epoch the
+// login was read at ([generation.SeededEpoch]), which is also the one its
+// login is ordered after until it finishes ([generation.After]).
 //
 // A COPY rather than a symlink into the shared directory: the CLI rewrites
 // this file in place when it refreshes, and seven seats sharing one inode
 // would have seven writers on it. The copy back out is [syncCredentialsOut],
 // which runs once, when the seat's last call finishes.
 //
-// Each file is read ONCE, and the digest is of the very bytes written into
-// the home: a digest read separately could describe a newer file than the one
-// the CLI started from, and the baseline would then excuse a write it should
-// have refused.
+// THE WHOLE LOGIN IS READ AT ONCE, under the shared login's lock
+// ([Workspace.seedFrom]), before any of it is copied: read a file at a time it
+// could straddle a write — a seat seeded with the token of one sign-in beside
+// the config.toml of another — and the lock is what keeps a writer out between
+// two reads, as the journal is what keeps a killed writer's half out of every
+// read ([hostbox.WriteCredentials]).
+//
+// The digest is of the very bytes written into the home: a digest read
+// separately could describe a newer file than the one the CLI started from,
+// and the baseline would then excuse a write it should have refused.
 //
 // A login held in the CLI's own database is IMPORTED last, after the home's
 // own settings files, because the import is the CLI itself starting in this
@@ -697,24 +741,36 @@ func (w *Workspace) emptyLoginHome() error {
 // ([cliprofile.Profile.WorkConfigEnv]) — so its import reads only the
 // database location the home's variables name.
 //
-// AN IMPORT THE CLI REFUSED ([*loginRefusedError]) still returns the baseline,
-// the refused document's digest included, beside the error: a seat stops there,
-// but a command that MAKES a login replaces a document the CLI cannot read, and
-// what it stores is judged against — and written over — exactly that document
-// ([Provider.runInCredentialHome]). Every other failure returns none.
-func (w *Workspace) seed(ctx context.Context, home, cache string, store loginStore) (map[string]string, error) {
-	shared := w.CredentialsDir()
+// AN IMPORT THE CLI REFUSED ([*loginRefusedError]) still returns the
+// generation, the refused document's digest included, beside the error: a seat
+// stops there, but a command that MAKES a login replaces a document the CLI
+// cannot read, and what it stores is judged against — and written over —
+// exactly that document ([Provider.runInCredentialHome]). Every other failure
+// returns none.
+func (w *Workspace) seed(
+	ctx context.Context, home, cache string, store loginStore, mode syncMode,
+) (generation, error) {
+	login, epoch, err := w.seedFrom(ctx, mode)
+	if err != nil {
+		return generation{}, err
+	}
 	seeded := map[string]string{}
+	gen := generation{Mode: mode, Seeded: seeded, SeededEpoch: epoch}
+	if epoch != nil {
+		// The epoch a login command's login is ordered after, should it be
+		// carried out by a later command rather than by its own
+		// ([generation.After]): as of its seed, and moved to when it finished
+		// should its own carry fail. Its own copy, moved on its own.
+		after := *epoch
+		gen.After = &after
+	}
 	for _, rel := range w.profile.CredentialPaths {
 		name := filepath.Base(rel)
 		dst, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
-			return nil, err
+			return generation{}, err
 		}
-		content, present, err := readShared(filepath.Join(shared, name))
-		if err != nil {
-			return nil, err
-		}
+		content, present := login[name]
 		if !present {
 			// NO LOGIN YET is not an error here. The call then fails with
 			// the CLI's own "not authenticated", which names the vendor
@@ -727,47 +783,67 @@ func (w *Workspace) seed(ctx context.Context, home, cache string, store loginSto
 			// in with it, so a seat went on calling as a login `crewlet llm
 			// logout` had removed.
 			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
-				return nil, fmt.Errorf("cli-agent: removing the stale login %q: %w", dst, err)
+				return generation{}, fmt.Errorf("cli-agent: removing the stale login %q: %w", dst, err)
 			}
 			continue
 		}
 		if err := writePrivate(dst, content); err != nil {
-			return nil, err
+			return generation{}, err
 		}
 		seeded[name] = digestOf(content)
 	}
 	if err := w.seedFiles(home, cliprofile.SeedHome); err != nil {
-		return nil, err
+		return generation{}, err
 	}
-	if err := w.importLogin(ctx, home, cache, store, seeded); err != nil {
+	if err := w.importLogin(ctx, home, cache, store, login, seeded); err != nil {
 		var refused *loginRefusedError
 		if errors.As(err, &refused) {
-			return seeded, err
+			return gen, err
 		}
-		return nil, err
+		return generation{}, err
 	}
-	return seeded, nil
+	return gen, nil
 }
 
-// importLogin puts a [cliprofile.CredentialStore]'s document into a home's
-// database, for a profile that declares one, and records the document it read
-// in seeded.
+// seedFrom reads the login a home is seeded from and, for a command that MAKES a
+// login ([syncLogin]), the operator epoch beside it, in ONE HOLD of the shared
+// login's lock ([generation.SeededEpoch]): every writer that moves the epoch
+// moves it in the hold its write is made in ([Workspace.bumpLoginEpoch]), so the
+// two are read as of one instant. A seat's never needs the epoch, and is not
+// refused over an epoch it would never read.
+func (w *Workspace) seedFrom(ctx context.Context, mode syncMode) (map[string][]byte, *uint64, error) {
+	unlock, err := w.lockShared(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
+	login, err := w.readLoginLocked()
+	if err != nil || mode != syncLogin {
+		return login, nil, err
+	}
+	epoch, err := w.loginEpoch()
+	if err != nil {
+		return nil, nil, err
+	}
+	return login, &epoch, nil
+}
+
+// importLogin puts a [cliprofile.CredentialStore]'s document, as the login seed
+// read it, into a home's database, for a profile that declares one, and
+// records the document in seeded.
 //
 // INTO A DATABASE THE PRUNE HAS JUST EMPTIED, which is not incidental: the CLI
 // skips a credential id its database already holds rather than updating it, so
 // importing a refreshed document over an older database would keep the older
 // token. Both callers prune first.
 func (w *Workspace) importLogin(
-	ctx context.Context, home, cache string, store loginStore, seeded map[string]string,
+	ctx context.Context, home, cache string, store loginStore, login map[string][]byte, seeded map[string]string,
 ) error {
 	if w.profile.CredentialStore == nil {
 		return nil
 	}
 	path := w.documentPath()
-	document, present, err := readShared(path)
-	if err != nil {
-		return err
-	}
+	document, present := login[cliprofile.CredentialStoreDocument]
 	if !present {
 		// No login yet, exactly as for a credential file above.
 		return nil
@@ -858,10 +934,19 @@ func acquireFailureKind(err error) llm.ErrorKind {
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
 func (w *Workspace) seedFiles(root string, scope cliprofile.SeedScope) error {
+	var files []cliprofile.SeedFile
 	for _, f := range w.profile.SeedFiles {
-		if f.Scope() != scope {
-			continue
+		if f.Scope() == scope {
+			files = append(files, f)
 		}
+	}
+	return writeSeeds(root, files)
+}
+
+// writeSeeds writes settings files into root, in order — so a later one at a
+// path replaces an earlier one's content there.
+func writeSeeds(root string, files []cliprofile.SeedFile) error {
+	for _, f := range files {
 		dst, err := cliprofile.UnderRoot(root, f.Path)
 		if err != nil {
 			return err
@@ -885,18 +970,21 @@ const (
 	// syncRefresh is a seat's generation, and every auth command that makes
 	// no login (`status`, a vendor's own logout). Its CLI can only have
 	// REFRESHED the login it was seeded from, so the write is a
-	// COMPARE-AND-SWAP against that login: made only while the shared
-	// directory still holds exactly what the home was seeded from, and never
-	// where the shared directory held nothing. Anything else is somebody
-	// else's newer write — another seat's refresh, an operator's new login,
-	// a logout — and the newer one is kept.
+	// COMPARE-AND-SWAP against that login, WHOLE: made only while the shared
+	// directory still holds exactly what the home was seeded from — every
+	// file, and every absence — and never where the shared directory held
+	// nothing. Anything else is somebody else's newer write — another seat's
+	// refresh, an operator's new login, a logout — and the newer one is
+	// kept ([Workspace.carry]).
 	syncRefresh syncMode = "refresh"
 	// syncLogin is a command that MAKES a login: `crewlet llm login`, a
 	// credential login, a token capture. What its CLI stored is written
 	// whenever it differs from what the command started with, OVER whatever
 	// the shared directory holds by then — an operator's new login has to
 	// win over a refresh a seat wrote during a browser flow that took
-	// minutes — and it is the one mode that may create the shared login.
+	// minutes — as the WHOLE login its sign-in left, never one file of it
+	// beside another sign-in's ([Workspace.carry]); and it is the one mode
+	// that may create the shared login.
 	syncLogin syncMode = "login"
 )
 
@@ -921,16 +1009,28 @@ type generation struct {
 	// here was absent then.
 	Seeded map[string]string `json:"seeded"`
 	// After is the shared login's OPERATOR EPOCH ([Workspace.bumpLoginEpoch])
-	// as of when a [syncLogin] generation's own carry failed — or as of when
-	// its command began, where the epoch could not be read at the failure —
-	// set on the record of every login command and read only when that
-	// record is CARRIED OUT LATER ([Workspace.carryOut]). A command's own carry is made
-	// the moment it ends, and an operator's login is written then over
-	// whatever is there, the later of two sign-ins winning; a login that did
-	// not land then is ordered by this instead: written only while no
-	// operator has replaced the login of record since it finished — a
-	// `-from-host`, an import, a logout — and never over one.
+	// as of when a [syncLogin] generation's own carry failed, read under the
+	// shared login's lock ([Workspace.orderPendingLogin]) — or as of its seed
+	// ([generation.SeededEpoch]), where the lock could not be taken or the
+	// epoch read at the failure — set on the record of every login command and
+	// read only when that record is CARRIED OUT LATER ([Workspace.carryOut]). A
+	// command's own carry is made the moment it ends, and an operator's login
+	// is written then over whatever is there, the later of two sign-ins
+	// winning; a login that did not land then is ordered by this instead:
+	// written only while no operator has replaced the login of record since it
+	// finished — a `-from-host`, an import, a logout — and never over one.
 	After *uint64 `json:"after,omitempty"`
+	// SeededEpoch is the shared login's OPERATOR EPOCH as of the seed, read
+	// in the SAME HOLD of the shared login's lock as the login the home was
+	// seeded from, and set on the record of every [syncLogin] generation. It
+	// is what tells a file the sign-in removed and a seat has since REFRESHED
+	// from one another sign-in has since REPLACED, which no comparison of
+	// bytes can ([Workspace.carry]): while the epoch is still this one, every
+	// write the shared login took since the seed was a refresh of the login
+	// the home was seeded from. Read outside that hold, an operator's write
+	// landing between the two reads would be counted as having come before
+	// the seed. A record without it vouches for no write since its seed.
+	SeededEpoch *uint64 `json:"seeded_epoch,omitempty"`
 }
 
 // readGeneration reads an open generation's record, and reports false where
@@ -1195,48 +1295,63 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 // logged the whole fleet out of. So a home that holds what it was seeded with
 // writes nothing at all, whatever the shared directory holds.
 //
-// What did change is written by [Workspace.carry], under the shared login's
-// lock, by the generation's [syncMode]: a refresh only over the login it was
-// seeded from, a login over anything. A login that lost to a newer one is
+// What did change is decided under the shared login's lock, by the
+// generation's [syncMode]: a refresh only over the login it was seeded from, a
+// login over anything ([Workspace.carry]). A login that lost to a newer one is
 // logged as `cli_agent_login_superseded` and dropped.
 //
-// Neither kind of home deletes anything from the shared directory: a credential
-// file a call removed, or a database exporting no login — what a CLI that
-// dropped a credential it could not refresh leaves — is not a login worth
-// keeping over the shared one.
+// Neither kind of home deletes the shared directory's SEEDED COPY of a file its
+// CLI REMOVED: a credential file a call removed, or a database exporting no login
+// — what a CLI that dropped a credential it could not refresh leaves — is not a
+// login worth keeping over the shared one — whether that is the copy the home
+// was seeded with or a seat's refresh of it. A login does REPLACE a file
+// another sign-in wrote — one it never held, or one it removed that an
+// operator's write has replaced since it was seeded — see [Workspace.carry].
 //
 // Everything is READ before anything is written, the export included, so an
-// export that fails writes none of the credential files beside it: a carry is
-// retried whole ([Workspace.carryOut]), and a half-written one would be read
-// by the retry as somebody else's newer write.
+// export that fails writes nothing: a carry is retried whole
+// ([Workspace.carryOut]).
 //
-// Every write REPLACES the file rather than rewriting it in place, through a
-// temporary file and a rename: the shared file is what every other seat's next
-// generation is seeded from, and a seed reading it mid-write took a
-// half-written credential — or an empty one — into a seat.
+// And whatever it writes is ONE WRITE of the whole login
+// ([Workspace.writeLoginLocked]): every other seat's next generation is seeded
+// from the shared directory, and a carry that replaced one file and was killed
+// before the next left a login made of two sign-ins, which every reader then
+// took for one.
 func (w *Workspace) syncCredentialsOut(
 	ctx context.Context, home, cache string, store loginStore, gen generation,
 ) (bool, error) {
-	type held struct {
-		name, dst string
-		content   []byte
-	}
-	var changed []held
+	holds, _, err := w.carryChanged(ctx, home, cache, store, gen)
+	return holds, err
+}
+
+// carryChanged is [Workspace.syncCredentialsOut], reporting besides the digests
+// of the login the shared directory holds once the carry is made, by file name
+// — when that is this home's login, written or found there already — and nil
+// when a newer login superseded it or the home changed nothing: the baseline a
+// generation that goes on running carries out from next
+// ([Checkout.carryRefreshed]).
+func (w *Workspace) carryChanged(
+	ctx context.Context, home, cache string, store loginStore, gen generation,
+) (bool, map[string]string, error) {
+	// held is every file of the login the home holds; changed is those of
+	// them that differ from what the home was seeded with.
+	held := map[string][]byte{}
+	changed := map[string][]byte{}
 	holds := false
-	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		content, err := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
+			return false, nil, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
 		name := filepath.Base(rel)
+		held[name] = content
 		// A settings file the CLI also keeps its login in is carried with
 		// the rest, but answers "holds a login" only holding one
 		// ([cliprofile.Profile.HoldsLogin]): a login command that left
@@ -1245,29 +1360,28 @@ func (w *Workspace) syncCredentialsOut(
 			holds = true
 		}
 		if digestOf(content) != gen.Seeded[name] {
-			changed = append(changed, held{name: name, dst: filepath.Join(shared, name), content: content})
+			changed[name] = content
 		}
 	}
 	if w.profile.CredentialStore != nil {
 		if store == nil {
-			return false, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
+			return false, nil, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
 				"home was released with no way to export it", w.agent)
 		}
 		document, err := store.exportLogin(ctx, home, cache)
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
+			return false, nil, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
 		}
 		if holdsLogin(document) {
 			holds = true
+			held[cliprofile.CredentialStoreDocument] = document
 			if digestOf(document) != gen.Seeded[cliprofile.CredentialStoreDocument] {
-				changed = append(changed, held{
-					name: cliprofile.CredentialStoreDocument, dst: w.documentPath(), content: document,
-				})
+				changed[cliprofile.CredentialStoreDocument] = document
 			}
 		}
 	}
 	if len(changed) == 0 {
-		return holds, nil
+		return holds, nil, nil
 	}
 	who := ""
 	if store != nil {
@@ -1275,27 +1389,60 @@ func (w *Workspace) syncCredentialsOut(
 	}
 	unlock, err := w.lockShared(ctx)
 	if err != nil {
-		return holds, err
+		return holds, nil, err
 	}
 	defer unlock()
 	if gen.Mode == syncLogin && gen.After != nil {
 		// A LOGIN CARRIED OUT AFTER ITS COMMAND ENDED, which an operator's
 		// own later write of the login of record outranks: see
 		// [generation.After].
-		epoch, err := w.loginEpoch()
-		if err != nil {
-			return holds, err
+		epoch, epochErr := w.loginEpoch()
+		if epochErr != nil {
+			return holds, nil, epochErr
 		}
 		if epoch != *gen.After {
-			for _, h := range changed {
-				w.superseded(ctx, who, h.dst, "replaced")
+			for _, name := range slices.Sorted(maps.Keys(changed)) {
+				w.superseded(ctx, who, w.sharedPath(name), "replaced")
 			}
-			return holds, nil
+			return holds, nil, nil
 		}
 	}
-	for _, h := range changed {
-		if err := w.carry(ctx, who, gen, h.name, h.dst, h.content); err != nil {
-			return holds, err
+	current, err := w.readLoginLocked()
+	if err != nil {
+		return holds, nil, err
+	}
+	login, write, err := w.carry(ctx, who, gen, current, held, changed)
+	if err != nil {
+		return holds, nil, err
+	}
+	// NOTHING TO WRITE is not nothing to do. A refresh a newer login
+	// superseded stops here, but a login whose files the shared login
+	// already holds — a carry retried whole because a step after its write
+	// failed — IS the login of record, written, and still ends the logout
+	// below: answered as a carry with nothing left to do, the retry left the
+	// logout standing for good.
+	switch {
+	case write && gen.Mode == syncLogin:
+		// A LOGIN INSTALLED, so a new install record, committed with it
+		// ([LoginInstall]). Only on a write: nothing to write is a carry
+		// retried after its login landed, and that login landed with its
+		// record in the same step, so minting another would name one
+		// sign-in twice. A sign-in that left only a settings file holding
+		// no login installed none, and its write keeps no record either.
+		var install LoginInstall
+		if len(w.loginIn(login)) > 0 {
+			var err error
+			if install, err = newLoginInstall(time.Now()); err != nil {
+				return holds, nil, err
+			}
+		}
+		if err := w.installLoginLocked(ctx, who, login, install); err != nil {
+			return holds, nil, err
+		}
+	case write:
+		// A refresh, the same sign-in: its record stays.
+		if err := w.writeLoginLocked(ctx, who, login); err != nil {
+			return holds, nil, err
 		}
 	}
 	if gen.Mode == syncLogin {
@@ -1303,56 +1450,230 @@ func (w *Workspace) syncCredentialsOut(
 		// configured bundle restores again into a directory left empty later
 		// ([Workspace.markLoggedOut]). Under the lock, with the write.
 		if err := w.clearLoggedOut(); err != nil {
-			return holds, err
+			return holds, nil, err
 		}
 	}
-	return holds, nil
+	if login == nil {
+		return holds, nil, nil
+	}
+	return holds, digestsOf(login), nil
 }
 
-// carry is one changed login file's write, made under the shared login's lock
-// so that the comparison and the replacement are one step against every other
-// writer — a seat in this process, a `crewlet llm` command in another, or a
-// local sandbox's teardown.
-func (w *Workspace) carry(ctx context.Context, who string, gen generation, name, dst string, content []byte) error {
-	current, present, err := readShared(dst)
-	if err != nil {
-		return err
-	}
-	if present && bytes.Equal(current, content) {
-		// Already there: two homes that refreshed to the same login, or a
-		// carry repeated after a write that landed before it failed.
-		return nil
-	}
+// carry decides what a home's changed login makes of the shared one, read as
+// current under the shared login's lock — the whole login the carry writes,
+// or nil for none — from the files the home holds (held) and those of them it
+// changed, by the generation's [syncMode]:
+//
+//   - a LOGIN is written over whatever the shared directory holds, as the
+//     WHOLE LOGIN ITS SIGN-IN LEFT: every file the home holds, the ones the
+//     sign-in left as they were seeded included, so a file another writer —
+//     a seat's refresh included — replaced while the sign-in ran goes back to
+//     this sign-in's copy, the one its CLI left beside its new token, rather
+//     than staying beside that token; and NO FILE THE HOME NEVER HELD — one
+//     it was not seeded with and does not hold is another sign-in's, landed
+//     while this one ran (a restore into the directory it found empty, an
+//     operator's other login), and kept it would make a login of two. Written
+//     as the changed files alone, as it once was, a sign-in that refreshed its
+//     token and left its config.toml as it was put that token beside whichever
+//     config.toml the last writer left. A file the home was seeded with and no
+//     longer holds is NOT REMOVED — a CLI's removal is never carried
+//     ([Workspace.syncCredentialsOut]), because a CLI that dropped a file is
+//     no reason to log the fleet out of the login it was seeded with — so it
+//     goes back as the shared login holds it, for as long as that is still
+//     the seeded login: the copy the home was seeded with, or that copy as a
+//     seat's or a local box's refresh has rewritten it since, which is the
+//     same login, newer — and the CLI left no copy of its own to prefer to
+//     it. Once an operator's write has replaced the login instead — a
+//     `-from-host`, or a logout and an import after it — its copy is ANOTHER
+//     SIGN-IN'S, and is dropped like a file the home never held: kept, as it
+//     once was, a sign-in that renewed its token and removed its config.toml
+//     put that token beside the config.toml of the login an operator wrote
+//     while it ran. A refreshed file and another sign-in's are alike as bytes
+//     — each is a file that is not the seed — so which wrote it is read off
+//     the OPERATOR EPOCH ([Workspace.onlyRefreshedSince]). What the drop costs
+//     is that file: the login written is the one the sign-in itself left,
+//     without it;
+//   - a REFRESH is a COMPARE-AND-SWAP OF THE WHOLE LOGIN: made only while the
+//     shared login is still EXACTLY the one the home was seeded from, every
+//     file and every absence, and then only of the files the home was seeded
+//     with — a refresh never creates a login, nor a file of one. Judged a
+//     file at a time, as it once was, a refresh of one file was written beside
+//     a newer sign-in's other file, and the shared login became one no CLI
+//     ever wrote.
+//
+// A home whose changes the shared login already holds — two homes that
+// refreshed to the same login, or a carry repeated after its write landed —
+// writes nothing and says nothing.
+//
+// It answers the login the shared directory holds once the carry is made, and
+// whether that is a write: the login to write, true; the shared login as it
+// is, false, when it already holds this home's; nil, false, when a newer login
+// superseded the refresh.
+func (w *Workspace) carry(
+	ctx context.Context, who string, gen generation, current, held, changed map[string][]byte,
+) (map[string][]byte, bool, error) {
+	next := maps.Clone(current)
 	switch gen.Mode {
 	case syncLogin:
+		next = maps.Clone(held)
+		// refreshed is whether only refreshes have written the shared login
+		// since the seed, read once and only for a removed file whose copy is
+		// not the seeded one.
+		var refreshed *bool
+		for _, name := range slices.Sorted(maps.Keys(current)) {
+			content := current[name]
+			if _, holds := held[name]; holds {
+				continue
+			}
+			seed, seeded := gen.Seeded[name]
+			if !seeded {
+				continue
+			}
+			if digestOf(content) != seed {
+				if refreshed == nil {
+					only, err := w.onlyRefreshedSince(gen)
+					if err != nil {
+						return nil, false, err
+					}
+					refreshed = &only
+				}
+				if !*refreshed {
+					continue
+				}
+			}
+			next[name] = content
+		}
 	case syncRefresh:
-		base, seededFrom := gen.Seeded[name]
-		switch {
-		case !seededFrom:
-			// A REFRESH NEVER CREATES A LOGIN. Nothing in the shared
-			// directory when the home was seeded means nobody had logged
-			// this entry in — or somebody had logged it out — and a login
-			// a seat's call happened to leave behind is not the
-			// operator's to inherit. If somebody has signed in since,
-			// theirs is the login, and this one is no refresh of it.
-			return nil
-		case !present:
-			w.superseded(ctx, who, dst, "removed")
-			return nil
-		case digestOf(current) != base:
-			w.superseded(ctx, who, dst, "changed")
-			return nil
+		for name, content := range changed {
+			if _, seeded := gen.Seeded[name]; seeded {
+				next[name] = content
+			}
 		}
 	default:
-		return fmt.Errorf("cli-agent: carrying %q out under an unknown mode %q", dst, gen.Mode)
+		return nil, false, fmt.Errorf("cli-agent: carrying a login out under an unknown mode %q", gen.Mode)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(dst), err)
+	if maps.EqualFunc(next, current, bytes.Equal) {
+		// NOTHING TO WRITE, and the shared login is this home's only where
+		// the home holds exactly it — its refresh already there, or a carry
+		// repeated after its write landed. A home that changed only files a
+		// refresh never carries holds the seed beside a newer writer's
+		// login, which is no baseline of its own: taken for one, its next
+		// refresh would pass the compare-and-swap and revert that login.
+		if homeHolds(gen, current, held) {
+			return current, false, nil
+		}
+		return nil, false, nil
 	}
-	if err := hostbox.ReplaceFile(dst, bytes.NewReader(content)); err != nil {
-		return fmt.Errorf("cli-agent: writing the refreshed login %q: %w", dst, err)
+	if gen.Mode == syncRefresh && !maps.Equal(digestsOf(current), gen.Seeded) {
+		// Somebody else's newer write — another seat's refresh, an
+		// operator's login, a logout — and the newer one is kept.
+		for _, name := range slices.Sorted(maps.Keys(changed)) {
+			if _, seeded := gen.Seeded[name]; !seeded {
+				continue
+			}
+			how := "changed"
+			if len(w.loginIn(current)) == 0 {
+				how = "removed"
+			}
+			w.superseded(ctx, who, w.sharedPath(name), how)
+		}
+		return nil, false, nil
+	}
+	return next, true, nil
+}
+
+// homeHolds reports whether a home holds exactly the login given: every file
+// the generation was seeded with and every file of the login, each present in
+// both with the same bytes or absent from both.
+func homeHolds(gen generation, login, held map[string][]byte) bool {
+	names := map[string]bool{}
+	for name := range gen.Seeded {
+		names[name] = true
+	}
+	for name := range login {
+		names[name] = true
+	}
+	for name := range names {
+		have, holds := held[name]
+		want, in := login[name]
+		if holds != in || !bytes.Equal(have, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// onlyRefreshedSince reports whether every write the shared login has taken
+// since a login command's home was seeded was a REFRESH of the login it was
+// seeded from, under the shared login's lock the caller holds: whether the
+// operator epoch is still the one read with the seed ([generation.SeededEpoch]).
+//
+// The epoch is a witness to exactly that because of who writes the shared
+// login while a sign-in runs. A seat's or a local box's refresh moves no epoch,
+// and is a compare-and-swap of the WHOLE login against the one it was seeded
+// from that never adds a file nor removes one, so a chain of them starting from
+// the sign-in's seed is that login, refreshed. Every other writer moves the
+// epoch, in the same hold as its write and before it ([Workspace.bumpLoginEpoch])
+// — `-from-host`, an import, a logout (one whose epoch cannot move still
+// removes the login, which leaves no copy of any file to keep), and so does a
+// restore of a configured bundle that REPLACES a login ([Provider.RestoreBundle]),
+// except two, neither of which can reach a file the sign-in was seeded with:
+// a restore into a directory holding no login, which a sign-in seeded with a
+// login never meets, and another login command, which is refused while this one
+// holds the login home ([Workspace.lockLoginHome]).
+//
+// A record without a seeded epoch vouches for nothing, so it answers false: the
+// shared copy is then dropped as another sign-in's, which loses a file rather
+// than putting one sign-in's file beside another's.
+func (w *Workspace) onlyRefreshedSince(gen generation) (bool, error) {
+	if gen.SeededEpoch == nil {
+		return false, nil
+	}
+	epoch, err := w.loginEpoch()
+	if err != nil {
+		return false, err
+	}
+	return epoch == *gen.SeededEpoch, nil
+}
+
+// orderPendingLogin records on a login command's open generation, at record,
+// the operator epoch its login is ordered after now that its own carry has
+// failed ([generation.After]) — the login is then carried out by a later
+// command, and lands only while no operator has written since this instant.
+//
+// READ IN A HOLD OF ITS OWN of the shared login's lock, as the seed's is
+// ([Workspace.seedFrom]), because every operator's write moves the epoch in
+// the hold its write is made in, and moves it FIRST ([Workspace.bumpLoginEpoch]).
+// Read without the lock, the read could land inside such a hold, after the
+// epoch moved and before the write: the kept login was then ordered after a
+// `-from-host` that landed after this read, and the next command carried it out
+// over that login. Under the lock the read sees the epoch as of before an
+// operator's whole hold or after it. One it waited out is a write its own carry,
+// had it landed, would have waited out and been written over too, the later of
+// two sign-ins winning; one made after the read moves the epoch past it.
+//
+// A lock that cannot be taken in its bounded wait, or an epoch that cannot be
+// read, leaves the record as it is — ordered after the epoch read with the seed
+// ([Workspace.seed]) — which errs towards the operator: a write of theirs that
+// landed while the sign-in ran then outranks it too, but none made after it
+// finished ever loses to it. Only a record that cannot be written is an error.
+func (w *Workspace) orderPendingLogin(ctx context.Context, record string, gen generation) error {
+	if epoch, err := w.lockedLoginEpoch(ctx); err == nil {
+		gen.After = &epoch
+		return writeGeneration(record, gen)
 	}
 	return nil
+}
+
+// lockedLoginEpoch reads the operator epoch ([Workspace.loginEpoch]), taking the
+// shared login's lock for that read alone.
+func (w *Workspace) lockedLoginEpoch(ctx context.Context) (uint64, error) {
+	unlock, err := w.lockShared(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	return w.loginEpoch()
 }
 
 // superseded logs a changed login dropped because the shared one moved past
@@ -1367,29 +1688,31 @@ func (w *Workspace) superseded(ctx context.Context, who, dst, how string) {
 		"path", dst, "shared", how)
 }
 
-// lockShared takes the shared login's lock for one compare-and-swap, and hands
-// back its release.
+// lockShared takes the shared login's lock for one compare-and-swap, or one
+// read of the login, and hands back its release.
 //
-// TWO HALVES because there are two kinds of writer: this process's own seats,
-// queued on [Workspace.sharedMu], and everything that writes the same directory
-// from elsewhere — a `crewlet llm` command, each a process of its own, and a
-// local sandbox's teardown — which only an flock on a file every one of them
-// opens reaches ([hostbox.LockCredentials], whose file is
-// [Workspace.sharedLock]). Every write to the shared directory takes it — a
-// seat's carry, a login's, `-from-host`, a bundle, a logout's removal and the
-// operator epoch beside them — because a compare-and-swap is only one against
-// writers that agree to the same lock.
+// ONE LOCK FOR EVERY TAKER: an flock on a file every writer of the directory
+// opens ([hostbox.LockCredentials], whose file is [Workspace.sharedLock]) — this
+// process's seats, every `crewlet llm` command, each a process of its own, and
+// a local sandbox's teardown, in this process or another. Every write to the
+// shared directory takes it — a seat's carry, a login's, `-from-host`, a
+// bundle, a logout's removal and the operator epoch beside them — because a
+// compare-and-swap is only one against writers that agree to the same lock.
+// And EVERY READ of the login takes it ([Workspace.Login]) — a seed, the
+// doctor, an export, a restore's look for a login already there — because a
+// login is a set of files, and the lock is what keeps a writer out between a
+// reader's first file and its last.
+//
+// NO IN-PROCESS MUTEX IN FRONT OF IT. An flock belongs to the open file
+// description, so two takers in this process exclude each other exactly as
+// two processes do, and each waits for the lock on its OWN context and for its
+// OWN [hostbox.CredentialLockWait]. A mutex queued ahead of the flock waited
+// on neither: every seat starting reads the login under this lock, and while
+// a stopped `crewlet llm` command held the flock each queued seat waited out
+// the one before it's whole ten seconds, so the k-th waited about k times
+// that, whatever its call's deadline.
 func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
-	w.sharedMu.Lock()
-	release, err := hostbox.LockCredentials(ctx, w.CredentialsDir())
-	if err != nil {
-		w.sharedMu.Unlock()
-		return nil, err
-	}
-	return func() {
-		release()
-		w.sharedMu.Unlock()
-	}, nil
+	return hostbox.LockCredentials(ctx, w.CredentialsDir())
 }
 
 // seatLockWait bounds how long the first call into a seat waits for the seat's
@@ -1397,8 +1720,9 @@ func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 //
 // Held by somebody else only for a SWEEP's carry-out of this seat — one export,
 // bounded by [auxiliaryTimeout]; one wait for the shared login's lock, bounded
-// by [hostbox.CredentialLockWait]; and replacing files under a mebibyte, for which a second
-// is three orders of magnitude of headroom — or by ANOTHER PROCESS running this
+// by [hostbox.CredentialLockWait]; and one write of a login of a few files, each
+// under [hostbox.MaxCredentialBytes], for which a second is three orders of
+// magnitude of headroom — or by ANOTHER PROCESS running this
 // seat's generation, an engine that lost the seat's lease and is still
 // finishing a call in its home, which no wait this call can afford outlasts.
 // So the bound is the sweep's, and the second case is refused as a timeout the
@@ -1460,7 +1784,10 @@ func (e *loginHomeBusyError) Error() string {
 }
 
 // loginEpoch reads the shared login's OPERATOR EPOCH, zero where none has been
-// written — see [Workspace.bumpLoginEpoch].
+// written — see [Workspace.bumpLoginEpoch] — under the shared login's lock the
+// caller holds: an operator's write moves the epoch first and writes second in
+// one hold, so a read that does not exclude the hold can land between the two
+// ([Workspace.orderPendingLogin]).
 func (w *Workspace) loginEpoch() (uint64, error) {
 	path := filepath.Join(w.root, loginEpochFile)
 	raw, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
@@ -1480,18 +1807,38 @@ func (w *Workspace) loginEpoch() (uint64, error) {
 }
 
 // bumpLoginEpoch moves the OPERATOR EPOCH on, under the shared login's lock the
-// caller holds.
+// caller holds, BEFORE the write it counts.
 //
 // The epoch counts the operator's writes of the login of record that are not a
-// login command's own — `-from-host`, an import, a logout — and nothing else: a
-// seat's refresh is not one, and a boot's restore of a bundle is not one. It
-// exists for the one write that is made LATE: a login whose export failed is
-// kept in the login home and carried out by the next command, which may be days
-// later, and a login carried out then over whatever the shared directory holds
-// undid every operator write in between. So the login's record carries the
-// epoch as of when it finished ([generation.After]), and it lands only if the
-// epoch has not moved since — a seat's refresh of the older login still loses
-// to it, and an operator's write made after it always wins.
+// login command's own (`-from-host`, an import, a logout, and the automatic
+// restore of a bundle newer than the login it replaces, which writes over a
+// login exactly as `-from-host` does) and nothing else: a seat's refresh is not
+// one, and a restore into a directory holding no login is not one. It is read
+// twice:
+//
+//   - for the one write that is made LATE: a login whose export failed is kept
+//     in the login home and carried out by the next command, which may be days
+//     later, and a login carried out then over whatever the shared directory
+//     holds undid every operator write in between. So the login's record
+//     carries the epoch as of when it finished ([generation.After]), and it
+//     lands only if the epoch has not moved since — a seat's refresh of the
+//     older login still loses to it, and an operator's write made after it
+//     always wins;
+//   - for a file a sign-in REMOVED, which goes back as the shared login holds
+//     it only while that is still the login the sign-in was seeded from, as
+//     seeded or refreshed: an unmoved epoch since the seed is what says no
+//     operator has written in between ([Workspace.onlyRefreshedSince]).
+//
+// Both readers take an unmoved epoch as proof that no operator's write landed,
+// so the epoch moves FIRST, and DURABLY — the file synced, then the directory
+// holding its rename — before the write it counts is begun. An epoch that moved
+// over a write that then failed, or was killed, errs towards the operator: a
+// kept login is dropped as replaced, a removed file's refreshed copy as another
+// sign-in's. A write that landed with no epoch behind it — killed between the
+// two, as it could be while the epoch came second, or a power loss that kept
+// the write's rename and not the epoch's — read as no write at all: a kept
+// login was carried out over it, and its copy of a file a sign-in removed went
+// beside that sign-in's new token.
 //
 // A login command's own write needs no step of its own: login commands take
 // the login home's lock one at a time, and each begins by carrying out the
@@ -1504,6 +1851,9 @@ func (w *Workspace) bumpLoginEpoch() error {
 	}
 	path := filepath.Join(w.root, loginEpochFile)
 	if err := hostbox.ReplaceFile(path, strings.NewReader(strconv.FormatUint(epoch+1, 10)+"\n")); err != nil {
+		return fmt.Errorf("cli-agent: recording the login's epoch in %q: %w", path, err)
+	}
+	if err := hostbox.SyncDir(w.root); err != nil {
 		return fmt.Errorf("cli-agent: recording the login's epoch in %q: %w", path, err)
 	}
 	return nil
@@ -1560,34 +1910,21 @@ func (w *Workspace) loggedOut() (bool, error) {
 	}
 }
 
-// readShared reads one shared login file, reporting false where there is none.
-func readShared(path string) ([]byte, bool, error) {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("cli-agent: reading the shared login %q: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, false, fmt.Errorf("cli-agent: shared login %q is not a regular file", path)
-	}
-	content, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
-	if os.IsNotExist(err) {
-		// Removed between the two reads — a logout landing — which is
-		// exactly what it would have read a moment later.
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("cli-agent: reading the shared login %q: %w", path, err)
-	}
-	return content, true, nil
-}
-
-// digestOf is the SHA-256 of content in hex, [hostbox.FileDigest]'s form.
+// digestOf is the SHA-256 of content in hex, [hostbox.Digest]'s form.
 func digestOf(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
+}
+
+// digestsOf is [digestOf] of every file of a login, by name — a [generation]'s
+// baseline's form, so a login read now compares with the one a home was seeded
+// from.
+func digestsOf(login map[string][]byte) map[string]string {
+	out := make(map[string]string, len(login))
+	for name, content := range login {
+		out[name] = digestOf(content)
+	}
+	return out
 }
 
 // writePrivate writes content at dst, 0600, creating its parent.
@@ -1634,46 +1971,128 @@ func holdsLogin(document []byte) bool {
 	return true
 }
 
-// HasLogin reports whether the shared directory holds a login.
-func (w *Workspace) HasLogin() bool {
-	return len(w.LoginFiles()) > 0
-}
-
-// LoginFiles lists the credential files in the shared directory that hold a
-// login ([Workspace.holdsLogin]), as absolute paths, sorted — a
-// [cliprofile.CredentialStore]'s document among them, which travels in a bundle
-// and is removed by a logout exactly as a credential file is.
-func (w *Workspace) LoginFiles() []string {
-	shared := w.CredentialsDir()
-	var candidates []string
+// loginNames is every file the shared login may hold, by its name in the
+// shared directory: each credential file's, and a
+// [cliprofile.CredentialStore]'s document — which travels in a bundle, is
+// removed by a logout and is written in one step with the rest exactly as a
+// credential file is.
+func (w *Workspace) loginNames() []string {
+	names := make([]string, 0, len(w.profile.CredentialPaths)+1)
 	for _, rel := range w.profile.CredentialPaths {
-		candidates = append(candidates, filepath.Join(shared, filepath.Base(rel)))
+		names = append(names, filepath.Base(rel))
 	}
 	if w.profile.CredentialStore != nil {
-		candidates = append(candidates, w.documentPath())
+		names = append(names, cliprofile.CredentialStoreDocument)
 	}
-	var out []string
-	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && w.holdsLogin(path) {
-			out = append(out, path)
-		}
-	}
-	slices.Sort(out)
-	return out
+	return names
 }
 
-// holdsLogin reports whether a shared credential file is a login, by its
-// profile's [cliprofile.Profile.HoldsLogin]. A file that cannot be read counts
-// as one, as a file the rule cannot parse does: the direction that never drops
-// a login.
-func (w *Workspace) holdsLogin(path string) bool {
-	name := filepath.Base(path)
-	if _, named := w.profile.LoginKeys[name]; !named {
-		return true
-	}
-	content, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
+// sharedPath is where the shared directory keeps the login file name.
+func (w *Workspace) sharedPath(name string) string { return filepath.Join(w.CredentialsDir(), name) }
+
+// Login reads the shared login — ONE login, every file it holds by name — under
+// the shared login's lock: see [Workspace.readLoginLocked]. A settings file
+// holding no login is among them, as the CLI keeps it; [Workspace.loginIn] is
+// the part that signs anybody in.
+func (w *Workspace) Login(ctx context.Context) (map[string][]byte, error) {
+	unlock, err := w.lockShared(ctx)
 	if err != nil {
-		return true
+		return nil, err
 	}
-	return w.profile.HoldsLogin(name, content)
+	defer unlock()
+	return w.readLoginLocked()
+}
+
+// readLoginLocked reads the shared login under the shared login's lock the
+// caller holds: every file it holds, by name, from ONE committed write.
+//
+// A LOGIN IS A SET OF FILES, and the shared directory is written a set at a
+// time ([hostbox.WriteCredentials]): a write that stopped part way — a process
+// killed between two files, a disk that refused the second — is finished
+// before anything is read, so every reader answers with the login before that
+// write or the one after it, and never with half of each. One that cannot be
+// finished is an error, which a reader reports rather than reading the half
+// it left as a login: the doctor and `crewlet llm list` say so, a seat is
+// refused, and a restore declines nothing it cannot see.
+func (w *Workspace) readLoginLocked() (map[string][]byte, error) {
+	login, err := hostbox.ReadCredentials(w.CredentialsDir(), w.loginNames())
+	if err != nil {
+		return nil, fmt.Errorf("cli-agent: reading the shared login in %s: %w", w.CredentialsDir(), err)
+	}
+	return login, nil
+}
+
+// writeLoginLocked makes the shared login EXACTLY login — every file it holds
+// written, every other file the login may hold removed — in ONE committed
+// step, under the shared login's lock the caller holds
+// ([hostbox.WriteCredentials]).
+//
+// A write that COMMITTED and could not be put in place at once is written: it
+// is the login of record, and every reader puts it in place before it reads
+// ([Workspace.readLoginLocked]), so it is logged
+// (`cli_agent_login_unapplied`) rather than reported as a login that did not
+// land — the caller's steps after a write (the operator epoch, the logout's
+// record) follow it, and a reader that still cannot put it in place says so
+// itself.
+//
+// THE INSTALL RECORD IS LEFT AS IT IS ([LoginInstall]): this is the write of a
+// login that was not installed, a refresh carried back, which is the same
+// sign-in. A write that installs one, or removes one, is
+// [Workspace.installLoginLocked].
+func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[string][]byte) error {
+	return w.commitLoginLocked(ctx, who, w.loginNames(), login)
+}
+
+// commitLoginLocked is the one write of the shared directory: files over names,
+// as [hostbox.WriteCredentials] makes it, a write that committed and could not
+// be put in place at once logged and answered as written.
+func (w *Workspace) commitLoginLocked(ctx context.Context, who string, names []string, files map[string][]byte) error {
+	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files)
+	if err != nil && hostbox.Committed(err) {
+		log.WarnContext(ctx, "cli_agent_login_unapplied", "provider", who, "agent", w.agent,
+			"path", w.CredentialsDir(), "error", err)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cli-agent: writing the shared login in %s: %w", w.CredentialsDir(), err)
+	}
+	return nil
+}
+
+// HasLogin reports whether the shared login holds a login — any file of it
+// that is one ([Workspace.loginIn]) — or an error where it cannot be read.
+//
+// ANY ONE FILE IS ENOUGH, deliberately: hermes keeps API keys in one file and
+// an OAuth pool in the other and an entry may use either alone, and gemini-cli
+// signs in without the account file beside its token. What makes one file a
+// whole login rather than half of two is that the directory is written a login
+// at a time, not a count of its files.
+func (w *Workspace) HasLogin(ctx context.Context) (bool, error) {
+	login, err := w.Login(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(w.loginIn(login)) > 0, nil
+}
+
+// loginIn is the part of files — the shared login as [Workspace.Login] reads
+// it, by name — that is a login: every file but a settings file the CLI also
+// keeps its login in that holds none, by its profile's
+// [cliprofile.Profile.HoldsLogin]. Copilot writes `firstLaunchAt` into the
+// config.json its plaintext login lives in on its first start, signed in or
+// not, and Cursor Agent's cli-config.json is written on every run.
+//
+// Such a file is still the login's — read, seeded into a seat's home, carried
+// out and written with the rest, as the CLI keeps it. It is just not a login:
+// not reported as one, exported in a bundle, removed by a logout, nor in a
+// bundle's way. Counted as one, the doctor reported a sign-in nobody made, and
+// a configured bundle — the real login — was refused as a login present.
+func (w *Workspace) loginIn(files map[string][]byte) map[string][]byte {
+	out := make(map[string][]byte, len(files))
+	for name, content := range files {
+		if w.profile.HoldsLogin(name, content) {
+			out[name] = content
+		}
+	}
+	return out
 }

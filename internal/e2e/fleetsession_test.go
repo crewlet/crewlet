@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON'S SESSION IS THE FLEET'S, NOT THE NODE'S THAT MINTED IT.
@@ -139,19 +139,45 @@ const (
 // janeGrants are what the invitation confers: the tracker, to file work, and
 // nothing else — the socket is the overview, which is everybody's — so no
 // phase passes on a permission it did not ask for.
-var janeGrants = []iam.Grant{iam.GrantTracker}
+var janeGrants = []iam.Grant{iam.GrantWorklet}
+
+// person is somebody this suite signs in: where their invitation is sent, the
+// login, name and password they choose when they redeem it, the human seat the
+// invitation binds them to, and what it confers.
+//
+// THE GRANTS ARE THE CASE'S OWN, never a fixture's default: a phase that passes
+// on a permission it did not ask for certifies nothing about the one it did.
+type person struct {
+	address, login, name, password, seat string
+	grants                               []iam.Grant
+}
+
+// jane is the fleet session case's person, holding [janeGrants].
+var jane = person{
+	address: janeAddress, login: janeLogin, name: "Jane Doe",
+	password: janePassword, seat: janeSeat, grants: janeGrants,
+}
 
 // signIn invites Jane under the deployment's Tier A token, redeems the link
 // and signs her in with her password, all on one member — which leaves her
-// browser holding the session cookie that member minted.
+// browser holding the session cookie that member minted. See [signInAs].
 func signIn(t *testing.T, n *node, b *browser) {
+	t.Helper()
+	signInAs(t, n, b, jane)
+}
+
+// signInAs invites who under the deployment's Tier A token, onto their seat
+// with their grants, redeems the link and signs them in with their password,
+// all on one member — which leaves b holding the session cookie that member
+// minted.
+func signInAs(t *testing.T, n *node, b *browser, who person) {
 	t.Helper()
 
 	// THE INVITATION, as `crewlet iam invite` issues it: the deployment's
 	// own token, since the company has nobody in it who could.
 	status, issued := tierA(t, n, http.MethodPost, "/iam/invitations", map[string]any{
-		"email": janeAddress, "grants": janeGrants,
-		"seat": janeSeat, "reason": "the fleet session case",
+		"email": who.address, "grants": who.grants,
+		"seat": who.seat, "reason": "the end-to-end suite",
 	})
 	if status != http.StatusCreated && status != http.StatusAccepted {
 		t.Fatalf("POST /iam/invitations answered %d: %v", status, issued)
@@ -174,23 +200,23 @@ func signIn(t *testing.T, n *node, b *browser) {
 	// THE REDEMPTION, as the dashboard's invitation screen posts it: the id
 	// in the path, the secret in the body, from the deployment's origin.
 	status, redeemed := b.send(n, http.MethodPost, auth.AuthInvitePrefix+id, map[string]any{
-		"secret": secret, "login": janeLogin, "name": "Jane Doe", "password": janePassword,
+		"secret": secret, "login": who.login, "name": who.name, "password": who.password,
 	})
 	if status != http.StatusOK {
-		t.Fatalf("redeeming the invitation answered %d: %v", status, redeemed)
+		t.Fatalf("redeeming %s's invitation answered %d: %v", who.login, status, redeemed)
 	}
 
-	// AND A SIGN-IN, with the password she chose, which replaces the
+	// AND A SIGN-IN, with the password they chose, which replaces the
 	// redemption's cookie with one opened by the password route.
 	status, opened := b.send(n, http.MethodPost, auth.PathAuthLogin, map[string]any{
-		"login": janeLogin, "password": janePassword,
+		"login": who.login, "password": who.password,
 	})
 	if status != http.StatusOK || opened["status"] != "signed_in" {
-		t.Fatalf("signing in answered %d: %v", status, opened)
+		t.Fatalf("signing %s in answered %d: %v", who.login, status, opened)
 	}
-	if opened["login"] != janeLogin || opened["seat"] != janeSeat {
+	if opened["login"] != who.login || opened["seat"] != who.seat {
 		t.Fatalf("the sign-in opened a session for %v at seat %v, want %s at %s",
-			opened["login"], opened["seat"], janeLogin, janeSeat)
+			opened["login"], opened["seat"], who.login, who.seat)
 	}
 	if b.session() == "" {
 		t.Fatalf("the sign-in set no %s cookie on a deployment at %s: %v",
@@ -263,7 +289,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 	key := statelog.NewOpID(time.Now(), "")
 	var filed map[string]any
 	settle(t, "member "+n.id+" to take a write through the cookie", func() (bool, string) {
-		status, body := b.sendKeyed(n, http.MethodPost, "/work/items", key, map[string]any{
+		status, body := b.sendKeyed(n, http.MethodPost, "/worklet/items", key, map[string]any{
 			"title": "file the fleet session case", "project": "ENG",
 		})
 		switch status {
@@ -273,7 +299,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		case http.StatusServiceUnavailable:
 			return false, ""
 		}
-		return false, fmt.Sprintf("POST /work/items through the cookie answered "+
+		return false, fmt.Sprintf("POST /worklet/items through the cookie answered "+
 			"%d: %v", status, body)
 	})
 	item, _ := filed["key"].(string)
@@ -281,10 +307,10 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		t.Fatalf("the write answered no work item key: %v", filed)
 	}
 
-	var change tracker.HistoryEntry
+	var change worklet.HistoryEntry
 	settle(t, "member "+n.id+" to apply "+item, func() (bool, string) {
 		detail, err := n.engine.Tracker().Task(t.Context(), item,
-			tracker.DetailWants{History: true},
+			worklet.DetailWants{History: true},
 			statelog.Freshness{Level: statelog.ReadSession})
 		if err != nil || len(detail.History) == 0 {
 			return false, ""
@@ -292,7 +318,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		change = detail.History[len(detail.History)-1]
 		return true, ""
 	})
-	if change.Actor != janeSeat || change.ActorKind != tracker.AuthorHuman ||
+	if change.Actor != janeSeat || change.ActorKind != worklet.AuthorHuman ||
 		!strings.HasPrefix(change.OperatorID, iam.SessionPrefix) {
 		t.Errorf("%s is written as %q (%s) through %q, want Jane's seat %q as a "+
 			"human, through her session", item, change.Actor, change.ActorKind,

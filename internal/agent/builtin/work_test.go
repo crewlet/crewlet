@@ -14,12 +14,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ---- the fakes -------------------------------------------------------- //
@@ -27,12 +29,12 @@ import (
 type fakeTracker struct {
 	// answer overrides what Tasks returns, for the cases that are about
 	// the SHAPE of an answer rather than about the rows in it.
-	answer *tracker.Answer
+	answer *worklet.Answer
 
 	// query is the last one the list tool built, so a case can assert
 	// what a model's ARGUMENTS became — which is the half of this tool
 	// nothing looked at while it dropped a filter and refused a flag.
-	query tracker.Query
+	query worklet.Query
 
 	// params is what the tool handed the grammar, before it was parsed.
 	params map[string]string
@@ -41,7 +43,7 @@ type fakeTracker struct {
 	// — a view's own keys under the caller's, as the real expansion loads
 	// them.
 	views map[string]map[string]any
-	tasks map[string]tracker.TaskDetail
+	tasks map[string]worklet.TaskDetail
 
 	// reads is every freshness the point readers were handed.
 	reads []statelog.Freshness
@@ -49,17 +51,17 @@ type fakeTracker struct {
 	// wants is the last DetailWants a detail read was given, so a case can
 	// assert what a model's arguments BECAME rather than only that the call
 	// came back.
-	wants tracker.DetailWants
+	wants worklet.DetailWants
 
-	created []tracker.Task
-	asks    []tracker.Comment
+	created []worklet.Task
+	asks    []worklet.Comment
 	merged  []mergeCall
 	moved   []moveCall
 
 	// createAnswer overrides what CreateTask answers, for the cases about
 	// what the TOOL makes of an outcome rather than about the task it
 	// composed.
-	createAnswer *tracker.WriteResult
+	createAnswer *worklet.WriteResult
 
 	// defaultAssignee is who a create naming nobody is reported filed to,
 	// standing in for the project's default the real tracker settles on
@@ -69,7 +71,7 @@ type fakeTracker struct {
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
 	searched  []string
-	ranked    []tracker.Ranked
+	ranked    []worklet.Ranked
 	searchErr error
 	// searchModes is every mode a search asked for, partialSearch makes
 	// the fake answer over part of the corpus, and searchDegraded makes it
@@ -78,46 +80,51 @@ type fakeTracker struct {
 	searchModes    []knowledge.Mode
 	partialSearch  bool
 	searchDegraded knowledge.Degradation
-	patched        []tracker.TaskPatch
+	patched        []worklet.TaskPatch
 	ifMatch        []uint64
-	notified       []*tracker.Notify
+	notified       []*worklet.Notify
 
 	// kinds is what each write said it WAS, which is a different fact
-	// from whether it notified anybody — see [tracker.MutationRecord.Kind].
-	kinds  []tracker.ChangeKind
+	// from whether it notified anybody (see [worklet.MutationRecord.Kind]).
+	kinds  []worklet.ChangeKind
 	actors []builtin.Actor
 	opIDs  []string
 
 	// thread is what Thread answers and threadQuery the last one asked,
 	// which is how a case asserts what the comment tool RESOLVED rather
 	// than only what it wrote.
-	thread      tracker.ResolvedThread
-	threadQuery tracker.ThreadQuery
+	thread      worklet.ResolvedThread
+	threadQuery worklet.ThreadQuery
 	threadErr   error
+
+	// posted is the remark UpdateTask answers that it found already on the
+	// task — the call that posted it, made again — for the cases about what
+	// the comment tool reports of a write answered from a row.
+	posted *worklet.PostedRemark
 
 	// depended is every dependency change the tool composed, dependErr
 	// what the sequence answers, and dependAnswer — when set — the result
 	// it answers in place of the default applied commit.
-	depended     []tracker.DependencyChange
+	depended     []worklet.DependencyChange
 	dependErr    error
-	dependAnswer *tracker.DependencyResult
+	dependAnswer *worklet.DependencyResult
 
-	projectEdits     []tracker.ProjectEdit
-	projectAuthority []tracker.ProjectAuthority
+	projectEdits     []worklet.ProjectEdit
+	projectAuthority []worklet.ProjectAuthority
 	// projectWarnings is what a policy write reports it was not refused
 	// for — a target date given as an instant, stored as its day.
-	projectWarnings []string
+	projectWarnings []caveat.Caveat
 
 	// declaredTypes and declaredFields are the catalogue as the WRITE
 	// tools composed it, which is the half of those verbs that lives in
 	// this package: the tracker's own suite certifies what it does with a
 	// declaration, and nothing else can say what a model's arguments
 	// BECAME.
-	declaredTypes  [][]tracker.TaskType
-	declaredFields [][]tracker.FieldDef
-	tagEdits       []tracker.TagEdit
-	tagAuthority   []tracker.TagAuthority
-	tagWarnings    []string
+	declaredTypes  [][]worklet.TaskType
+	declaredFields [][]worklet.FieldDef
+	tagEdits       []worklet.TagEdit
+	tagAuthority   []worklet.TagAuthority
+	tagWarnings    []caveat.Caveat
 	ensured        [][]string
 	ensuredIn      []string
 	// ensureErr is what the INLINE declaration alone answers, so a case can
@@ -125,19 +132,21 @@ type fakeTracker struct {
 	// would succeed — and so catch a tool that carried on to one.
 	ensureErr error
 
-	projectQuery tracker.ProjectQuery
-	projects     tracker.ProjectListing
-	detailQuery  tracker.ProjectDetailQuery
-	project      tracker.ProjectDetail
+	projectQuery worklet.ProjectQuery
+	projects     worklet.ProjectListing
+	detailQuery  worklet.ProjectDetailQuery
+	project      worklet.ProjectDetail
 
-	activityQuery tracker.ActivityQuery
-	activity      tracker.ActivityAnswer
-	myWorkQuery   tracker.MyWorkQuery
-	myWork        tracker.MyWork
+	activityQuery worklet.ActivityQuery
+	activity      worklet.ActivityAnswer
+	myWorkQuery   worklet.MyWorkQuery
+	myWork        worklet.MyWork
 
 	// viewQuery is the last strip the view listing asked for, so a case
 	// can assert WHOSE strip a caller was shown.
-	viewQuery tracker.ViewQuery
+	viewQuery worklet.ViewQuery
+	// viewListing is the strip Views answers.
+	viewListing worklet.ViewListing
 	// myWorkZone is the clock the last day was cut on, which is the half
 	// of that read a tool decides rather than the tracker.
 	myWorkZone *time.Location
@@ -145,24 +154,27 @@ type fakeTracker struct {
 	// viewer is who the last list was expanded FOR, which is the half of a
 	// personal filter — `preset=my_queue`, `assignee=me` — that decides
 	// whose queue a caller is answered about.
-	viewer tracker.Viewer
+	viewer worklet.Viewer
 
 	// personQuery and inboxQuery are the last personal reads this fake was
 	// asked, so a case can assert WHOSE record a tool resolved the question
 	// to.
-	personQuery tracker.PersonQuery
-	inboxQuery  tracker.InboxQuery
+	personQuery worklet.PersonQuery
+	inboxQuery  worklet.InboxQuery
+	// inbox is the page Inbox answers, where a case sets one; nil answers
+	// its one placeholder notice.
+	inbox *worklet.InboxAnswer
 
 	readErr  error
 	writeErr error
 }
 
 func newFakeTracker() *fakeTracker {
-	tasks := map[string]tracker.TaskDetail{
+	tasks := map[string]worklet.TaskDetail{
 		"ENG-1": {
-			Task: tracker.Task{
+			Task: worklet.Task{
 				ID: "i1", Key: "ENG-1", Project: "ENG", Title: "the work",
-				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+				Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted,
 				Version: 7,
 			},
 			Complete: true,
@@ -172,10 +184,10 @@ func newFakeTracker() *fakeTracker {
 	// references to IDS before anything is written — a key stored in a
 	// relation resolves to nothing on every node, for ever.
 	for _, n := range []string{"2", "3", "4"} {
-		tasks["ENG-"+n] = tracker.TaskDetail{
-			Task: tracker.Task{
+		tasks["ENG-"+n] = worklet.TaskDetail{
+			Task: worklet.Task{
 				ID: "id-" + n, Key: "ENG-" + n, Project: "ENG",
-				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+				Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted,
 			},
 			Complete: true,
 		}
@@ -183,61 +195,61 @@ func newFakeTracker() *fakeTracker {
 	return &fakeTracker{tasks: tasks}
 }
 
-func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (f *fakeTracker) Tasks(_ context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	f.query = q
 	if f.readErr != nil {
-		return tracker.Answer{}, f.readErr
+		return worklet.Answer{}, f.readErr
 	}
 	if f.answer != nil {
 		return *f.answer, nil
 	}
-	answer := tracker.Answer{Complete: true, Level: statelog.ReadSession}
+	answer := worklet.Answer{Complete: true, Level: statelog.ReadSession}
 	for _, d := range f.tasks {
-		row := tracker.TaskRow{
+		row := worklet.TaskRow{
 			ID: d.Task.ID, Key: d.Task.Key, Title: d.Task.Title,
 			Status: d.Task.Status, Project: d.Task.Project,
 		}
 		// THE OPT-IN FACTS, as the real reader fills them: present when
 		// the query asked, so a surface that forwarded `fields=` shows up
 		// in what it renders rather than only in the query it built.
-		if q.Wants(tracker.RowFieldSpend) {
-			row.Spend = &tracker.RowSpend{Tokens: 1400, Turns: 2}
+		if q.Wants(worklet.RowFieldSpend) {
+			row.Spend = &worklet.RowSpend{Tokens: 1400, Turns: 2}
 		}
-		if q.Wants(tracker.RowFieldTags) {
+		if q.Wants(worklet.RowFieldTags) {
 			row.Tags = []string{"api"}
 		}
 		answer.Rows = append(answer.Rows, row)
 	}
-	slices.SortFunc(answer.Rows, func(a, b tracker.TaskRow) int {
+	slices.SortFunc(answer.Rows, func(a, b worklet.TaskRow) int {
 		return strings.Compare(a.ID, b.ID)
 	})
 	answer.TotalHint = len(answer.Rows)
 	return answer, nil
 }
 
-func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.DetailWants,
-	fresh statelog.Freshness) (tracker.TaskDetail, error) {
+func (f *fakeTracker) Task(_ context.Context, idOrKey string, want worklet.DetailWants,
+	fresh statelog.Freshness) (worklet.TaskDetail, error) {
 
 	f.reads = append(f.reads, fresh)
 	f.wants = want
 	if f.readErr != nil {
-		return tracker.TaskDetail{}, f.readErr
+		return worklet.TaskDetail{}, f.readErr
 	}
 	for key, d := range f.tasks {
 		if key == strings.ToUpper(idOrKey) || d.Task.ID == idOrKey {
 			return d, nil
 		}
 	}
-	return tracker.TaskDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoTask, idOrKey)
+	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+func (f *fakeTracker) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.viewQuery = q
-	return tracker.ViewListing{}, nil
+	return f.viewListing, nil
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
-	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 
 	f.viewer = viewer
 
@@ -249,7 +261,7 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	for key, value := range params {
 		f.params[key] = fmt.Sprint(value)
 	}
-	merged := tracker.MapParams{}
+	merged := worklet.MapParams{}
 	if view, held := f.views[fmt.Sprint(params["view"])]; held {
 		for key, value := range view {
 			merged[key] = value
@@ -258,20 +270,20 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	for key, value := range params {
 		merged[key] = value
 	}
-	return tracker.ParseQuery(merged, now, loc)
+	return worklet.ParseQuery(merged, now, loc)
 }
 
-func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (f *fakeTracker) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
 // Person answers an empty record under the handle it was ASKED for, so a case
 // can assert whose record a name resolved to rather than only that it read one.
-func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
-	_ time.Time) (tracker.PersonState, error) {
+func (f *fakeTracker) Person(_ context.Context, q worklet.PersonQuery,
+	_ time.Time) (worklet.PersonState, error) {
 
 	f.personQuery = q
-	return tracker.PersonState{Handle: q.Handle}, nil
+	return worklet.PersonState{Handle: q.Handle}, nil
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.
@@ -280,14 +292,14 @@ func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
 // decided by what comes back from here — who is in the thread, which open ask
 // was inferred, whose question is being answered — so a stub returning nothing
 // would let every one of those arms pass while doing nothing at all.
-func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
-	fresh statelog.Freshness) (tracker.ResolvedThread, error) {
+func (f *fakeTracker) Thread(_ context.Context, q worklet.ThreadQuery,
+	fresh statelog.Freshness) (worklet.ResolvedThread, error) {
 
 	f.reads = append(f.reads, fresh)
 
 	f.threadQuery = q
 	if f.threadErr != nil {
-		return tracker.ResolvedThread{}, f.threadErr
+		return worklet.ResolvedThread{}, f.threadErr
 	}
 	out := f.thread
 	if out.Asked == "" {
@@ -302,34 +314,34 @@ func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
 // as records the actor and hands back a writer bound to it, which is the
 // tracker's own rule: a writer acts as exactly one party.
 // The PROJECT seam, which [builtin.ProjectReader] asserts for: a reader that
-// answers the task questions and not these is a build with no native tracker,
+// answers the task questions and not these is a build with no Worklet,
 // and the registration turns on exactly that.
-func (f *fakeTracker) Projects(_ context.Context, q tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
+func (f *fakeTracker) Projects(_ context.Context, q worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
 
 	f.projectQuery = q
 	return f.projects, f.readErr
 }
 
-func (f *fakeTracker) Project(_ context.Context, q tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (f *fakeTracker) Project(_ context.Context, q worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 
 	f.detailQuery = q
 	return f.project, f.readErr
 }
 
 // The FEED seam — what happened, and what is waiting on somebody. A reader
-// that answers the task questions and not these is a build with no native
-// tracker, and the registration turns on exactly that.
-func (f *fakeTracker) Activity(_ context.Context, q tracker.ActivityQuery,
-	_ time.Time) (tracker.ActivityAnswer, error) {
+// that answers the task questions and not these is a build with no
+// Worklet, and the registration turns on exactly that.
+func (f *fakeTracker) Activity(_ context.Context, q worklet.ActivityQuery,
+	_ time.Time) (worklet.ActivityAnswer, error) {
 
 	f.activityQuery = q
 	return f.activity, f.readErr
 }
 
-func (f *fakeTracker) MyWork(_ context.Context, q tracker.MyWorkQuery,
-	_ time.Time, loc *time.Location) (tracker.MyWork, error) {
+func (f *fakeTracker) MyWork(_ context.Context, q worklet.MyWorkQuery,
+	_ time.Time, loc *time.Location) (worklet.MyWork, error) {
 
 	f.myWorkQuery = q
 	f.myWorkZone = loc
@@ -351,14 +363,14 @@ func (f *fakeTracker) depends(actor builtin.Actor) builtin.WorkDepender {
 // Search implements [builtin.WorkSearcher]: the fake in its fifth shape, for
 // the one read here that is a RANKING rather than a filter.
 func (f *fakeTracker) Search(_ context.Context,
-	q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+	q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 
 	f.searched = append(f.searched, q.Text)
 	f.searchModes = append(f.searchModes, q.Mode)
 	if f.searchErr != nil {
-		return tracker.SearchAnswer{}, f.searchErr
+		return worklet.SearchAnswer{}, f.searchErr
 	}
-	answer := tracker.SearchAnswer{}
+	answer := worklet.SearchAnswer{}
 	answer.ServedMode = q.Mode.Resolved()
 	answer.Coverage.Complete = true
 	if f.partialSearch {
@@ -390,7 +402,7 @@ func (f *fakeTracker) merges(actor builtin.Actor) builtin.WorkMerger {
 type mergeCall struct {
 	duplicate, into string
 	reparent        bool
-	notify          *tracker.Notify
+	notify          *worklet.Notify
 }
 
 // MergeDuplicates records the fold, for the same reason Depend does: what the
@@ -398,15 +410,15 @@ type mergeCall struct {
 // itself is certified against a real store in the tracker's own suite.
 func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
 	duplicate, into string, reparent bool,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	f.merged = append(f.merged, mergeCall{
 		duplicate: duplicate, into: into, reparent: reparent, notify: notify,
 	})
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 51},
 		Version:  51,
@@ -422,31 +434,31 @@ func (f *fakeTracker) moves(actor builtin.Actor) builtin.WorkMover {
 // moveCall is one move as the tool composed it.
 type moveCall struct {
 	task, target string
-	notify       *tracker.Notify
+	notify       *worklet.Notify
 }
 
 // MoveTaskToProject records the move — the sequence itself is certified
 // against a real store in the tracker's own suite.
 func (f *fakeTracker) MoveTaskToProject(_ context.Context, opID, taskID, target string,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	f.moved = append(f.moved, moveCall{task: taskID, target: target, notify: notify})
 	f.opIDs = append(f.opIDs, opID)
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
-	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+	return worklet.WriteResult{Key: target + "-3", Result: statelog.Result{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
 		Version:  71,
 	}}, nil
 }
 
-func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Task,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+func (f *fakeTracker) CreateTask(_ context.Context, opID string, task worklet.Task,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.created = append(f.created, task)
 	f.notified = append(f.notified, notify)
@@ -460,7 +472,7 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	if assignee == "" {
 		assignee = f.defaultAssignee
 	}
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Key: "ENG-9", Assignee: assignee, Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
 		Version:  11,
@@ -469,8 +481,8 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 
 // CreateTaskAsking records the ask beside the task, and is otherwise the
 // create.
-func (f *fakeTracker) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-	ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+func (f *fakeTracker) CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+	ask worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	if f.writeErr == nil {
 		f.asks = append(f.asks, ask)
@@ -479,21 +491,21 @@ func (f *fakeTracker) CreateTaskAsking(ctx context.Context, opID string, task tr
 }
 
 func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch uint64,
-	patch tracker.TaskPatch, kind tracker.ChangeKind,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	patch worklet.TaskPatch, kind worklet.ChangeKind,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.patched = append(f.patched, patch)
 	f.ifMatch = append(f.ifMatch, ifMatch)
 	f.notified = append(f.notified, notify)
 	f.kinds = append(f.kinds, kind)
 	f.opIDs = append(f.opIDs, opID)
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Key: "ENG-1", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 12},
-		Version:  12,
+		Version:  12, Posted: f.posted,
 	}, nil
 }
 
@@ -501,75 +513,75 @@ func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch u
 // every seat, so a seat without it could never use the `labels` argument on
 // the create and update tools it already holds.
 func (f *fakeTracker) WriteProject(_ context.Context, opID, key string,
-	edit tracker.ProjectEdit, authority tracker.ProjectAuthority) (
-	tracker.WriteResult, error) {
+	edit worklet.ProjectEdit, authority worklet.ProjectAuthority) (
+	worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.projectEdits = append(f.projectEdits, edit)
 	f.projectAuthority = append(f.projectAuthority, authority)
 	f.opIDs = append(f.opIDs, opID)
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome: statelog.OutcomeApplied, Version: 3,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
 		},
-		Warnings: f.projectWarnings,
+		Caveats: f.projectWarnings,
 	}, nil
 }
 
 func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
-	edit tracker.TagEdit, authority tracker.TagAuthority) (
-	tracker.WriteResult, error) {
+	edit worklet.TagEdit, authority worklet.TagAuthority) (
+	worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.tagEdits = append(f.tagEdits, edit)
 	f.tagAuthority = append(f.tagAuthority, authority)
 	f.opIDs = append(f.opIDs, opID)
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Outcome: statelog.OutcomeApplied, Version: 4,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 14},
-		Warnings: f.tagWarnings,
+		Caveats:  f.tagWarnings,
 	}, nil
 }
 
 // The CATALOGUE write side, which is the OPERATOR's alone. The declaration a
 // tool composed is what a case here asserts; whether the tracker accepts it is
-// the tracker's own suite (internal/tracker/config_test.go), and a second copy
+// the tracker's own suite (internal/worklet/config_test.go), and a second copy
 // of that gate in this fake would certify nothing but itself.
 func (f *fakeTracker) WriteTypes(_ context.Context, opID string,
-	types []tracker.TaskType) (tracker.WriteResult, error) {
+	types []worklet.TaskType) (worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.declaredTypes = append(f.declaredTypes, types)
 	f.opIDs = append(f.opIDs, opID)
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Outcome: statelog.OutcomeApplied, Version: 5,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 15},
 	}, nil
 }
 
 func (f *fakeTracker) WriteFields(_ context.Context, opID string,
-	fields []tracker.FieldDef) (tracker.WriteResult, error) {
+	fields []worklet.FieldDef) (worklet.WriteResult, error) {
 
 	if f.writeErr != nil {
-		return tracker.WriteResult{}, f.writeErr
+		return worklet.WriteResult{}, f.writeErr
 	}
 	f.declaredFields = append(f.declaredFields, fields)
 	f.opIDs = append(f.opIDs, opID)
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Outcome: statelog.OutcomeApplied, Version: 6,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 16},
 	}, nil
 }
 
 func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
-	tags []string) ([]string, []string, error) {
+	tags []string) ([]string, []caveat.Caveat, error) {
 
 	if f.writeErr != nil {
 		return nil, nil, f.writeErr
@@ -644,10 +656,10 @@ func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 
 // ---- the cases -------------------------------------------------------- //
 
-// THE THREE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers
-// by moving the item, commenting on it, or filing the follow-up — and without
-// this the gate sees only builtins, concludes the turn reached nobody, and
-// corrects it into another round.
+// THE FIVE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers by
+// moving the item, commenting on it, filing the follow-up, or merging it into
+// the item it duplicates — and without this the gate sees only builtins,
+// concludes the turn reached nobody, and corrects it into another round.
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -658,11 +670,11 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 		// AND ON THE TRACKER. The name alone says the turn reached
 		// somebody; the surface says whom, and without it a tracker write
 		// discharged an obligation owed to a founder waiting in chat.
-		if deliveries[name] != tracker.Source {
+		if deliveries[name] != worklet.Source {
 			t.Errorf("%s delivers to %q, want %q — a turn that answered with it "+
 				"would otherwise be corrected for having done nothing, or credited "+
 				"for answering somebody it never reached",
-				name, deliveries[name], tracker.Source)
+				name, deliveries[name], worklet.Source)
 		}
 	}
 	// READING IS NOT DELIVERING. A turn that only read is exactly the turn
@@ -714,7 +726,7 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 		t.Fatalf("actors = %v", trk.actors)
 	}
 	actor := trk.actors[0]
-	if actor.Handle != "eng" || actor.Kind != tracker.AuthorAgent {
+	if actor.Handle != "eng" || actor.Kind != worklet.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", actor)
 	}
 	// THE RUN is the provenance an audit walks back to, and the WORK KEY is
@@ -737,9 +749,9 @@ func TestAWriteCarriesTheChatSurfaceTheTurnWasWokenOn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		transport string
-		want      *tracker.Origin
+		want      *worklet.Origin
 	}{
-		{"slack", &tracker.Origin{Surface: "slack", Conversation: "slack:C1:171.2"}},
+		{"slack", &worklet.Origin{Surface: "slack", Conversation: "slack:C1:171.2"}},
 		{"", nil},
 	} {
 		trk := newFakeTracker()
@@ -822,7 +834,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	}
 }
 
-// A COMPANY RUNNING JIRA GETS NO NATIVE TOOLS AT ALL. A seat offered a tool
+// A COMPANY RUNNING JIRA GETS NO WORKLET TOOLS AT ALL. A seat offered a tool
 // against a tracker its company does not run would reach for it and fail at
 // the call, and learn to distrust the whole catalogue.
 func TestNoTrackerMeansNoTools(t *testing.T) {
@@ -882,7 +894,8 @@ func TestACommentCarriesTheTurnsKeyAndItsMentions(t *testing.T) {
 }
 
 // A BAD ENUM IS REFUSED WITH THE LIST, so the model's next call is right
-// rather than being another guess.
+// rather than being another guess: every value, each quoted as the refused one
+// beside it is, read whole.
 func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -890,21 +903,27 @@ func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	// THE CLOSE REASON IS THE STATUS. The tracker has no separate field:
 	// `cancelled` IS "finished without being delivered", which is what
 	// makes it invisible to a delivery count with no second value to keep in step.
-	for _, tc := range []struct{ field, value, want string }{
-		{"status", "wip", "in_progress"},
-		{"status", "wontfix", "cancelled"},
-		{"priority", "P0", "urgent"},
+	statuses := "The statuses are: " + words.And(worklet.Statuses) + "."
+	priorities := "The priorities are: " + words.And(worklet.Priorities) + "."
+	for _, tc := range []struct {
+		tool       string
+		args       map[string]any
+		want, list string
+	}{
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wip"}, "in_progress", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wontfix"}, "cancelled", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "priority": "P0"}, "urgent", priorities},
+		{builtin.CreateWorkItemTool, map[string]any{"title": "somewhere", "project": "ENG", "priority": "P0"},
+			"urgent", priorities},
 	} {
-		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
-			"item": "ENG-1", tc.field: tc.value,
-		})
+		got := callWork(t, reg, tc.tool, tc.args)
 		if !got.Failed {
-			t.Errorf("%s=%q was accepted", tc.field, tc.value)
+			t.Errorf("%s %v was accepted", tc.tool, tc.args)
 			continue
 		}
-		if !strings.Contains(got.Output, tc.want) {
-			t.Errorf("the refusal of %s=%q does not list the valid values: %s",
-				tc.field, tc.value, got.Output)
+		if !strings.Contains(got.Output, tc.want) || !strings.Contains(got.Output, tc.list) {
+			t.Errorf("the refusal of %s %v does not list the valid values as %q: %s",
+				tc.tool, tc.args, tc.list, got.Output)
 		}
 	}
 }
@@ -945,7 +964,7 @@ func TestAFailedReadIsNotAnEmptyResult(t *testing.T) {
 func TestARequestTheTrackerRefusedIsNotToldToTryAgain(t *testing.T) {
 	t.Parallel()
 	for _, refusal := range []error{
-		fmt.Errorf("%w: cursor: \"42\" is not a log position", tracker.ErrBadQuery),
+		fmt.Errorf("%w: cursor: \"42\" is not a log position", worklet.ErrBadQuery),
 		fmt.Errorf("this read's floor: %w", statelog.ErrForeignPosition),
 	} {
 		trk := newFakeTracker()
@@ -989,7 +1008,7 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 		t.Errorf("a refused write gave %q (%s)", got.Output, tools.RefusalOf(got))
 	}
 
-	trk.writeErr = errors.New("tracker: read the re-spread window: open " +
+	trk.writeErr = errors.New("worklet: read the re-spread window: open " +
 		"/var/lib/crewlet/replicated.db: disk I/O error")
 	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "status": "done",
@@ -1002,7 +1021,7 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 
 	// AND THE HAND-OFF BUDGET TELLS IT WHAT TO DO INSTEAD, rather than
 	// inviting another attempt.
-	trk.writeErr = tracker.ErrReassignmentBudget
+	trk.writeErr = worklet.ErrReassignmentBudget
 	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "assignee": "ops",
 	})
@@ -1013,7 +1032,7 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 	// AND A WALK THAT STOPPED AT AN UNKNOWN STEP IS NEITHER: some of it may
 	// have landed, so "NOT made" would be false, and the same call again is
 	// what finishes it.
-	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	trk.writeErr = fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)
 	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "status": "done",
 	})
@@ -1033,17 +1052,17 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 // filed, after which the seat reworded the call and filed a duplicate.
 func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
 	t.Parallel()
-	lostAck := tracker.WriteResult{
+	lostAck := worklet.WriteResult{
 		Key:    "ENG-9",
 		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
 	}
-	unvouched := tracker.WriteResult{Result: statelog.Result{
+	unvouched := worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeUnknown, OpID: "op.counter", Unvouched: true,
 	}}
 	cases := []struct {
 		name     string
 		operator bool
-		answer   tracker.WriteResult
+		answer   worklet.WriteResult
 		want     []string
 		refuse   []string
 	}{
@@ -1119,7 +1138,7 @@ func TestAWalkThisNodeCannotVouchForIsNotAnsweredWithARetry(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
-	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)
+	trk.writeErr = fmt.Errorf("stopped: %w", worklet.ErrStepUnvouched)
 	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "status": "done",
 	})
@@ -1143,7 +1162,7 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}); got.Failed {
 		t.Fatalf("the duplicate link failed: %s", got.Output)
 	}
-	// A GESTURE, AND NEVER THE WHOLE SET. [tracker.TaskPatch]'s
+	// A GESTURE, AND NEVER THE WHOLE SET. [worklet.TaskPatch]'s
 	// collections are carried whole, so stating this one edge as the
 	// collection deleted every other relation the item had — and the
 	// `waiting_on` edges are the expensive half, because their mirrors on
@@ -1239,12 +1258,12 @@ func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
 	if gesture == nil {
 		t.Fatal("the call carried no relation gesture at all")
 	}
-	var kinds []tracker.RelationKind
+	var kinds []worklet.RelationKind
 	for _, add := range gesture.Add {
 		kinds = append(kinds, add.Kind)
 	}
-	for _, want := range []tracker.RelationKind{
-		tracker.RelationLinked, tracker.RelationDuplicates,
+	for _, want := range []worklet.RelationKind{
+		worklet.RelationLinked, worklet.RelationDuplicates,
 	} {
 		if !slices.Contains(kinds, want) {
 			t.Errorf("the gesture adds %v and not %q — the arm that ran "+
@@ -1267,7 +1286,7 @@ func TestIfMatchReachesTheWriter(t *testing.T) {
 	callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
 		"item": "ENG-1", "status": "in_progress",
 	})
-	if !slices.Equal(trk.ifMatch, []uint64{7, tracker.NoIfMatch}) {
+	if !slices.Equal(trk.ifMatch, []uint64{7, worklet.NoIfMatch}) {
 		t.Errorf("if_match reached the writer as %v, want [7 0]", trk.ifMatch)
 	}
 }
@@ -1277,7 +1296,7 @@ func TestIfMatchReachesTheWriter(t *testing.T) {
 func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.writeErr = fmt.Errorf("%w: task i1 is at version 9", tracker.ErrStaleVersion)
+	trk.writeErr = fmt.Errorf("%w: task i1 is at version 9", worklet.ErrStaleVersion)
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
@@ -1363,7 +1382,7 @@ func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 		t.Errorf("assignee reached the grammar as %v", q.Assignee)
 	case len(q.Tags.Tags) != 1 || q.Tags.Tags[0] != "urgent":
 		t.Errorf("label reached the grammar as %v", q.Tags.Tags)
-	case len(q.Status) != 1 || q.Status[0] != tracker.StatusTodo:
+	case len(q.Status) != 1 || q.Status[0] != worklet.StatusTodo:
 		t.Errorf("status reached the grammar as %v", q.Status)
 	case q.Text != "deploy":
 		t.Errorf("text reached the grammar as %q — a model's search term was "+
@@ -1379,7 +1398,7 @@ func TestEveryListArgumentReachesTheGrammar(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("open_only failed the whole call: %s", got.Output)
 	}
-	want := []tracker.StatusGroup{tracker.GroupNotStarted, tracker.GroupActive}
+	want := []worklet.StatusGroup{worklet.GroupNotStarted, worklet.GroupActive}
 	if len(trk.query.StatusGroups) != len(want) {
 		t.Fatalf("open_only reached the grammar as %v, want %v",
 			trk.query.StatusGroups, want)
@@ -1419,7 +1438,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 		Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 		ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
-	for _, name := range tracker.OperatorOnlyTools() {
+	for _, name := range worklet.OperatorOnlyTools() {
 		if _, held := reg.Lookup(name); held {
 			t.Errorf("a seat holds %s, which is a decision a person makes "+
 				"about how the company runs", name)
@@ -1443,14 +1462,14 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			FileWriter:      func(builtin.Actor) builtin.FileWriter { return newFakeFiles() },
 			Objects:         newFakeObjects(),
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
 		operator[tool.Name()] = true
 	}
-	for _, name := range tracker.OperatorOnlyTools() {
+	for _, name := range worklet.OperatorOnlyTools() {
 		if !operator[name] {
 			t.Errorf("%s is operator-only and the operator surface does not "+
 				"serve it, so nothing serves it at all", name)
@@ -1458,7 +1477,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	}
 	// AND THE SEAT'S OWN ARE THERE TOO: the operator surface is the
 	// same tools with one field different, not a second catalogue.
-	for _, name := range tracker.Tools() {
+	for _, name := range worklet.Tools() {
 		if !operator[name] {
 			t.Errorf("the operator surface does not serve %s, which every "+
 				"seat holds", name)
@@ -1475,10 +1494,10 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.answer = &tracker.Answer{
-		Groups: []tracker.Group{{
+	trk.answer = &worklet.Answer{
+		Groups: []worklet.Group{{
 			Key: "todo", Count: 12,
-			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
+			Rows: []worklet.TaskRow{{ID: "t-1", Key: "ENG-1"}},
 		}},
 		Complete: true,
 	}
@@ -1505,11 +1524,11 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.answer = &tracker.Answer{
-		Groups: []tracker.Group{
-			{Key: "todo", Rows: []tracker.TaskRow{}},
-			{Key: "in_progress", Rows: []tracker.TaskRow{}},
-			{Key: "in_review", Rows: []tracker.TaskRow{}},
+	trk.answer = &worklet.Answer{
+		Groups: []worklet.Group{
+			{Key: "todo", Rows: []worklet.TaskRow{}},
+			{Key: "in_progress", Rows: []worklet.TaskRow{}},
+			{Key: "in_review", Rows: []worklet.TaskRow{}},
 		},
 		Complete: true,
 	}
@@ -1544,7 +1563,7 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
 		TrashWriter:     func(builtin.Actor) builtin.TrashWriter { return nil },
 		Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+			return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 		},
 	}
 	// AN AUTHORIZER THAT ADMITS, because a nil one refuses every call before
@@ -1580,16 +1599,19 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 
 // Inbox answers one notice, which is all the placement test needs: what it is
 // about is whether the surface SERVES the verb, never what the verb returns.
-func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
-	_ time.Time) (tracker.InboxAnswer, error) {
+func (f *fakeTracker) Inbox(_ context.Context, q worklet.InboxQuery,
+	_ time.Time) (worklet.InboxAnswer, error) {
 
 	f.inboxQuery = q
-	return tracker.InboxAnswer{
+	if f.inbox != nil {
+		return *f.inbox, nil
+	}
+	return worklet.InboxAnswer{
 		Handle:         q.Handle,
-		PrimaryReasons: tracker.DefaultPrimaryReasons,
-		Notices: []tracker.InboxNotice{{
+		PrimaryReasons: worklet.DefaultPrimaryReasons,
+		Notices: []worklet.InboxNotice{{
 			RecordID: "rec-1", SubjectID: "i1", SubjectKey: "ENG-1",
-			Reason: tracker.ReasonAssignee, Primary: true,
+			Reason: worklet.ReasonAssignee, Primary: true,
 		}},
 		Primary: 1, Unread: 1,
 	}, nil
@@ -1601,16 +1623,16 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 // ids and a `{set}` gesture into the adds and removes a two-ended write needs,
 // and the sequence itself is certified against a real store elsewhere.
 func (f *fakeTracker) Depend(_ context.Context, _ string,
-	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
+	change worklet.DependencyChange, _ worklet.Leads) (worklet.DependencyResult, error) {
 
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
-		return tracker.DependencyResult{}, f.dependErr
+		return worklet.DependencyResult{}, f.dependErr
 	}
 	if f.dependAnswer != nil {
 		return *f.dependAnswer, nil
 	}
-	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
+	return worklet.DependencyResult{WriteResult: worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome:  statelog.OutcomeApplied,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 41},
@@ -1670,9 +1692,9 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 func TestTheListAnswerCarriesTheCursorItsOwnArgumentAsksFor(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.answer = &tracker.Answer{
+	trk.answer = &worklet.Answer{
 		Complete:   true,
-		Rows:       []tracker.TaskRow{{ID: "i1", Key: "ENG-1", Title: "one"}},
+		Rows:       []worklet.TaskRow{{ID: "i1", Key: "ENG-1", Title: "one"}},
 		NextCursor: "opaque-cursor",
 	}
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
@@ -1790,7 +1812,7 @@ func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 	// thread, and a reader told "no comments" goes looking for the wrong
 	// thing — so the message names where ids come from and how to get the
 	// thread back.
-	trk.readErr = fmt.Errorf("%w: cm-nope on i1", tracker.ErrNoComment)
+	trk.readErr = fmt.Errorf("%w: cm-nope on i1", worklet.ErrNoComment)
 	got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
 		"item": "ENG-1", "comment": "cm-nope",
 	})
@@ -1815,7 +1837,7 @@ func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 func TestADescriptionIsWholeOrSaidToBeLeftOut(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	whole := strings.Repeat("d", tracker.MaxBody)
+	whole := strings.Repeat("d", worklet.MaxBody)
 	item := trk.tasks["ENG-1"]
 	item.Task.Body = whole
 	trk.tasks["ENG-1"] = item
@@ -1914,14 +1936,14 @@ func TestACreateStartsInTheStatusItNames(t *testing.T) {
 		t.Fatalf("create failed: %s", got.Output)
 	}
 	task := trk.created[0]
-	if task.Status != tracker.StatusInProgress || task.StatusGroup != tracker.GroupActive {
+	if task.Status != worklet.StatusInProgress || task.StatusGroup != worklet.GroupActive {
 		t.Errorf("filed as %s/%s, want in_progress/active", task.Status, task.StatusGroup)
 	}
 
 	plain := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "not started", "project": "ENG",
 	})
-	if plain.Failed || trk.created[1].Status != tracker.StatusTodo {
+	if plain.Failed || trk.created[1].Status != worklet.StatusTodo {
 		t.Errorf("a create naming no status filed %q (%s), want todo",
 			trk.created[1].Status, plain.Output)
 	}
@@ -1929,8 +1951,9 @@ func TestACreateStartsInTheStatusItNames(t *testing.T) {
 	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "somewhere", "project": "ENG", "status": "shipping",
 	})
-	if !bad.Failed || !strings.Contains(bad.Output, "shipping") {
-		t.Errorf("an unknown status was not refused by name: %s", bad.Output)
+	if !bad.Failed || !strings.Contains(bad.Output, `"shipping" is not a status. The statuses are: `+
+		words.And(worklet.Statuses)+".") {
+		t.Errorf("an unknown status was not refused by name, naming every status: %s", bad.Output)
 	}
 	if len(trk.created) != 2 {
 		t.Errorf("the refused create filed a task anyway (%d filed)", len(trk.created))
@@ -2320,7 +2343,7 @@ func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
 	// it twice.
 	plain := newFakeTracker()
 	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-		return builtin.Actor{Handle: "token:ops", Kind: tracker.AuthorOperator}, nil
+		return builtin.Actor{Handle: "token:ops", Kind: worklet.AuthorOperator}, nil
 	}
 	tools := builtin.OperatorTools(builtin.OperatorDeps{
 		Work:      builtin.WorkDeps{Reader: plain, Writer: plain.as, Actor: operator},

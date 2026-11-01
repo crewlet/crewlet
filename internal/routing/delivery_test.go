@@ -17,7 +17,7 @@ import (
 // knowing which. Each sends a reader somewhere different: at who has left, at
 // a retention horizon, and at neither.
 //
-// The first draft of the tracker's routing reader collapsed all three into one
+// The first draft of Worklet's routing reader collapsed all three into one
 // boolean called `swept`, which is the failure the whole engine's three-valued
 // answers exist to prevent, arriving at the one surface built to end it.
 //

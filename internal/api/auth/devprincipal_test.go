@@ -148,7 +148,7 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 	t.Parallel()
 	b := devBootstrap(t)
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantTracker}},
+		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantWorklet}},
 	}
 	dev, err := auth.NewDevPrincipal("alice", &b)
 	if err != nil {
@@ -241,8 +241,8 @@ func TestTheDevPrincipalCarriesAdminOnlyWhereTheNodeServesIt(t *testing.T) {
 		posture iam.AdminPosture
 		want    []iam.Grant
 	}{
-		{iam.AdminServe, append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)},
-		{iam.AdminRefuse, slices.Clone(iam.Apps)},
+		{iam.AdminServe, iam.AllGrants},
+		{iam.AdminRefuse, iam.Apps},
 		{"sometimes", []iam.Grant{}},
 	} {
 		b := devBootstrap(t)

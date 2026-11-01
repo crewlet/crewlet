@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -96,8 +97,8 @@ func TestACompletedTurnBecomesAnEpisode(t *testing.T) {
 }
 
 // AN EPISODE IS FILED AGAINST THE ITEM ITS TURN WAS CHARGED TO, as the
-// backend-qualified ref — a native task id and a Jira issue id are drawn from
-// different spaces, so the bare id would make two items one — and a turn on
+// backend-qualified ref (a Worklet task id and a Jira issue id are drawn from
+// different spaces, so the bare id would make two items one), and a turn on
 // nothing files against nothing rather than against an empty ref.
 func TestAnEpisodeRecordsTheTurnsItem(t *testing.T) {
 	t.Parallel()
@@ -257,7 +258,7 @@ func TestAFailedTurnIsStillRecorded(t *testing.T) {
 func TestASelfPersistedTurnIsStillRecorded(t *testing.T) {
 	t.Parallel()
 	turn := epTurn()
-	turn.Event.AllToolNames = []string{learning.ReflectTool}
+	turn.Event.AllToolNames = []string{toolname.ReflectAndPersist}
 	if reason := episodist(t, episodes(t)).Skip(turn); reason != "" {
 		t.Fatalf("skipped a self-persisted turn: %s", reason)
 	}

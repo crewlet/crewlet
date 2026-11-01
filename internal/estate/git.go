@@ -13,10 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REPOSITORY'S GIT WORK IS ASKED OF ITS HOME GIT NODE (ADR-0059).
+// A REPOSITORY'S GIT WORK IS ASKED OF ITS HOME GIT NODE (ADR-0082).
 //
 // An operation on a repository's git objects — a server-side read by object
-// id, and an engine write built beside a copy of them (ADR-0062) — is answered
+// id, and an engine write built beside a copy of them (ADR-0085) — is answered
 // by a node with the `git` role from its own cache, never by a data node's
 // copy. Asked of whichever node the ordinary walk picked, a seat on a node
 // without the git role would have every git node warm every repository it ever
@@ -68,7 +68,7 @@ type GitServer interface {
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 
 	// Write builds one engine write over this node's copy and lands it as a
-	// push (ADR-0062). ctx ends when the answer is due, as a read's does: a
+	// push (ADR-0085). ctx ends when the answer is due, as a read's does: a
 	// write that ctx ends before its landing ran nothing and answers
 	// code.ErrGitUnready while the asker still listens, so the walk asks the
 	// next git node, which builds the same push; one ended inside its
@@ -403,7 +403,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 			}
 			continue
 		}
-		if value, final, ranErr := r.settle(spec, attempt, node, rep, w); final {
+		if value, final, ranErr := r.settle(ctx, spec, attempt, node, rep, w); final {
 			return value, ranErr
 		}
 		if i == fill && passesFill(rep) {
@@ -465,7 +465,7 @@ var ErrNoGitNode = errors.New("estate: no live git node")
 // routes around a slow node: a home that went quiet, or declined a read, is
 // still the home, and its work waits for it rather than moving to a node that
 // would then do it too. A presence view that disagrees between two nodes can
-// make each believe it is home — no lease and no epoch decide it (ADR-0059) —
+// make each believe it is home — no lease and no epoch decide it (ADR-0082) —
 // so whatever is done as home must be safe done twice: a home's work is
 // decided by the repository's committer, which takes it once.
 //
@@ -505,7 +505,7 @@ func (r *Router) Home(repoID string) (string, error) {
 // fleet rather than a fleet that moved part way through it. Two nodes whose
 // readings differ may each judge themselves a repository's home, as they may a
 // repository at a time: a home's work is decided by its repository's writers,
-// which take it once (ADR-0059).
+// which take it once (ADR-0082).
 //
 // THE HOME'S, NOT THE MAINTAINER'S ([Router.MaintainerOf]): the change work
 // reads two commits' facts on a git node's read lane and asks for records —
@@ -635,7 +635,7 @@ func (h homeReading) home(r *Router, repoID string) string {
 // DEMOTION, as in Home: maintenance is a node's own work, not a read the walk
 // routes to it, so nothing the router remembers of a node's answers moves it.
 // Two nodes whose views listed a heartbeat apart may each take itself for the
-// maintainer — no lease and no epoch decide it (ADR-0059) — so whatever is
+// maintainer — no lease and no epoch decide it (ADR-0082) — so whatever is
 // done as the maintainer must be safe done twice, as a home's work is: its
 // repository's committer takes it once.
 //
@@ -682,7 +682,7 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 // 2026-10-29) — and a pass judges every repository against one fleet rather
 // than a fleet that moved part way through it. Two nodes whose
 // listings differ may each judge themselves a repository's maintainer, as they
-// may a repository at a time: its committer takes the work once (ADR-0059).
+// may a repository at a time: its committer takes the work once (ADR-0082).
 func (r *Router) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
 	if len(charges) == 0 {
 		return map[string]bool{}, nil

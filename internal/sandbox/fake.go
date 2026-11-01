@@ -10,7 +10,9 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -144,14 +146,15 @@ func (s *FakeSandbox) Execs() []FakeExec {
 	return slices.Clone(s.execs)
 }
 
-// JobRunning answers through [FakeSandbox.Exec], the way a remote box does,
-// so a test scripts liveness with ExecFunc.
-func (s *FakeSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, s, commandID)
+// Job answers through [FakeSandbox.Exec], the way a remote box does, so a
+// test scripts liveness with ExecFunc ([remoteJob]).
+func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
+	return remoteJob(ctx, s, commandID)
 }
 
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and
-// ReadFile can see it.
+// ReadFile can see it — replaced whole under the box's lock, so a read never
+// finds a write half done, as no real backend's does ([Sandbox.WriteFile]).
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -317,6 +320,11 @@ type FakeProvider struct {
 	// a control plane that is slow to answer, or does not, for one box
 	// while it answers for the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
+
+	// runs is the run each box was made for, as a local box records it
+	// ([HostBox]): kept for a box made for a turn in a cell on the engine's
+	// host, the one kind a local backend lists.
+	runs map[string]HostBox
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -340,7 +348,27 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	p.next++
 	box := NewFakeSandbox(fmt.Sprintf("box-%d", p.next))
 	p.boxes[box.id] = box
+	if spec.TurnID != "" && spec.Placement.OnEngineHost() {
+		if p.runs == nil {
+			p.runs = map[string]HostBox{}
+		}
+		p.runs[box.id] = HostBox{SandboxID: box.id, TurnID: spec.TurnID, Placement: spec.Placement}
+	}
 	return box, nil
+}
+
+// RunBoxes lists the boxes made for a turn in a cell on the engine's host
+// that have not been killed, as [Local.RunBoxes] does.
+func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []HostBox
+	for _, id := range slices.Sorted(maps.Keys(p.runs)) {
+		if _, live := p.boxes[id]; live {
+			out = append(out, p.runs[id])
+		}
+	}
+	return out, nil
 }
 
 // Connect returns a previously created box, which is what makes a
@@ -420,7 +448,8 @@ func (p *FakeProvider) KilledIDs() []string {
 	return slices.Clone(p.Killed)
 }
 
-// FakeRunner is a coding agent whose job finishes when a test says so.
+// FakeRunner is a coding agent whose job finishes when a test says so — or,
+// with a [FakeRunner.Player], whose every job is played by that function.
 type FakeRunner struct {
 	mu sync.Mutex
 
@@ -430,6 +459,33 @@ type FakeRunner struct {
 
 	done   bool
 	result Result
+	// lost is what [FakeRunner.Lose] took down with its engine, nil before
+	// it is called.
+	lost *fakeLoss
+
+	// Player, when set, is what each job started on this runner DOES: called
+	// once per job with the request it was started with, and its answer is
+	// the job's result. Set it before the first Start.
+	//
+	// PLAYED ON THE JOB'S FIRST POLL OR COLLECT, never at Start: a detached
+	// job does its work after its launch has returned and its turn has
+	// parked, and a play that ran inside Start would make every bridged call
+	// it makes land while the launch is still in flight — a shape no real
+	// job has. And played on the poller's goroutine rather than one of the
+	// runner's own, so there is no goroutine here to outlive the test or the
+	// process: the job's work is bounded by the poll that asked for it.
+	//
+	// A job this runner did not start — one a previous process launched —
+	// is reported done and failed, saying so: its play lived in the process
+	// that started it, and a fake has nothing to resume it from.
+	Player func(ctx context.Context, req RunRequest) Result
+	plays  map[string]*fakePlay
+
+	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the CLI
+	// this fake stands in for takes a person's notes between its own steps,
+	// as a real runner's CLI taught to does. Set it before the first
+	// collection.
+	TakesNotes bool
 
 	// StartErr, when set, fails every Start.
 	StartErr error
@@ -440,7 +496,7 @@ type FakeRunner struct {
 	// and is called WITHOUT the runner's lock — so one box's poll can be
 	// held while another's runs, as a real runner's are, rather than every
 	// poll queueing behind the fake's own mutex.
-	PollFunc func(ctx context.Context, box Sandbox) (bool, error)
+	PollFunc func(ctx context.Context, box Sandbox) (JobState, error)
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
 	// CollectFunc, when set, is called by every Collect with its context,
@@ -460,17 +516,69 @@ type FakeRunner struct {
 	source  OutputSource
 	reads   int
 	waiting int
+	// spent is what the job reports having spent, read by every live
+	// reading. See [FakeRunner.Spend].
+	spent int
 }
 
 var _ Runner = (*FakeRunner)(nil)
 
+// Spend is the job reporting it has spent n tokens in all, as a live reading
+// of a real job's stream reports.
+func (r *FakeRunner) Spend(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spent = n
+}
+
+// fakePlay is one job a [FakeRunner.Player] plays: the request it was started
+// with, and the result once it has been played.
+type fakePlay struct {
+	req    RunRequest
+	once   sync.Once
+	result Result
+	// finished is set once the play has answered.
+	finished atomic.Bool
+}
+
+// played reports whether the job's play has answered.
+func (p *fakePlay) played() bool { return p.finished.Load() }
+
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
-	return &FakeRunner{name: name, installed: map[string]bool{}}
+	return &FakeRunner{name: name, installed: map[string]bool{}, plays: map[string]*fakePlay{}}
+}
+
+// play is a played job's result, playing it first if nothing has yet; ok is
+// false where no Player is set and the job finishes when a test says so.
+func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) {
+	r.mu.Lock()
+	player := r.Player
+	p := r.plays[handle.CommandID]
+	r.mu.Unlock()
+	if player == nil {
+		return Result{}, false
+	}
+	if p == nil {
+		return Result{Error: "the fake runner did not start this job: its play lived in " +
+			"the process that started it"}, true
+	}
+	// ONCE, under the job's own guard rather than the runner's lock: the
+	// play can take as long as its work does, and every other job's poll —
+	// and every read of what was started — must not queue behind it.
+	p.once.Do(func() {
+		p.result = player(ctx, p.req)
+		p.finished.Store(true)
+	})
+	return p.result, true
 }
 
 // Name is the coding agent's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
+
+// ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
+// whose CLI takes a person's notes between its steps gives the coordinator.
+func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
@@ -490,37 +598,67 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	}
 	req.Env = maps.Clone(req.Env)
 	r.started = append(r.started, req)
-	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}, nil
+	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
+	if r.Player != nil {
+		r.plays[handle.CommandID] = &fakePlay{req: req}
+	}
+	return handle, nil
 }
 
-// Poll reports done only once [FakeRunner.Finish] has been called.
-func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
+// Poll reports the job ended once [FakeRunner.Finish] has been called — or,
+// under a [FakeRunner.Player], once the job has been played, which this poll
+// does — and lost once [FakeRunner.Lose] took it down with its engine.
+func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error) {
 	r.mu.Lock()
 	poll := r.PollFunc
+	_, lost := r.lostJob(handle)
 	r.mu.Unlock()
 	if poll != nil {
 		return poll(ctx, box)
 	}
+	if lost {
+		return JobLost, nil
+	}
+	if _, played := r.play(ctx, handle); played {
+		return JobEnded, nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.PollErr != nil {
-		return false, r.PollErr
+		return "", r.PollErr
 	}
-	return r.done, nil
+	if r.done {
+		return JobEnded, nil
+	}
+	return JobRunning, nil
 }
 
-// Collect returns the result a test queued with [FakeRunner.Finish].
+// Collect returns the result a test queued with [FakeRunner.Finish], or the
+// one the job's play answered.
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.CollectErr != nil {
+		r.mu.Unlock()
 		return Result{}, r.CollectErr
 	}
-	if r.CollectFunc != nil {
-		if err := r.CollectFunc(ctx); err != nil {
+	collect := r.CollectFunc
+	r.mu.Unlock()
+	if collect != nil {
+		if err := collect(ctx); err != nil {
 			return Result{}, err
 		}
 	}
+	r.mu.Lock()
+	partial, lost := r.lostJob(handle)
+	r.mu.Unlock()
+	if lost {
+		return partial, nil
+	}
+	if result, played := r.play(ctx, handle); played {
+		return result, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.result, nil
 }
 
@@ -620,7 +758,7 @@ func (f *fakeReading) Read(ctx context.Context, _ Sandbox) (LiveRead, error) {
 	}
 	text := r.account[f.at:]
 	f.at = len(r.account)
-	return LiveRead{Origin: origin, Source: source, Text: text, Finished: r.done}, nil
+	return LiveRead{Origin: origin, Source: source, Text: text, Finished: r.done, Spent: r.spent}, nil
 }
 
 // Finish makes the next Poll report done and the next Collect return result.
@@ -631,6 +769,46 @@ func (r *FakeRunner) Finish(result Result) {
 	r.result = result
 }
 
+// Lose takes every job running now down with its engine — the jobs a host's
+// restart killed mid-step: each this runner has started so far and not played,
+// and each it is asked about that it never started, which a previous process
+// of the engine did. A poll of one reports it [JobLost], and a collection of
+// one reads partial, what it had said before it went. A job started after it
+// is not lost.
+func (r *FakeRunner) Lose(partial Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lost = &fakeLoss{before: len(r.started), partial: partial}
+}
+
+// fakeLoss is what [FakeRunner.Lose] took down: the jobs started before it,
+// and what each had said.
+type fakeLoss struct {
+	before  int
+	partial Result
+}
+
+// lostJob is what a lost job had said, and whether the job handle names was
+// lost. Called under the runner's lock.
+func (r *FakeRunner) lostJob(handle RunHandle) (Result, bool) {
+	if r.lost == nil {
+		return Result{}, false
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(handle.CommandID, "cmd-"))
+	switch {
+	case err != nil || !strings.HasPrefix(handle.CommandID, "cmd-") || n < 1 || n > len(r.started):
+		// NOT THIS RUNNER'S: a previous process started it, and it went
+		// with that process.
+		return r.lost.partial, true
+	case n > r.lost.before:
+		return Result{}, false
+	}
+	if p := r.plays[handle.CommandID]; p != nil && p.played() {
+		return Result{}, false
+	}
+	return r.lost.partial, true
+}
+
 // Installed reports whether the agent was installed in this box.
 func (r *FakeRunner) Installed(sandboxID string) bool {
 	r.mu.Lock()
@@ -638,7 +816,9 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 	return r.installed[sandboxID]
 }
 
-// Started is every run request handed to Start, in order.
+// Started is every run request handed to Start, in order — whole, the steer
+// wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
+// CLI's own side of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

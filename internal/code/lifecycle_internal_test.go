@@ -7,7 +7,7 @@ import (
 )
 
 // EVERY CONTROL OF A PROTECTION IS JUDGED FOR LOOSENING. A seat may add a rule
-// or tighten one and never loosen one (ADR-0058), so a field ADDED to
+// or tighten one and never loosen one (ADR-0081), so a field ADDED to
 // Protection that loosenings skips is a control every unit's lead may switch
 // off unseen — and a direct_push value added to the closed set, one it may
 // switch to. So the cases are keyed by field name and held to the struct's own

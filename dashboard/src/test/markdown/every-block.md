@@ -2,7 +2,7 @@
 
 A paragraph with **strong**, __strong by underscores__, *emphasis*, _emphasis by
 underscores_, ~~struck~~, `inline code`, a [link](https://example.com/docs "The docs"),
-an [in-app link](#/knowledge/pages/7c1e), an autolink <https://example.com>, and a
+an [in-app link](#/doclet/pages/7c1e), an autolink <https://example.com>, and a
 picture ![a chart](images/chart.png "Quarterly").
 
 ## Lists
@@ -105,7 +105,7 @@ Text before any heading, with snake_case_names and a literal \*star\* and a \# h
 
 Raw <b>tags</b> and an & ampersand stay text, as do <script>alert(1)</script> and [refused](javascript:alert(1)).
 
-A [link with \] bracket](#/knowledge/pages/42) and a [paren link](https://en.wikipedia.org/wiki/Markdown_(disambiguation)).
+A [link with \] bracket](#/doclet/pages/42) and a [paren link](https://en.wikipedia.org/wiki/Markdown_(disambiguation)).
 
 Title over a rule
 ---

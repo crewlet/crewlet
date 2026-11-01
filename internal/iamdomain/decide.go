@@ -290,8 +290,7 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 		row   ResetRow
 	)
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, personID,
-			"the first password link its create issued")
+		person, err := heldPerson(ctx, tx, personID)
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return nil
@@ -310,9 +309,7 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 	case err != nil:
 		return Created{Result: result}, err
 	case !found && result.Outcome != statelog.OutcomeApplied:
-		return Created{Result: result}, fmt.Errorf("request %s added person "+
-			"%s, and this node hasn't caught up yet. Retry with "+
-			"the same key: %w", result.OpID, personID, statelog.ErrUnavailable)
+		return Created{Result: result}, &NotReadBack{Result: result}
 	case found && row.Opens(link.Secret, w.Now()):
 		link.ExpiresAt = row.ExpiresAt
 		return Created{Result: result, Link: &link}, nil
@@ -499,10 +496,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// is a node that has not applied it yet, and another node can
 		// redeem the link. Never the issue's "create a company first",
 		// which is advice to an administrator and not to an invitee.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for seat "+
-			"%q, and this node has no company yet. Try again shortly (%v)",
-			statelog.ErrUnavailable, in.Invitation,
-			in.Seat, err)
+		return statelog.Result{}, fmt.Errorf("%w: this invitation is for "+
+			"seat %q, and this node has no company yet. Try again shortly "+
+			"(%v)", statelog.ErrUnavailable, in.Seat, err)
 	case errors.Is(err, statelog.ErrUnavailable):
 		return statelog.Result{}, err
 	case err != nil:
@@ -510,9 +506,9 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// own answer is an invalid value an administrator typed, and wrapped
 		// here it told a surface the invitee had sent a bad request, when
 		// what they hold is a link the company's chart has since retired.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for a "+
-			"seat that's no longer available (%v)",
-			ErrRefused, in.Invitation, err)
+		return statelog.Result{}, forbidden("this invitation is for a "+
+			"seat that's no longer available").about("invitation %s: %v",
+			in.Invitation, err)
 	}
 	return w.enrol(ctx, enrolment{
 		personID: in.PersonID, kind: iam.KindPerson, stage: in.Stage,
@@ -593,16 +589,15 @@ func (in Redemption) validate() error {
 		// REFUSED rather than invalid: it is what a link without its
 		// secret comes to, and its remedy is the one every way a link
 		// stops working has — ask for a new one.
-		return fmt.Errorf("%w: invitation %s needs the full "+
-			"link, not just its id", ErrRefused, in.Invitation)
+		return forbidden("this invitation needs the full link, not just "+
+			"its id").about("invitation %s", in.Invitation)
 	case in.Seat == "":
 		// A CALLER'S FAULT, never the invitee's: every invitation holds a
 		// seat ([Writer.Invite]), and the surface redeeming one hands on the
 		// seat it read off the invitation. [ErrSeatRequired] would ask the
 		// invitee for a field their form does not have.
-		return fmt.Errorf("%w: redeeming invitation %s binds the human seat "+
-			"the invitation holds, and this redemption names none",
-			ErrInvalid, in.Invitation)
+		return fmt.Errorf("%w: redeeming an invitation binds the human seat "+
+			"it holds, and this redemption names none", ErrInvalid)
 	case in.Password.Method != MethodPassword || in.Password.ID == "" ||
 		in.Password.Verifier == "":
 		return fmt.Errorf("%w: a redemption carries the password the invitee "+
@@ -857,26 +852,40 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 //     operation under a new key.
 func (e *enrolment) alreadyEnrolled() error {
 	if e.invitation != "" {
-		return fmt.Errorf("%w: invitation %s has already been used",
-			ErrRefused, e.invitation)
+		return forbidden("this invitation has already been used").
+			about("invitation %s", e.invitation)
 	}
-	return fmt.Errorf("%w: person %s already exists, and request %s didn't "+
-		"create them. Use a new key to add someone new",
-		ErrOperationReused, e.personID, e.opID)
+	// NEITHER THE PERSON NOR THE REQUEST BY ID: the person is the one the
+	// key derives ([CreatedPersonID]) and the request is the key itself,
+	// which the answer carries as its op_id and the surface's log beside it.
+	return fmt.Errorf("%w: it already added somebody. Use a new key to add "+
+		"someone new", ErrOperationReused)
 }
 
 // isEnrolled reports whether a person row exists, read inside a decide's
 // snapshot.
+//
+// A seek of the person's own key ([enrolledStatement]).
 func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) {
 	var enrolled bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM iam_people WHERE id = ?)`, personID).
+	if err := tx.QueryRowContext(ctx, enrolledStatement, personID).
 		Scan(&enrolled); err != nil {
 		return false, fmt.Errorf("iamdomain: read whether %s is enrolled: %w",
 			personID, err)
 	}
 	return enrolled, nil
 }
+
+// enrolledStatement is whether a row holds one person's key.
+const enrolledStatement = `SELECT EXISTS(SELECT 1 FROM iam_people WHERE id = ?)`
+
+// invitationStateStatement is one invitation's address, deadline, redemption
+// and document, by its key: what a redemption is judged against
+// ([Writer.redeemable]) and what a retried issue compares its terms with
+// ([Writer.issuedBefore]).
+const invitationStateStatement = `
+	SELECT email_blind, expires_at, redeemed_at, document
+	  FROM iam_invites WHERE id = ?`
 
 // validateEnrolment is the half of a create's and a redemption's validation
 // that is the same rule for both: an id and an operation to publish under, a
@@ -971,14 +980,12 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		expires, spent int64
 		document       []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, expires_at, redeemed_at, document
-		  FROM iam_invites WHERE id = ?`, e.invitation).
+	err := tx.QueryRowContext(ctx, invitationStateStatement, e.invitation).
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("%w: this node doesn't have invitation %s",
-			ErrRefused, e.invitation)
+		return "", forbidden("this node doesn't have this invitation").
+			about("invitation %s", e.invitation)
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read invitation %s: %w", e.invitation, err)
 	}
@@ -993,18 +1000,17 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return "", fmt.Errorf("%w: that isn't the link for invitation %s",
-			ErrRefused, e.invitation)
+		return "", forbidden("that isn't this invitation's link").
+			about("invitation %s", e.invitation)
 	case held != e.blind:
-		return "", fmt.Errorf("%w: invitation %s is for a "+
-			"different email address",
-			ErrRefused, e.invitation)
+		return "", forbidden("this invitation is for a different email "+
+			"address").about("invitation %s", e.invitation)
 	case spent != 0:
-		return "", fmt.Errorf("%w: invitation %s has already been used",
-			ErrRefused, e.invitation)
+		return "", forbidden("this invitation has already been used").
+			about("invitation %s", e.invitation)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
-		return "", fmt.Errorf("%w: invitation %s has expired", ErrRefused,
-			e.invitation)
+		return "", forbidden("this invitation has expired").
+			about("invitation %s", e.invitation)
 	}
 	// WHAT WAS OFFERED, READ THROUGH [iam.Expand]: an invitation offering
 	// admin offers every app with it, and an invitation carrying a name
@@ -1013,9 +1019,9 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
 		if !slices.Contains(offered, g) {
-			return "", fmt.Errorf("%w: invitation %s gives %v, which "+
-				"doesn't include %s", ErrRefused, e.invitation,
-				invitation.Grants, g)
+			return "", forbidden("this invitation doesn't give %s", g).
+				about("invitation %s gives %s", e.invitation,
+					grantWords(invitation.Grants))
 		}
 	}
 	// THE SEAT IS THE INVITATION'S, and exactly it: one the invitation
@@ -1023,8 +1029,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if e.seat != invitation.Seat {
-		return "", fmt.Errorf("%w: invitation %s is for seat %q, not %q",
-			ErrRefused, e.invitation, invitation.Seat, e.seat)
+		return "", forbidden("this invitation is for seat %q, not %q",
+			invitation.Seat, e.seat).about("invitation %s", e.invitation)
 	}
 	return invitation.InvitedBy, nil
 }
@@ -1200,9 +1206,9 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			// ON THE KIND THIS SNAPSHOT HOLDS, and before anything else
 			// is formed: the rule is about what the row IS, never about
 			// what the caller says it is.
-			return nil, fmt.Errorf("%w: %s is a person, and a person's seat "+
-				"is moved to another human seat or freed by removing them — "+
-				"never cleared", ErrSeatRequired, in.PersonID)
+			return nil, fmt.Errorf("%w: they're a person, so their seat is "+
+				"moved to another human seat or freed by removing them, "+
+				"never cleared", ErrSeatRequired)
 		}
 		next := IdentityChange{V: DocumentVersion, Login: held.Login,
 			SeatID: held.SeatID}
@@ -1467,14 +1473,18 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		decide)
 }
 
+// heldIdentifiersStatement is the three unique values one person's row holds,
+// by its key.
+const heldIdentifiersStatement = `
+	SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`
+
 // heldIdentifiers reads the unique values a person holds in one snapshot —
 // nothing, for a person this snapshot does not hold.
 func heldIdentifiers(ctx context.Context, tx *sql.Tx, personID string) (
 	Identifiers, error) {
 
 	var held Identifiers
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, heldIdentifiersStatement,
 		personID).Scan(&held.EmailBlind, &held.Login, &held.SeatID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Identifiers{}, nil
@@ -1655,8 +1665,8 @@ type SessionStart struct {
 	// A SIGN-IN IS THE ONE PLACE IN THIS ESTATE IT IS CORRECT — never a
 	// session that replaces another, which is opened from a page that
 	// lists them — and the reason is that
-	// the bearer minted from this record carries its POSITION: every node
-	// validates against its own applier, and a node below that position
+	// the bearer minted from this record carries its POSITION: every data
+	// node validates against its own applier, and a node below that position
 	// serves reads on the signature and the epoch alone
 	// ([session.RowBehind]). So the row this node would wait for is a row
 	// nothing in the answer reads, and what the wait costs is 250-500 ms
@@ -1710,8 +1720,9 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 			return fmt.Errorf("iamdomain: read session %s's owner: %w",
 				lineage, err)
 		case owner != person:
-			return fmt.Errorf("%w: session %s belongs to person %s, not %s",
-				ErrRefused, lineage, owner, person)
+			return forbidden("that session isn't theirs").
+				about("session %s belongs to person %s, not %s", lineage,
+					owner, person)
 		}
 		return nil
 	}
@@ -1735,28 +1746,21 @@ func (w *Writer) missingKeys() string {
 // taken refuses a value somebody other than except holds, read INSIDE a
 // directory decide's snapshot, naming who holds it.
 //
-// THE COLUMN IS CHOSEN HERE, by a switch over the three values, never from a
-// caller's string: a column name built at a call site is a string this package
-// would be interpolating into SQL from somewhere it cannot see.
+// THE STATEMENT IS CHOSEN HERE, by a switch over the three values, and each is
+// spelled whole ([takenStatements]): nothing a caller passes reaches the SQL,
+// and every statement the switch can pick is one the plan gate reads — a
+// column interpolated here was a statement the gate could only copy, and the
+// copy it kept had drifted from this one.
 func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	except string) error {
 
-	var column string
-	switch field {
-	case UniqueEmail:
-		column = "email_blind"
-	case UniqueLogin:
-		column = "login"
-	case UniqueSeat:
-		column = "seat_id"
-	default:
+	statement, ok := takenStatements[field]
+	if !ok {
 		return fmt.Errorf("iamdomain: %q is not a value the directory keeps "+
 			"to one holder", field)
 	}
 	var holder string
-	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM iam_people WHERE `+column+` = ? AND id <> ? LIMIT 1`,
-		value, except).Scan(&holder)
+	err := tx.QueryRowContext(ctx, statement, value, except).Scan(&holder)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -1767,6 +1771,21 @@ func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	return &ErrTaken{Field: field, Value: value, Person: holder}
 }
 
+// takenStatements is who other than one person holds each of the directory's
+// three values, one statement per value, each a seek of that value's own plain
+// index: a PARTIAL one over the non-empty rows cannot serve a bound value,
+// which implies nothing about being non-empty.
+var takenStatements = map[Unique]string{
+	UniqueEmail: `SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
+	UniqueLogin: `SELECT id FROM iam_people WHERE login = ? AND id <> ? LIMIT 1`,
+	UniqueSeat:  `SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
+}
+
+// identityOfStatement is one person's kind and the three unique values their
+// row holds, by its key.
+const identityOfStatement = `
+	SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`
+
 // identityOf is an enrolled person's kind and the unique values they hold,
 // read inside a decide's snapshot, or [ErrNotFound].
 func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
@@ -1776,13 +1795,11 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 		kind string
 		held Identifiers
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, identityOfStatement,
 		personID).Scan(&kind, &held.EmailBlind, &held.Login, &held.SeatID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", Identifiers{}, fmt.Errorf("%w on this node: %s",
-			ErrNotFound, personID)
+		return "", Identifiers{}, fmt.Errorf("%w on this node", ErrNotFound)
 	case err != nil:
 		return "", Identifiers{}, fmt.Errorf("iamdomain: read person %s: %w",
 			personID, err)
@@ -1852,6 +1869,10 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 	return seat.Handle, nil
 }
 
+// heldPersonStatement is one person's document and the stage their row's
+// column holds, by its key.
+const heldPersonStatement = `SELECT document, stage FROM iam_people WHERE id = ?`
+
 // heldPerson is one person's document as a read-modify-write forms the next
 // one from, read inside the caller's snapshot — carrying the stage the ROW
 // holds.
@@ -1865,22 +1886,20 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 // column alone is `active`, so an administrator correcting a suspended
 // person's grants would silently let them back in. Taking the column is what
 // makes the copy unable to outvote the fact.
-//
-// forming names what the caller is building, for the refusal.
-func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
+func heldPerson(ctx context.Context, tx *sql.Tx, personID string) (
 	Person, error) {
 
 	var (
 		document []byte
 		stage    string
 	)
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, stage FROM iam_people WHERE id = ?`, personID).
+	err := tx.QueryRowContext(ctx, heldPersonStatement, personID).
 		Scan(&document, &stage)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Person{}, fmt.Errorf("%w: person %q is not enrolled on this "+
-			"node, so %s cannot be formed here", ErrNotFound, personID, forming)
+		// THE SAME WORDS AS [identityOf]'s: the person's id is the one the
+		// caller passed, and what it was building is the gesture they made.
+		return Person{}, fmt.Errorf("%w on this node", ErrNotFound)
 	case err != nil:
 		return Person{}, fmt.Errorf("iamdomain: read person %q: %w", personID, err)
 	}
@@ -1925,7 +1944,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	}
 	var mutation []byte
 	decide := func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their credential set")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -2039,10 +2058,12 @@ type CredentialSet struct {
 // restore runbook's invalidate-all, the one gesture that ends a credential a
 // restore brought back unrevoked without knowing which one it was.
 //
-// NIL GRANTS MEAN "EVERYTHING THE OWNER HOLDS": every permission this build
-// knows that the owner holds, admin included, expanded and in [iam.AllGrants]
-// order — resolved here, in the snapshot, and stated on the record, so what
-// the token carries is never re-derived by a node applying it.
+// NIL GRANTS MEAN "EVERYTHING THE OWNER HOLDS THAT THE MINTING PARTY MAY
+// CONFER": every permission this build knows that the owner holds, expanded and
+// in [iam.AllGrants] order, less any the minting party does not hold — admin
+// included where it does ([Writer.tokenGrants]) — resolved here, in the
+// snapshot, and stated on the record, so what the token carries is never
+// re-derived by a node applying it.
 func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
 	switch {
 	case in.PersonID == "" || in.ID == "" || in.OpID == "":
@@ -2079,7 +2100,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	// THE LAST RUN'S ANSWER, which is what the landed record carries.
 	var minted TokenMinted
 	decide := func(tx *sql.Tx) (err error) {
-		owner, err := heldPerson(ctx, tx, in.PersonID, "a token for them")
+		owner, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -2092,8 +2113,8 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		}
 		if owner.Kind == iam.KindMachine &&
 			strings.HasPrefix(login, iam.TokenLoginPrefix) {
-			return fmt.Errorf("%w: %s belongs to an API token, not an "+
-				"account, so it can't have access tokens", ErrRefused, login)
+			return forbidden("%s belongs to an API token, not an "+
+				"account, so it can't have access tokens", login)
 		}
 		if err = w.mayMintFor(in, owner); err != nil {
 			return err
@@ -2169,7 +2190,7 @@ type TokenMint struct {
 	Label string
 
 	// Grants is what the token may carry, or nil for every grant the owner
-	// holds that a token may carry. See [Writer.MintToken].
+	// holds that the minting party may confer. See [Writer.MintToken].
 	Grants []iam.Grant
 
 	// ExpiresAt is REQUIRED, and at most [credential.MaxTokenLifetime]
@@ -2209,27 +2230,51 @@ var ErrInvalidToken = errors.New("invalid token request")
 
 // tokenGrants resolves what a token carries and refuses what it may not.
 //
-// OMITTED, IT IS EVERYTHING THE OWNER HOLDS: [iam.AdminServe]'s effective set
-// over the owner's row, which is every permission this build knows that the
-// owner holds through [iam.Expand], admin included, in [iam.AllGrants] order.
-// The posture is used here only as the form that clamps nothing; the node a
-// token is presented to applies its own on every request.
+// OMITTED, IT IS EVERYTHING THE OWNER HOLDS THAT THE MINTING PARTY MAY CONFER:
+// [iam.AdminServe]'s effective set over the owner's row — every permission
+// this build knows that the owner holds through [iam.Expand], admin included,
+// in [iam.AllGrants] order — less any the minting party does not hold. The
+// posture is used here only as the form that clamps nothing; the node a token
+// is presented to applies its own on every request. What the minting party
+// holds is the rule the asked arm keeps too ([Writer.MayConfer]): whoever
+// mints a token is shown its value. Defaulting to the owner's whole set and
+// then holding it to that rule refused every default mint on a node whose
+// `api.auth.admin` is `refuse` — a person holding admin signs in there
+// carrying their apps alone, so their own token, asked for nothing, was
+// refused for the admin they cannot confer on that node; it now carries their
+// apps, which is everything they could have asked for there.
 //
 // ASKED, every name must be one this build knows that the owner holds through
-// [iam.Expand]: a token minted [tracker] by an administrator whose row says
+// [iam.Expand]: a token minted [worklet] by an administrator whose row says
 // only [admin] carries the app they hold through admin, and a name nobody can
 // read is refused rather than minted onto a credential that would carry it
 // for a year.
 func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	grants := asked
 	if grants == nil {
-		grants = iam.AdminServe.Effective(owner)
+		grants = []iam.Grant{}
+		for _, g := range iam.AdminServe.Effective(owner) {
+			if w.Can(g) {
+				grants = append(grants, g)
+			}
+		}
 	}
 	holds := iam.Expand(owner)
 	for _, g := range grants {
-		if !g.Valid() || !slices.Contains(holds, g) {
-			return nil, fmt.Errorf("%w: a token can only have its owner's "+
-				"access, and %s isn't in %v", ErrRefused, g, owner)
+		switch {
+		case !g.Valid():
+			// A NAME THIS BUILD DOES NOT KNOW is no permission at all,
+			// as [Writer.MayConfer] says it: told as one the owner
+			// lacks, it named a permission nobody could hold.
+			return nil, forbidden("%s", iam.NotAGrant(g))
+		case !slices.Contains(holds, g):
+			// IN WORDS FOR EITHER READER: the owner minting their own
+			// token, who is the usual one, and an administrator minting
+			// a service account's — "they" read to the owner as
+			// somebody else.
+			return nil, forbidden("a token can only have what its owner "+
+				"has, and its owner doesn't have %s", g).
+				about("the owner holds %s", grantWords(owner))
 		}
 	}
 	if err := w.MayConfer(nil, grants); err != nil {
@@ -2242,11 +2287,11 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 func tokenOwnable(personID string, owner Person) error {
 	switch {
 	case owner.Kind != iam.KindPerson && owner.Kind != iam.KindMachine:
-		return fmt.Errorf("%w: %s isn't a person or service account here",
-			ErrRefused, personID)
+		return forbidden("a token can only act for a person or a service "+
+			"account").about("owner %s is a %s", personID, owner.Kind)
 	case !owner.Stage.MayAct():
-		return fmt.Errorf("%w: %s is %q, so a token can't act for them",
-			ErrRefused, personID, owner.Stage)
+		return forbidden("they're %s, so a token can't act for them",
+			owner.Stage).about("owner %s", personID)
 	}
 	return nil
 }
@@ -2275,26 +2320,41 @@ func tokenOwnable(personID string, owner Person) error {
 // minted from a token renews for ever, a year at a time, with nobody present —
 // the route refuses such a request, and the record refuses it again for the
 // route's reason, since a party is composed as the token's OWNER and would
-// otherwise pass the person arm below as that owner.
+// otherwise pass the person arm below as that owner — as [ErrTokenRefused],
+// so a surface answers it as the route does: a person must be present.
+//
+// ONLY THE SERVICE ACCOUNT'S ARM IS LIFTED BY A PERMISSION, and its refusal
+// names admin; a person's token minted by anybody else, and any mint through a
+// token, name none ([Refusal]).
+//
+// AND NOTHING THROUGH THE DASHBOARD ASSISTANT, for the same reason: it is
+// composed as its person, so the person arm would admit it, and a token it
+// minted would be a credential a model was one step from holding. Both locks
+// read the CLASS of the operator id, as [Writer.mayAdminister] does: the token
+// lock read a well-formed name, so an operator id of the token's class this
+// build could not parse fell through to the person arm and minted as the
+// token's owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
-	if iam.ValidMachineTokenName(w.OperatorID) {
-		return fmt.Errorf("%w: you're using the access token %s, and a token "+
-			"can't create another. Sign in to create one",
-			ErrRefused, w.OperatorID)
+	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
+		return forbidden("%w. A token can't create another, so sign in to "+
+			"create one", ErrTokenRefused).about("through %s", w.OperatorID)
+	}
+	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) {
+		return forbidden("%w. Create the token yourself from your account "+
+			"page (%s)", ErrAssistRefused, w.OperatorID)
 	}
 	switch owner.Kind {
 	case iam.KindPerson:
 		if w.Principal == "" || w.Principal != in.PersonID {
-			return fmt.Errorf("%w: %s is a person, so only they can create "+
-				"their personal access tokens. Admins create tokens for "+
-				"service accounts only",
-				ErrRefused, in.PersonID)
+			return forbidden("only they can create their own access "+
+				"tokens. Admins create tokens for service accounts only").
+				about("owner %s, a person", in.PersonID)
 		}
 	case iam.KindMachine:
 		if !w.Can(iam.GrantAdmin) {
-			return fmt.Errorf("%w: creating a token for the service "+
-				"account %s needs %s", ErrRefused, in.PersonID,
-				iam.GrantAdmin)
+			return needs([]iam.Grant{iam.GrantAdmin}, "creating a token for "+
+				"a service account needs %s", iam.GrantAdmin).
+				about("service account %s", in.PersonID)
 		}
 	}
 	return nil
@@ -2303,8 +2363,7 @@ func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 // loginOf is one person's login, read inside a decide's snapshot.
 func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 	var login string
-	err := tx.QueryRowContext(ctx,
-		`SELECT login FROM iam_people WHERE id = ?`, personID).Scan(&login)
+	err := tx.QueryRowContext(ctx, personLoginStatement, personID).Scan(&login)
 	if err != nil {
 		return "", fmt.Errorf("iamdomain: read person %s's login: %w",
 			personID, err)
@@ -2497,8 +2556,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		// call's terms with the invitation the key issued, nor read the
 		// deadline it keeps. Both are read back now, from the invitation's
 		// own row, by the comparison the decide makes.
-		applied := result.Outcome == statelog.OutcomeApplied
-		if expires, err = w.issuedAs(ctx, id, blind, seat, in, applied); err != nil {
+		if expires, err = w.issuedAs(ctx, id, blind, seat, in, result); err != nil {
 			return InviteIssued{Result: result}, err
 		}
 	}
@@ -2518,8 +2576,8 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 // holds that has not reached this node yet.
 //
 //   - NOT APPLIED HERE, and no row: the invitation landed and its terms cannot
-//     be read yet — unavailable, and the same key retried once this node has
-//     applied it is answered in full.
+//     be read yet — [NotReadBack], and the same key retried once this node
+//     has applied it is answered in full.
 //   - APPLIED HERE, and no row: the row existed and the retention sweep has
 //     COLLECTED it, which it does only to an invitation that was redeemed or
 //     aged out ([Writer.Sweep]) — so the link the key issued admits
@@ -2528,7 +2586,9 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 //     caller to retry the same key, which found the same absence on every
 //     attempt for the rest of the ledger's month.
 func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
-	in InviteMint, applied bool) (time.Time, error) {
+	in InviteMint, result statelog.Result) (time.Time, error) {
+
+	applied := result.Outcome == statelog.OutcomeApplied
 
 	expires := in.ExpiresAt
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
@@ -2540,15 +2600,51 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 	case err != nil:
 		return time.Time{}, err
 	case applied:
-		return time.Time{}, fmt.Errorf("%w: request %s already sent "+
-			"invitation %s, which has been used or expired. Send a new "+
-			"one with a new key", ErrOperationReused,
-			in.OpID, id)
+		return time.Time{}, fmt.Errorf("%w: the invitation it sent has been "+
+			"used or has expired. Send a new one with a new key",
+			ErrOperationReused)
 	}
-	return time.Time{}, fmt.Errorf("request %s sent invitation %s, and this "+
-		"node hasn't caught up yet. Retry with the same key: %w",
-		in.OpID, id, statelog.ErrUnavailable)
+	return time.Time{}, &NotReadBack{Result: result, Invitation: true}
 }
+
+// NotReadBack is a create of a person, or an invitation's issue, that LANDED
+// — its record is durable, applied on another node or pending here — and whose
+// answer this node cannot read back yet: the person's first password link, or
+// the invitation's own terms, are rows it has not applied. Only a retry under
+// the SAME key hands them back, answered from the ledger once the rows are
+// here.
+//
+// A TYPE OF ITS OWN rather than a condition wrapped in a sentence, because the
+// one thing a surface must not do is answer it as a condition: it was a bare
+// [statelog.ErrUnavailable] behind a sentence of this package's, which a
+// surface telling every condition in the state log's words answered as "the
+// node couldn't do this right now", so an administrator was told a create
+// that had landed had not, and a screen that mints a fresh key for anything
+// but an unknown outcome sent the retry under a new key — refused by the
+// address and the seat the first attempt now held, with the first password
+// link lost. It still unwraps to [statelog.ErrUnavailable], since it clears by
+// waiting and every rule that asks how long to wait reads it as one.
+type NotReadBack struct {
+	// Result is the write's own outcome where the caller has it, which is
+	// never unknown: the write landed.
+	Result statelog.Result
+
+	// Invitation is an invitation's issue, whose terms were not read back;
+	// false for a person's create, whose first password link was not.
+	Invitation bool
+}
+
+func (e *NotReadBack) Error() string {
+	made := "the person"
+	if e.Invitation {
+		made = "the invitation"
+	}
+	return "iamdomain: " + made + " this key made landed, and this node " +
+		"hasn't applied it yet, so only a retry under the same key reads it back"
+}
+
+// Unwrap makes it a condition that clears by waiting ([statelog.RetryAfter]).
+func (e *NotReadBack) Unwrap() error { return statelog.ErrUnavailable }
 
 // ErrOperationReused reports an operation key that already names something
 // other than what this call asks for: an invitation issued for another address
@@ -2580,9 +2676,7 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 		expires, redeemed int64
 		document          []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, expires_at, redeemed_at, document
-		  FROM iam_invites WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, invitationStateStatement, id).
 		Scan(&held, &expires, &redeemed, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -2597,16 +2691,15 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 	switch {
 	case held != blind || !sameGrants(stored.Grants, in.Grants) ||
 		stored.Seat != seat:
-		return fmt.Errorf("%w: request %s already sent invitation %s with "+
-			"different details. Use a new key for a new invitation",
-			ErrOperationReused, in.OpID, id)
+		return fmt.Errorf("%w: it sent an invitation with different "+
+			"details. Use a new key for a new invitation", ErrOperationReused)
 	case redeemed != 0:
-		return fmt.Errorf("%w: the invitation from request %s has been used",
-			ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation it sent has been used",
+			ErrOperationReused)
 	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
 		// NO EXPIRY IS AGED OUT, for [Writer.redeemable]'s reason.
-		return fmt.Errorf("%w: the invitation from request %s has expired. "+
-			"Send a new one with a new key", ErrOperationReused, in.OpID)
+		return fmt.Errorf("%w: the invitation it sent has expired. Send a "+
+			"new one with a new key", ErrOperationReused)
 	}
 	// THE DEADLINE IT WAS ISSUED WITH, which is the one its link keeps: a
 	// retry an hour later is not a later invitation.
@@ -2664,8 +2757,8 @@ type InviteIssued struct {
 // reads an invitation as outstanding by and the redemption's own refusals
 // mirror ([InvitationRow.Spent]).
 //
-// THE COLUMN IS CHOSEN HERE, by a switch, as [taken] chooses its own — never
-// from a caller's string.
+// THE STATEMENT IS CHOSEN HERE, by a switch, as [taken] chooses its own
+// ([invitedStatements]) — never from a caller's string.
 //
 // THE WRITER'S CLOCK DECIDES THE EXPIRY HERE, which is the one place in this
 // domain that is acceptable: every instant an applier stores is the BROKER's,
@@ -2678,22 +2771,13 @@ type InviteIssued struct {
 func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value string,
 	now time.Time) error {
 
-	var column string
-	switch field {
-	case UniqueEmail:
-		column = "email_blind"
-	case UniqueSeat:
-		column = "seat_id"
-	default:
+	statement, ok := invitedStatements[field]
+	if !ok {
 		return fmt.Errorf("iamdomain: an invitation holds an address and a "+
 			"seat, and %q is neither", field)
 	}
 	var id string
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM iam_invites
-		WHERE `+column+` = ? AND `+openInvitation+`
-		ORDER BY created_at DESC LIMIT 1`,
-		value, now.UnixMilli()).Scan(&id)
+	err := tx.QueryRowContext(ctx, statement, value, now.UnixMilli()).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -2708,6 +2792,17 @@ func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value strin
 // `iam_invites` and one bound instant: not redeemed, and not aged out — a zero
 // expiry included, which no writer forms. See [heldByInvitation].
 const openInvitation = `redeemed_at = 0 AND expires_at > ?`
+
+// invitedStatements is the newest open invitation holding each of the two
+// values an invitation holds, one statement per value, each a seek of that
+// value's index (0041's address index, 0042's seat index), which is in the
+// order the statement takes the newest by.
+var invitedStatements = map[Unique]string{
+	UniqueEmail: `SELECT id FROM iam_invites WHERE email_blind = ? AND ` +
+		openInvitation + ` ORDER BY created_at DESC LIMIT 1`,
+	UniqueSeat: `SELECT id FROM iam_invites WHERE seat_id = ? AND ` +
+		openInvitation + ` ORDER BY created_at DESC LIMIT 1`,
+}
 
 // InviteMint is what issuing an invitation needs.
 type InviteMint struct {
@@ -2795,6 +2890,11 @@ func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) 
 	return w.publishDirectory(ctx, OpCancel, "", opID, reason, scopeOf, decide)
 }
 
+// invitationInStatement is one invitation's address blind and the person its
+// redemption created, by its key.
+const invitationInStatement = `
+	SELECT email_blind, person_id FROM iam_invites WHERE id = ?`
+
 // invitationIn is the address blind one invitation holds and the person a
 // redemption created, read inside a decide's snapshot — and false for an id it
 // does not hold.
@@ -2802,8 +2902,7 @@ func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
 	InvitationRow, bool, error) {
 
 	var held InvitationRow
-	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, person_id FROM iam_invites WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, invitationInStatement, id).
 		Scan(&held.Blind, &held.Person)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -2877,13 +2976,13 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their new password")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
 		if person.Kind != iam.KindPerson {
-			return fmt.Errorf("%w: %s is a %s, and only people have passwords",
-				ErrRefused, in.PersonID, person.Kind)
+			return forbidden("only people have passwords").
+				about("%s is a %s", in.PersonID, person.Kind)
 		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
@@ -3053,7 +3152,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// actually carries: a decide may run again against a fresh snapshot.
 	var before, after []iam.Grant
 	decide := func(tx *sql.Tx) (err error) {
-		person, err := heldPerson(ctx, tx, in.PersonID, "their row")
+		person, err := heldPerson(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
 		}
@@ -3172,6 +3271,10 @@ func keepsStanding(held, updated Person) error {
 // grant the caller may not confer is refused with nothing moved. The record's
 // own decide asks again in the snapshot the grants land from, and that answer
 // is the authority — the early one is read from rows that may be a moment old.
+//
+// A PERMISSION THE PARTY LACKS IS NAMED ([Refusal.Grants]), since holding it is
+// the remedy; a name this build does not know names none, since no permission
+// would make it one.
 func (w *Writer) MayConfer(before, after []iam.Grant) error {
 	held := iam.Expand(before)
 	for _, g := range after {
@@ -3179,12 +3282,10 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 			continue
 		}
 		if !g.Valid() {
-			return fmt.Errorf("%w: %q isn't a permission. Choose from %v",
-				ErrRefused, g, iam.AllGrants)
+			return forbidden("%s", iam.NotAGrant(g))
 		}
-		return fmt.Errorf("%w: you can't give %s because you don't have "+
-			"it (you have %v)",
-			ErrRefused, g, w.Grants)
+		return needs([]iam.Grant{g}, "you can't give %s because you don't "+
+			"have it", g).about("the party holds %s", grantWords(w.Grants))
 	}
 	return nil
 }

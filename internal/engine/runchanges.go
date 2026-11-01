@@ -174,10 +174,12 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		Open: &code.ChangeOpen{RepoID: r.RepoID, ChangeID: id, SourceRef: branchRef(r.Branch),
 			TargetRef: r.Open.Target, Title: title, Draft: r.Open.Draft, WorkItem: item, TurnID: run.TurnID,
 			RunID: run.LaunchID}})
+	// THE FACT ALONE, never an instruction: the run's report is read by the
+	// reviewer as well as the seat, and a step it names ("read it with ...")
+	// would be the engine telling a phase that holds no such tool what to do.
 	switch {
 	case err != nil:
-		out.Unopened = fmt.Sprintf("asking the code host to open it failed (%v), so whether it opened is unknown: "+
-			"read its branch's change with code_list_changes before you open it with code_open_change", err)
+		out.Unopened = fmt.Sprintf("asking the code host to open it failed (%v), so whether it opened is unknown", err)
 	case res.Refusal != "":
 		out.Unopened = fmt.Sprintf("the code host refused it (%s): %s", res.Refusal, res.Detail)
 	case res.Outcome == statelog.OutcomeApplied || res.Outcome == statelog.OutcomePending:
@@ -186,11 +188,10 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 		if res.Number == 0 {
 			// A PENDING OPEN IS NUMBERED BY ITS APPLY, which none has run
 			// where the answer was formed.
-			out.Change = "a change of " + r.Repo + " not numbered yet (read it with code_list_changes)"
+			out.Change = "a change of " + r.Repo + " not numbered yet"
 		}
 	default:
-		out.Unopened = "whether the code host opened it is unknown: read its branch's change with " +
-			"code_list_changes before you open it with code_open_change"
+		out.Unopened = "whether the code host opened it is unknown"
 	}
 	if out.Unopened != "" {
 		log.WarnContext(ctx, "sandbox_change_unopened", "turn_id", run.TurnID, "launch_id", run.LaunchID,

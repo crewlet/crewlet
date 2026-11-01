@@ -24,12 +24,21 @@ import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag, PageNote } from "@crewlethq/ui";
+import {
+  Card,
+  cx,
+  EmptyState,
+  EmptyValue,
+  SegmentedControl,
+  Tag,
+  PageNote,
+  peekClickHandler,
+} from "@crewlethq/ui";
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER } from "~/lib/access.ts";
+import { WORKLET } from "~/lib/access.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -37,6 +46,7 @@ import {
   handleLabel,
   indexOrg,
   nameOfIn,
+  stateGroupWord,
   stateLine,
   unitDirectLabel,
   type NameOf,
@@ -44,13 +54,13 @@ import {
 } from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
-import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 const VIEWS = ["seats", "workload"] as const;
-/** The views a company running no Crewlet Works is offered: the workload is its open tasks. */
+/** The views a company running no Worklet is offered: the workload is its open tasks. */
 const SEATS_ONLY = ["seats"] as const;
 
 const GROUPINGS = ["state", "unit", "flat"] as const;
@@ -68,12 +78,12 @@ type Grouping = (typeof GROUPINGS)[number];
  * absolute number that is "full".
  */
 function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
-  // THE TRACKER'S QUESTION, asked only of a reader holding Tracker: who holds
-  // how much open work is the tracker's to say.
+  // WORKLET'S QUESTION, asked only of a reader holding Worklet: who holds
+  // how much open work is Worklet's to say.
   const viewer = useViewer();
   const answer = useQuery("work_workload", undefined, {
     pollMs: 60_000,
-    enabled: viewer.tracker,
+    enabled: viewer.worklet,
   });
   // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
   // has: who it is and where they sit. The bar stays the same field whichever
@@ -93,8 +103,8 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // rather than per row, so every track on the table is drawn against the
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
-  if (!viewer.loading && !viewer.tracker) {
-    return <GrantRequired grants={[TRACKER]} reader={viewer.login} size="compact" />;
+  if (!viewer.loading && !viewer.worklet) {
+    return <GrantRequired grants={[WORKLET]} reader={viewer.login} size="compact" />;
   }
   return (
     <QueryState
@@ -155,7 +165,7 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
       <a
         className="wl-who"
         href={href(["company", "org", "seats", load.handle])}
-        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: load.handle }))}
+        onClick={peekClickHandler(() => openPeek({ kind: "seat", id: load.handle }))}
       >
         <span className="truncate">{load.seat?.name ?? load.handle}</span>
         <span className="wl-handle mono">{load.handle}</span>
@@ -193,11 +203,15 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
   );
 }
 
+// THE STATE GROUPS ARE NAMED BY `stateGroupWord`, the words the badge, the
+// chart's legend and Home use, so a seat is never "Needs you" on its card and
+// "Waiting on a person" over it. The engine's `stopped` holds a seat a person
+// paused as well as one a fault stopped, so its group says both.
 const STATE_ORDER = [
-  { key: "needs", label: "Waiting on a person" },
-  { key: "broken", label: "Stopped" },
-  { key: "working", label: "Working" },
-  { key: "idle", label: "Idle" },
+  { key: "needs", label: stateGroupWord("needs") },
+  { key: "broken", label: stateGroupWord("stopped") },
+  { key: "working", label: stateGroupWord("working") },
+  { key: "idle", label: stateGroupWord("idle") },
   // NO ROW FROM THE ENGINE YET — never "not running here": whether a seat is
   // held anywhere in the fleet is the engine's `stopped`/`unplaced` to say,
   // and a seat a peer runs is idle or working like any other.
@@ -245,7 +259,7 @@ function bucketOf(seat: Seat | null, agent: AgentRow | undefined): string {
 export function People() {
   const agents = useAgents();
   const org = useOrg();
-  // THE WORKLOAD IS CREWLET WORKS' OPEN TASKS, and not offered where the
+  // THE WORKLOAD IS WORKLET'S OPEN TASKS, and not offered where the
   // company runs none: the roster is its seats alone.
   const runs = useServicesRun();
   const [view, setView] = useTab<(typeof VIEWS)[number]>("view", runs.tracker ? VIEWS : SEATS_ONLY);
@@ -373,7 +387,7 @@ export function People() {
    * height, ragged against the taller ones beside it in the row. What it adds
    * is the click, caught on its way out of the anchor — so the card is still a
    * real link and ⌘-click, middle-click and the status bar all still name the
-   * seat's own page, exactly as `rowPeekHandler` has it everywhere else.
+   * seat's own page, exactly as `peekClickHandler` has it everywhere else.
    */
   const card = ({ key, seat, agent }: Row) =>
     seat ? (
@@ -382,7 +396,7 @@ export function People() {
         style={{ display: "contents" }}
         // BY THE HANDLE THE ENGINE DERIVED, which `seatPath` addresses a link
         // by too.
-        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
+        onClick={peekClickHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
       >
         <SeatCard seat={seat} agent={agent} nameOf={nameOf} stateInHeading={group === "state"} />
       </div>

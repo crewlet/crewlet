@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The USAGE RECORD: one node's day for one seat, one schedule, one person or
@@ -734,10 +735,10 @@ func (r Record) validateRepoReads() error {
 		switch {
 		case !types.CodeReaderKind(rd.PrincipalKind).Valid():
 			return fmt.Errorf("usage: a reader on %s is a %q, which is not a principal kind this build "+
-				"reads (%v)", r.Subject, rd.PrincipalKind, types.CodeReaderKinds())
+				"reads (%s)", r.Subject, rd.PrincipalKind, words.Or(types.CodeReaderKinds()))
 		case !types.CodeFetchedVia(rd.Via).Valid():
 			return fmt.Errorf("usage: a reader on %s read it by %q, which is not a way this build reads "+
-				"(%v)", r.Subject, rd.Via, types.CodeFetchedVias())
+				"(%s)", r.Subject, rd.Via, words.Or(types.CodeFetchedVias()))
 		case rd.Principal == "" || len(rd.Principal) > maxReaderBytes || len(rd.Seat) > maxSeatBytes:
 			return fmt.Errorf("usage: a reader on %s names principal %q and seat %q — a principal is 1 to "+
 				"%d bytes and a seat at most %d", r.Subject, rd.Principal, rd.Seat, maxReaderBytes,

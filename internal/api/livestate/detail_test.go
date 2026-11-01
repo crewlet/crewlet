@@ -38,24 +38,34 @@ func narrated(n int) []any {
 func moved(t *testing.T, was, now livestate.CallVersions) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	for name, pair := range map[string][2]int{
-		"prompt": {was.Prompt, now.Prompt}, "response": {was.Response, now.Response},
-		"narration": {was.Narration, now.Narration}, "executions": {was.Executions, now.Executions},
-		"rounds": {was.Rounds, now.Rounds},
-	} {
-		if pair[1] < pair[0] {
-			t.Errorf("the %s version went back from %d to %d", name, pair[0], pair[1])
+	before, after := byName(was), byName(now)
+	for name, v := range after {
+		if v < before[name] {
+			t.Errorf("the %s version went back from %d to %d", name, before[name], v)
 		}
-		out[name] = pair[1] > pair[0]
+		out[name] = v > before[name]
+	}
+	return out
+}
+
+// byName is every version a call names, by its name on the wire — read off
+// the type, so a version added to it is in every case here without anybody
+// listing it.
+func byName(v livestate.CallVersions) map[string]int {
+	out := map[string]int{}
+	val := reflect.ValueOf(v)
+	for i := range val.NumField() {
+		tag, _, _ := strings.Cut(val.Type().Field(i).Tag.Get("json"), ",")
+		out[tag] = int(val.Field(i).Int())
 	}
 	return out
 }
 
 // only is the moved map in which exactly the named fields grew.
 func only(names ...string) map[string]bool {
-	out := map[string]bool{"prompt": false, "response": false, "narration": false, "executions": false, "rounds": false}
-	for _, n := range names {
-		out[n] = true
+	out := map[string]bool{}
+	for name := range byName(livestate.CallVersions{}) {
+		out[name] = slices.Contains(names, name)
 	}
 	return out
 }
@@ -118,9 +128,11 @@ func TestANewCallsVersionsArePastEveryOneHandedOut(t *testing.T) {
 	review.Payload["phase"] = "review"
 	s.Apply(review)
 	now := s.AgentOverlay("Lead").LiveCall.Versions
-	newest := max(was.Prompt, was.Response, was.Narration, was.Executions, was.Rounds)
-	for name, v := range map[string]int{"prompt": now.Prompt, "response": now.Response,
-		"narration": now.Narration, "executions": now.Executions, "rounds": now.Rounds} {
+	newest := 0
+	for _, v := range byName(was) {
+		newest = max(newest, v)
+	}
+	for name, v := range byName(now) {
 		if v <= newest {
 			t.Errorf("the next phase's %s is at %d, not past the last call's newest, %d", name, v, newest)
 		}
@@ -128,40 +140,43 @@ func TestANewCallsVersionsArePastEveryOneHandedOut(t *testing.T) {
 }
 
 // A CALL BUILT AGAIN UNDER THE SAME KEY IS NEWER THAN THE ONE BEFORE IT. A
-// suspended Execute phase publishes a completion checkpoint, which clears its
-// call, and streams its resumed rounds under the same turn, phase and
-// iteration. Counted per call, the rebuilt call's versions began again at one,
-// and a tab that missed the push clearing the call and the first push after
-// it — the hub drops a slow tab's oldest envelopes — took every later push for
-// one overtaken by the copy it held: it kept the call from before the
-// suspension and asked for nothing.
+// parked turn's resume that runs again — held until its seat's budget has room
+// for the relaunch its reviewer sent back, or retried after an attempt that
+// broke — collects the same run into the same turn and round, so its review
+// opens again under the turn, phase and iteration of the attempt before it,
+// whose completion cleared the call. Counted per call, the rebuilt call's
+// versions began again at one, and a tab that missed the push clearing the
+// call and the first push after it — the hub drops a slow tab's oldest
+// envelopes — took every later push for one overtaken by the copy it held: it
+// kept the earlier attempt's review and asked for nothing.
 //
-// Mutation: number a call of its own from one again, and the resumed call's
-// versions are below the suspended call's.
+// Mutation: number a call of its own from one again, and the later attempt's
+// versions are below the earlier attempt's.
 func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 	t.Parallel()
 	for name, restarted := range map[string]bool{
-		"its next round first":                  false,
+		"its first round first":                 false,
 		"the phase opened again, a placeholder": true,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := livestate.New()
-			for i := range 5 {
-				s.Apply(round(fmt.Sprintf("2026-10-06T09:00:0%dZ", i+1), i, map[string]any{
+			review := map[string]any{"phase": "review"}
+			for i := range 4 {
+				s.Apply(round(fmt.Sprintf("2026-10-06T09:00:0%dZ", i+1), i, with(review, map[string]any{
 					"round_narration": narrated(i + 1), "response": strings.Repeat("old ", i+1),
-					"prompt":          "fix it",
+					"prompt":          "judge it",
 					"tool_executions": []any{map[string]any{"name": "read_file", "round": float64(i + 1)}},
-				}))
+				})))
 			}
-			suspended := s.AgentOverlay("Lead").LiveCall.Versions
-			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0)}
+			earlier := s.AgentOverlay("Lead").LiveCall.Versions
+			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "review", "iteration": float64(0)}
 			s.Apply(&livestate.Envelope{
-				ID: "checkpoint", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
+				ID: "completed", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
 				Category: "task", Payload: maps.Clone(key),
 			})
 			if o := s.AgentOverlay("Lead"); o != nil && o.LiveCall != nil {
-				t.Fatal("the checkpoint did not clear the call; this case needs it cleared")
+				t.Fatal("the review's completion did not clear the call; this case needs it cleared")
 			}
 			if restarted {
 				// The placeholder a phase's start seeds is a call of its
@@ -171,21 +186,20 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 					Category: "task", Payload: maps.Clone(key),
 				})
 			}
-			// The resumed loop's first round, under the same key and newer
-			// than the checkpoint.
-			s.Apply(round("2026-10-06T09:05:00Z", 5, map[string]any{"round_narration": narrated(1), "response": "new"}))
-			resumed := s.AgentOverlay("Lead").LiveCall
-			if resumed == nil || resumed.Key() != (livestate.CallKey{TurnID: "t1", Phase: "execute", Iteration: 0}) {
-				t.Fatalf("the resumed call is %+v; want it under the suspended call's key", resumed)
+			// The next attempt's first round, under the same key and newer
+			// than the earlier attempt's completion.
+			s.Apply(round("2026-10-06T09:05:00Z", 0, with(review, map[string]any{
+				"round_narration": narrated(1), "response": "new",
+			})))
+			again := s.AgentOverlay("Lead").LiveCall
+			if again == nil || again.Key() != (livestate.CallKey{TurnID: "t1", Phase: "review", Iteration: 0}) {
+				t.Fatalf("the next attempt's call is %+v; want it under the earlier attempt's key", again)
 			}
-			for field, pair := range map[string][2]int{
-				"prompt": {suspended.Prompt, resumed.Versions.Prompt}, "response": {suspended.Response, resumed.Versions.Response},
-				"narration":  {suspended.Narration, resumed.Versions.Narration},
-				"executions": {suspended.Executions, resumed.Versions.Executions},
-				"rounds":     {suspended.Rounds, resumed.Versions.Rounds},
-			} {
-				if pair[1] <= pair[0] {
-					t.Errorf("the resumed call's %s is at %d, the suspended call's was %d; want it newer", field, pair[1], pair[0])
+			was := byName(earlier)
+			for field, v := range byName(again.Versions) {
+				if v <= was[field] {
+					t.Errorf("the next attempt's %s is at %d, the earlier attempt's was %d; want it newer",
+						field, v, was[field])
 				}
 			}
 		})
@@ -193,9 +207,9 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 }
 
 // A FROZEN CALL'S VERSIONS MOVE WITH WHAT THE FAILURE WROTE INTO IT. A failed
-// phase writes its last tool calls and narration into the call it freezes, in
-// place — and a tab holding the frame before would otherwise be told nothing
-// moved.
+// phase writes its last tool calls, its narration and its runs — the one that
+// failed among them — into the call it freezes, in place, and a tab holding
+// the frame before would otherwise be told nothing moved.
 func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
@@ -207,14 +221,42 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 			"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0), "failed": true,
 			"error": "the provider died", "round_narration": narrated(2),
 			"tool_executions": []any{map[string]any{"name": "read_file", "round": float64(2)}},
+			"invocations":     []any{map[string]any{"outcome": "failed"}},
 		},
 	})
 	call := s.AgentOverlay("Lead").LiveCall
 	if call == nil || !call.Failed {
 		t.Fatalf("the failed call was not frozen: %+v", call)
 	}
-	if got := moved(t, before, call.Versions); !reflect.DeepEqual(got, only("narration", "executions")) {
-		t.Errorf("the failure moved %v; want the narration and the tool calls it wrote", got)
+	if got := moved(t, before, call.Versions); !reflect.DeepEqual(got,
+		only("narration", "executions", "invocations")) {
+		t.Errorf("the failure moved %v; want the narration, the tool calls and the runs it wrote", got)
+	}
+}
+
+// A RUN ENDING MOVES THE RUNS' VERSION AND NOTHING ELSE. The frame that
+// publishes a CLI run's end lists one more run, and every committed field
+// beside it is what it was — so a push leaves them out and carries the runs.
+//
+// Mutation: compare the runs as always changed, or never, and this fails.
+func TestARunEndingMovesTheRunsAlone(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	frame := map[string]any{"round_narration": narrated(1), "response": "one",
+		"rounds": []any{map[string]any{"round": float64(1)}}}
+	s.Apply(round("2026-10-06T09:00:01Z", 0, frame))
+	before := s.AgentOverlay("Lead").LiveCall.Versions
+	ended := maps.Clone(frame)
+	ended["invocations"] = []any{map[string]any{"first_round": float64(1), "last_round": float64(1),
+		"outcome": "stopped"}}
+	s.Apply(round("2026-10-06T09:00:02Z", 0, ended))
+	after := s.AgentOverlay("Lead").LiveCall.Versions
+	if got := moved(t, before, after); !reflect.DeepEqual(got, only("invocations")) {
+		t.Errorf("a run ending moved %v; want the runs alone", got)
+	}
+	s.Apply(round("2026-10-06T09:00:03Z", 0, ended))
+	if got := moved(t, after, s.AgentOverlay("Lead").LiveCall.Versions); !reflect.DeepEqual(got, only()) {
+		t.Errorf("a frame repeating the runs moved %v; want nothing", got)
 	}
 }
 

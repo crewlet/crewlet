@@ -17,7 +17,7 @@ import (
 
 // A CHANGE'S MERGE, decided by the shipped committer from one snapshot on a
 // real embedded broker, applied by the shipped applier as one record and read
-// back from the rows it wrote (ADR-0066).
+// back from the rows it wrote (ADR-0089).
 
 // seatRef is dev's own branch, under the seats' namespace: what a seat's
 // change is opened from, and what its merge deletes by default (Q4).

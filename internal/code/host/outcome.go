@@ -16,7 +16,7 @@ import (
 // row. A proposal answered `pending` is durable and not yet applied here, and
 // a durable record a gate then drops on every node is not a push that landed
 // — so pending is waited on, at most Timing.PendingGrace, and never reported
-// as ok (ADR-0054).
+// as ok (ADR-0077).
 
 // answered is one command as git is told it.
 type answered struct {

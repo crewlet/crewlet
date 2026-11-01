@@ -8,14 +8,15 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHO MAY CALL A TOOL, AND WHY THE DECISION IS TAKEN HERE.
@@ -117,8 +118,18 @@ func Decide(chart authz.Chart) Authorizer {
 		case iam.Anonymous:
 			return ErrUnauthenticated
 		}
+		// AT THE INSTANT THE REQUEST WAS ROUTED ([authz.DecidedAt]): a tool
+		// a routed request calls on its own behalf — the work surface's
+		// tool-backed routes, which dispatch into this gate — is one more
+		// check of that request, so it is judged at the instant its route
+		// was, as every other check of it is. Judged at its own clock, a
+		// proof the route admitted could lapse while the body was read and
+		// the call be refused as stale on the request the route had just
+		// let through. A turn, and an operator call no route decided (the
+		// MCP surface, the act route), carry no such instant and are judged
+		// now.
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart, time.Now()))
+			authz.Decide(ctx, principal, action, object, chart, authz.DecidedAt(ctx)))
 	}
 }
 
@@ -167,7 +178,22 @@ type DecisionRefused struct {
 }
 
 func (e *DecisionRefused) Error() string {
-	return fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	refusal := fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	if e.Decision.Reason == authz.ReasonUnseated {
+		// THE ONE REFUSAL WHOSE REMEDY NO GRANT NAMES, and so the one the
+		// sentence has to: what admits is a binding, and the envelope's
+		// `grants` is empty by design.
+		refusal += ": it's made as a seat and this credential acts as none. " +
+			"Bind it to a human seat with `crewlet iam bind`"
+	}
+	if e.Decision.Reason == authz.ReasonRole && e.Decision.Role.Valid() {
+		// THE ROLE IS THE REMEDY, and the artifact's owner is who gives it:
+		// the envelope carries it as `role`, and the sentence beside it says
+		// the same, so a route's refusal and a tool's read alike.
+		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
+			"artifact, which its owner can share with you"
+	}
+	return refusal
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
@@ -202,29 +228,31 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // read is judged by the repository's grant on the node that answers it, and
 // inside a turn somebody woke is decided again for them — the row through
 // [authz.DecideWithin], a colleague seat's grant beside the asker's: see
-// codetools.go), and the seat-only ones (`a2a_ask`, `run_sandbox`), which the
-// table bars a person from before any class reads anything.
+// codetools.go), and the seat-only one (`a2a_ask`), which the table bars a
+// person from before any class reads anything. `code_checkout` has no row at
+// all: only an executor run's bridge offers it, so no person and no registry
+// phase can call it, and [CodeDeps.ResolveRunRepos] decides what it may grant.
 var subjectOf = map[string]subject{
 	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
-	// without the tracker may still read the item an OPEN ASK on it names
+	// without Worklet may still read the item an OPEN ASK on it names
 	// them on and post the answer — and which asks are open, and whom
 	// they name, is a stored row ([authz.ClassAppOrAsked]). A tracker
 	// holder is admitted before anything is read; anybody else is told
 	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
-	// ([tracker.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
+	// ([worklet.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
 	// and [commentOnWorkItem.CallForTurn].
-	"get_work_item":        {kind: authz.KindTask, inTool: true},
-	"comment_on_work_item": {kind: authz.KindTask, inTool: true},
+	GetWorkItemTool:           {kind: authz.KindTask, inTool: true},
+	worklet.CommentOnWorkTool: {kind: authz.KindTask, inTool: true},
 
 	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
 	// `mark_inbox` and `set_pins` take no handle, because a model that
 	// could name whose day to read could read anybody's. An unnamed owner
 	// is the CALLER — see [subject.objectFor].
-	"my_work":    {kind: authz.KindPerson},
-	"mark_inbox": {kind: authz.KindPerson},
-	"set_pins":   {kind: authz.KindPerson},
+	worklet.MyWorkTool:    {kind: authz.KindPerson},
+	worklet.MarkInboxTool: {kind: authz.KindPerson},
+	worklet.SetPinsTool:   {kind: authz.KindPerson},
 	// AND THE CODE LOG'S HALF OF AN INBOX'S MARKS, a person's own alike.
-	"code_mark_inbox": {kind: authz.KindPerson},
+	CodeMarkInboxTool: {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -236,9 +264,9 @@ var subjectOf = map[string]subject{
 	// was refused as leading nobody called that, before the tool ever
 	// resolved it — and an administrator's decision on a login was a
 	// decision about a record nothing of that person's is under.
-	"get_person":     {kind: authz.KindPerson, inTool: true},
-	"work_inbox":     {kind: authz.KindPerson, inTool: true},
-	"set_priorities": {kind: authz.KindPerson, inTool: true},
+	worklet.GetPersonTool:     {kind: authz.KindPerson, inTool: true},
+	worklet.WorkInboxTool:     {kind: authz.KindPerson, inTool: true},
+	worklet.SetPrioritiesTool: {kind: authz.KindPerson, inTool: true},
 
 	// A SAVED VIEW IS EITHER, and its own class reads whichever it
 	// names. Its container is a kind plus a key in ONE argument
@@ -252,7 +280,7 @@ var subjectOf = map[string]subject{
 	// handle, so a bound person typing their login saved a view under a
 	// name no strip of theirs reads, and one that marked it protected was
 	// then refused their own next save.
-	"save_work_view": {kind: authz.KindView, personal: "personal", container: "container"},
+	worklet.SaveWorkViewTool: {kind: authz.KindView, personal: "personal", container: "container"},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN ROW — its project and its
 	// reporter — which is stored and never an argument: the tools take a
@@ -270,21 +298,21 @@ var subjectOf = map[string]subject{
 	// project is passed to the writer as a PRECONDITION and the tracker
 	// refuses a task filed elsewhere by then with a conflict — the same
 	// holds for `update_work_item`'s re-route.
-	"remove_work_item":  {kind: authz.KindTask, inTool: true},
-	"restore_work_item": {kind: authz.KindTask, inTool: true},
+	worklet.RemoveWorkItemTool:  {kind: authz.KindTask, inTool: true},
+	worklet.RestoreWorkItemTool: {kind: authz.KindTask, inTool: true},
 
 	// AND SO IS A FILE'S REMOVAL, decided by the project it is kept in —
 	// which the tool settles before it asks, since a call that names no
 	// project means the caller's own team's, and the gate cannot know
 	// whose that is. Decided here on the argument, every removal from the
 	// caller's own project was refused as naming none.
-	"remove_project_file": {kind: authz.KindProject, inTool: true},
+	worklet.RemoveProjectFileTool: {kind: authz.KindProject, inTool: true},
 
 	// AND SO IS A MOVE, for the same reason and against the same project:
 	// the item's own, read off the row. Moving work to another project is
 	// a re-route with a re-key, so it is the lead's of the project the
 	// item is LEAVING — see workmove.go.
-	"move_work_item": {kind: authz.KindTask, inTool: true},
+	worklet.MoveWorkItemTool: {kind: authz.KindTask, inTool: true},
 
 	// A SEAT'S WORK IS DECIDED ON THE SEAT, and the seat is never quite
 	// what the arguments state. A pause and a resume name it by a handle
@@ -296,10 +324,10 @@ var subjectOf = map[string]subject{
 	// answer is decided on the run's own row: its requester through the
 	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
 	// answerrun.go.
-	"pause_seat":  {kind: authz.KindPerson, inTool: true},
-	"resume_seat": {kind: authz.KindPerson, inTool: true},
-	"steer_turn":  {kind: authz.KindPerson, inTool: true},
-	"answer_run":  {kind: authz.KindPerson, inTool: true},
+	PauseSeatTool:  {kind: authz.KindPerson, inTool: true},
+	ResumeSeatTool: {kind: authz.KindPerson, inTool: true},
+	SteerTurnTool:  {kind: authz.KindPerson, inTool: true},
+	AnswerRunTool:  {kind: authz.KindPerson, inTool: true},
 
 	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
 	// whether an agent owns it), which no argument states, and inside a
@@ -328,6 +356,20 @@ var subjectOf = map[string]subject{
 	QueryArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	WriteArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	SetArtifactSchemaTool: {kind: authz.KindArtifact, inTool: true},
+
+	// A CHAT MESSAGE IS DECIDED ON WHOSE WORDS IT IS, which is its stored
+	// row and never an argument: the tools name a message by its id. An
+	// admin is admitted on the unread message — moderation, which takes a
+	// message down in a room the moderator cannot read without showing it
+	// to them — and anybody else is told [authz.ErrUnresolved], read as
+	// themselves, and decided again on its author. See
+	// [ChatDeps.remarkAuthority].
+	chatlet.EditMessageTool:   {kind: authz.KindMessage, inTool: true},
+	chatlet.DeleteMessageTool: {kind: authz.KindMessage, inTool: true},
+
+	// AND A READ CURSOR IS THE CALLER'S OWN RECORD, as an inbox's marks
+	// are: `mark_chat_read` takes no handle, so its owner is the caller.
+	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
 }
 
 // subject is what one tool is about, as the names of its own arguments.
@@ -410,17 +452,17 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 	}
 	kind, id, found := strings.Cut(raw, ":")
 	if !found {
-		if strings.EqualFold(raw, tracker.ContainerWorkspace) {
-			return authz.KindCompany, tracker.ContainerWorkspace
+		if strings.EqualFold(raw, worklet.ContainerWorkspace) {
+			return authz.KindCompany, worklet.ContainerWorkspace
 		}
-		return authz.KindProject, tracker.ProjectKey(raw)
+		return authz.KindProject, worklet.ProjectKey(raw)
 	}
-	if kind == tracker.ContainerWorkspace {
+	if kind == worklet.ContainerWorkspace {
 		// THE WORKSPACE CARRIES NO ID, so `workspace:x` names nothing —
 		// the tool refuses the spelling with the grammar in its message.
 		return "", ""
 	}
-	return containerObject(tracker.Container{Kind: kind, ID: id})
+	return containerObject(worklet.Container{Kind: kind, ID: id})
 }
 
 // containerObject is a tracker container as the authority table's kind and
@@ -429,15 +471,15 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 // ONE MAPPING for both of the places a view's container reaches a decision —
 // the argument the gate reads and the STORED view `save_work_view` asks about
 // once it has read it — so the two cannot decide one container two ways.
-func containerObject(c tracker.Container) (authz.ObjectKind, string) {
+func containerObject(c worklet.Container) (authz.ObjectKind, string) {
 	switch c.Kind {
-	case tracker.ContainerWorkspace:
-		return authz.KindCompany, tracker.ContainerWorkspace
-	case tracker.ContainerProject:
-		return authz.KindProject, tracker.ProjectKey(c.ID)
-	case tracker.ContainerUnit:
+	case worklet.ContainerWorkspace:
+		return authz.KindCompany, worklet.ContainerWorkspace
+	case worklet.ContainerProject:
+		return authz.KindProject, worklet.ProjectKey(c.ID)
+	case worklet.ContainerUnit:
 		return authz.KindUnit, c.ID
-	case tracker.ContainerPerson:
+	case worklet.ContainerPerson:
 		return authz.KindPerson, c.ID
 	}
 	// A KIND THIS BUILD DOES NOT KNOW NAMES NOTHING, which every class
@@ -450,7 +492,7 @@ func containerObject(c tracker.Container) (authz.ObjectKind, string) {
 // viewObject is a saved view as [authz.ClassSavedView] decides it: its owner,
 // which makes it that person's record, and its container, which makes a
 // shared one that container's lead's.
-func viewObject(owner string, c tracker.Container) authz.Object {
+func viewObject(owner string, c worklet.Container) authz.Object {
 	o := authz.Object{Kind: authz.KindView, Owner: owner}
 	o.ContainerKind, o.Container = containerObject(c)
 	return o
@@ -464,7 +506,7 @@ func viewObject(owner string, c tracker.Container) authz.Object {
 // what an absent project means would be this table holding an opinion the
 // rules already hold.
 func stringArg(args map[string]any, field string) string {
-	held, _ := args[field].(string)
+	held, _ := argval.String(args[field])
 	return held
 }
 
@@ -487,50 +529,27 @@ type gated struct {
 	authorize Authorizer
 }
 
-// gatedSeat and gatedDetached are [gated] for the two OPTIONAL interfaces a
-// tool may also satisfy.
+// gatedSeat is [gated] for the OPTIONAL interface a tool may also satisfy.
 //
-// THREE TYPES rather than one with nil checks, because the surface dispatches
-// on which interface a tool satisfies — and a single wrapper implementing all
-// of them would make every read-only builtin look seat-scoped and
-// suspendable. The phase surface would then refuse each one outside a turn,
-// and the tool loop would wait for a suspension nothing was going to send.
-//
-// Measured by deleting the detached arm: `run_sandbox` stopped suspending the
-// loop, so a turn that launched a coding run ended believing the work was
-// done.
+// TWO TYPES rather than one with a nil check, because [tools.Invoke] dispatches
+// on which interface a tool satisfies — and a single wrapper implementing
+// both would make every read-only builtin look seat-scoped, so the phase
+// surface would refuse each one outside a turn.
 type gatedSeat struct {
 	gated
 	seat tools.SeatCallable
 }
 
-type gatedDetached struct {
-	gated
-	detached tools.Detached
-}
+// Unwrap implements [tools.Wrapper], so the surface reads what the gated tool
+// declares (its refusal target) through the gate. [gatedSeat] inherits it.
+func (g *gated) Unwrap() tools.Callable { return g.Callable }
 
 func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
 	wrapped := gated{Callable: tool, authorize: authorize}
-	switch held := tool.(type) {
-	case tools.Detached:
-		return &gatedDetached{gated: wrapped, detached: held}
-	case tools.SeatCallable:
+	if held, ok := tool.(tools.SeatCallable); ok {
 		return &gatedSeat{gated: wrapped, seat: held}
 	}
 	return &wrapped
-}
-
-func (g *gatedDetached) CallDetached(ctx context.Context, turn *turnctx.Turn,
-	args map[string]any) (tools.DetachedResult, error) {
-
-	ctx = turnctx.WithPrincipal(ctx, turn)
-	if refusal := g.admit(ctx, args); refusal != nil {
-		// NO SUSPENSION ON A REFUSAL, which is the whole reason this arm
-		// exists: a suspended loop is re-entered when detached work
-		// finishes, and work that never started never finishes.
-		return tools.DetachedResult{Result: *refusal}, nil
-	}
-	return g.detached.CallDetached(ctx, turn, args)
 }
 
 func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, error) {
@@ -566,7 +585,7 @@ func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // or the result it is answered with instead.
 //
 // THE ARGUMENTS HERE, at the one place every call of every builtin passes:
-// a seat's turn, a worker's slice of it, a sandbox's bridge, the operator's
+// a seat's turn, a worker's slice of it, an executor run's bridge, the operator's
 // assistant and the HTTP write surface all reach a builtin through this
 // wrapper. The HTTP surface used to check them at its routes alone, so the
 // other four dropped what the route refused — see [ErrUndeclaredArgument].
@@ -601,8 +620,25 @@ func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
 var ErrUndeclaredArgument = errors.New("builtin: this call carries an " +
 	"argument its tool does not read")
 
+// UndeclaredArguments is an [ErrUndeclaredArgument] refusal as a value: the
+// tool and the arguments it does not read, so a surface answering in status
+// codes names them as a field rather than in a sentence written for a model
+// (ADR-0060).
+type UndeclaredArguments struct {
+	Tool  string
+	Names []string
+}
+
+func (e *UndeclaredArguments) Error() string {
+	return fmt.Sprintf("%s: %s takes no %s", ErrUndeclaredArgument, e.Tool,
+		strings.Join(e.Names, ", "))
+}
+
+// Is reports the sentinel the refusal is an instance of.
+func (e *UndeclaredArguments) Is(target error) bool { return target == ErrUndeclaredArgument }
+
 // undeclared is the arguments a call carries that its tool's schema does not
-// declare, quoted and sorted — nil when there are none.
+// declare, sorted, or nil when there are none.
 //
 // THE SCHEMA IS THE LIST, read off the tool rather than typed beside it, so an
 // argument a tool gains is accepted the moment it can be read and one it loses
@@ -614,7 +650,7 @@ func undeclared(tool tools.Callable, args map[string]any) []string {
 	var unread []string
 	for field := range args {
 		if _, held := properties[field]; !held {
-			unread = append(unread, fmt.Sprintf("%q", field))
+			unread = append(unread, field)
 		}
 	}
 	slices.Sort(unread)
@@ -631,13 +667,17 @@ func undeclaredRefusal(tool tools.Callable, unread []string) mcp.Result {
 	if len(takes) > 0 {
 		reads = strings.Join(takes, ", ")
 	}
-	names := strings.Join(unread, ", ")
+	quoted := make([]string, len(unread))
+	for i, name := range unread {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	names := strings.Join(quoted, ", ")
 	return mcp.Result{
 		Failed: true,
 		// INVALID, beneath the sentinel: the request is the caller's to
 		// change, and a surface answering in status codes reads both.
 		Cause: mcp.Classify(mcp.RefusalInvalid,
-			fmt.Errorf("%w: %s takes no %s", ErrUndeclaredArgument, tool.Name(), names)),
+			&UndeclaredArguments{Tool: tool.Name(), Names: unread}),
 		Output: fmt.Sprintf("%s takes no argument %s — it reads %s, and one it "+
 			"does not read is refused rather than ignored, because ignoring it "+
 			"answers a different request from the one you sent", tool.Name(),

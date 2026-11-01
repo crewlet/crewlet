@@ -183,7 +183,8 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 // pointed at, or a later one, or an error saying why that is unknown — for a
 // caller judging a company it holds rather than the one this node publishes:
 // the clearing of a removed seat's pause, which runs on the company an apply
-// is about to publish ([Engine.clearRemovedSeatPauses]). Every other reader
+// is about to publish ([Engine.clearRemovedSeatPauses]), and the model
+// catalogue's retry, on the one it is about to install. Every other reader
 // asks [Engine.servedFleetRevision].
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
@@ -206,6 +207,13 @@ func fleetCompanyAt(target coord.Activation, c *Company) (*Company, error) {
 	switch {
 	case c == nil:
 		return nil, errors.New("engine: this node publishes no company yet")
+	case c.ActivatedAt.IsZero():
+		// AN OFFER, most likely: what this node runs no activation has
+		// named, so there is no instant of its own to report.
+		return nil, fmt.Errorf("engine: this node serves a company no activation has "+
+			"named (an offline command's choice the fleet has not taken, or one "+
+			"handed to the engine in code) and the fleet is on activation epoch %d of %s",
+			target.Epoch, target.At.Format(time.RFC3339Nano))
 	case store.EncodeTime(c.ActivatedAt) < store.EncodeTime(target.At):
 		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
 			"fleet is on activation epoch %d of %s", c.ActivatedAt.Format(time.RFC3339Nano),

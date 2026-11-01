@@ -49,6 +49,9 @@ const OperatorSource = "operator"
 var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
+	ModelActed{}.EventType(),
+	AssistantConversationRead{}.EventType(),
+	AssistantTurnCompleted{}.EventType(),
 }
 
 // AuditOutcome is what became of an audited call.
@@ -84,34 +87,58 @@ func (o AuditOutcome) Valid() bool {
 // outcomes that are failures of the call rather than states of a write.
 func (o AuditOutcome) failed() bool { return o == AuditRefused || o == AuditFailed }
 
-// The four transports a person's call arrives on. Three are operator tool
-// calls, and each reaches the catalogue through one dispatch
-// (internal/api/operator), which is what records the call — so the transport
-// is the ONLY thing about the record that depends on which surface a person
-// used. The fourth is a person's own git client, whose every push the code
-// host records (internal/code/host).
+// The five transports a person's call arrives on. Four are operator tool
+// calls (the Dashboard Assistant's is the act route reached in process), and
+// each reaches the catalogue through one dispatch (internal/api/operator),
+// which is what records the call — so the transport is the ONLY thing about
+// the record that depends on which surface a person used. The fifth is a
+// person's own git client, whose every push the code host records
+// (internal/code/host).
 const (
 	// TransportAct is the dashboard's write surface, `/operator/act`.
 	TransportAct = "act"
 	// TransportMCP is an operator's own assistant, `/operator/mcp`.
 	TransportMCP = "mcp"
-	// TransportWork is the human write surface's tool-backed routes,
-	// `/work/…` and `/pages/…` (internal/api/workapi) — the scriptable
+	// TransportWork is the human write surface's routes, `/worklet/…`,
+	// `/doclet/pages/…` and `/chatlet/…` (internal/api/workapi): the scriptable
 	// resource REST a CLI or a script writes through, which calls the
-	// same dispatch rather than the tools directly.
+	// same dispatch rather than the tools directly, and whose verbs with
+	// no tool are recorded under it too.
 	TransportWork = "work"
 	// TransportGit is a person's git client, smart HTTP at `/git/`: every
 	// push it makes is one record, whatever became of it.
 	TransportGit = "git"
+	// TransportAssistant is the Dashboard Assistant carrying out a write the
+	// person approved: the act route reached in process under an exec grant
+	// derived from the approving request (ADR-0051). The record names the
+	// person, as every record the write left does; its [AssistantRef] says
+	// which conversation, turn, grant, session and proposal carried it.
+	TransportAssistant = "assistant"
 )
 
+// AssistantRef is what a write the Dashboard Assistant carried out was carried
+// by: the conversation and turn that proposed it, the grant it was sent under,
+// the browser session that grant was derived from, and the proposal the person
+// approved. Identifiers only; the conversation itself is sealed in its own
+// domain and never copied into the event log.
+type AssistantRef struct {
+	ConversationID string `json:"conversation_id"`
+	TurnID         string `json:"turn_id"`
+	GrantID        string `json:"grant_id"`
+	// Session is the credential the grant was derived from,
+	// `session:<lineage>`.
+	Session    string `json:"session"`
+	ProposalID string `json:"proposal_id,omitempty"`
+}
+
 // OperatorActed is one call a person made that is not a proven read, on any
-// of the four transports: the dashboard's act route, an operator's assistant
-// over MCP and the human write surface's tool-backed routes call the same
-// catalogue, and a person's git client pushes through the code host — a person
-// transport of its own (ADR-0055), one record a push (internal/code/host). An
-// audit that depended on which one a person used would be missing whichever
-// surface nobody tested.
+// of the five transports: the dashboard's act route, an operator's assistant
+// over MCP, the human write surface's tool-backed routes and the Dashboard
+// Assistant's approved writes call the same catalogue, and a person's git
+// client pushes through the code host — a person transport of its own
+// (ADR-0078), one record a push (internal/code/host). An audit that depended
+// on which one a person used would be missing whichever surface nobody
+// tested.
 //
 // The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
 // page body or a comment is the company's content, and it already lives in
@@ -157,6 +184,13 @@ type OperatorActed struct {
 	// Failed is stamped for `refused` and `failed`, so the event store
 	// tags the row and the log's failure filter finds it.
 	Failed bool `json:"failed,omitempty"`
+
+	// Assistant is set exactly when the call came through an assistant
+	// grant, and ConversationID beside it is its conversation at the top
+	// level, where the event store promotes it to a listing tag so the
+	// Audit log lists every write one conversation made.
+	Assistant      *AssistantRef `json:"assistant,omitempty"`
+	ConversationID string        `json:"conversation_id,omitempty"`
 }
 
 // EventType is the "operator_acted" wire type.
@@ -179,6 +213,10 @@ func (e OperatorActed) SummaryFor(actor string) string {
 // derived from the outcome rather than set beside it.
 func NewOperatorActed(e OperatorActed) OperatorActed {
 	e.Failed = e.Outcome.failed()
+	e.ConversationID = ""
+	if e.Assistant != nil {
+		e.ConversationID = e.Assistant.ConversationID
+	}
 	return e
 }
 

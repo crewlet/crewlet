@@ -6,7 +6,14 @@
 
 import { describe, expect, test } from "vitest";
 import { SESSION_QUERIES } from "../contract/domains.ts";
-import { domainsOf, isLater, parsePosition, SessionFloors, spellPosition } from "./session.ts";
+import {
+  domainsOf,
+  EVERY_QUESTION,
+  isLater,
+  parsePosition,
+  SessionFloors,
+  spellPosition,
+} from "./session.ts";
 
 describe("a position", () => {
   test("reads the engine's own spelling", () => {
@@ -114,6 +121,14 @@ describe("the floor", () => {
     expect(SessionFloors.moves("company_feed", "tracker", [])).toBe(true);
     expect(SessionFloors.moves("company_feed", "pages", [])).toBe(true);
     expect(SessionFloors.moves("company_feed", null, [])).toBe(false);
+  });
+
+  // A WRITE WHOSE REACH NOBODY CAN NAME moves every question, the ones no
+  // domain's floor covers (the brand) included.
+  test("a write naming every question moves every question", () => {
+    expect(SessionFloors.moves("brand", null, [EVERY_QUESTION])).toBe(true);
+    expect(SessionFloors.moves("work_items", "pages", [EVERY_QUESTION])).toBe(true);
+    expect(SessionFloors.moves("brand", "tracker", [])).toBe(false);
   });
 
   test("every listed question is listed once under each domain whose log it reads", () => {

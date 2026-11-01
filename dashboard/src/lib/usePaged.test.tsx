@@ -1,274 +1,568 @@
 /**
- * The pager every paged history shares, and the one rule a list paged by a
- * cursor may not break: no row falls between two pages.
+ * A paged history whose newest page keeps moving.
  *
- * An older page continues from the cursor the page before it was answered
- * with, minted from its last row. The newest page read again under newer rows
- * pushes its last ones out, and the older page starts after them — so the
- * cases below drive the newest page's real loader (`useQuery`, its poll and
- * its reconnect) and a scripted engine, and assert what a reader would see.
+ * THE ONE THING IT MUST NOT DO IS DRAW A HOLE AS CONTINUITY. A held page
+ * begins where the newest page ended when it was asked for, and every arrival
+ * at the top pushes the oldest entry off the newest page's foot — onto no
+ * page at all, unless the hook notices the two no longer meet. These cases
+ * are full pages over a keyset cursor, the shape every caller's history has:
+ * the cursor is the last entry of a page, and the page before it is whatever
+ * is older than that entry.
  */
 
-import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { useLayoutEffect, useState } from "react";
+import { expect, test, vi } from "vitest";
 
-import { useClient, useConnection } from "./store-hooks.ts";
-import { usePageHold, usePaged } from "./usePaged.ts";
-import { useQuery, type QueryResult } from "./useQuery.ts";
-import { session } from "~/protocol/session.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
+import { usePaged } from "./usePaged.ts";
+import type { QueryResult } from "./useQuery.ts";
 
-vi.mock("./store-hooks.ts", () => ({
-  useClient: vi.fn(),
-  useConnection: vi.fn(),
-}));
+/** How many entries one page holds. */
+const PAGE = 5;
+const PARAMS = { limit: PAGE };
 
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+interface Answer {
+  entries: { id: string }[];
+  next: string;
+}
+
+const pick = (answer: Answer) => answer.entries;
+const idOf = (entry: { id: string }) => entry.id;
+const cursorOf = (answer: Answer) => answer.next;
+
+/** One page of `history` (newest first): the newest, or what is older than
+ *  the entry `cursor` names — a keyset cursor, as the engine's are. */
+function pageOf(history: readonly number[], cursor = ""): Answer {
+  const older = cursor === "" ? history : history.filter((n) => n < Number(cursor));
+  const slice = older.slice(0, PAGE);
+  return {
+    entries: slice.map((n) => ({ id: `e-${n}` })),
+    next: older.length > PAGE ? String(slice[slice.length - 1]) : "",
+  };
+}
+
+/** Numbers from `high` down to `low`. */
+const down = (high: number, low: number) =>
+  Array.from({ length: high - low + 1 }, (_, i) => high - i);
+
+function answered(data: Answer): QueryResult<Answer> {
+  return { data, loading: false, error: null, refusal: null, refetch: () => undefined };
+}
+
+/** The hook over a history the test moves, paged back once. */
+async function pagedBack(start: readonly number[]) {
+  const history = { now: start };
+  const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
+  const view = renderHook(
+    ({ first }: { first: QueryResult<Answer> }) =>
+      usePaged(first, PARAMS, page, pick, idOf, cursorOf),
+    { initialProps: { first: answered(pageOf(history.now)) } },
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+  const arrive = (next: readonly number[]) => {
+    history.now = next;
+    view.rerender({ first: answered(pageOf(history.now)) });
+  };
+  return { ...view, page, arrive, history };
+}
+
+const ids = (items: readonly { id: string }[]) => items.map((entry) => entry.id);
+
+test("an entry pushed off the newest page by an arrival stays on the list", async () => {
+  // Twelve entries, two pages drawn: 12..8 and 7..3. Entry 13 arrives and the
+  // newest page is 13..9 — so 8 is on neither page unless the gap is read.
+  const { result, arrive } = await pagedBack(down(12, 1));
+  arrive(down(13, 1));
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(13, 3).map((n) => `e-${n}`)));
+  // AND THE PAGER STILL ENDS WHERE IT DID: the next page is the one before 3.
+  expect(result.current.more).toBe(true);
+  act(() => result.current.next());
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(13, 1).map((n) => `e-${n}`)));
 });
 
-/** How often the newest page is polled here. */
-const POLL_MS = 30_000;
-
-/** A page as the engine answers one: its rows, newest first, and the cursor after them. */
-interface Page {
-  comments: { id: string }[];
-  next_cursor?: string;
-}
-
-const rowsOf = (a: Page) => a.comments;
-const idOf = (row: { id: string }) => row.id;
-const cursorOf = (a: Page) => a.next_cursor ?? "";
-
-/**
- * A history of `count` rows, newest first (`r<count>` … `r1`), answered
- * `size` at a time: the newest page with no cursor, an older one from the
- * cursor naming the last row of the page before — as a keyset cursor is
- * minted, so a page asked after newer rows land continues from that row.
- */
-function history(size: number) {
-  let count = 0;
-  const answer = (after: number | null): Page => {
-    const top = after === null ? count : after - 1;
-    const ids = [];
-    for (let n = top; n > 0 && ids.length < size; n--) ids.push(n);
-    const last = ids[ids.length - 1];
-    return {
-      comments: ids.map((n) => ({ id: `r${n}` })),
-      ...(last !== undefined && last > 1 ? { next_cursor: `c${last}` } : {}),
-    };
-  };
-  return {
-    /** The engine holds `n` rows. */
-    holds(n: number) {
-      count = n;
-    },
-    newest: () => answer(null),
-    after: (cursor: string) => answer(Number(cursor.slice(1))),
-  };
-}
-
-/** The socket every newest-page ask goes through, and the connection it rides. */
-function engine(newest: () => Page) {
-  const query = vi.fn((_what: string, _params?: Record<string, unknown>) =>
-    Promise.resolve(newest()),
-  );
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
-  return query;
-}
-
-/** The socket goes away and comes back. */
-function reconnect(rerender: () => void) {
-  vi.mocked(useConnection).mockReturnValue({ connected: false, accessRefused: null } as never);
-  rerender();
-  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
-  rerender();
-}
-
-/**
- * A pager over `work_comments`, its newest page asked as every caller asks it:
- * with the hold `usePageHold` says.
- */
-function usePager(params: Record<string, unknown>, page: (cursor: string) => Promise<Page>) {
-  const hold = usePageHold<Page>(params);
-  const first = useQuery("work_comments", params, {
-    pollMs: POLL_MS,
-    hold: hold.holding,
-  }) as unknown as QueryResult<Page>;
-  return usePaged(hold, first, page, rowsOf, idOf, cursorOf);
-}
-
-const ids = (items: readonly { id: string }[]) => items.map((row) => row.id);
-
-// HELD FROM THE PRESS: a poll tick or a reconnect while the older page is on
-// its way, or after it landed, asks nothing of the newest page — read again,
-// it would push its last row out from under the page that continues it.
-// Mutation: ask the newest page without the hold, and the tick asks it.
-test("from the press of older, no poll tick and no reconnect asks the newest page", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const h = history(2);
-  h.holds(4);
-  const query = engine(h.newest);
-  let land: (page: Page) => void = () => {};
-  const page = vi.fn(
-    (_cursor: string) =>
-      new Promise<Page>((resolve) => {
-        land = resolve;
+test("the list is never drawn with the gap while the gap is being read", async () => {
+  const { result, arrive, page, history } = await pagedBack(down(12, 1));
+  // The read that fills the gap is held until the test lets it go.
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(history.now, cursor));
       }),
   );
-  const { result, rerender } = renderHook(() => usePager({ item: "t-1" }, page));
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r4", "r3"]);
-  expect(query).toHaveBeenCalledTimes(1);
-
-  act(() => result.current.older());
-  expect(page).toHaveBeenCalledWith("c3");
-  // ON ITS WAY: a tick and a reconnect pass the newest page by.
-  h.holds(5);
-  await act(async () => void vi.advanceTimersByTime(POLL_MS));
-  reconnect(rerender);
-  await afterMicrotasks();
-  expect(query).toHaveBeenCalledTimes(1);
-
-  await act(async () => land(h.after("c3")));
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r4", "r3", "r2", "r1"]);
-  expect(result.current.held).toBe(true);
-  // AND HELD AFTER IT LANDED.
-  await act(async () => void vi.advanceTimersByTime(5 * POLL_MS));
-  reconnect(rerender);
-  await afterMicrotasks();
-  expect(query).toHaveBeenCalledTimes(1);
-  expect(ids(result.current.items)).toEqual(["r4", "r3", "r2", "r1"]);
+  arrive(down(13, 1));
+  // AS IT WAS LAST DRAWN — 12..3, whole — and not 13..9 beside 7..3.
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  expect(ids(result.current.items)).toEqual(down(12, 3).map((n) => `e-${n}`));
+  act(() => release());
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(13, 3).map((n) => `e-${n}`)));
 });
 
-// A NEWEST PAGE THAT MOVES ANYWAY — here the reader's own write, which asks it
-// again at the floor it raised — reads the held pages again from it, so the
-// write is drawn and the rows it pushed out are on the page that now
-// continues it. Mutations: drop the read again, and the write is never drawn;
-// draw the newest page over the pages held instead, and r5 and r4 are on
-// neither.
-test("a newest page that moves under held pages reads them again from it, leaving no row out", async () => {
-  const h = history(2);
-  h.holds(5);
-  const query = engine(h.newest);
-  const page = vi.fn((cursor: string) => Promise.resolve(h.after(cursor)));
-  const { result } = renderHook(() => usePager({ item: "t-1" }, page));
-  await afterMicrotasks();
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r5", "r4", "r3", "r2"]);
-
-  // TWO ROWS LAND, one of them the reader's own comment: the newest page
-  // asked again is r7 and r6, its cursor after r6.
-  h.holds(7);
-  act(() => void session.written("tracker", "CREWLET_TRACKER_LOG@1:9", []));
-  await afterMicrotasks();
-  await afterMicrotasks();
-  expect(query).toHaveBeenCalledTimes(2);
-  expect(page).toHaveBeenLastCalledWith("c6");
-  expect(ids(result.current.items)).toEqual(["r7", "r6", "r5", "r4"]);
-  // STILL ONE READING, held: the next page continues the one now drawn.
-  expect(result.current.held).toBe(true);
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(page).toHaveBeenLastCalledWith("c4");
-  expect(ids(result.current.items)).toEqual(["r7", "r6", "r5", "r4", "r3", "r2"]);
+test("a gap longer than what was paged back through drops the held pages", async () => {
+  // One page held; eleven entries arrive, so the gap is more than a page.
+  const { result, arrive } = await pagedBack(down(12, 1));
+  arrive(down(23, 1));
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(23, 19).map((n) => `e-${n}`)));
+  // AND THE READER PAGES BACK AGAIN from a list that is whole.
+  expect(result.current.more).toBe(true);
+  expect(result.current.pageError).toBeNull();
 });
 
-// A NEW QUESTION DISCARDS WHAT THE LAST ONE HELD. Hidden under its key, the
-// last one's older pages came back when the reader returned to it, under a
-// newest page read since: rows the reader had just seen vanished from the
-// middle of the list. Mutation: keep the state and hide it by question, and
-// A's old older page comes back.
-test("a question left and come back to starts again from its newest page", async () => {
-  const a = history(2);
-  const b = history(2);
-  a.holds(4);
-  // B FILLS ITS PAGE TOO: `useQuery` shows a question's last answer until the
-  // next one lands, so for a moment back on A the newest page is B's, and a
-  // B with no cursor would let A's held pages go by chance.
-  b.holds(4);
-  const query = engine(() => a.newest());
-  query.mockImplementation((_what, params) =>
-    Promise.resolve(params?.item === "b" ? b.newest() : a.newest()),
-  );
-  const page = vi.fn((cursor: string) => Promise.resolve(a.after(cursor)));
-  const { result, rerender } = renderHook(({ item }) => usePager({ item }, page), {
-    initialProps: { item: "a" },
+test("a gap that could not be read drops the held pages and says why", async () => {
+  const { result, arrive, page } = await pagedBack(down(12, 1));
+  page.mockImplementationOnce(async () => {
+    throw new Error("unavailable");
   });
-  await afterMicrotasks();
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r4", "r3", "r2", "r1"]);
-
-  rerender({ item: "b" });
-  await afterMicrotasks();
-  expect(result.current.held).toBe(false);
-  // TWO NEW ROWS on A while the reader looked at B.
-  a.holds(6);
-  rerender({ item: "a" });
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r6", "r5"]);
-  expect(result.current.held).toBe(false);
-  expect(result.current.more).toBe(true);
+  arrive(down(13, 1));
+  await waitFor(() => expect(result.current.pageError).toBe("unavailable"));
+  expect(ids(result.current.items)).toEqual(down(13, 9).map((n) => `e-${n}`));
 });
 
-// AN OLDER PAGE THAT FAILS WITH NOTHING OLDER HELD has nothing to hold still
-// for: the newest page is live again, polled at its cadence, and the failure
-// is said. Mutation: keep the hold, and the tick asks nothing.
-test("an older page that fails with nothing held lets the newest page go live", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const h = history(2);
-  h.holds(4);
-  const query = engine(h.newest);
-  const page = vi.fn(() => Promise.reject(new Error("unavailable")));
-  const { result } = renderHook(() => usePager({ item: "t-1" }, page));
-  await afterMicrotasks();
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(result.current.pageError).toBe("unavailable");
-  expect(result.current.held).toBe(false);
-  await act(async () => void vi.advanceTimersByTime(POLL_MS));
-  await afterMicrotasks();
-  expect(query).toHaveBeenCalledTimes(2);
+test("a newest page that still meets the held page asks nothing more", async () => {
+  // An edit to an entry on the newest page moves nothing: its cursor is the
+  // one the held page was asked under.
+  const { result, arrive, page } = await pagedBack(down(12, 1));
+  arrive(down(12, 1));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(page).toHaveBeenCalledTimes(1);
+  expect(ids(result.current.items)).toEqual(down(12, 3).map((n) => `e-${n}`));
 });
 
-// A PAGE THAT FAILS UNDER PAGES HELD KEEPS THEM, and the same press asks it
-// again: the cursor it was asked from is the last held page's, so `older`
-// reads it and the list goes on with no row left out — which is why a footer
-// says the failure beside its control (`PageFailed`), never in its place.
-// Mutation: drop the pages held when a page fails, and the reading the reader
-// paged back through is gone.
-test("an older page that fails under pages held keeps them, and older asks it again", async () => {
-  const h = history(2);
-  h.holds(6);
-  engine(h.newest);
-  let failing = false;
-  const page = vi.fn((cursor: string) =>
-    failing ? Promise.reject(new Error("unavailable")) : Promise.resolve(h.after(cursor)),
+test("a history that ends before the held page keeps only what is still there", async () => {
+  // Everything older than the newest page was erased: the held page holds
+  // entries that no longer exist, and the newest page says nothing is older.
+  const { result, arrive } = await pagedBack(down(12, 1));
+  arrive(down(12, 8));
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(12, 8).map((n) => `e-${n}`)));
+  expect(result.current.more).toBe(false);
+});
+
+test("a refreshed page is read again under its own cursor and replaced in place", async () => {
+  // AN ENTRY ON A HELD PAGE CAN CHANGE OR GO — a chat mention's message
+  // erased — and a page read once draws it as it was for as long as the
+  // screen is open. The caller says so; the page is asked again where it began.
+  const { result, page, history } = await pagedBack(down(12, 1));
+  history.now = down(12, 1).filter((n) => n !== 5);
+  act(() => result.current.refresh());
+  await waitFor(() =>
+    expect(ids(result.current.items)).toEqual(
+      [12, 11, 10, 9, 8, 7, 6, 4, 3, 2].map((n) => `e-${n}`),
+    ),
   );
-  const { result } = renderHook(() => usePager({ item: "t-1" }, page));
-  await afterMicrotasks();
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3"]);
-
-  failing = true;
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(result.current.pageError).toBe("unavailable");
-  expect(result.current.held).toBe(true);
+  expect(page).toHaveBeenLastCalledWith("8");
+  // AND THE PAGER NOW BEGINS WHERE THE PAGE ENDS.
   expect(result.current.more).toBe(true);
-  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3"]);
+});
 
-  failing = false;
-  act(() => result.current.older());
-  await afterMicrotasks();
-  expect(page).toHaveBeenLastCalledWith("c3");
-  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3", "r2", "r1"]);
+test("a refresh asks only the pages its caller names", async () => {
+  const { result, page } = await pagedBack(down(12, 1));
+  const asked = page.mock.calls.length;
+  act(() => result.current.refresh(() => false));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(page).toHaveBeenCalledTimes(asked);
+});
+
+test("a re-read asked while one is out reads again after it, and its word is kept", async () => {
+  // THE FIRST MAY HAVE READ BEFORE THE CHANGE THE SECOND WAS ASKED FOR, so
+  // the second is not folded into it: it reads once the first has landed,
+  // and what it read is what stays.
+  const { result, page, history } = await pagedBack(down(12, 1));
+  const held: ((answer: Answer) => void)[] = [];
+  page.mockImplementation(
+    (_cursor: string) => new Promise<Answer>((resolve) => held.push(resolve)),
+  );
+  act(() => result.current.refresh());
+  await waitFor(() => expect(held).toHaveLength(1));
+  history.now = down(12, 1).filter((n) => n !== 6);
+  act(() => result.current.refresh());
+  await act(async () => held[0]!(pageOf(down(12, 1), "8")));
+  await waitFor(() => expect(held).toHaveLength(2));
+  await act(async () => held[1]!(pageOf(history.now, "8")));
+  expect(ids(result.current.items)).not.toContain("e-6");
+});
+
+test("re-reads asked before their turn are one read of each page", async () => {
+  // A BURST OF CHANGES IS ONE RE-READ: a second asked while the first waits
+  // for its turn widens it instead of asking the same pages twice.
+  const { result, page } = await pagedBack(down(12, 1));
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(down(12, 1), cursor));
+      }),
+  );
+  // A PAGE ON ITS WAY holds the line, so both re-reads wait behind it.
+  act(() => result.current.next());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  act(() => result.current.refresh((_answer, place) => place.last));
+  act(() => result.current.refresh());
+  act(() => release());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(4));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(page.mock.calls.slice(2).map(([cursor]) => cursor)).toEqual(["8", "3"]);
+});
+
+test("a re-read hands the first page to the caller's own question", async () => {
+  // THE FIRST PAGE IS THE CALLER'S QUESTION, so a change that reached it is
+  // the caller's refetch rather than a page this hook asks under a cursor.
+  const history = { now: down(12, 1) };
+  const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
+  const refetch = vi.fn();
+  const view = renderHook(() =>
+    usePaged({ ...answered(pageOf(history.now)), refetch }, PARAMS, page, pick, idOf, cursorOf),
+  );
+  act(() => view.result.current.refresh((_answer, place) => place.first && place.last));
+  await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1));
+  expect(page).not.toHaveBeenCalled();
+});
+
+/** Whether a drawn list is one run of the history, with nothing missing
+ *  between its first entry and its last. */
+const whole = (items: readonly { id: string }[]) =>
+  items.every(
+    (entry, i) => i === 0 || Number(items[i - 1]!.id.slice(2)) - Number(entry.id.slice(2)) === 1,
+  );
+
+test("entries that appear inside a held page are read in before it is drawn", async () => {
+  // A PRIVATE ROOM JOINED: the mentions said in it become visible across
+  // the whole feed. Every page read again holds as many entries over a
+  // shorter range, so each now ends short of the page after it, and what
+  // it let go of is on no page — a hole drawn as continuity unless the
+  // range is read in.
+  const evens = down(40, 1).filter((n) => n % 2 === 0);
+  const { result, arrive, history } = await pagedBack(evens);
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
+  history.now = down(40, 1);
+  act(() => result.current.refresh());
+  arrive(down(40, 1));
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(40, 17).map((n) => `e-${n}`)));
+  // AND THE PAGER STILL ENDS WHERE THE LAST PAGE DOES.
+  expect(result.current.more).toBe(true);
+});
+
+test("a re-read page is never drawn short of the next before the gap is read", async () => {
+  // Three pages drawn over the evens 24..2; every odd then becomes visible.
+  const evens = down(24, 1).filter((n) => n % 2 === 0);
+  const { result, page, history } = await pagedBack(evens);
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(evens.length));
+  const before = ids(result.current.items);
+  history.now = down(24, 1);
+  // Both held pages are read again; the read of the gap the first of them
+  // now ends short of is held until the case lets it go.
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(async (cursor: string) => pageOf(history.now, cursor));
+  page.mockImplementationOnce(async (cursor: string) => pageOf(history.now, cursor));
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(history.now, cursor));
+      }),
+  );
+  act(() => result.current.refresh());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(5));
+  expect(page).toHaveBeenLastCalledWith("11");
+  // AS IT WAS LAST DRAWN until the gap has been read — never the re-read
+  // page, 15..11, beside the held one under it, 5..1.
+  expect(ids(result.current.items)).toEqual(before);
+  act(() => release());
+  await waitFor(() =>
+    expect(ids(result.current.items)).toEqual(
+      [24, 22, 20, 18, 16, ...down(15, 1)].map((n) => `e-${n}`),
+    ),
+  );
+});
+
+test("a gap under a re-read page longer than the pages after it drops them", async () => {
+  // BOUNDED BY WHAT IT WOULD SAVE: one page after the re-read one, and a
+  // gap more than a page long — the reader pages on again from a list that
+  // is whole.
+  const sparse = down(60, 1).filter((n) => n % 4 === 0);
+  const { result, history } = await pagedBack(sparse);
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
+  history.now = down(60, 1);
+  act(() => result.current.refresh());
+  await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE - PAGE));
+  // The newest page as it was, then the re-read first held page and the
+  // gap under it read in; the last held page, past the bound, is gone.
+  const drawn = result.current.items.slice(PAGE);
+  expect(whole(drawn)).toBe(true);
+  expect(result.current.more).toBe(true);
+});
+
+test("a gap under a re-read page that could not be read leaves the page as it was", async () => {
+  const evens = down(24, 1).filter((n) => n % 2 === 0);
+  const { result, page, history } = await pagedBack(evens);
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(evens.length));
+  const before = ids(result.current.items);
+  history.now = down(24, 1);
+  page.mockImplementationOnce(async (cursor: string) => pageOf(history.now, cursor));
+  page.mockImplementationOnce(async (cursor: string) => pageOf(history.now, cursor));
+  page.mockImplementationOnce(async () => {
+    throw new Error("unavailable");
+  });
+  act(() => result.current.refresh());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(5));
+  // THE LAST PAGE, which nothing follows, is put in place; the one above it
+  // keeps what it last said, which still meets it.
+  await waitFor(() =>
+    expect(ids(result.current.items)).toEqual([
+      ...before.slice(0, 2 * PAGE),
+      ...down(5, 1).map((n) => `e-${n}`),
+    ]),
+  );
+  expect(whole(result.current.items.slice(2 * PAGE))).toBe(true);
+  // A RE-READ IS THE SCREEN'S OWN, and its failure is nobody's to be told.
+  expect(result.current.pageError).toBeNull();
+});
+
+test("a join in flight when a re-read replaces the first held page still lands", async () => {
+  // THE RE-READ GAVE THE PAGE THE JOIN WAS REACHING A NEW ANSWER, and a
+  // join that matched it by identity threw its read away — the new entry
+  // stayed off screen until the first page next changed.
+  const { result, arrive, page, history } = await pagedBack(down(12, 1));
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(history.now, cursor));
+      }),
+  );
+  arrive(down(13, 1));
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  act(() => result.current.refresh());
+  // EVERYTHING THE RE-READ CAN DO WITHOUT THE JOIN, done and drawn first.
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  act(() => release());
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(13, 3).map((n) => `e-${n}`)));
+});
+
+test("a page asked while a re-read moves the last page's foot is still added", async () => {
+  // AN ENTRY ON THE LAST PAGE ERASED while the next page is on its way: the
+  // last page's foot moves, and a page appended only where it began under
+  // the old foot was dropped — "Older" pressed, and nothing added.
+  const { result, page, history } = await pagedBack(down(20, 1));
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(history.now, cursor));
+      }),
+  );
+  act(() => result.current.next());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  history.now = down(20, 1).filter((n) => n !== 13);
+  act(() => result.current.refresh());
+  act(() => release());
+  await waitFor(() =>
+    expect(ids(result.current.items)).toEqual(
+      down(20, 6)
+        .filter((n) => n !== 13)
+        .map((n) => `e-${n}`),
+    ),
+  );
+  expect(result.current.paging).toBe(false);
+});
+
+// THE JOIN NEVER OVERWRITES WHAT LANDED SINCE ITS RENDER. A newest answer is
+// committed, and its join runs in the passive effect after — and in between,
+// an older page the reader asked for can land and append itself. The join
+// used to replace the whole held state with one built from that render, so
+// the appended page was dropped: "Older" came back with nothing added, which
+// is a press that silently did nothing.
+test("an older page that lands between a newest answer and its join is kept", async () => {
+  const history = { now: down(16, 1) };
+  const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
+  let move: (first: QueryResult<Answer>) => void = () => undefined;
+  // RUN IN THE COMMIT THAT TAKES THE NEW ANSWER — a layout effect, so after
+  // the commit and before the join's passive effect.
+  let inCommit: (() => void) | null = null;
+  const view = renderHook(() => {
+    const [first, setFirst] = useState(() => answered(pageOf(history.now)));
+    move = setFirst;
+    useLayoutEffect(() => {
+      inCommit?.();
+      inCommit = null;
+    }, [first]);
+    return usePaged(first, PARAMS, page, pick, idOf, cursorOf);
+  });
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+
+  let release: () => void = () => undefined;
+  page.mockImplementationOnce(
+    (cursor: string) =>
+      new Promise<Answer>((resolve) => {
+        release = () => resolve(pageOf(history.now, cursor));
+      }),
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+
+  // OUTSIDE `act`, so the render and its effects are scheduled as a browser
+  // schedules them rather than flushed as one step.
+  const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = env.IS_REACT_ACT_ENVIRONMENT;
+  env.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    inCommit = () => release();
+    // The newest page read again, unchanged — a new answer that still joins.
+    move(answered(pageOf(history.now)));
+    await waitFor(() =>
+      expect(ids(view.result.current.items)).toEqual(down(16, 2).map((n) => `e-${n}`)),
+    );
+  } finally {
+    env.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});
+
+// A JOIN WAITS FOR THE OLDER PAGE THAT IS OUT, AND THEN DECIDES AGAINST IT
+// TOO. The page is asked under the held tail's cursor and answered from the
+// history as it was then, and a first page that moves while it is out may
+// replace or drop the pages it follows — so the join runs only once the page
+// has landed on the tail it was asked after, and decides against everything
+// held then: one change at a time, never a seam. Every list these cases draw
+// is held to being CONTIGUOUS, render by render, which is the whole of what
+// "no hole drawn as continuity" means for a history of consecutive entries.
+
+/** Hold the next read until `release`, answering from the history as it
+ *  was when it was ASKED — an answer the engine formed before the move. */
+function holdNext(page: ReturnType<typeof vi.fn>, history: { now: readonly number[] }) {
+  const gate = { release: () => undefined as void };
+  page.mockImplementationOnce((cursor: string) => {
+    const asked = history.now;
+    return new Promise<Answer>((resolve) => {
+      gate.release = () => resolve(pageOf(asked, cursor));
+    });
+  });
+  return gate;
+}
+
+/** Whether a drawn list runs down one entry at a time — has no hole in it. */
+function contiguous(list: readonly string[]): boolean {
+  const ns = list.map((id) => Number(id.slice("e-".length)));
+  return ns.every((n, i) => i === 0 || ns[i - 1]! - n === 1);
+}
+
+/** The hook over a history the test moves, paged back once, every list it
+ *  draws recorded. */
+async function drawnBack(start: readonly number[]) {
+  const history = { now: start };
+  const page = vi.fn(async (cursor: string) => pageOf(history.now, cursor));
+  const drawn: string[][] = [];
+  const view = renderHook(
+    ({ first }: { first: QueryResult<Answer> }) => {
+      const paged = usePaged(first, PARAMS, page, pick, idOf, cursorOf);
+      drawn.push(ids(paged.items));
+      return paged;
+    },
+    { initialProps: { first: answered(pageOf(history.now)) } },
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+  const arrive = (next: readonly number[]) => {
+    history.now = next;
+    view.rerender({ first: answered(pageOf(history.now)) });
+  };
+  return { ...view, page, arrive, history, drawn };
+}
+
+test("a join that cuts the held pages short waits for the older page out, and cuts it too", async () => {
+  const { result, arrive, page, history, drawn } = await drawnBack(down(12, 1));
+  const gate = holdNext(page, history);
+  act(() => result.current.next());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  // Everything older than 8 is erased and 13 and 14 arrive. The join waits
+  // behind the page before 3, and the list is drawn as it was meanwhile.
+  arrive(down(14, 8));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ids(result.current.items)).toEqual(down(12, 3).map((n) => `e-${n}`));
+  expect(page).toHaveBeenCalledTimes(2);
+  // The page before 3 lands, answered before the erase, on the tail it was
+  // asked after. Then the join walks from the newest page: 9..8, and the
+  // history ends there — so every held page goes, the late one with them.
+  act(() => gate.release());
+  await waitFor(() => expect(ids(result.current.items)).toEqual(down(14, 8).map((n) => `e-${n}`)));
+  expect(result.current.paging).toBe(false);
+  expect(result.current.more).toBe(false);
+  for (const items of drawn) expect(contiguous(items), items.join(",")).toBe(true);
+});
+
+test("a join that drops the held pages waits for the older page out, which goes with them", async () => {
+  const { result, arrive, page, history, drawn } = await drawnBack(down(12, 1));
+  const gate = holdNext(page, history);
+  act(() => result.current.next());
+  await waitFor(() => expect(page).toHaveBeenCalledTimes(2));
+  // Eleven arrive: more than the held pages' worth, so the join will drop
+  // them — but not before the page that is out has landed.
+  arrive(down(23, 1));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ids(result.current.items)).toEqual(down(12, 3).map((n) => `e-${n}`));
+  act(() => gate.release());
+  await waitFor(() => expect(result.current.paging).toBe(false));
+  await new Promise((r) => setTimeout(r, 20));
+  // Only the newest page is left, whole; the reader pages on from there.
+  expect(ids(result.current.items)).toEqual(down(23, 19).map((n) => `e-${n}`));
+  expect(result.current.more).toBe(true);
+  for (const items of drawn) expect(contiguous(items), items.join(",")).toBe(true);
+});
+
+// A NEW QUESTION DISCARDS WHAT THE LAST ONE HELD. Kept under its question,
+// A's pages came back the moment the reader returned to it, while the first
+// page was still B's answer (`useQuery` shows a question's last answer until
+// the next one lands): the join then read A from a cursor B minted. Mutation:
+// key what is held by the question alone, and the return asks a page.
+test("a question left and come back to starts again from its first page", async () => {
+  const a = { now: down(12, 1) };
+  const b = down(112, 101);
+  const page = vi.fn(async (cursor: string) => pageOf(a.now, cursor));
+  const view = renderHook(
+    ({ params, first }: { params: Record<string, unknown>; first: QueryResult<Answer> }) =>
+      usePaged(first, params, page, pick, idOf, cursorOf),
+    { initialProps: { params: { item: "a" }, first: answered(pageOf(a.now)) } },
+  );
+  act(() => view.result.current.next());
+  await waitFor(() => expect(view.result.current.items).toHaveLength(2 * PAGE));
+  const asked = page.mock.calls.length;
+
+  view.rerender({ params: { item: "b" }, first: answered(pageOf(b)) });
+  // TWO ARRIVE ON A while the reader looks at B; back on A, B's answer is the
+  // first page until A's lands.
+  a.now = down(14, 1);
+  view.rerender({ params: { item: "a" }, first: answered(pageOf(b)) });
+  view.rerender({ params: { item: "a" }, first: answered(pageOf(a.now)) });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ids(view.result.current.items)).toEqual(down(14, 10).map((n) => `e-${n}`));
+  expect(view.result.current.more).toBe(true);
+  expect(page).toHaveBeenCalledTimes(asked);
+  expect(view.result.current.pageError).toBeNull();
+});
+
+// A PAGE THAT FAILS KEEPS WHAT IS HELD, and the same press asks it again: the
+// cursor it was asked from is still the last held page's, so `next` reads it
+// and the list goes on with no entry left out — which is why a caller says
+// the failure beside its control (`PageFailed`), never in its place.
+// Mutation: drop the held pages when a page fails, and the reading the reader
+// paged back through is gone.
+test("a page that fails keeps the pages held, and next asks it again", async () => {
+  const { result, page } = await pagedBack(down(15, 1));
+  page.mockImplementationOnce(async () => {
+    throw new Error("unavailable");
+  });
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.pageError).toBe("unavailable"));
+  expect(result.current.paging).toBe(false);
+  expect(result.current.more).toBe(true);
+  expect(ids(result.current.items)).toEqual(down(15, 6).map((n) => `e-${n}`));
+
+  act(() => result.current.next());
+  await waitFor(() => expect(result.current.items).toHaveLength(3 * PAGE));
+  expect(page).toHaveBeenLastCalledWith("6");
+  expect(ids(result.current.items)).toEqual(down(15, 1).map((n) => `e-${n}`));
   expect(result.current.pageError).toBeNull();
 });

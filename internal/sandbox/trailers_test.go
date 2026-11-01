@@ -30,7 +30,7 @@ type boxRun struct {
 var (
 	thisRun  = boxRun{seat: "swe", launch: "0190d8f0-1111-7000-8000-000000000001", item: &engItem}
 	otherRun = boxRun{seat: "swe", launch: "0190d8f0-2222-7000-8000-000000000002"}
-	engItem  = types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+	engItem  = types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
 )
 
 // env is the run's three variables, as "NAME=value" pairs.
@@ -492,7 +492,7 @@ func TestNoTrailerValueCanInject(t *testing.T) {
 			t.Errorf("TrailerEnv took %s", tc.name)
 		}
 	}
-	vars, err := sandbox.TrailerEnv("swe", thisRun.launch, &types.WorkItem{Backend: types.WorkNative})
+	vars, err := sandbox.TrailerEnv("swe", thisRun.launch, &types.WorkItem{Backend: types.WorkWorklet})
 	if err != nil || vars[sandbox.TrailerWorkItemVar] != "native" {
 		t.Errorf("an item with no key gives %q (%v), want its backend alone", vars[sandbox.TrailerWorkItemVar], err)
 	}

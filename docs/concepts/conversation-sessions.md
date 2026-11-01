@@ -18,12 +18,12 @@ and it deliberately follows the same doctrine one scope wider.
 
 ## What it is not
 
-**Not a transcript replay.** The engine can already round-trip a whole LLM
-conversation — a detached run's suspended conversation persists the full
-message list beside the run's record and splices it back into a running loop,
-which re-enters it as it was.
-That is right for a turn *parked* on a question whose dangling tool call
-is waiting for one answer. It is wrong here: a conversation's next turn
+**Not a transcript replay.** A run parked on a person's question keeps its
+transcript in its CLI's own session, in its box, and the answer continues that
+session where it stopped (Claude Code's `--resume`, OpenCode's `--session`)
+wherever the relaunch reuses that box; where it cannot, a fresh run is told the
+question and the answer instead. That is right for a run parked on one question waiting for one answer. It is
+wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context
 invites acting on state that is no longer true.
 
@@ -134,7 +134,7 @@ push it to invent the data instead.
 A turn is appended when all of these hold:
 
 - it **completed** — a crashed turn has nothing coherent to record;
-- it was not a **detached-sandbox suspend** — the resumed turn records once, for real;
+- it was not a segment that parked on its executor's run — the segment that ends the turn records once, for real;
 - its trigger has a **reproducible conversation identity** (see below);
 - it has a **work key** — the constituent-trigger identity used for dedupe.
 
@@ -170,7 +170,7 @@ off the one that wrote it, and `entry_id` says nothing about what a row
 `conversation_key` holds the **conversation identity**: the `{source}:{local}`
 grammar of [the event system](event-system.md#inbox-batching--coalescing) —
 `jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, and `work:task:<id>`
-for a task in the engine's own tracker, which is named by its id because its key
+for a task in Worklet, which is named by its id because its key
 is not one task for ever: two tasks can hold one key, and a move re-keys a task
 without ending its thread. It is the durable
 thread, NOT the partition key the seat's inbox coalesces on. The two are the

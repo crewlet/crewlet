@@ -24,9 +24,9 @@ import (
 // a person's values move the only way anything here changes: a RECORD, one
 // per person holding a value under a key other than the active one, which is
 // an ordinary content update ([Writer.UpdatePerson]) whose document carries the
-// same name, address and seeds sealed afresh. Every node applies it and holds
-// the new ciphertext; the old key can then be dropped without a single value
-// in any row becoming unreadable.
+// same name, address and seeds sealed afresh. Every data node applies it and
+// holds the new ciphertext; the old key can then be dropped without a single
+// value in any row becoming unreadable.
 //
 // # What is not moved, and why that is enough
 //
@@ -57,24 +57,29 @@ type SealedCount struct {
 
 // Outside is how many of the people's values are sealed under a key other
 // than active — what a rekey would move.
-func (c SealedCount) Outside(active string) int { return outside(c.People, active) }
+func (c SealedCount) Outside(active string) int { return secrets.KeyCounts(c.People).Outside(active) }
 
 // InvitationsOutside is how many live invitations' addresses are sealed under
 // a key other than active — what a rotation waits out rather than moves.
 func (c SealedCount) InvitationsOutside(active string) int {
-	return outside(c.Invitations, active)
+	return secrets.KeyCounts(c.Invitations).Outside(active)
 }
 
-// outside sums a per-key count over every key but active.
-func outside(byKey map[string]int, active string) int {
-	n := 0
-	for key, count := range byKey {
-		if key != active {
-			n += count
-		}
-	}
-	return n
-}
+// The two PASSES [Reader.SealedKeys] counts the people's and the open
+// invitations' sealed values by: every value, by definition, read off the rows
+// whole — no index narrows "every row holding a sealed value", and the count
+// is what an operator retires a keyring key on.
+const (
+	sealedPeopleStatement = `
+		SELECT name_sealed FROM iam_people
+		WHERE length(name_sealed) > 0
+		UNION ALL
+		SELECT email_sealed FROM iam_people
+		WHERE length(email_sealed) > 0`
+	sealedInvitationsStatement = `
+		SELECT email_sealed FROM iam_invites
+		WHERE ` + openInvitation + ` AND length(email_sealed) > 0`
+)
 
 // SealedKeys counts the sealed values this node's rows hold that anything
 // opens, by the keyring key each is sealed under, without opening one; now is
@@ -90,53 +95,23 @@ func (r *Reader) SealedKeys(ctx context.Context, now time.Time) (SealedCount, er
 			what, sql string
 			into      map[string]int
 		}{
-			{"names and addresses", `
-				SELECT name_sealed FROM iam_people
-				WHERE length(name_sealed) > 0
-				UNION ALL
-				SELECT email_sealed FROM iam_people
-				WHERE length(email_sealed) > 0`,
-				out.People},
+			{"names and addresses", sealedPeopleStatement, out.People},
 			{"second factors", `
 				SELECT verifier FROM iam_credentials WHERE method = 'totp'`,
 				out.People},
-			{"invitations", `
-				SELECT email_sealed FROM iam_invites
-				WHERE redeemed_at = 0 AND expires_at > ? AND length(email_sealed) > 0`,
-				out.Invitations},
+			{"invitations", sealedInvitationsStatement, out.Invitations},
 		} {
 			var args []any
 			if q.what == "invitations" {
 				args = append(args, millis(now))
 			}
-			if err := countKeys(ctx, tx, q.sql, q.into, args...); err != nil {
+			if err := secrets.CountKeys(ctx, tx, q.sql, q.into, args...); err != nil {
 				return fmt.Errorf("iamdomain: count the sealed %s: %w", q.what, err)
 			}
 		}
 		return nil
 	})
 	return out, err
-}
-
-// countKeys adds every envelope one query answers to a count by key id.
-func countKeys(ctx context.Context, tx *sql.Tx, query string, into map[string]int,
-	args ...any) error {
-
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sealed []byte
-		if err := rows.Scan(&sealed); err != nil {
-			return err
-		}
-		if key, ok := secrets.EnvelopeKeyID(string(sealed)); ok {
-			into[key]++
-		}
-	}
-	return rows.Err()
 }
 
 // ResealReport is what one pass over the estate moved.
@@ -211,16 +186,23 @@ func (w *Writer) Reseal(ctx context.Context, reader *Reader) (ResealReport, erro
 	return report, errors.Join(errs...)
 }
 
+// The two PASSES [Reader.sealedOutside] finds the people holding a stale name
+// or address by, each every person holding one, by definition.
+const (
+	sealedNamesStatement = `SELECT id, name_sealed FROM iam_people
+		WHERE length(name_sealed) > 0`
+	sealedAddressesStatement = `SELECT id, email_sealed FROM iam_people
+		WHERE length(email_sealed) > 0`
+)
+
 // sealedOutside is every person holding a value — a name, an address, a
 // second factor's seed — sealed under a key other than active, in id order.
 func (r *Reader) sealedOutside(ctx context.Context, active string) ([]string, error) {
 	stale := map[string]bool{}
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		for _, query := range []string{
-			`SELECT id, name_sealed FROM iam_people
-			 WHERE length(name_sealed) > 0`,
-			`SELECT id, email_sealed FROM iam_people
-			 WHERE length(email_sealed) > 0`,
+			sealedNamesStatement,
+			sealedAddressesStatement,
 			`SELECT person_id, verifier FROM iam_credentials WHERE method = 'totp'`,
 		} {
 			rows, err := tx.QueryContext(ctx, query)

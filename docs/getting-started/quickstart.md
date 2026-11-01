@@ -25,8 +25,8 @@ Crewlet uses a [two-tier config](../concepts/configuration.md):
 ## 0. There is no infrastructure to start
 
 Crewlet is one binary. Its event stream is a NATS JetStream server it
-embeds, and its database is a local file it creates — so a company runs with
-no broker to operate and nothing to point a DSN at. Both slots take an
+embeds, and its database is two local files it creates — so a company runs
+with no broker to operate and nothing to point a DSN at. The stream takes an
 external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
 
@@ -61,8 +61,8 @@ stream:
                           #   survives a restart — including the people
                           #   who sign in, whom every node keeps on a
                           #   state log whatever backends the company
-                          #   names, and its items and pages, which are on
-                          #   the engine's own tracker and knowledge base
+                          #   names, and its items, pages and messages,
+                          #   which are on Worklet, Doclet and Chatlet
                           #   here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
@@ -111,8 +111,8 @@ api:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
-                          #   non-empty: admin, tracker, knowledge,
-                          #   artifacts. Admin runs the company and
+                          #   non-empty: admin, worklet, doclet,
+                          #   artifacts, chatlet. Admin runs the company and
                           #   includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
@@ -154,6 +154,20 @@ providers:
                                         # `dimensions` to set
     api_key: "${OPENAI_API_KEY}"        # used by the agent-learning subsystem
                                         # (diary vector search + episode recall)
+  sandbox:                              # where every seat's executor runs: its CLI's
+                                        # own run, in a box on this machine
+    local:
+      state_dir: "./acme-data/sandboxes"
+    default_run_in: direct              # the claude binary, run as you, on this host;
+                                        # it calls the seat's tools back through this
+                                        # node's own listener, so nothing else to set.
+                                        # Every seat's executor is Claude Code's own
+                                        # run, fully permissioned (its shell and editor,
+                                        # bypassPermissions) as your own account: a
+                                        # first run on your own machine while its
+                                        # seats take work from you alone. Before a
+                                        # seat takes work from anyone else, move the
+                                        # runs into a container (Next steps below)
 
 # Org-wide roles — these sit above all teams and manage team leads.
 roles:
@@ -163,8 +177,10 @@ roles:
   # you connect later. It is also the seat you join on in step 4: every
   # person holds a human seat, so a company with none admits nobody.
   # `contact` is optional — without one you are reached through the
-  # dashboard only, and agents cannot @-mention you on chat; scope
-  # `manages` to the top seat so you aren't copied on everything.
+  # dashboard only, whose chat is the engine's own and mentions you by your
+  # handle, and agents cannot @-mention you on a vendor's chat you connect
+  # later; scope `manages` to the top seat so you aren't copied on
+  # everything.
   - name: Your Name
     handle: founder             # see the note under this block — set these now
     kind: human
@@ -182,7 +198,7 @@ roles:
     backstory: "Experienced founder who balances speed with quality"
     manages: [cto, pm]
     # A zero-integration way to see your first agent turn: a scheduled task.
-    # Delete this once you have real integrations delivering work.
+    # Delete this once real work arrives, from you or an integration.
     schedules:
       - name: hello-crewlet
         cron: "*/5 * * * *"
@@ -198,9 +214,13 @@ units:
     type: team
     lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
+    # The team's room. Chat defaults to Chatlet too, so this opens
+    # a channel called `product` with this unit's seats in it — and it is an
+    # address, so it is `product` rather than `#product` or `Product Team`.
+    channel: product
     # A unit's identity on the tracker and the knowledge base. Both default
-    # to the engine's own backends, so these two keys are all it takes to
-    # give the team somewhere to file work and write things down — no site,
+    # to Worklet and Doclet, so these two keys are all it takes to
+    # give the team somewhere to file work and write things down: no site,
     # no project to create, no per-seat account. They name a Jira project and
     # a Confluence space just as well if you switch the backend later, which
     # is why they are not called `jira_project` / `confluence_space`.
@@ -218,6 +238,7 @@ units:
     type: team
     lead: cto
     purpose: "Build and ship the product"
+    channel: engineering
     project: ENG
     space: ENG
     goals:
@@ -274,7 +295,9 @@ providers:
     plan:
       model: sonnet
 
-    # OpenAI's models through Codex
+    # OpenAI's models through Codex: for a seat's reviewer, workers and side
+    #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
+    #   a seat's executor
     gpt:
       agent: codex
       model: gpt-5
@@ -357,7 +380,12 @@ refused rather than read as unlimited. When a round would take a window past
 its ceiling, the agent's turn stops immediately and a `budget_exhausted` event
 is emitted, naming the window and when it resets. Until then the agent's new
 messages wait on its inbox rather than being lost, and they are delivered when
-the window turns over — or at once, if you raise the ceiling.
+the window turns over — or at once, if you raise the ceiling. Every turn
+launches an executor, which needs `turn_engine.executor_min_budget_tokens`
+(25000 by default) left in every capped window: a seat whose window leaves less
+waits parked the same way, and a `token_budget` ceiling below that floor is
+refused when you write it. The run's own spend is charged when it is
+collected.
 
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and
@@ -408,21 +436,21 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **bootstrap seed**: it is imported when no company exists
-yet — in the store, or in the fleet a new node joins — and once one exists it
-is ignored, with a warning that says so, naming the file and the two ways to
+`-company` is a **bootstrap seed**: it is imported when no company exists yet,
+in the node's store or anywhere in its fleet, and once one exists it is
+ignored — with a warning that says so, naming the file and the two ways to
 apply it. So a restart never reverts a change you made live, however stale the
 file on disk is, and neither does adding a node with this same command.
 
 When you do want the file to win, that is a different flag:
-`crewlet run -import-company company.yaml` makes it the active revision over
+`crewlet run -import-company company.yaml` makes it the company over
 whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-A running node always serves the store, not the file — and once the store
-holds a company it also *starts* on the store's, so nothing it builds at boot
-comes from a file it is about to ignore.
+A running node never goes back to the file: it runs what its fleet activated,
+and once a company exists it also *starts* on that one, so nothing it builds at
+boot comes from a file it is about to ignore.
 
 **Or two steps** — import once, then run:
 
@@ -430,6 +458,13 @@ comes from a file it is about to ignore.
 crewlet config import company.yaml
 crewlet run                             # boots from the store
 ```
+
+With the engine stopped, the import is what this node boots on, and its start
+publishes it to the fleet: as the first company where the fleet has none, and
+otherwise only while the fleet still runs the revision the import was built
+on, so a change made on a node that has fallen behind is never published over
+what the fleet moved on to ([`crewlet config
+import`](../reference/cli.md#crewlet-config-import)).
 
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
@@ -480,8 +515,8 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
-  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+- **your access**: tick **Admin**, which ticks and locks every app (Worklet,
+  Doclet, Artifacts and Chatlet) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -531,15 +566,16 @@ credential, not how people should be signing in. Everybody after you arrives
 the same way, on a seat of their own: add a human seat for them (**Org chart ›
 Edit org › Add human seat**), and once it is saved an administrator invites
 them onto it, or creates them on it, from its card in the org chart — with
-both apps ticked by default and Admin not. A person handed no permission at all
+every app ticked by default and Admin not. A person handed no permission at all
 still sees the company's overview: the org chart, what the agents are doing,
-spend and schedules — just not its tracker or its knowledge base.
+spend and schedules — just not its tracker, its knowledge base or its chat.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
-command that talks to one, and prints its link once. `-seat` is required —
-every invitation names the seat its redemption binds — and `crewlet iam seats
--unheld` lists the human seats nothing holds yet:
+command that talks to one, and prints where the issue stands and its link
+once. `-seat` is required — every invitation names the seat its redemption
+binds — and `crewlet iam seats -unheld` lists the human seats nothing holds
+yet:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -547,11 +583,12 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `tracker`, `knowledge`, `artifacts` or `none`, and left out on an
-invitation it sends every app and not admin.
+`admin`, `worklet`, `doclet`, `artifacts`, `chatlet` or `none`, and left out
+on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
+applied at CREWLET_IAM_LOG@0:3 (op 0192f4c7-…)
 http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
 
 expires 2026-06-21 12:00
@@ -569,10 +606,14 @@ a condition the engine itself raised takes over the sentence under the
 greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
-(Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
-Workspace group (Work, Knowledge, Artifacts and Live); and Settings at its
-foot. Each workspace's sections are tabs in its page header. `g` then a
-letter jumps between them, and `?` lists every key.
+(Principles, Brand, Org chart, Schedules, Integrations and Budgets); the
+Workspace group (Worklet, Chatlet, Doclet, Artifacts and Live); and Settings at
+its foot. Each workspace's sections are tabs in its page header, or Chatlet's
+rail beside its rooms. `g` then a letter jumps between them, and `?` lists
+every key. The control under the company's mark (or `⌘\`, `Ctrl+\` off a
+Mac) folds the sidebar to a narrow rail of icons, with Company and Workspace
+each one icon whose places open beside it, and the sidebar stays as you left
+it.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
@@ -582,8 +623,11 @@ opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
-shows the turn as it runs — Execute, then Review, each phase listing the rounds
-it took, the tools each round called, and the prompts the model actually saw.
+shows the turn as it runs — Execute (Claude Code's own run in a box, shown live
+while it works and recorded as one round with the calls it made to the seat's
+tools, beside the run's own card with its activity and tokens), then Review,
+each phase listing the rounds it took, the tools each round called, and the
+prompts the model actually saw.
 A turn has those two phases: Execute both decides and acts, because the frame
 that works out what to do is the frame that does it, and Review then judges
 what the round actually landed. On a seat's very first turn one more runs
@@ -592,13 +636,13 @@ phase that finishes updates in place rather than moving, so you can read one
 while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
 each one does.
 
-Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
-`tracker.backend` and `knowledge.backend` default to `native`, so your company
+Follow the turn to **Worklet** and **Doclet**. Both are the engine's own:
+`tracker.backend` defaults to `worklet` and `knowledge.backend` to `doclet`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
 files with `create_work_item` and writes with `write_page`; a row opens the
-item beside the list, and ⌘-click opens its page. Work opens as a **list** —
-one line per item, which reads the same on your first task as on your five
-hundredth — and **Filter** and **Display** in the bar decide what is on it and
+item beside the list, and ⌘-click opens its page. Worklet opens as a **list**
+(one line per item, which reads the same on your first task as on your five
+hundredth), and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
@@ -614,6 +658,14 @@ row in **Asked of me**. Signed in with the API token instead, the dashboard says
 so rather than guessing — a token bound to no seat is an ordinary state, not a
 fault, and its day is the one kept under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**Chatlet** is yours the same way, and only that way. Its rooms are the engine's
+own — `chat.backend` defaults to `chatlet` — and every one of them is read and
+spoken in as your seat, because a room shows each speaker by seat and its
+members are seats: the units' channels above are already open, with their
+seats in them. Signed in with the API token instead, Chatlet reads nothing at
+all, not even a public room, because that credential acts as no seat. See
+[Chatlet](../concepts/chatlet.md#people).
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
@@ -647,17 +699,24 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker and knowledge-base tools a seat holds — eighteen over
-the tracker and five over the pages — and eleven more that no seat is given:
-the saved views, the catalogue write, a person's own queue, inbox and pins, the
-trash, and the board drag. Each is decided by the same authority table a seat's
-calls are, and knowledge search sits beside them, with the gestures a person
+It gets the same tracker, knowledge-base and chat tools a seat holds (eighteen
+over the tracker, five over the pages and nine in the chat) and twenty-six
+more that no seat is given: the saved views, the catalogue write, a person's own
+queue, inbox and pins, the trash, the board drag, the chat's furniture — making
+a room, opening a conversation, a room's settings and membership, editing and
+taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question. On the
-deployment's token its writes carry the token's own login, `token:founder`,
-with author kind `operator` — never an agent's — so an audit can tell them from
-an agent's. The token cannot write as your seat: a seat is held by one row of
-the identity directory, and yours is you. See
+steering a running turn, answering a coding run's question, answering a
+question from the company's knowledge and, where the company hosts its code,
+reading who read a unit's repository and marking your own code notices.
+Each is decided by the same authority table a seat's calls are, and knowledge
+search sits beside them. On the deployment's token its writes carry the token's
+own login, `token:founder`, with author kind `operator` — never an agent's — so
+an audit can tell them from an agent's. The token cannot write as your seat: a
+seat is held by one row of the identity directory, and yours is you. Which is
+also why it is refused every chat tool, the reads included (`unseated`): a room
+renders a speaker by seat and its membership is seats, so chat is spoken in as
+somebody — your own token, below, does. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
@@ -696,10 +755,10 @@ so you can sign in on it with the founder token before any company exists. You
 cannot invite yourself yet — there is no seat to put you on, so an invitation
 there answers `409 no_active_revision` — and the company comes first: import
 or create it with your human seat in it, then invite yourself onto that seat
-as above. The work tracker's and the knowledge base's routes
+as above. Worklet's, Doclet's and Chatlet's routes
 answer `503 no_active_revision` until the first revision arrives. That
-revision brings up everything the company needs, the engine's own tracker and
-knowledge base included, with their projects and spaces, and the
+revision brings up everything the company needs, Worklet, Doclet and Chatlet
+included, with their projects, spaces and rooms, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — and the API that was already serving answers the board's
 and the pages' questions, takes and serves a project's files, and offers the
@@ -735,7 +794,11 @@ keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. The builder's next steps give it: with
 `crewlet run` stopped, write the company to a file with `crewlet config
-export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`
+export`, add `providers.llm` and `providers.sandbox` to it (`local: {}` with
+`default_run_in: direct` runs every executor on this host, as you — a first
+run on your own machine while its seats take work from you alone; a company
+with agent seats and a model is refused without a sandbox), sign the CLI in with
+`crewlet llm login`
 (a captured token goes into the fleet's secret store through the node's own
 broker, which the command starts while the node is stopped), import the file
 and start the node again
@@ -770,8 +833,8 @@ coordination:
 ```
 
 The agents node gets a Tier A of its own. It needs no `company.yaml`, no API
-port and no stream directory — it fetches the company from the data node, and
-its store is deleted every time it starts:
+and no stream directory — it fetches the company from the data node, and its
+store is deleted every time it starts:
 
 ```yaml
 # agents.yaml — the agents node
@@ -786,25 +849,46 @@ stream:
     urls: ["nats-leaf://127.0.0.1:7422"]
 coordination:
   type: embedded-kv
-# and the same `secrets:` block as crewlet.yaml — required on every node:
-# this node decrypts the company document and the secret store itself, and
-# its leaf link is admitted by a key derived from it
+secrets:                  # the same keyring as crewlet.yaml — REQUIRED on
+                          #   every node: this one decrypts the company
+                          #   document and the secret store itself, and
+                          #   its leaf link is admitted by a key derived
+                          #   from it
+  active_key_id: "2026-01"
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 ```bash
 crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
-crewlet run -config agents.yaml -api-port 0       # terminal 2
+crewlet run -config agents.yaml -api-port 8001    # terminal 2
 ```
 
-`-api-port 0` binds nothing on the agents node. Give it a port of its own
-instead (`-api-port 8001`) when something should probe it: without the
-`ingress` role it serves `/health` and `/ready` there and nothing else, and its
-`/ready` turns `200` once it has joined the fleet and been admitted — see
-[Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+Every seat's executor runs its CLI in a box on the agents node, and the box
+calls the seat's tools back through the tool bridge. The agents node serves
+that bridge itself, on its own port: a `direct` box is a process of the host it
+runs on, so it dials the node that launched it on loopback, and a node without
+the `ingress` role serves the bridge there to its own host's loopback alone.
+The network still reaches nothing on port 8001 but `/health` and `/ready`, and
+its `/ready` turns `200` once the node has joined the fleet and been admitted —
+see [Probes on a node without
+ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress). So
+neither node needs a bridge address here; export the variables from step 3 in
+each terminal and nothing more.
+
+Started with `-api-port 0` instead, the agents node binds nothing, and its
+boxes have no listener of their own to dial: export
+`CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"`, the data node's API, in both
+terminals. The data node relays each call to the agents node over the broker,
+and it needs the variable too: a node that runs no seats serves the bridge's
+route only when it is set. A box in a `container` or `e2b` cell needs that
+address whatever the agents node binds — see [Where a box dials
+it](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box).
 
 The agents node claims the seats once the data node answers that its copy of
-the company's records is level with its logs, and its seats' tracker and knowledge
-tools read and write through it. See
+the company's records is level with its logs, and its seats' tracker, knowledge
+and chat tools read and write through it. See
 [Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
 node without data can and cannot do.
 
@@ -829,7 +913,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # store and activate the company
+crewlet config import company.yaml     # store the company; the run publishes it
 crewlet run                            # start the node
 ```
 
@@ -839,41 +923,104 @@ for adding behaviour the agents can reach.
 
 ## Next steps
 
-An org with no integrations only reacts to schedules. Real work arrives
-through external surfaces — pick yours in
+An org with no integrations already takes work from you as well as from its
+schedules: the engine runs its own tracker, wiki and chat, so a task you file
+or assign in Worklet, a page in Doclet and a post in a Chatlet room each wake
+the seats they reach. External surfaces put the company to work where your
+people already are, and add what those three do not: a code host for its
+code, and a chat that reaches you when you are not looking. Pick yours in
 **[Choosing your stack](choosing-your-stack.md)** (LLM, tracker + knowledge
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
-  your company already runs on [Slack](../integrations/slack.md), use it —
+- Move the runs into a container before a seat takes work from anyone else
+  — a chat other people are in, a shared tracker, a code host. `direct` is
+  for a first run on your own machine while its seats take work from you
+  alone: every executor run is Claude Code's own, fully permissioned, as
+  your account, and once other people can give a seat work it acts on what
+  they send. Give `providers.sandbox.local`
+  an `image` with Claude Code installed ([Bring your own
+  image](../concepts/code-sandbox.md#bring-your-own-image) has two recipes,
+  one with no image to build) and set `default_run_in: container`, with
+  Docker or Podman on this machine; then stop the node, export
+  `CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"`, which the node reads as
+  it starts, and start it again with `crewlet run -import-company
+  company.yaml`. The boxes dial that address under the runtime's name for
+  this host, and `api.host` above is already off loopback, which Docker and
+  Podman on Linux need. A local box is seeded with the same `crewlet llm
+  login`
+- **You already have chat.** `chat.backend` defaults to the engine's own, so
+  the units you gave a `channel` above have rooms in the dashboard right now,
+  with their seats in them — and you are in them as your own seat once you
+  have signed in (above): post in one and its team's agents wake to answer.
+  What it does not do is reach you when you are not looking — the engine
+  sends no email, no push and no SMS, so a mention becomes an unread count
+  and a mention feed. See [Chatlet](../concepts/chatlet.md).
+- Connect a **vendor** chat instead — Slack or Mattermost, both below — if
+  your people already live in one, or if being notified while away matters.
+  It is exclusive with the engine's own — one live chat home, or a person
+  answers in the place the agents are not reading. Whichever you pick, first
+  add the integration's block to `company.yaml` — the page's *Configure in
+  YAML* section — with a `${VAR}` for each credential: the provisioner mints
+  exactly the variables the file names. It records what it mints through the
+  running node, as the founder token, and the `crewlet config import` that
+  ends each snippet is what hands the engine both: the node took its company
+  from the file once, at step 3, so an edit to the file reaches it only
+  through an import, and an apply is when the engine reads its secret store.
+  If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
-  URL for its Events API and one OAuth **Allow** click per agent:
-  ```bash
-  crewlet slack provision company.yaml -public-url https://your-server.com
-  ```
-  To try chat on this machine first,
+  URL for its Events API, an app configuration token entered once on Slack's
+  connect form under Company › Integrations, and one **Allow** click per agent
+  from the Slack integration's Agents tab: the engine creates each agent's app
+  and seals its bot token when the click comes back.
+  To try a vendor chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
-  `docker-compose.yml` and needs no account, no inbound URL and no clicks:
+  `docker-compose.yml` and needs no account, no inbound URL and no clicks.
+  Its block names the instance as `url: "${MATTERMOST_URL}"`,
+  `team: nimbus` (the team the script creates) and
+  `provisioning.admin_token: "${MATTERMOST_ADMIN_TOKEN}"`:
   ```bash
   docker compose --profile mattermost up -d --wait
-  scripts/mattermost-dev-bootstrap.sh
-  crewlet mattermost provision company.yaml
+  scripts/mattermost-dev-bootstrap.sh       # writes MATTERMOST_* to .env
+  set -a; . ./.env; set +a
+  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+  printf %s "$MATTERMOST_URL" | crewlet secrets set MATTERMOST_URL
+  printf %s "$MATTERMOST_ADMIN_TOKEN" | crewlet secrets set MATTERMOST_ADMIN_TOKEN
+  crewlet config import company.yaml        # the block
   ```
+  Then turn each agent on in the Mattermost integration's Agents tab: the
+  engine creates its bot and seals its token itself. The engine was started
+  before `.env` existed, so `MATTERMOST_URL` and the admin token reach it
+  through the secret store rather than through its environment, which
+  nothing changes while it runs.
   Running that stack on a **remote host** rather than this machine? Set
   `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine
   needs no public URL; the Mattermost server still needs to know its own.
+  The import that ends each snippet makes the file the **whole** running
+  document, so it is the right last step only while `company.yaml` is what
+  the node runs. A company created in the dashboard's org builder, or changed
+  there since — a human seat added under **Org chart › Edit org** included — is
+  replaced by the file, and the write is refused `409 seat_held` where the
+  file drops a human seat somebody holds or is invited to. Connect chat from
+  Company › Integrations then, as each page's *Setting it up from the
+  dashboard* section describes
+  ([Slack](../integrations/slack.md#setting-it-up-from-the-dashboard),
+  [Mattermost](../integrations/mattermost.md#setting-it-up-from-the-dashboard)):
+  it seals the credentials and re-activates the company as it stands.
 - Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
   tracker of the code host you already run
 - Connect a knowledge backend — [Confluence](../integrations/confluence.md) —
   so shared procedures surface in the executor's `## Relevant knowledge`
   block; publish version-controlled docs with `crewlet confluence import`
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
-  [GitHub](../integrations/github.md) — and enable the
-  [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
-  merge requests
+  [GitHub](../integrations/github.md) — and give each seat that pushes its
+  code-host token in `role.sandbox.env` plus the git-auth setup step
+  ([code sandbox](../concepts/code-sandbox.md#the-git-auth-recipe)), so its
+  executor's run opens real merge requests under its own identity, in the
+  container the first step above moved it into; the image needs `git` (and
+  `gh` for GitHub pull requests)
 - Bring your team in: add a human seat for each person who is to sign in
   (**Org chart › Edit org › Add human seat**), then invite them onto it or create
   them on it from its card in **Company › Org chart**, every person holds a
@@ -904,8 +1051,9 @@ each), then wire them in:
   source and no shell to be in
 - Explore the [Nimbus example](../../examples/) — a seven-seat company on
   Mattermost, running on Claude Code with your Claude plan rather than an API
-  key (`nimbus-claude-cli`), its engineering seats running that CLI as their own
-  agentic loop.
+  key (`nimbus-claude-cli`), every seat running that CLI as its own agentic
+  loop, in a `direct` box on the engine host — a first run on your own
+  machine while its seats take work from you alone, like this page's.
   It is the next step up from this page and still needs nothing but the chat
   server in this repo's compose file; every integration above adds on top of
   it

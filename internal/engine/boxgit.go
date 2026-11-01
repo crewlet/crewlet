@@ -12,7 +12,7 @@ import (
 )
 
 // boxGitEnv is the engine's git environment for ONE LAUNCH of a run given
-// repositories on the code host (ADR-0063), over run, the run environment the
+// repositories on the code host (ADR-0086), over run, the run environment the
 // launch assembled from the operator's configuration: the run's credential for
 // this launch — a token naming the turn and the launch id the store just
 // minted, so a job a relaunch superseded is refused — the code host's base,

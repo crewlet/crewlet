@@ -21,6 +21,7 @@ import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
+import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
 import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
 
@@ -126,12 +127,17 @@ const MEMBER = {
   login: "lee",
   owner: "lee",
   handle: "lee",
-  grants: ["tracker", "knowledge"],
+  grants: ["worklet", "doclet"],
   acts: [],
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const NATIVE: OrgServices = { tracker: "native", knowledge: "native", code: "native" };
+const BUILT_IN: OrgServices = {
+  tracker: "worklet",
+  knowledge: "doclet",
+  chat: "chatlet",
+  code: "native",
+};
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -157,10 +163,15 @@ function mount(
   viewer: unknown,
   kind?: string | typeof ROUTED,
   /** What the company runs, or null for a node running no company. */
-  services: OrgServices | null = NATIVE,
+  services: OrgServices | null = BUILT_IN,
   setup: { status: number; body: unknown } = { status: 200, body: listing },
-  /** The company document the `config` question answers, or none answered. */
-  document?: unknown,
+  /** The company document the `config` question answers, or none at all. */
+  config?: unknown,
+  /**
+   * What the page reads besides the defaults: each access read's answer for a
+   * kind (nobody on it otherwise), and the integrations answer.
+   */
+  extra: { access?: (kind: string) => unknown; integrations?: IntegrationsAnswer } = {},
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -172,6 +183,22 @@ function mount(
       if (path === "/setup/integrations") {
         return new Response(JSON.stringify(setup.body), { status: setup.status });
       }
+      // AN APP'S AGENTS, as the access route answers them: nobody on it yet.
+      const access = /^\/setup\/integrations\/([^/]+)\/access$/.exec(path);
+      if (access && method === "GET") {
+        return new Response(
+          JSON.stringify(
+            extra.access?.(access[1]!) ?? {
+              kind: access[1],
+              revision: "rev-1",
+              syncing: false,
+              options: [],
+              seats: [],
+            },
+          ),
+          { status: 200 },
+        );
+      }
       return new Response(JSON.stringify({}), { status: 200 });
     }),
   );
@@ -182,11 +209,11 @@ function mount(
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
-    if (what === "integrations") return Promise.resolve(answer);
+    if (what === "integrations") return Promise.resolve(extra.integrations ?? answer);
+    if (what === "config" && config !== undefined) return Promise.resolve(config);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
-    if (what === "config" && document !== undefined) return Promise.resolve(document);
     return new Promise(() => {});
   };
   render(
@@ -221,7 +248,10 @@ afterEach(() => {
 // GROUPED BY NEED, CREWLET'S OWN FIRST: the built-in answer to a need opens
 // its group, beside the apps that answer it. ATLASSIAN IS LISTED BY PRODUCT,
 // one line under work tracking and one under docs, because it is one
-// connection that serves two needs.
+// connection that serves two needs. A PRODUCT NAMES ITS MAKER beside it:
+// Chatlet, Worklet and Doclet name Crewlet as Jira and Confluence name
+// Atlassian. Mutation: drop the services' vendor and the three lines lose
+// "Crewlet".
 test("the directory groups by need, with Crewlet's own service first in each", async () => {
   mount(ADMIN);
   const nav = await screen.findByRole("navigation", { name: "Integrations" });
@@ -233,13 +263,17 @@ test("the directory groups by need, with Crewlet's own service first in each", a
         h.textContent,
         within(list)
           .getAllByRole("link")
-          .map((a) => a.querySelector(".crewlet-directory__label")!.textContent),
+          .map((a) => {
+            const label = a.querySelector(".crewlet-directory__label")!.textContent;
+            const hint = a.querySelector(".crewlet-directory__hint")?.textContent;
+            return hint ? `${label} (${hint})` : label;
+          }),
       ];
     });
   expect(groups).toEqual([
-    ["Chat", ["Crewlet Chat", "Slack", "Mattermost"]],
-    ["Work tracking", ["Crewlet Works", "Jira"]],
-    ["Docs and knowledge", ["Crewlet Knowledge", "Confluence"]],
+    ["Chat", ["Chatlet (Crewlet)", "Slack", "Mattermost"]],
+    ["Work tracking", ["Worklet (Crewlet)", "Jira (Atlassian)"]],
+    ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
   ]);
@@ -254,8 +288,8 @@ test("each line carries its own state, and a product only its own", async () => 
   expect((await line(/^Jira/)).textContent).not.toContain("Connected");
   expect((await line(/GitLab/)).textContent).toContain("Needs attention");
   expect((await line(/Slack/)).textContent).toBe("Slack");
-  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
-  expect((await line(/Crewlet Chat/)).textContent).toContain("Soon");
+  expect((await line(/Worklet/)).textContent).toContain("In use");
+  expect((await line(/Chatlet/)).textContent).toContain("In use");
 });
 
 // THE OLD ADDRESSES STILL WORK, AS THE SELECTION: an app's key, a surface
@@ -266,7 +300,7 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
     ["atlassian", /^Jira/],
     ["forge", /^Jira/],
     ["confluence", /Confluence/],
-    ["works", /Crewlet Works/],
+    ["worklet", /^Worklet/],
   ] as const) {
     mount(ADMIN, kind);
     expect((await line(name)).getAttribute("aria-current"), kind).toBe("page");
@@ -275,11 +309,14 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
 });
 
 // WITH NOTHING CHOSEN, WHAT NEEDS A LOOK: each issue under its app's name,
-// sending the reader to the app's page rather than fixing it out of context.
+// sending the reader to the app's page rather than fixing it out of context,
+// on a button that says the fix it opens there.
 test("the summary lists what needs a look and links to each app", async () => {
   mount(ADMIN);
   expect(await screen.findByText(expiring)).toBeTruthy();
-  const open = screen.getByRole("link", { name: "Open GitLab" });
+  const tile = screen.getByText(expiring).closest(".int-issue") as HTMLElement;
+  const open = within(tile).getByRole("link", { name: "Replace key GitLab" });
+  expect(open.textContent).toBe("Replace key");
   expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
 });
 
@@ -291,7 +328,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   mount(ADMIN);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
   const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
-  expect(names).toEqual(["Crewlet Works", "Crewlet Knowledge", "Confluence", "GitLab", "Datadog"]);
+  expect(names).toEqual(["Chatlet", "Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
   for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
@@ -302,11 +339,32 @@ test("the home shows only what is in use, each a compact card with one action", 
   // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
   // card under it, the services included.
   expect(screen.getByText(DESCRIPTION)).toBeTruthy();
-  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 5");
+  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
+});
+
+// EVERY STATE IS DRAWN ONE WAY: a service's "In use" and an app's
+// "Connected" are each the tone's dot and the word, on the tile and on the
+// directory's row alike. A service's was a pill beside the apps' dots.
+// Mutation: hand a service's tile or row a Tag again and this goes red.
+test("a service's state and an app's are drawn the same way, tile and row", async () => {
+  mount(ADMIN);
+  const inUse = await screen.findByRole("region", { name: /^In use/ });
+  for (const name of ["Worklet", "Datadog"]) {
+    const card = within(inUse).getByRole("link", { name }).closest(".crewlet-catalog-tile")!;
+    const state = card.querySelector(".crewlet-catalog-tile__status")!;
+    expect(state.querySelector(".crewlet-status-dot"), name).toBeTruthy();
+    expect(card.querySelector(".crewlet-tag"), name).toBeNull();
+  }
+  expect(inUse.querySelector(".crewlet-catalog-tile__status")?.textContent?.trim()).toBe("In use");
+  for (const name of [/Worklet/, /Datadog/]) {
+    const row = await line(name);
+    expect(row.querySelector(".crewlet-status-dot"), String(name)).toBeTruthy();
+    expect(row.querySelector(".crewlet-tag"), String(name)).toBeNull();
+  }
 });
 
 // EVERY CARD'S ACTION NAMES ITS CARD: a reader listing the links in In use
-// meets "Open Crewlet Works" and "Replace key GitLab", never a column of
+// meets "Open Worklet" and "Replace key GitLab", never a column of
 // "Open". Mutation: drop the action's aria-label and the names repeat.
 test("each card's action is named for its app, and no two share a name", async () => {
   mount(ADMIN);
@@ -359,13 +417,13 @@ test("coming back to an app through the list does not reopen the arrival's form"
   expect(await screen.findByRole("heading", { level: 2, name: "GitHub" })).toBeTruthy();
   location.hash = (await line(/GitLab/)).getAttribute("href")!;
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Overview/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/ })).toBeTruthy();
   expect(screen.queryByRole("form", { name: "Replace the GitLab key" })).toBeNull();
 });
 
 // A HOME WITH NOTHING IN USE says so and points at the list.
 test("a company with nothing in use is told to pick from the list", async () => {
-  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", code: "none" });
+  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", chat: "none", code: "none" });
   expect(await screen.findByText("Nothing is in use yet")).toBeTruthy();
   expect(screen.queryByRole("region", { name: /^In use/ })).toBeNull();
 });
@@ -376,28 +434,152 @@ test("a company with nothing in use is told to pick from the list", async () => 
 test("an app's page offers Replace key, which opens its form in the pane", async () => {
   mount(ADMIN, "gitlab");
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Overview/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Replace key GitLab" }));
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  expect(screen.queryByRole("tab", { name: /Overview/ })).toBeNull();
+  expect(screen.queryByRole("tab", { name: /Agents/ })).toBeNull();
   expect(await line(/GitLab/)).toBeTruthy();
 });
 
-// CHECK NOW ASKS THE LOOP TO LOOK, on the surfaces that run a pass, and is
-// not offered where the listing says none does (as on Slack, whose apps are
-// made by hand): the route would only refuse. Here Datadog's listing names no
-// pass. Mutation: drop the `can_provision` gate and the second case finds the
-// control.
-test("Check now asks the loop to look where a pass runs, and only there", async () => {
+// CHECK NOW SITS AT THE FAR END OF THE TAB ROW, beside the tabs and never
+// among them, on every tab of a connected app, and asks the loop to look.
+test("Check now sits beside the tabs on every tab, and asks the loop to look", async () => {
   const { fetched } = mount(ADMIN, "gitlab");
-  fireEvent.click(await screen.findByRole("tab", { name: /Agents/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "Check now" }));
+  const tabs = await screen.findByRole("tablist", { name: "GitLab sections" });
+  const check = await screen.findByRole("button", { name: "Check now" });
+  expect(tabs.contains(check)).toBe(false);
+  fireEvent.click(screen.getByRole("tab", { name: /Activity/ }));
+  expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Check now" }));
   await waitFor(() => expect(fetched).toContain("POST /setup/integrations/gitlab/check"));
-  cleanup();
+  // THE BUTTON'S OWN BUSY STATE IS THE ANSWER: nothing is said beside it
+  // unless the loop refused.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Check now" }).getAttribute("aria-busy")).not.toBe(
+      "true",
+    ),
+  );
+  expect(screen.queryByText("Crewlet is looking now.")).toBeNull();
+});
 
-  mount(ADMIN, "datadog");
-  fireEvent.click(await screen.findByRole("tab", { name: /Agents/ }));
-  expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
+// THE AGENTS TAB COUNTS THE AGENTS THAT ARE ON, once the access answer has
+// said: one of Datadog's three. Mutation: count every agent and it reads 3.
+test("the Agents tab counts the agents that are on", async () => {
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, { access: () => datadogAnswer() });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  // THE TAB BAR AND ITS PANEL share one `.tab-detail` column, one shared
+  // step apart, rather than standing the pane's own gap from each other.
+  expect(tab.closest(".tab-detail")?.querySelector(".int-tab")).toBeTruthy();
+  await waitFor(() => expect(within(tab).getByText("1")).toBeTruthy());
+  expect(within(tab).queryByText("3")).toBeNull();
+});
+
+// THE COUNT AND THE ATTENTION DOT ARE TWO FACTS: GitLab has an issue, so its
+// tab carries the dot, and still counts the one agent that is on, before it.
+// Mutation: let the marker stand in for the count and the "1" goes.
+test("an Agents tab that needs attention still counts the agents that are on", async () => {
+  mount(ADMIN, "gitlab", BUILT_IN, undefined, undefined, { access: () => datadogAnswer() });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  const count = await within(tab).findByText("1");
+  const dot = tab.querySelector(".crewlet-tabs__marker--warning");
+  expect(dot).not.toBeNull();
+  expect(count.compareDocumentPosition(dot!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// AN AGENT'S OWN WAIT IS SAID ON ITS ROW, with the step's own control, and not
+// again above the table as the integration's: the engine marks it `seat`. The
+// tab still says something needs attention. Mutation: list every finding
+// above the table and the wait is drawn twice.
+test("an agent's own wait is left to its row, not listed above the agents", async () => {
+  const waiting: IntegrationsAnswer = {
+    ...answer,
+    integrations: answer.integrations.map((row) =>
+      row.key === "datadog"
+        ? {
+            ...row,
+            reconcile: {
+              phase: "awaiting_admin",
+              actor: "admin",
+              findings: [
+                {
+                  kind: "approval_required",
+                  subject: "sre",
+                  detail: "Ask an administrator to approve SRE's role",
+                  phase: "awaiting_admin",
+                  seat: true,
+                },
+              ],
+            },
+          }
+        : row,
+    ),
+  };
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => datadogAnswer(),
+    integrations: waiting,
+  });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  await waitFor(() => expect(tab.querySelector(".crewlet-tabs__marker--warning")).not.toBeNull());
+  await screen.findByRole("table", { name: "Agents on Datadog" });
+  expect(document.querySelector(".int-issue")).toBeNull();
+  expect(screen.queryByText(/approve SRE's role/)).toBeNull();
+});
+
+// A NOTE SITS UNDER THE AGENTS, its own row led by its title, the sentence
+// with its key and address set as code, and what would change it beneath.
+// Mutation: draw the notes above the table, or drop the lead, and it fails.
+test("a working integration's notes sit under its agents, each led by its title", async () => {
+  const noted: IntegrationsAnswer = {
+    ...answer,
+    integrations: answer.integrations.map((row) =>
+      row.key === "datadog"
+        ? {
+            ...row,
+            reconcile: {
+              phase: "ready",
+              findings: [
+                {
+                  kind: "coverage_partial",
+                  subject: "api.external_url",
+                  title: "Datadog can't reach this engine",
+                  detail: "`api.external_url` is `http://localhost:8200`, so no events arrive",
+                  remedy: "Set `api.external_url` to a public address to receive events",
+                  phase: "ready",
+                },
+              ],
+            },
+          }
+        : row,
+    ),
+  };
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => datadogAnswer(),
+    integrations: noted,
+  });
+  const notes = await screen.findByRole("region", { name: "Notes" });
+  const lead = within(notes).getByText("Datadog can't reach this engine.");
+  expect(lead.tagName).toBe("STRONG");
+  expect(within(notes).getByText("http://localhost:8200").tagName).toBe("CODE");
+  expect(within(notes).getByText(/to a public address to receive events\./)).toBeTruthy();
+  const table = await screen.findByRole("table", { name: "Agents on Datadog" });
+  expect(table.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// A SYNC THAT ENDS HAS BEEN CHECKED: the engine looked again before it let the
+// sync end, so the page reads the integration's rows again the moment it does,
+// with nobody pressing Check now. Mutation: drop the re-read and the second
+// integrations question never goes out.
+test("the integration is read again the moment a sync ends", async () => {
+  let syncing = true;
+  const { asked } = mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => ({ ...datadogAnswer(), syncing }),
+  });
+  await screen.findByRole("table", { name: "Agents on Datadog" });
+  const before = asked.filter((q) => q === "integrations").length;
+  syncing = false;
+  await waitFor(() =>
+    expect(asked.filter((q) => q === "integrations").length).toBeGreaterThan(before),
+  );
 });
 
 // THE ADDRESS APPS DELIVER TO, said once at the foot of the home rather than
@@ -443,7 +625,7 @@ test("a managed document holds Connect and keeps Replace key", async () => {
 // AN ADMIN THE ENGINE REFUSES `/setup` is told what it takes, and every form
 // action is held with that reason rather than removed.
 test("a refused setup listing names the access it takes and holds every form action", async () => {
-  mount(ADMIN, "github", NATIVE, {
+  mount(ADMIN, "github", BUILT_IN, {
     status: 403,
     body: { error: "unauthorized", reason: "no_grant", grants: ["admin"] },
   });
@@ -460,7 +642,7 @@ test("a refused setup listing names the access it takes and holds every form act
 // every reader and the first list names `integrations`.
 test("a reader without Admin is shown the services and asked nothing an Admin's", async () => {
   const { asked, fetched } = mount(MEMBER);
-  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
+  expect((await line(/Worklet/)).textContent).toContain("In use");
   expect((await line(/GitLab/)).textContent).toBe("GitLab");
   // THE SAME DESCRIPTION, and no hint to connect what an Admin connects.
   expect(screen.getByText(DESCRIPTION)).toBeTruthy();
@@ -491,21 +673,54 @@ test("a reader nobody signed in is offered the sign-in", async () => {
 // --- Crewlet's own services -------------------------------------------------------- //
 
 test("a service the company runs is in use, with its way in", async () => {
-  mount(MEMBER, "works");
-  expect(await screen.findByRole("heading", { level: 2, name: "Crewlet Works" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Open Work" }).getAttribute("href")).toBe("#/work");
+  mount(MEMBER, "worklet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Worklet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Worklet" }).getAttribute("href")).toBe("#/worklet");
 });
+
+// A SERVICE OPENS ON ITS AGENTS, with no Overview: what that tab listed (a
+// service's projects or spaces) is the service's own landing, so the header
+// counts them as a link to that list. Mutation: bring the Overview tab back
+// and the tab list goes red; drop the fact's path and the link does.
+test.each([
+  ["worklet", "Worklet", "#/worklet"],
+  ["doclet", "Doclet", "#/doclet"],
+])(
+  "%s opens on its agents, with what it holds counted as a way to its list",
+  async (kind, name, list) => {
+    mount(
+      { ...MEMBER, grants: [...MEMBER.grants, "worklet", "doclet"], worklet: true, doclet: true },
+      kind,
+    );
+    const tabs = await screen.findByRole("tablist", { name: `${name} sections` });
+    expect(within(tabs).queryByRole("tab", { name: /Overview/ })).toBeNull();
+    expect(
+      within(tabs)
+        .getByRole("tab", { name: /^Agents/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    const counted = [...document.querySelectorAll<HTMLAnchorElement>(`a[href="${list}"]`)].filter(
+      (a) => a.textContent !== `Open ${name}`,
+    );
+    expect(counted, "the header's count links to the service's own list").toHaveLength(1);
+  },
+);
 
 // WHAT RUNS INSTEAD, IN THE ENGINE'S WORD, with the way to it, and nothing
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.
 test("a service run elsewhere says what replaces it and asks nothing of it", async () => {
-  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native", code: "none" });
+  const { asked } = mount(ADMIN, "worklet", {
+    tracker: "jira",
+    knowledge: "doclet",
+    chat: "chatlet",
+    code: "none",
+  });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
   );
-  expect((await line(/Crewlet Works/)).textContent).toContain("Not in use");
+  expect((await line(/Worklet/)).textContent).toContain("Not in use");
   expect(asked).not.toContain("work_projects");
 });
 
@@ -515,32 +730,83 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 // there, so the pane said the default whatever a company set. Mutation: read
 // it under `tracker` again, and a company keeping ninety days is told the
 // engine's default.
-test("the Works settings say how long the company's inbox keeps a notice", async () => {
-  mount(ADMIN, "works", NATIVE, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+test("Worklet's settings say how long the company's inbox keeps a notice", async () => {
+  mount(ADMIN, "worklet", BUILT_IN, undefined, { name: "Acme", inbox: { retention_days: 90 } });
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
   const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
   await waitFor(() => expect(row.textContent).toContain("90 days"));
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none", code: "none" });
+  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none", chat: "chatlet", code: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });
 
 // UNTIL THE ENGINE HAS SAID, nothing is guessed: a node running no company
-// says so, and no service wears On or Off.
+// says so, and no service wears In use or Not in use.
 test("a node running no company says so and wears no state", async () => {
-  mount(ADMIN, "works", null);
+  mount(ADMIN, "worklet", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  const works = await line(/Crewlet Works/);
-  expect(works.textContent).toBe("Crewlet Works");
+  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside Worklet, Doclet and Chatlet.
+  for (const [name, says] of [
+    ["Worklet", "WorkletCrewlet"],
+    ["Doclet", "DocletCrewlet"],
+    ["Chatlet", "ChatletCrewlet"],
+  ] as const) {
+    expect((await line(new RegExp(name))).textContent, name).toBe(says);
+  }
 });
 
-test("Crewlet Chat is coming soon, pointing at the chat apps meanwhile", async () => {
+// CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own seat's,
+// so its page says what it gives and the way in, and asks no count.
+test("Chatlet in use is In use, with its way in and nothing counted", async () => {
+  const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "chatlet"] }, "chat");
+  expect(await screen.findByRole("heading", { level: 2, name: "Chatlet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Chatlet" }).getAttribute("href")).toBe(
+    "#/chatlet/activity",
+  );
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+  expect((await line(/Chatlet/)).textContent).toContain("In use");
+  expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
+});
+
+// THE WAY IN IS OFFERED TO A HOLDER OF CHATLET, as Worklet's and Doclet's are
+// to a holder of their apps. Mutation: offer Open Chatlet to every reader, and
+// a reader without Chatlet is sent to a screen that refuses them.
+test("a reader without Chatlet is told what opens it, and offered no way in", async () => {
   mount(MEMBER, "chat");
-  const soon = (await screen.findByText("Coming soon")).closest(".int-soon") as HTMLElement;
-  expect(within(soon).getByRole("link", { name: "Slack" }).getAttribute("href")).toBe(
+  expect(await screen.findByRole("heading", { level: 2, name: "Chatlet" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+  expect(screen.getByText(/needs Chatlet access/)).toBeTruthy();
+  expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
+});
+
+// THE VENDOR BY NAME, from the viewer answer that names it to a holder of
+// Chatlet, with the way to its line. Mutation: drop chat's `replacedBy` and the
+// page says nothing does this for your company.
+test("a company talking on a vendor's chat is told which, with the way to it", async () => {
+  mount({ ...ADMIN, chat_vendors: ["slack"] }, "chat", { ...BUILT_IN, chat: "vendor" });
+  expect(await screen.findByText("Slack does this for your company")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Slack" }).getAttribute("href")).toBe(
     "#/company/integrations/slack",
   );
+  expect(screen.getByText("Slack is not connected.")).toBeTruthy();
+  expect((await line(/Chatlet/)).textContent).toContain("Not in use");
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+});
+
+// A VENDOR NOBODY NAMED is still a vendor's chat, never a blank and never
+// "nothing does this": the projection says the chat is a vendor's, and only
+// a holder of Chatlet is told which.
+test("a vendor chat nobody named is said in words, with no line to open", async () => {
+  mount(MEMBER, "chat", { ...BUILT_IN, chat: "vendor" });
+  expect(await screen.findByText("A vendor's chat does this for your company")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
+});
+
+test("a company running no chat says so, with nothing to open", async () => {
+  mount(ADMIN, "chat", { ...BUILT_IN, chat: "none" });
+  expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
 });

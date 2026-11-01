@@ -74,7 +74,7 @@ func TestEveryAnchorStatementSeeksItsKey(t *testing.T) {
 			"INDEX statelog_anchor_swept_idx (stream=? AND anchor<?)",
 			[]any{stream, floor, 100}},
 	} {
-		plan := explainAnchors(t, w.Tx, tc.statement, tc.args)
+		plan := storetest.Plan(t, writerPlans{w}, tc.statement, tc.args)
 		seeks := false
 		for _, step := range plan {
 			if strings.Contains(step, "SEARCH") && strings.Contains(step, tc.seek) {
@@ -153,33 +153,16 @@ func BenchmarkReadingASubjectsAnchor(b *testing.B) {
 	}
 }
 
-// explainAnchors is statement's plan, a step a line, explained in a
-// transaction of in's — the writer's, since the sweep is a DELETE and a read
-// transaction refuses even to explain one.
-func explainAnchors(t *testing.T, in func(context.Context, func(*sql.Tx) error) error,
-	statement string, args []any) []string {
-	t.Helper()
-	var plan []string
-	if err := in(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
-		if err != nil {
-			return fmt.Errorf("EXPLAIN QUERY PLAN:\n%s\n%w", statement, err)
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, parent, unused int
-			var detail string
-			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-				return err
-			}
-			plan = append(plan, detail)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(plan) == 0 {
-		t.Fatalf("no plan for:\n%s", statement)
-	}
-	return plan
+// writerPlans plans every statement in a transaction of the pinned writer's
+// own — the sweep is a DELETE, and a read transaction refuses even to explain
+// one — so [storetest.Plan] reads each through the connection the applier
+// writes on.
+type writerPlans struct{ w *store.Writer }
+
+func (h writerPlans) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	return h.w.Tx(ctx, fn)
+}
+
+func (h writerPlans) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	return h.w.Tx(ctx, fn)
 }

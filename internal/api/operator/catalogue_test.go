@@ -17,13 +17,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY TRANSPORT SERVES THE ONE CATALOGUE, and this holds the two sides a
@@ -47,6 +48,7 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 			Reader: stubWorkReader{}, Writer: stubWorkWriter, Merges: stubWorkMerger,
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
+		Chat:  (&chatDesk{}).half(),
 	})})
 	ops := machine("token:ops-bot", iam.Apps...)
 	sess := dialOperator(t, s, ops)
@@ -90,13 +92,13 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 	}
 	args := map[string]any{"item": "ENG-1"}
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.GetWorkItemTool, Arguments: args,
+		Name: worklet.GetWorkItemTool, Arguments: args,
 	})
 	if err != nil {
 		t.Fatalf("call over MCP: %v", err)
 	}
 	direct, err := s.Dispatch(asOps, operator.Call{
-		Transport: types.TransportMCP, Tool: tracker.GetWorkItemTool, Args: args,
+		Transport: types.TransportMCP, Tool: worklet.GetWorkItemTool, Args: args,
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -108,7 +110,7 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 
 	// AND A NAME THE CATALOGUE DOES NOT HOLD IS NOT SERVED, rather than
 	// resolved to something near it.
-	if _, err := s.Dispatch(asOps, operator.Call{Tool: "run_sandbox"}); !errors.Is(err, operator.ErrNotServed) {
+	if _, err := s.Dispatch(asOps, operator.Call{Tool: "no_such_tool"}); !errors.Is(err, operator.ErrNotServed) {
 		t.Errorf("the dispatch answered %v for a tool that is in no operator's catalogue", err)
 	}
 }
@@ -126,7 +128,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
 	})})
 	ctx := iam.WithPrincipal(t.Context(),
-		person("jane.founder", "jane-founder", iam.GrantKnowledge))
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
 	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
 	key := statelog.NewOpID(time.Now(), "")
 	comment := func(key string) {
@@ -166,7 +168,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 // after a ledger loss decides a second time.
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantTracker))
+	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantWorklet))
 	key := statelog.NewOpID(time.Now().Add(-time.Hour), "")
 	named, err := operator.WorkActor(operator.WithKey(ctx, key), nil)
 	if err != nil {
@@ -187,6 +189,12 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	}
 	if plain.WorkKey != "" || plain.OperationSeed() != "" {
 		t.Errorf("a call naming no operation resolved to %+v", plain)
+	}
+	// A KEY THAT CARRIES NO INSTANT fails the call rather than dating every
+	// id it derives at the epoch.
+	if got, err := operator.WorkActor(operator.WithKey(ctx, "not-an-op-id"), nil); err == nil {
+		t.Errorf("a call under a key with no instant resolved to %+v — every id it "+
+			"derived would read as older than any loss the ledger had", got)
 	}
 }
 
@@ -233,7 +241,7 @@ func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
 		// no item, so this one is a refusal — is what being served looks
 		// like; a request no node served is an error on the transport.
 		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-			Name: tracker.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
+			Name: worklet.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
 		})
 		if err != nil {
 			t.Fatalf("call %d, on whichever node it reached: %v", i, err)
@@ -414,27 +422,117 @@ type recordingPages struct {
 	opKeys []string
 }
 
-func (*recordingPages) List(context.Context, pages.Filter,
-	statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (*recordingPages) List(context.Context, doclet.Filter,
+	statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
 func (*recordingPages) Get(context.Context, string,
-	statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{Page: pages.Page{ID: "p-1", Container: "ENG", Title: "Runbook"}}, nil
+	statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{Page: doclet.Page{ID: "p-1", Container: "ENG", Title: "Runbook"}}, nil
 }
 
-func (p *recordingPages) Comment(_ context.Context, actor pages.Actor, _ string,
-	_ pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p *recordingPages) Comment(_ context.Context, actor doclet.Actor, _ string,
+	_ doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.opKeys = append(p.opKeys, actor.OpKey)
-	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
+	return doclet.Comment{ID: "c-1"}, doclet.Written{}, nil
 }
 
 func (p *recordingPages) keys() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.opKeys...)
+}
+
+// AN OPERATOR'S CALL IS HELD TO ITS TOOL'S SCHEMA LIKE A SEAT'S (ADR-0059):
+// the operator surface calls a tool through tools.Invoke, so a value the tool
+// would misread (an object where the comment's text belongs, read as "") is
+// refused before the tool runs and nothing is written, with every finding
+// named; a lossless value (a number where a string belongs) is written.
+//
+// Mutation: call the tool directly from Server.run and the empty comment is
+// written.
+func TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns(t *testing.T) {
+	t.Parallel()
+	kb := &recordingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": map[string]any{"text": "the step is wrong"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Failed || !strings.Contains(got.Output, "comment_on_page did not run") ||
+		!strings.Contains(got.Output, "`body` is an object, and comment_on_page reads a string there") {
+		t.Errorf("a misread was answered %q", got.Output)
+	}
+	// AND A PERSON IS ANSWERED IN A PERSON'S WORDS (ADR-0060), never the
+	// sentence above, which names arguments.
+	if got.PersonRefusal != caveat.ValueInWrongForm() {
+		t.Errorf("a misread carries the person's words %q", got.PersonRefusal.Person())
+	}
+	if n := len(kb.keys()); n != 0 {
+		t.Errorf("a misread wrote %d comments", n)
+	}
+	got, err = s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": 42.0}})
+	if err != nil || got.Failed || len(kb.keys()) != 1 {
+		t.Errorf("a lossless value was answered %+v (%v)", got, err)
+	}
+}
+
+// creatingPages records each page the knowledge base is asked to create, by
+// the operation key and the status it was written under.
+type creatingPages struct {
+	recordingPages
+	created []string
+}
+
+func (p *creatingPages) Create(_ context.Context, actor doclet.Actor,
+	page doclet.NewPage) (doclet.Written, error) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.created = append(p.created, actor.OpKey+"|"+string(page.Status))
+	return doclet.Written{}, nil
+}
+
+// AN OPERATOR'S RETRY SPELT ANOTHER WAY IS THE SAME WRITE (#423 re-verify):
+// the operator surface makes the canonical arguments once, at its entry, so a
+// request sent again under its key with "Draft" for "draft" asks the store
+// for the very same write (one key, one status), which the store makes once.
+//
+// Mutation: hand the tool the arguments as sent and the store is asked for a
+// page with status "Draft".
+func TestAnOperatorsRetrySpeltAnotherWayIsTheSameWrite(t *testing.T) {
+	t.Parallel()
+	kb := &creatingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	key := statelog.NewOpID(time.Now(), "")
+	for _, status := range []string{"Draft", " draft "} {
+		got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct, Key: key,
+			Tool: builtin.WritePageTool, Args: map[string]any{
+				"title": "Runbook", "body": "the steps", "container": "ENG", "status": status}})
+		if err != nil || got.Failed {
+			t.Fatalf("status %q was answered %+v (%v)", status, got, err)
+		}
+	}
+	kb.mu.Lock()
+	defer kb.mu.Unlock()
+	if len(kb.created) != 2 || kb.created[0] != kb.created[1] ||
+		!strings.HasSuffix(kb.created[0], "|"+string(doclet.StatusDraft)) {
+		t.Errorf("the store was asked for %q, want one write twice, as a draft", kb.created)
+	}
 }

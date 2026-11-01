@@ -512,6 +512,42 @@ export function menuEntryLabel(item: HTMLElement): string {
 }
 
 /**
+ * A SCREEN width the suite stands at, inside the kit's `AppShell`: the shell's
+ * content column reports itself `width` px wide, which is what the kit's
+ * `useScreenBelow` answers from. jsdom lays nothing out, so a column has no
+ * box and the hook falls back to the window; this gives the column one, so a
+ * suite can stand a wide window beside a narrow screen (an assistant the
+ * reader opened takes width the window never reports). Install it before the
+ * render: the shell measures its column as it mounts.
+ */
+export function installScreen(width: number): { restore: () => void } {
+  const CONTENT = "crewlet-app-shell__content";
+  const proto = HTMLElement.prototype;
+  const rects = Object.getOwnPropertyDescriptor(Element.prototype, "getClientRects");
+  const client = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+  Object.defineProperty(proto, "getClientRects", {
+    configurable: true,
+    value(this: Element) {
+      return this.classList.contains(CONTENT)
+        ? ([{ width }] as unknown as DOMRectList)
+        : (rects?.value as () => DOMRectList).call(this);
+    },
+  });
+  Object.defineProperty(proto, "clientWidth", {
+    configurable: true,
+    get(this: Element) {
+      return this.classList.contains(CONTENT) ? width : (client?.get?.call(this) ?? 0);
+    },
+  });
+  return {
+    restore: () => {
+      delete (proto as unknown as Record<string, unknown>).getClientRects;
+      delete (proto as unknown as Record<string, unknown>).clientWidth;
+    },
+  };
+}
+
+/**
  * A window width the suite drives, answered to every width query asked of it.
  *
  * jsdom has no `matchMedia`, and the setup file's stub answers "never

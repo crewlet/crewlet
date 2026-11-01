@@ -47,7 +47,7 @@ func gateFieldNames(t *testing.T) map[string]string {
 }
 
 // EVERY FIELD OF A MERGE GATE IS JUDGED FOR LOOSENING, or named neutral. A
-// seat may tighten a gate and never loosen one (ADR-0058), so a field ADDED to
+// seat may tighten a gate and never loosen one (ADR-0081), so a field ADDED to
 // MergeGate that LoosenedBy skips is one every unit's lead may switch off
 // unseen — and a value added to a ranked field's closed set, one it may lower
 // to. So the cases are keyed by field — Landing's own fields among them — and

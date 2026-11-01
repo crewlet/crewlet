@@ -46,7 +46,7 @@ import (
 //   - A detached coding run outlives its turn, its process and sometimes its
 //     node, and is recovered by whichever node owns the seat NEXT. That node
 //     read its own database, found nothing, and left a billed sandbox running
-//     with a suspended conversation nothing could re-enter.
+//     with a parked turn nothing could re-enter.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
@@ -55,7 +55,8 @@ import (
 // The rest never lived on a node's own database and are here because the
 // question they answer is a company's from the start: the company's sealed
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
-// may still have, the [SeatPauses] a person set, the windowed token [Budgets]
+// may still have, the [SeatPauses] a person set, the [ModelRetries] a person
+// asked for and the [DeviceSignIns] in progress, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -102,6 +103,16 @@ const (
 	// tripping — two seats answering each other saturate a second easily
 	// — and narrower would trip on an ordinary burst from one push.
 	RateWindow = time.Second
+
+	// MaxRateWindow is the longest window any caller counts a [Counter]
+	// over, and so how long the fleet keeps a window (a few multiples of
+	// it, so a window that just closed is still readable while a straggler
+	// finishes writing to it). One minute: the Dashboard Assistant's turn
+	// rate is a person's questions per MINUTE (internal/assistant), counted
+	// across the fleet, the widest window any caller asks for. A backend
+	// refuses a wider one rather than reap it mid-window, which would
+	// restart its count and pass far more than the caller asked for.
+	MaxRateWindow = time.Minute
 
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
@@ -331,6 +342,10 @@ type Counter interface {
 	// Allow increments the bucket's count for the window containing now
 	// and reports whether it stayed within limit.
 	//
+	// A window wider than [MaxRateWindow] is an ERROR, never counted: the
+	// fleet does not keep a window that long, so its count would restart
+	// before the window closed.
+	//
 	// THREE ANSWERS: within the limit, over it, and — as an error — the
 	// store could not say, whatever the bool beside it. CONTENTION IS
 	// NEVER THE THIRD: every race a caller loses is another caller's
@@ -429,6 +444,11 @@ type Activation struct {
 	// Origin is who wrote the revision, as the node that stored it first
 	// recorded it. See [RevisionOrigin].
 	Origin RevisionOrigin
+
+	// Restored is whether the write that set the pointer put back a company
+	// the fleet had lost rather than choosing one ([ActivationRequest.Restore]).
+	// It describes this activation alone: the next write sets it again.
+	Restored bool
 }
 
 // RevisionOrigin is the record a revision was WRITTEN with, travelling with
@@ -547,13 +567,14 @@ const MaxApplyErrorLength = 2000
 //     newer one's values back. An activation whose instant was no later than
 //     the stamps already on those rows was applied to neither, silently,
 //     until some later activation happened to carry a later clock.
-//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes its
-//     locally active revision only when that revision's `activated_at` is
-//     LATER than the pointer's, and the reconciler holds a node's own copy to
-//     the pointer by revision and instant together (re-activating an
-//     unchanged revision is the credential-rotation gesture). A node holding
-//     the replaced revision read its own copy as the newer and published it
-//     back over the fleet's.
+//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes the
+//     fleet's revision it last saw over a recreated pointer only when that
+//     revision's instant is LATER than the pointer's, and the reconciler
+//     tells the activation it applied from a new one by revision and instant
+//     together (re-activating an unchanged revision is the
+//     credential-rotation gesture). A node that had seen the replaced
+//     revision read its own copy as the newer and published it back over the
+//     fleet's.
 //
 // Decided INSIDE the compare-and-set that replaces the pointer, against the
 // pointer it replaces, so two activations racing each other cannot both be
@@ -593,11 +614,53 @@ func TruncateApplyError(detail string) string {
 type NodeApply struct {
 	NodeID string
 	Epoch  int64
-	// RevisionID is which revision this node applied at that epoch. It is
-	// carried alongside the epoch rather than derived from it because the
-	// fleet view is read while nodes are mid-transition, and a node still
-	// on the previous revision is exactly what an operator is looking for.
+	// RevisionID is which revision this node ATTEMPTED at that epoch —
+	// applied or not, as Status says. It is carried alongside the epoch
+	// rather than derived from it because the fleet view is read while
+	// nodes are mid-transition, and a node still on the previous revision
+	// is exactly what an operator is looking for.
 	RevisionID string
+	// Applied is the epoch this node last APPLIED — its reconciler's own
+	// progress — or 0 before its first apply succeeds. Epoch is the one it
+	// last ATTEMPTED, and the two differ exactly when Status says the
+	// attempt failed: a node that applied 5 and refused 6 says Epoch 6,
+	// Applied 5.
+	//
+	// ITS OWN FIELD rather than inferred from Epoch and Status, because the
+	// inference is wrong in the case a reader is asking about: a refusal
+	// says the node did not reach Epoch, never which epoch it did reach. A
+	// writer that saved epoch 6 learns from this whether a node runs it —
+	// the comparison a node's own health push makes with its live epoch —
+	// without reading the node's own /health.
+	Applied int64
+	// Serving is the revision this node's engine RUNS: the one its last
+	// successful apply installed, or the one it booted on; empty while it
+	// runs none. A node that refused the epoch's revision goes on serving
+	// the one before, and this is the row an operator reads to see it.
+	//
+	// NOT "SERVING DIFFERS FROM RevisionID" as the test for a refusal: a
+	// refused re-activation of the revision a node already runs — the
+	// credential-rotation gesture — names one revision in both. Status is
+	// what says the attempt failed; Serving says what runs regardless.
+	Serving string
+	// Boots is the revision this node would START ON if it restarted now:
+	// its boot row's, as its reconciler last read or wrote it. Empty on a
+	// node that boots on nothing — one whose own database is discarded at
+	// every start (a node without the `data` role), and one whose row names
+	// no revision yet because it has never applied one. Never empty for a
+	// row its reconciler could not read: the reconciler reads it before it
+	// writes its first record, and a read that fails later leaves the last
+	// answer standing.
+	//
+	// A FACT OF ITS OWN, never derived from Serving. The boot row moves
+	// only once an apply has SUCCEEDED, and that write is local and best
+	// effort: while a failed one is being retried, this node runs a
+	// revision it would not come back on, and the two names differ. A
+	// reader that took Serving for what a restart lands on — the
+	// Kubernetes operator keeps a revision's secrets while some node still
+	// names it — would drop what that node actually needs to boot, and the
+	// first restart would crash-loop on a revision it can no longer build.
+	Boots string
 	// Status is the apply outcome as a plain string. Not
 	// configplane.ApplyStatus: the coordination contract is where the
 	// engine's layers meet, and giving it a dependency on the posture
@@ -645,44 +708,71 @@ type ActivationRequest struct {
 	// origin fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
-	// Expect is the revision the caller read before building this one.
+	// Expect is the revision the caller read before building this one: the
+	// activation lands ONLY WHILE THE POINTER NAMES IT.
 	//
-	// EMPTY IS UNCONDITIONAL, and that is a real posture rather than a
-	// missing value: a node publishing its own locally-active revision at
-	// boot is ASSERTING, not editing — it has nothing to have raced with
-	// and no earlier state to compare against. An editor always has one,
-	// and passing it is what makes a concurrent edit visible.
+	// A POINTER THAT IS NOT THERE is [ErrActivationRaced] too — never set,
+	// deleted, or removed by a purge — because what the caller built on is
+	// gone, and the write it built is an edit of a company the fleet no
+	// longer runs. Every editor reads the pointer first and passes what it
+	// read: Expect when it read one, ExpectAbsent when it read none. So a
+	// write cannot pass an expectation it never saw the pointer hold, and the
+	// race it reports is real: the fix is to read again and rebuild.
 	//
-	// # An UNSET pointer is not a race, whatever Expect says
-	//
-	// The comparison is "if a pointer exists, it must still name this".
-	// With no pointer at all there is nothing to have lost a race to, and
-	// refusing would break the state a node reaches legitimately and often:
-	// a node seeded from a file has a locally-active revision before it has
-	// published anything, and every config write on it would fail until it
-	// did. The lost-update this exists to catch needs a winner, and an
-	// empty pointer has none.
+	// EMPTY IS UNCONDITIONAL, and only one caller passes it: `crewlet run
+	// -import-company`, an operator replacing the company outright from a
+	// file, which asserts rather than edits and has nothing to have raced
+	// with. Everything else built on a pointer it read, or on its absence.
 	Expect string
 
 	// ExpectAbsent is the create-only compare-and-set: publish this only
 	// if the fleet has no activation at all.
 	//
-	// It is what Expect cannot say. An empty Expect is unconditional, and
-	// an Expect naming a revision passes when there is no pointer, so
-	// neither refuses the write that matters here: a node whose OWN store
-	// is empty, writing the company it believes is the first, while the
-	// fleet is already running one. A node reaches that state
-	// legitimately, by joining a fleet and not having reconciled yet, or
-	// by failing the best-effort copy of the pointer into its own store,
-	// and its write would replace a running company outright: the company
-	// name changes, so every seat id derived from it changes, and all of
-	// their memory is orphaned.
+	// It is what a write built WITH NO POINTER passes: a config write on a
+	// node that read none, a booting node restoring the company after the
+	// pointer was lost, and the bootstrap seed of a fleet's first company.
+	// An empty Expect would replace whatever another node published in the
+	// meantime, and the one case that matters is a company the fleet is
+	// already running: a node reaches "no pointer as far as it knows"
+	// legitimately, by joining a fleet before its first read, and its write
+	// would replace that company outright — the company name changes, so
+	// every seat id derived from it changes, and all of their memory is
+	// orphaned.
 	//
 	// Refused with [ErrActivationRaced], like any other lost race, leaving
 	// nothing behind. Set together with Expect it is a programming error
 	// rather than a posture, because a write cannot have been built on a
 	// revision and on nothing at once.
 	ExpectAbsent bool
+
+	// ExpectEpoch narrows Expect to the very activation the caller read: the
+	// write lands only while the pointer is AT this epoch, not merely naming
+	// the revision. Zero leaves Expect as it is; set without Expect it is a
+	// programming error.
+	//
+	// The boot publish of an offline offer is the caller that needs it. It
+	// records, before it publishes, the instant it will land at, so that a
+	// node which crashed before recording the landing tells it by the pointer
+	// carrying exactly that instant. The instant is decided against the
+	// activation the write replaces ([ActivationAt]), and with Expect alone
+	// another writer re-activating the same revision in between lets the
+	// write land a millisecond after that one — at an instant nothing
+	// recorded, so the landed publish reads as never made.
+	ExpectEpoch int64
+
+	// Restore marks a write that puts back a company the fleet lost rather
+	// than choosing one: a booting node republishing what it knew after the
+	// pointer was gone. The pointer says so ([Activation.Restored]) until the
+	// next write replaces it.
+	//
+	// A peer answers the two differently. A restore is one node's memory of
+	// the company, and a node that remembers the fleet having moved on to a
+	// newer revision replaces it with that one. A choice — an offline change
+	// published, an override, an API write — is the company, and nothing
+	// replaces it but another write, whatever the instants say: they come
+	// from the writers' clocks, and a deliberate choice made on a node whose
+	// clock runs behind another's would otherwise read as stale.
+	Restore bool
 }
 
 // ErrPayloadNotDocument reports an activation whose payload is not a JSON
@@ -940,8 +1030,8 @@ type Fires interface {
 // delivers a batch whose acknowledgement was lost AGAIN, to whichever member
 // asks next — so without a decision a batch can land in two logs, and every
 // figure derived from a node's own log counts it twice: the usage domain sums
-// each node's day, so a stateless node's spend would be billed once per data
-// node that happened to write it.
+// each data node's day, so a stateless node's spend would be billed once per
+// data node that happened to write it.
 //
 // # Create-only, written AFTER the rows, and the loser deletes
 //
@@ -951,15 +1041,43 @@ type Fires interface {
 // that died between the two holding a batch nobody wrote. In this order the
 // worst a crash leaves is a written copy whose claim is unknown, which the
 // node settles the same way on its next pass, and a batch is acknowledged only
-// once its keeper is decided, so the group keeps offering it until then.
+// once its keeper is decided, so the group keeps offering it until then —
+// or once the store answers that the record it holds decides nothing
+// ([ErrCustodyUndecidable]), which no redelivery changes.
 type Custody interface {
 	// ClaimCustody records node as the keeper of batch unless a keeper is
 	// already recorded, and answers the keeper: node itself, or the node
-	// that claimed first. An error is the third answer — the store could
-	// not say — and the caller must neither keep nor delete its copy on
-	// it.
+	// that claimed first.
+	//
+	// An error is the third answer, and the caller must neither keep nor
+	// delete its copy on any of them. Every error is UNKNOWN — the store
+	// could not say, and asking again may — except one wrapping
+	// [ErrCustodyUndecidable], which is the store's DEFINITE answer that a
+	// keeper is recorded and nothing can read who.
 	ClaimCustody(ctx context.Context, batch, node string) (string, error)
 }
+
+// ErrCustodyUndecidable is [Custody.ClaimCustody]'s answer for a batch whose
+// keeper record exists and cannot be read as a keeper: it does not decode, or
+// it names no node. No claim this engine makes writes such a record — every
+// claim names its node and is refused without one — so it is a value that
+// reached the store some other way: written into the bucket by hand or by a
+// process that is not this engine, by a later build that changed the record's
+// shape, or corrupted.
+//
+// DEFINITE, never [ErrUnavailable]: the store answered, and it will answer the
+// same for as long as the record stands, so a caller that read it as a store
+// it could not reach would wait on it for ever — and a caller working through
+// many batches would stop at this one, leaving every batch behind it
+// unsettled. It is about ONE batch, and the caller goes on to the next.
+//
+// And it decides NOTHING about the copy: kept, it may be a second copy of a
+// batch the unreadable record's node already keeps; deleted, it may be the
+// only copy there is. So the copy stays as it is, counted in no node's day,
+// until the record is removed — a claim then creates it afresh — or the batch
+// is past the event log's retention and goes with its rows. A backend whose
+// store can only hold a record a claim wrote never answers it.
+var ErrCustodyUndecidable = errors.New("coord: the record of this custody batch's keeper cannot be read")
 
 // Rebases is the fleet's record of the instant a unit of work's derived
 // operation ids are minted at, for the work whose own start is too old for the
@@ -1003,15 +1121,57 @@ type Rebases interface {
 
 // Record is one stored value with the version it was read at.
 //
-// The version is an OPAQUE token: pass back exactly what a read handed you.
-// It is what makes a read-modify-write safe without a transaction — the write
-// lands only if nothing has changed since — and it is the whole of the
-// concurrency story [SandboxRuns] offers, because a detached run's mutations
-// are conditional flips whose conditions are the run's OWN fields.
+// The version is an OPAQUE token, and the store's: it names one write to one
+// incarnation of a record and is never handed out twice, so a record deleted
+// and created again under the same key never answers to a version an earlier
+// incarnation carried. It is what makes a read-decide-write safe without a
+// transaction — a write lands only where the record still stands at the
+// version its decision read — and [SandboxRuns.MutateSandboxRun] is where that
+// comparison is made, inside the store, rather than at every caller.
 type Record struct {
 	Key     string
 	Value   []byte
 	Version uint64
+}
+
+// SandboxRunChange is what a decision handed to [SandboxRuns.MutateSandboxRun]
+// writes.
+//
+// ITS ZERO VALUE WRITES NOTHING, and that is a decision like the other two
+// rather than a missing one: the condition the caller evaluated did not hold —
+// a claim somebody else won, a fence a newer lease outranks — and the record
+// is left exactly as it was read. Put and Delete together are no change at
+// all, and the store refuses them as the contradiction they are.
+type SandboxRunChange struct {
+	// Put is the record's next value, written whole at the version the
+	// decision read. Empty with Delete false writes nothing.
+	Put []byte
+
+	// Delete removes the record at the version the decision read.
+	Delete bool
+}
+
+// Validate refuses a change that both writes and removes the record.
+func (c SandboxRunChange) Validate() error {
+	if c.Delete && len(c.Put) > 0 {
+		return errors.New("coord: a change to a sandbox run either writes it or deletes it, " +
+			"never both")
+	}
+	return nil
+}
+
+// SandboxRunUpdate is one state of a run's record that
+// [SandboxRuns.WatchSandboxRun] delivers.
+type SandboxRunUpdate struct {
+	// Record is the record as it now stands; the zero value when Found is
+	// false.
+	Record Record
+
+	// Found is false while the run has no record: before its create, and
+	// once it is deleted. A watch's first update says so explicitly, which
+	// is the only way a watch can say "this run has no record" — an empty
+	// stream says nothing at all.
+	Found bool
 }
 
 // SandboxRuns is the fleet's record of detached coding runs.
@@ -1022,8 +1182,10 @@ type Record struct {
 // person is being asked. Every decision taken on those fields —
 // the at-most-once tail claim, the epoch fence, the conditional pause expiry —
 // is sandbox's, lives in internal/sandbox where its suite is, and would be
-// nothing but duplication here. So this holds bytes and a version, and the
-// conditions are expressed as compare-and-swap by the package that owns them.
+// nothing but duplication here. So this holds bytes and a version, and every
+// condition is a DECISION the owning package hands to
+// [SandboxRuns.MutateSandboxRun], which the store takes again whenever another
+// writer lands first.
 //
 // It is shared because a run is DETACHED and its seat MOVES. The run outlives
 // its turn, its process and sometimes its node; the node that owns the seat
@@ -1038,22 +1200,28 @@ type Record struct {
 // the work again and abandons a box, and a store that could not be read must
 // never be able to say that.
 //
-// # A record has PARTS beside it
+// # A lost race is decided again, within the bound every fleet key shares
 //
-// A part is a value kept beside one run's record under a name its writer
-// chose — internal/sandbox keeps a launch's suspended conversation and its
-// bridged tool log there — so that a read or a write of the RECORD never
-// moves it. Every flip of a run is a compare-and-swap of its record whole,
-// every listing below reads every record whole, and every git request of a
-// coding box reads its run's record and every ref answer past its floor
-// writes it: with the conversation on the record, each of those moved the
-// whole conversation, megabytes for a long turn, through the bucket's stream
-// leader. A part is versioned as a record is and written the same way, and is
-// never read by a listing of records.
+// Every change after the create is a read-decide-write the STORE runs: it
+// reads the record, hands it to the caller's decision, and writes what that
+// decision chose at the version read. A write another writer beat is never
+// sent again as it was — the condition it evaluated may no longer hold — but
+// decided again on the record as it now stands, within the attempts every
+// race the fleet store loses is carried in (internal/coord/kv's casline.go):
+// a bound counted in the NODES writing a key, never in the calls, each lost
+// attempt followed by a window of the round trips the node measures on the
+// bucket. The calls are many: one run's record takes every tool call its box
+// makes over the bridge — from as many as twenty subagents at once, Claude
+// Code's default — beside its seat's own turns, a peer recovering it, a
+// person's answer and a person's stop, and a bound sized for the calls
+// answered a busy record as one that kept changing.
 //
-// A part belongs to its record's TURN, and nothing removes it when the record
-// goes: its writer does, by name, and [SandboxRuns.SweepSandboxRunParts]
-// removes whatever a write that raced the record's end left behind.
+// # A run's record is watched by its key
+//
+// A watch is of ONE run ([SandboxRuns.WatchSandboxRun]), so a node that follows
+// a run's record as it changes — rather than reading it again on every call it
+// serves — is told of that run's writes and of no other run's, however busy
+// the fleet.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
@@ -1073,41 +1241,55 @@ type SandboxRuns interface {
 	// turn's, so a second create is a retried launch, not a second run.
 	CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error)
 
-	// UpdateSandboxRun writes at a version, reporting whether that version
-	// still held. False is a LOST RACE, not a failure — the caller re-reads
-	// and re-decides, because the condition it evaluated may no longer be
-	// true.
-	UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error)
+	// MutateSandboxRun changes one run's record by a decision taken on the
+	// record as it stands, answering the record as the change left it and
+	// whether a change landed.
+	//
+	// decide is handed the record read — its key, value and version — and
+	// answers the change to make ([SandboxRunChange]), whose zero value makes
+	// none. The store writes the change only where the record still stands
+	// at the version decide was handed; where it does not, it reads the
+	// record AGAIN and asks decide again, within the attempts the store
+	// carries a write in. So decide may be called more than once, each time with the
+	// record as it then stands, and must decide from that record alone:
+	// anything it keeps for its caller is the last call's. It is called
+	// holding nothing of the store's, so it may itself read or write the
+	// store — a write it makes is one the change it answers then loses to.
+	//
+	// A RUN WITH NO RECORD DECIDES NOTHING: decide is not called, and the
+	// answer is (Record{}, false, nil) — a run that is gone is the same
+	// non-answer as a decision that changed nothing, never an error. An
+	// error decide returns is returned AS IT IS, with nothing written, so a
+	// caller's own refusal reaches it in its own vocabulary. A write that
+	// still lost at its last attempt is [ErrUnavailable]: the store
+	// answered every attempt, and another writer changed the record first
+	// each time.
+	//
+	// With true it answers the record as written for a Put — the new value
+	// at its new version — and the record it removed for a Delete; with
+	// false, the record as the last decision read it.
+	MutateSandboxRun(ctx context.Context, turnID string,
+		decide func(current Record) (SandboxRunChange, error)) (Record, bool, error)
 
-	// DeleteSandboxRun removes a record at a version, reporting whether
-	// that version still held. Its parts stay: see the type's doc.
-	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
-
-	// SandboxRunPart reads the part named part beside turnID's run, whether
-	// or not the run has a record. Record.Key is the part's name.
-	SandboxRunPart(ctx context.Context, turnID, part string) (Record, bool, error)
-
-	// PutSandboxRunPart writes a part at a version, reporting whether that
-	// version still held: version 0 writes only where no part of that name
-	// is stored, any other only where that version is the part's. False is
-	// a LOST RACE, as an update of a record's is. Writing one asks nothing of
-	// the run's record: a writer that needs the record to name what it
-	// writes reads the record itself.
-	PutSandboxRunPart(ctx context.Context, turnID, part string, value []byte, version uint64) (bool, error)
-
-	// DeleteSandboxRunPart removes a part whatever version it holds. A part
-	// that is not stored is no error: its writer removes a part once nothing
-	// names it, and a removal repeated after a crash finds it gone.
-	DeleteSandboxRunPart(ctx context.Context, turnID, part string) error
-
-	// SweepSandboxRunParts removes every part written before cutoff whose
-	// run has NO RECORD, reporting how many went. Whether a run has a
-	// record is read AFTER its parts are found, so a record written under
-	// the turn again — its next job, after its last one ended — keeps
-	// every part beside it; and each part is removed only as it was when
-	// found, so a part written again since is untouched. A failure part-way
-	// reports the parts already removed beside the error.
-	SweepSandboxRunParts(ctx context.Context, cutoff time.Time) (int64, error)
+	// WatchSandboxRun streams one run's record: its state when the watch
+	// began — [SandboxRunUpdate.Found] false where it has none — then each
+	// state it reaches after that, a delete as Found false.
+	//
+	// The first update is CERTIFIED as a listing's answer is: a record that
+	// existed throughout the call is never answered absent, though on a
+	// replicated store it can lag the newest write by a replica's lag, which
+	// the next update then carries. The call returns once it is in hand,
+	// and a failure to read it is the call's error. After it, no update is
+	// older than one already delivered and the newest state is always
+	// delivered, but a state a later write replaced before the watch reached
+	// it may be passed over: a watcher holds the record's current state, not
+	// its history.
+	//
+	// The channel is closed when ctx ends or the watch fails. A CLOSED
+	// CHANNEL IS NOT A DELETE: the watcher has stopped hearing, keeps what it
+	// last knew and watches again, and the new watch's first update is the
+	// state then, so a change made while nobody listened is not lost.
+	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
 }
 
 // SecretRecord is one stored credential, as coordination holds it.
@@ -1133,6 +1315,13 @@ type SecretRecord struct {
 	UpdatedByKind string
 	OperatorID    string
 	Source        string
+
+	// OpID is the operation key of the create-only write that sealed the
+	// row (internal/api/opkey, scoped by its principal), so the same
+	// request retried can finish what it sealed without the store being
+	// read for a value. Empty for every other write, which clears it.
+	// NEVER ANSWERED: no route, listing, log or audit carries it.
+	OpID string
 
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] is
@@ -1236,12 +1425,11 @@ type Secrets interface {
 //
 // # No retention
 //
-// The bucket has no age, for the reason the budget counter has none: a status
-// is standing state rather than a short-horizon question. One that expired
-// would make a converged integration read as one nobody has ever looked at,
-// on a timer nobody chose, and the loop would then re-provision against a
-// third-party app it had already agreed with. There are at most as many keys
-// here as there are surfaces, so nothing grows.
+// The bucket has no age, because a status is standing state rather than a
+// short-horizon question. One that expired would make a converged integration
+// read as one nobody has ever looked at, on a timer nobody chose, and the loop
+// would then re-provision against a third-party app it had already agreed with.
+// There are at most as many keys here as there are surfaces, so nothing grows.
 type Integrations interface {
 	// IntegrationStatuses returns every recorded status, keyed by the
 	// surface it describes.
@@ -1418,13 +1606,14 @@ type Mailboxes interface {
 //
 // A KV backend removes a key by appending a delete or purge MARKER, and a
 // bucket the broker ages takes the marker with everything else when it ages
-// out. The families above that no clock may reap — the runs, the channels,
-// the mailboxes, the secrets, the budgets, the integration statuses, the
-// positions register — keep every marker for the life of the deployment, and
-// each one is a leader read on every listing that meets it (internal/coord/kv
-// walk.go says why a marker is read again rather than trusted). So the
-// markers are swept, as a DECISION under the maintenance duty, for the reason
-// the channels are: a bucket's age cannot express which records may go.
+// out. The families here that no clock may reap — the activation pointer, the
+// runs, the channels, the mailboxes, the secrets, the integration statuses, the
+// object store's backend record, the positions register, the chat read state —
+// keep every marker for the life of the deployment, and each one is a leader
+// read on every listing that meets it (internal/coord/kv walk.go says why a
+// marker is read again rather than trusted). So the markers are swept, as a
+// DECISION under the maintenance duty, for the reason the channels are: a
+// bucket's age cannot express which records may go.
 //
 // # It changes no answer
 //
@@ -1454,15 +1643,19 @@ type Fleet interface {
 	Plane
 	Channels
 	Follows
+	ChatReads
 	Fires
 	Rebases
 	SandboxRuns
 	Secrets
 	Integrations
+	SeatAccess
 	Mailboxes
 	ObjectStores
 	TrashReaps
 	SeatPauses
+	ModelRetries
+	DeviceSignIns
 	PositionRegister
 	HoldRegister
 	FloorRegister
@@ -1575,23 +1768,38 @@ type TrashReaps interface {
 //
 // Every method's seat is the seat's handle, which is immutable (ADR-0013) —
 // what internal/notify's FollowStore hands in. This store resolves nothing; it
-// keys on the name it is given.
+// keys on the name it is given — and it RANKS nothing either: which of two
+// reasons is the stronger is internal/notify's vocabulary, so the caller
+// chooses and this store makes the choice safe against a concurrent one.
 //
-// # Three methods, and no purge
+// # Two methods, and nothing removes a follow
 //
 // Retention here is the BUCKET's age, like every other aged slot: every
 // re-assert rewrites the record, so the age is a true last-activity stamp and
-// the broker expires what has gone quiet. A sweep would have nothing to delete.
+// the broker expires what has gone quiet. A sweep would have nothing to
+// delete, and there is no unfollow either: no surface offers a person or a
+// seat a way to stop following a thread, so the age is the only thing that
+// ends a follow.
 type Follows interface {
-	// Follow records that a seat follows a thread, or refreshes an
-	// existing follow's reason.
+	// Follow records that a seat follows a thread, or refreshes the follow
+	// it has, and answers the reason the record holds afterwards.
 	//
-	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
-	// a thread by a collective shout and later named personally is now
-	// following for the stronger reason, and an operator asking why it
-	// answered should see the mention rather than the shout that happened
-	// to come first.
-	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	// THE REASON IS CHOSEN AGAINST THE RECORD IT REPLACES: choose is handed
+	// the reason held, and whether a follow is held at all, and answers the
+	// reason to write — and the write lands only on the record choose was
+	// shown. One that loses to another writer reads again and asks again.
+	// A choice made from an earlier read is a decision about a record
+	// somebody may since have rewritten, and the reason decides whether a
+	// reply obliges an answer: a seat named in a thread a moment before a
+	// broadcast is written there must not be left following it for the
+	// broadcast. choose may run more than once, so it must be a pure
+	// function of what it is handed.
+	//
+	// EVERY CALL WRITES, an unchanged reason included, because the write is
+	// what moves the bucket's age: a follow refreshed only when its reason
+	// changed would expire in a thread the seat is still active in.
+	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
+		choose func(held string, following bool) string) (string, error)
 
 	// Following reports why a seat follows a thread, and whether it does.
 	//
@@ -1602,19 +1810,4 @@ type Follows interface {
 	// reply is quiet and self-healing where a spurious wake is a burst of
 	// turns that cannot be taken back.
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
-
-	// Unfollow drops a follow, reporting whether one was there.
-	//
-	// The counterpart of an explicit subscription: a seat told to stop
-	// watching a thread must actually stop, and waiting out the retention
-	// horizon is not stopping.
-	//
-	// SERIALIZABLE, which is the property both backends have to reach by
-	// different means: `true` is reported exactly when this call removed
-	// something, and every outcome is one some sequential order of the
-	// concurrent calls would have produced. A follow re-asserted while an
-	// unfollow is in flight is therefore removed, exactly as it is when the
-	// re-assert loses by a nanosecond — and the next mention re-follows
-	// through the ordinary path.
-	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }

@@ -16,7 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
@@ -76,7 +76,7 @@ const PARKED = [
 /** Mount the Timeline over a stubbed tail answer, counting the asks. */
 function mount(
   events: EventRecord[],
-  tail: SandboxTailAnswer | ((asked: number) => SandboxTailAnswer),
+  tail: SandboxTailAnswer | Error | ((asked: number) => SandboxTailAnswer | Error),
   {
     selected: initial = "",
     now = T0 + 60_000,
@@ -99,8 +99,10 @@ function mount(
   ) => {
     if (what === "sandbox_tail") {
       asked.push(params as Record<string, unknown>);
-      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows.
-      return Promise.resolve(typeof tail === "function" ? tail(asked.length) : tail);
+      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows; an
+      // ERROR is the engine refusing it.
+      const answer = typeof tail === "function" ? tail(asked.length) : tail;
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     }
     return Promise.resolve({});
   };
@@ -192,6 +194,121 @@ describe("a running coding run's live output", () => {
     );
     expect(await screen.findByText("node-b didn’t answer. Retrying.")).toBeTruthy();
     expect(screen.queryByText("No output yet.")).toBeNull();
+  });
+
+  // A GONE BOX IS SAID TO BE, and the view keeps asking until the run's record
+  // moves on: the job is recorded lost and its round carried on in a fresh one,
+  // so the notice says what comes next is the record's, not that the run ended.
+  // Drawn as a failed read, a person watching was told the engine had failed.
+  test("a gone box is said to be, never drawn as a failed read", async () => {
+    mount(
+      PARKED,
+      { outcome: "box_gone", turn_id: "turn-1", launch_id: "L1", node: "node-b" },
+      { selected: "run:L1" },
+    );
+    expect(
+      await screen.findByText(
+        "The run’s box is gone, so no more output will come from this job. Its record will say what happens next.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("No output yet.")).toBeNull();
+    expect(liveState({ outcome: "box_gone", turn_id: "t", launch_id: "L" }, false)).toBe(
+      "The run's box is gone.",
+    );
+  });
+
+  // A FAILED READ IS TOLD IN THE ENGINE'S WORDS, never its code: the
+  // sentence the engine sends for the condition where it sends one, and the
+  // screen's own sentence for the code where it does not. It printed the code
+  // ("The run's output could not be read: unavailable."), which no person can
+  // act on.
+  //
+  // Mutation: print the code again, and every row goes red.
+  test("a failed read is told in the engine's words, never by its code", async () => {
+    const said = "The coding sandbox didn’t answer. Try again in a moment.";
+    for (const [failure, words] of [
+      [new QueryError("unavailable", { code: null, detail: said, retryAfter: 5 }), said],
+      [
+        new QueryError("unavailable", {
+          code: null,
+          detail:
+            "The coding sandbox isn’t set up for this. An administrator needs to fix its setup.",
+          retryAfter: 0,
+        }),
+        "The coding sandbox isn’t set up for this. An administrator needs to fix its setup.",
+      ],
+      [
+        new QueryError("query_failed"),
+        "The engine failed to answer. You can check logs for the details.",
+      ],
+    ] as const) {
+      mount(PARKED, failure, { selected: "run:L1" });
+      expect(await screen.findByText(words)).toBeTruthy();
+      for (const code of ["unavailable", "query_failed"]) {
+        expect(screen.queryByText(new RegExp(code))).toBeNull();
+      }
+      cleanup();
+    }
+  });
+
+  // A READ THAT FAILS OVER OUTPUT ALREADY SHOWN is told the same way, over
+  // what the view holds: the output stays, and the code is never printed. It
+  // printed "Last read failed (query_failed). Retrying." over it.
+  //
+  // Mutation: print the code in the branch for a view that holds an answer,
+  // or drop what it holds on a failed read, and it goes red.
+  test("a failed read over output already shown keeps it and says the engine's words", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const said = "The coding sandbox didn’t answer. Try again in a moment.";
+    mount(
+      PARKED,
+      (n) =>
+        n === 1
+          ? RUNNING
+          : new QueryError("unavailable", { code: null, detail: said, retryAfter: 5 }),
+      { selected: "run:L1" },
+    );
+    await flush();
+    expect(screen.getByText("running go test ./...")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(screen.getByText(said)).toBeTruthy();
+    expect(screen.getByText("running go test ./...")).toBeTruthy();
+    for (const code of ["unavailable", "query_failed"]) {
+      expect(screen.queryByText(new RegExp(code))).toBeNull();
+    }
+  });
+
+  // A REFUSAL NO WAIT CLEARS ENDS THE POLL: its zero `retry_after` is the
+  // engine saying nothing should ask again on a timer, and asked every three
+  // seconds it was answered the same each time and logged at warn on the
+  // owning node each time. One a wait clears keeps asking.
+  //
+  // Mutation: keep polling on a refusal with no wait, and the first row goes
+  // red; stop on every refusal, and the second does.
+  test("a refusal no wait clears stops the poll, and one a wait clears does not", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    for (const [retryAfter, asks] of [
+      [0, 1],
+      [5, 4],
+    ] as const) {
+      const { asked } = mount(
+        PARKED,
+        new QueryError("unavailable", {
+          code: null,
+          detail: "The coding sandbox isn’t set up for this.",
+          retryAfter,
+        }),
+        { selected: "run:L1" },
+      );
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
+      });
+      expect(asked).toHaveLength(asks);
+      cleanup();
+    }
   });
 
   test("a run that has written nothing says so, which is not a silent owner", async () => {
@@ -344,6 +461,7 @@ describe("a person's note", () => {
         phase: "execute",
         iteration: 1,
         round: 3,
+        boundary: "round",
         note: "use staging",
         steered_by: "jane",
         steered_by_kind: "human",
@@ -367,6 +485,93 @@ describe("a person's note", () => {
     expect(screen.getByText("the turn finished before it read the note")).toBeTruthy();
     expect(screen.getByText("delivered")).toBeTruthy();
     expect(screen.getByText("expired")).toBeTruthy();
+  });
+
+  // A READ INSIDE A CODING RUN IS THE RUN'S: the engine's loop was parked
+  // while the run worked, so the note is drawn on the run's bar — the span
+  // the trace gives its job — and said as the kind of step that read it.
+  test("a read inside a coding run is drawn on the run's bar, in the words of its step", async () => {
+    const read = (note_id: string, ms: number, boundary: string) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary,
+        launch_id: "L1",
+        note: `note ${note_id}`,
+      });
+    const events = [
+      ...PARKED,
+      read("b", 1_100, "brief"),
+      read("t", 2_000, "tool_batch"),
+      read("f", 3_000, "finish"),
+      read("s", 4_000, "step"),
+      // A ROUND OF THE ENGINE'S OWN LOOP, the review's, names no job.
+      event("agent_turn_steered", 5_000, {
+        note_id: "rev",
+        outcome: "delivered",
+        phase: "review",
+        iteration: 1,
+        round: 2,
+        boundary: "round",
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["b", "brief", "run:L1"],
+      ["t", "tool_batch", "run:L1"],
+      ["f", "finish", "run:L1"],
+      ["s", "step", "run:L1"],
+      ["rev", "round", "turn-1|review|1.r2"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    for (const words of [
+      "read by the coding run of Execute in its brief",
+      "read by the coding run of Execute after a tool batch",
+      "read by the coding run of Execute as it was finishing",
+      "read by the coding run of Execute at its next step",
+      "read at round 2 of Review",
+    ]) {
+      expect(screen.getByText(new RegExp(words))).toBeTruthy();
+    }
+    // AND THE RUN'S ROW CARRIES THE MARK.
+    const run = screen.getByRole("button", { name: /Coding run/ });
+    expect(within(run).getByText("note")).toBeTruthy();
+  });
+
+  // A STEP THIS BUILD CANNOT NAME — one a newer build names, or none, which no
+  // build writes — is the turn's read, placed on the run its record names and
+  // never on a round of the engine's loop.
+  test("a boundary this build does not know is never drawn or said as a round", async () => {
+    const read = (note_id: string, ms: number, fields: Record<string, unknown>) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        note: `note ${note_id}`,
+        ...fields,
+      });
+    const events = [
+      ...PARKED,
+      read("new", 1_500, { boundary: "checkpoint", launch_id: "L1" }),
+      read("unplaced", 2_500, { boundary: "checkpoint" }),
+      read("none", 3_500, {}),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["new", "unknown", "run:L1"],
+      ["unplaced", "unknown", ""],
+      ["none", "unknown", ""],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    expect(screen.getAllByText(/read by the turn in Execute/)).toHaveLength(3);
+    expect(screen.queryByText(/read at round/)).toBeNull();
   });
 
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on
@@ -542,7 +747,7 @@ describe("a live tail's announcements", () => {
     expect(liveState(undefined, true)).toBe("The run's output could not be read.");
     expect(
       liveState({ outcome: "owner_silent", turn_id: "t", launch_id: "L", node: "n" }, false),
-    ).toBe("The node that owns this run did not answer.");
+    ).toBe("The node that runs it did not answer.");
     expect(
       liveState(
         { outcome: "not_running", turn_id: "t", launch_id: "L", status: "replaced" },

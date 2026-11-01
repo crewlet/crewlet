@@ -96,7 +96,7 @@ describe("the digits", () => {
     // A section is the page you are on; a filter narrows what is on it. Only
     // the first takes the keyboard, so a lens inside a peek does not fight an
     // object's own tabs for `1`.
-    const { result } = at("#/work/ENG-42", AGENT, "filter");
+    const { result } = at("#/worklet/ENG-42", AGENT, "filter");
     press("2");
     expect(result.current[0]).toBe("overview");
   });

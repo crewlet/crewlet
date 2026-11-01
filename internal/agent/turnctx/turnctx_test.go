@@ -91,7 +91,7 @@ func TestTheDirectoryReadingTravelsWithTheOrg(t *testing.T) {
 }
 
 func item(id string) types.WorkItem {
-	return types.WorkItem{Backend: types.WorkNative, ID: id, Key: "ENG-" + id, Project: "ENG"}
+	return types.WorkItem{Backend: types.WorkWorklet, ID: id, Key: "ENG-" + id, Project: "ENG"}
 }
 
 // ONE ITEM IS ONE ITEM, however often and under whatever label it was written.
@@ -121,7 +121,7 @@ func TestTheWriteSetNamesTheSoleItemItWasWrittenTo(t *testing.T) {
 	}
 	// A write that names no item is not an item: it must not make one sole
 	// write into two.
-	w.Add(types.WorkItem{Backend: types.WorkNative})
+	w.Add(types.WorkItem{Backend: types.WorkWorklet})
 	if _, ok := w.Sole(); !ok {
 		t.Error("a write naming no item was counted as a second item")
 	}

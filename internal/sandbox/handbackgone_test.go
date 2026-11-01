@@ -285,7 +285,7 @@ func TestARetryWhoseReleaseLandedAndFailedIsResumedWithItsReply(t *testing.T) {
 	if rig.fireRetries() != 1 {
 		t.Fatal("nothing retried the resume the run is owed")
 	}
-	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("resumed %+v, want the run resumed once with R1", calls)
 	}
 	if handed := rig.handedBack(); len(handed) != 0 {
@@ -338,7 +338,7 @@ func TestAKeptEndingWhoseClaimWasHandedBackResumesTheRun(t *testing.T) {
 	if rig.fireRetries() == 0 {
 		t.Fatal("nothing was scheduled to finish the kept ending")
 	}
-	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("resumed %+v, want the run resumed once with R1", calls)
 	}
 	if handed := rig.handedBack(); len(handed) != 0 {

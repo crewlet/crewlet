@@ -15,7 +15,7 @@ import (
 )
 
 // EVERY DERIVED FILE IS DECLARED, and every declaration says everything a
-// reader of it needs (ADR-0056). A derived file is one the cache writes from
+// reader of it needs (ADR-0079). A derived file is one the cache writes from
 // what an incarnation already holds and no row names; the sweep keeps, Verify
 // admits, the check and the scrub hold, the budget counts and the maintainer
 // writes exactly what the declarations say, so a file real git writes that no

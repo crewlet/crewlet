@@ -3,7 +3,28 @@
  * test builds is one the constructors in `lib/phases.ts` could have built.
  */
 
-import type { PhaseRecord, ToolCall } from "~/lib/phases.ts";
+import type { Invocation, PhaseRecord, ToolCall } from "~/lib/phases.ts";
+
+/** One CLI run that made round 1, observed and ended by its model, unless the
+ *  suite says otherwise. */
+export function invocation(over: Partial<Invocation> = {}): Invocation {
+  return {
+    run: 1,
+    startedAt: "",
+    durationMs: 0,
+    providerKey: "claude-max",
+    model: "stub-sonnet",
+    outcome: "end",
+    firstRound: 1,
+    lastRound: 1,
+    requestsObserved: true,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    toolCalls: 0,
+    ...over,
+  };
+}
 
 export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
   return {
@@ -55,11 +76,13 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     transcriptElidedBytes: 0,
     trigger: null,
     timedRounds: [],
+    invocations: [],
     hostRound: 0,
     cacheReadTokens: 0,
     maxRounds: 0,
     roundStartedAt: "",
-    runningCall: null,
+    runStartedAt: "",
+    runningCalls: [],
     bodyWithheld: false,
     steers: [],
     node: "",
@@ -85,6 +108,7 @@ export function toolCall(over: Partial<ToolCall> = {}): ToolCall {
     origin: "builtin",
     server: "",
     startedAt: "",
+    callId: "",
     ...over,
   };
 }

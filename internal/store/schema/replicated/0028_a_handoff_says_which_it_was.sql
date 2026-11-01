@@ -4,7 +4,7 @@
 --
 -- A task carries a hand-off counter, `tracker_tasks.reassignments`: an agent
 -- moving the assignee spends one, a person touching the task at all returns
--- the whole budget, and past `tracker.ReassignmentBudget` the next agent
+-- the whole budget, and past `worklet.ReassignmentBudget` the next agent
 -- hand-off is refused. The counter is the task's CURRENT value, and nothing
 -- kept what it was when each hand-off happened — so a feed row reading "eng
 -- reassigned it to ops" could not say "hand-off 3 of 8", and the history of an

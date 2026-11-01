@@ -8,6 +8,7 @@ import { RestError } from "~/protocol/index.ts";
 import { keyedWrite } from "~/lib/keyedWrite.ts";
 import { checkPage, uploadFiles } from "~/lib/artifacts/api.ts";
 import { HtmlCreate } from "./HtmlCreate.tsx";
+import { context, draftField, openFrame, setDraft } from "../draftTesting.ts";
 
 vi.mock("~/lib/artifacts/access.ts", () => ({ useArtifactAccess: () => ({ can: true }) }));
 vi.mock("~/lib/keyedWrite.ts", () => ({ keyedWrite: vi.fn() }));
@@ -263,7 +264,7 @@ test("asking files the task to the chosen agent and opens it", async () => {
   });
   expect(shown).toContain(request.brief);
   expect(shown).toContain("(kind `html`)");
-  expect(location.hash).toBe("#/work/CRW-9");
+  expect(location.hash).toBe("#/worklet/CRW-9");
 });
 
 // A PAGE THE PERSON WROTE goes to the agent to build on.
@@ -284,4 +285,25 @@ test("a source written on the page goes with the brief", async () => {
   expect(request.title).toBe("Build an HTML page: Venue poll");
   expect(request.brief).toContain("Build on the page as it stands (index.html):");
   expect(request.brief).toContain("<p>Draft</p>");
+});
+
+// THE SOURCE BEING WRITTEN IS THE ASSISTANT'S TO READ, and a change it proposes
+// replaces a file's source and what the page may use through the page's own
+// setters; the preview stays the person's press.
+test("the page being written is the assistant's to read, and a draft.set sets its source", () => {
+  openFrame("artifacts-new");
+  mount("#/artifacts/new/html");
+  expect(context().draft).toMatchObject({ kind: "client", step: "ask" });
+  expect(draftField("files.1")).toMatchObject({ label: "index.html", editable: true });
+  expect(
+    setDraft({ "files.1": page("<p>Poll</p>"), capabilities: ["db", "identity"] }),
+  ).toMatchObject({ outcome: "applied" });
+  expect(screen.getByRole("textbox", { name: "Source of index.html" })).toHaveProperty(
+    "value",
+    page("<p>Poll</p>"),
+  );
+  // THE TITLE FOLLOWS THE SOURCE until the person or the assistant types one.
+  expect(draftField("title")?.value).toBe("Venue poll");
+  expect(draftField("capabilities")?.value).toBe("db\nidentity");
+  expect(setDraft({ capabilities: ["camera"] })).toMatchObject({ outcome: "invalid" });
 });

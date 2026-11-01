@@ -516,7 +516,7 @@ export function barsOver(
     // THE UPPER EDGE IS INCLUSIVE AND THE LOWER ONE IS NOT, which is not a
     // choice made here: it is the edge the ROWS came back on. The engine
     // compiles a window to `h.created_at >= from AND h.created_at <= to`
-    // (`internal/tracker/activityread.go`), so a change made in the instant
+    // (`internal/worklet/activityread.go`), so a change made in the instant
     // the window closed IS in the answer — and a chart that excluded it would
     // draw fewer changes than the list under it, with nothing saying why.
     if (!Number.isFinite(ms) || ms < first || ms > end) continue;

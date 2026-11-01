@@ -17,6 +17,7 @@ import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 interface Golden {
   answers: Record<string, RetentionGateResult>;
@@ -50,7 +51,7 @@ function engine(...replies: { status: number; body: unknown }[]): Sent[] {
       const reply = replies[Math.min(sent.length - 1, replies.length - 1)]!;
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -156,7 +157,7 @@ test("the gesture carries the confirmation and an op id the route accepts", asyn
   confirmAndPress("node-2", "Evict");
   await waitFor(() => expect(sent.length).toBe(1));
 
-  expect(sent[0]!.path).toBe("/work/retention/evict/node-2");
+  expect(sent[0]!.path).toBe("/worklet/retention/evict/node-2");
   expect(sent[0]!.query.get("confirm")).toBe("node-2");
   const opId = sent[0]!.query.get("op_id") ?? "";
   expect(opId).toMatch(OP_ID);
@@ -248,7 +249,7 @@ test("an eviction nobody could judge offers force", async () => {
   engine(golden.refusals["eviction_unjudged"]!);
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
   confirmAndPress("node-4", "Evict");
-  await waitFor(() => expect(screen.getByText(/cannot be judged/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Couldn.t tell whether node-4/)).toBeTruthy());
   expect(screen.getByRole("checkbox", { name: "Force the eviction" })).toBeTruthy();
 });
 
@@ -366,7 +367,11 @@ test("a gateway's answer or a cut-off one keeps the op id and offers to finish i
         status: 504,
         headers: { "Content-Type": "text/html" },
       }),
-    () => new Response(JSON.stringify({ message: "upstream closed" }), { status: 502 }),
+    () =>
+      new Response(JSON.stringify({ message: "upstream closed" }), {
+        headers: ENGINE_HEADERS,
+        status: 502,
+      }),
     () =>
       new Response('{"node":"node-4","op_id":"01a0c4', {
         status: 200,
@@ -383,7 +388,7 @@ test("a gateway's answer or a cut-off one keeps the op id and offers to finish i
           ? reply()
           : new Response(JSON.stringify(answer("applied")), {
               status: 200,
-              headers: { "Content-Type": "application/json" },
+              headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
             });
       }),
     );
@@ -428,7 +433,7 @@ test("a refused finish renders beside the answer it already had", async () => {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
-  await waitFor(() => expect(screen.getByText(/cannot be judged/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Couldn.t tell whether node-4/)).toBeTruthy());
   expect(screen.getByText(/Finishing it was refused, and wrote nothing/)).toBeTruthy();
   // THE ANSWER IS STILL THERE: its operation, and Finish under it.
   expect(screen.getByText(result.op_id)).toBeTruthy();

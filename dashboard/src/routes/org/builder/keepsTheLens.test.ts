@@ -65,7 +65,7 @@ test("a move off the builder does not keep it, including to its own workspace's 
     "#/company/schedules",
     // The sidebar, which is ordinary links.
     "#/inbox",
-    "#/work",
+    "#/worklet",
     "#/settings/config",
     // The command palette, which pushes a path with no query at all.
     "#/company/org/seats/ceo",

@@ -484,10 +484,10 @@ func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]
 
 // The work's statements, each registered in plan_test.go. A head's attempts
 // for its target are a range of code_checks' key; the change's attempts not
-// yet ended are code_checks_live_idx's (replicated 0088), its predicate spelled
+// yet ended are code_checks_live_idx's (replicated 0111), its predicate spelled
 // as the index declares it, each kept where no live change into its target
 // heads its commit — code_changes_target_idx, whose predicate liveChanges
-// spells; and a requeue reads code_checks_requeue_idx (replicated 0088), its
+// spells; and a requeue reads code_checks_requeue_idx (replicated 0111), its
 // predicate spelled as the index declares it (requeuedRows), then the next
 // attempt's absence by code_checks' key.
 const (

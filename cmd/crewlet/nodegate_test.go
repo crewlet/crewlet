@@ -13,18 +13,13 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/artifactdata"
-	"github.com/crewlet/crewlet/internal/artifactsdomain"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // evictionLog is one identity-claiming log's eviction table, as its domain
@@ -38,15 +33,15 @@ type evictionLog interface {
 // NODES ON — through the gate this binary hands the API ([nodeGate]).
 //
 // Two failures, both through the wiring here. The route handed the gate nothing
-// about its caller, so every log's record — and the row every node applies it
-// into, the one `crewlet retention` prints as "evicted by" — named THIS NODE's
-// writer: "who stopped node-9 writing" had one answer, the node that happened
-// to serve the request. And the gate this binary handed over was the TRACKER's
-// writer, which wrote the tracker's log alone: every other log went on
-// counting the evicted node for ever. Mutation: hand the API the tracker's
+// about its caller, so every log's record — and the row every data node applies
+// it into, the one `crewlet retention` prints as "evicted by" — named THIS
+// NODE's writer: "who stopped node-9 writing" had one answer, the node that
+// happened to serve the request. And the gate this binary handed over was the
+// TRACKER's writer, which wrote the tracker's log alone: every other log went
+// on counting the evicted node for ever. Mutation: hand the API the tracker's
 // writer again, or drop the caller from the request, and a log either holds no
-// row or names the node; drop the credential from the party a log's writer
-// acts as, and that log's record does not carry it.
+// row or names the node; drop the credential from the party a log's writer acts
+// as, and that log's record does not carry it.
 func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	t.Parallel()
 	e := bootedEngine(t)
@@ -68,10 +63,19 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 		t.Fatalf("evict: %v (%+v)", err, res)
 	}
 
-	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
-	// added here too, or the gesture answering for it goes unchecked.
-	logs := []evictionLog{tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}, code.Domain{}}
+	// EVERY IDENTITY-CLAIMING LOG, read off the register rather than named:
+	// a log this build adds is checked here from the change that registers
+	// it, where a list written again here answered for the logs it named and
+	// left the newest unchecked.
+	var logs []evictionLog
+	for _, domain := range identityLogs(t) {
+		log, lists := domain.(evictionLog)
+		if !lists {
+			t.Fatalf("the %s log claims identity and cannot list who is evicted "+
+				"on it", domain.Name())
+		}
+		logs = append(logs, log)
+	}
 	var answered, want []string
 	for _, d := range res.Domains {
 		answered = append(answered, d.Domain)
@@ -136,9 +140,9 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 func TestAReanchorIsPublishedAsWhoRanIt(t *testing.T) {
 	t.Parallel()
 	e := bootedEngineAt(t, reanchorCompanyYAML, time.Now())
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 	before := cursorGenerations(t, e)
-	view := rebuiltLog(t, e, tracker.Domain{}.Stream())
+	view := rebuiltLog(t, e, worklet.Domain{}.Stream())
 
 	by := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
 		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
@@ -198,15 +202,15 @@ func TestAReanchorIsPublishedAsWhoRanIt(t *testing.T) {
 
 // AND A REANCHOR THAT NAMES NOBODY IS REFUSED before it touches anything: it
 // is the one gesture that declares a log's history unreachable, and an audit
-// row naming nobody is the one it would leave on every node.
+// row naming nobody is the one it would leave on every data node.
 //
 // ON A LOG THERE IS SOMETHING TO RE-ANCHOR, so the refusal is about the name
 // and nothing else: the same request naming somebody then runs.
 func TestAReanchorNamingNobodyIsRefused(t *testing.T) {
 	t.Parallel()
 	e := bootedEngine(t)
-	stream := tracker.Domain{}.Stream().Name
-	view := rebuiltLog(t, e, tracker.Domain{}.Stream())
+	stream := worklet.Domain{}.Stream().Name
+	view := rebuiltLog(t, e, worklet.Domain{}.Stream())
 	confirm := statelog.ConfirmationOf(view.CreatedAt)
 
 	_, err := e.Reanchor(t.Context(), engine.ReanchorRequest{Stream: stream, Confirm: confirm})

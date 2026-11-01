@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
 )
 
@@ -182,6 +183,15 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		meta[MetaWorkBackend], meta[MetaWorkID] = string(item.Backend), item.ID
 		meta[MetaWorkKey], meta[MetaWorkProject] = item.Key, item.Project
 	}
+	body, source := wakeText(payload, r.ChangeID)
+	if body != "" {
+		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts it
+		// in (ADR-0040): every word of a change's text is its writer's —
+		// the description they filed, the reason they gave, their comment,
+		// their review — and the record's actor is that writer.
+		meta[notify.BodySourceField] = string(source)
+		meta[notify.BodyAuthorField] = r.Actor
+	}
 	subject := r.ChangeRef
 	if r.Title != "" {
 		subject += ": " + r.Title
@@ -191,7 +201,7 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		EventType: string(record.Op),
 		Sender:    r.Actor,
 		Subject:   subject,
-		Body:      wakeText(payload, r.ChangeID),
+		Body:      body,
 		Metadata:  meta,
 		// WHO WROTE WHAT THE WAKE ANNOUNCES, by the routing's own record of
 		// it: a person as the seat they hold, a seat as itself, and nobody —
@@ -222,29 +232,32 @@ func writerOf(r *ChangeRouting) *types.NotificationWriter {
 // review cut at six hundred bytes reads as the whole of it. Nothing for a
 // record that says nothing of its own, a push's among them, and nothing for a
 // payload about another change.
-func wakeText(payload any, change string) string {
-	var text, about string
+func wakeText(payload any, change string) (string, provenance.Source) {
+	var (
+		text, about string
+		source      provenance.Source
+	)
 	switch p := payload.(type) {
 	case ChangeOpen:
-		text, about = p.Body, p.ChangeID
+		text, about, source = p.Body, p.ChangeID, provenance.SourceChangeDescription
 	case ChangeEdit:
 		if p.Body != nil {
 			text = *p.Body
 		}
-		about = p.ChangeID
+		about, source = p.ChangeID, provenance.SourceChangeDescription
 	case ChangeClose:
-		text, about = p.Reason, p.ChangeID
+		text, about, source = p.Reason, p.ChangeID, provenance.SourceChangeNote
 	case ReviewerRequest:
-		text, about = p.Note, p.ChangeID
+		text, about, source = p.Note, p.ChangeID, provenance.SourceChangeNote
 	case Comment:
-		text, about = p.Body, p.ChangeID
+		text, about, source = p.Body, p.ChangeID, provenance.SourceChangeComment
 	case Review:
-		text, about = p.Summary, p.ChangeID
+		text, about, source = p.Summary, p.ChangeID, provenance.SourceChangeReview
 	}
 	if about != change {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(text), source
 }
 
 // recordFromBody recovers the record the feed relayed, through the domain's

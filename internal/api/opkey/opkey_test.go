@@ -280,7 +280,7 @@ func person(login string) iam.Principal {
 
 // request is a write by p, sending key in the header where it is not empty.
 func request(p iam.Principal, key string) *http.Request {
-	r := httptest.NewRequest(http.MethodPost, "/work/items", nil)
+	r := httptest.NewRequest(http.MethodPost, "/worklet/items", nil)
 	if key != "" {
 		r.Header.Set(opkey.Header, key)
 	}

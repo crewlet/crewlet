@@ -111,9 +111,18 @@ func NewLineages(g *Guard, standing SessionStandings) (*Lineages, error) {
 // name, or a seat the chart will not let it act as; [iam.Unknown] for a node
 // that cannot tell, which a caller answers 503.
 func (l *Lineages) Principal(ctx context.Context, lineage string) (iam.Principal, iam.Resolution) {
+	return l.PrincipalFor(ctx, lineage, session.NeedRead)
+}
+
+// PrincipalFor is [Lineages.Principal] for a request that needs need of the
+// session: an assistant grant's request is judged at the need its own method
+// carries ([needOf]), exactly as the person's cookie sending it would be, so a
+// write through a grant is never admitted on rows that would answer the
+// person's own write 503.
+func (l *Lineages) PrincipalFor(ctx context.Context, lineage string, need session.Need) (iam.Principal, iam.Resolution) {
 	switch {
 	case strings.HasPrefix(lineage, iam.SessionPrefix):
-		return l.session(ctx, lineage)
+		return l.session(ctx, lineage, need)
 	case strings.HasPrefix(lineage, iam.MachineTokenPrefix):
 		return l.machineToken(ctx, lineage)
 	case strings.HasPrefix(lineage, iam.TokenLoginPrefix):
@@ -129,7 +138,7 @@ func (l *Lineages) Principal(ctx context.Context, lineage string) (iam.Principal
 }
 
 // session resolves a browser session's name.
-func (l *Lineages) session(ctx context.Context, name string) (iam.Principal, iam.Resolution) {
+func (l *Lineages) session(ctx context.Context, name string, need session.Need) (iam.Principal, iam.Resolution) {
 	s := l.guard.sessions
 	raw := strings.TrimPrefix(name, iam.SessionPrefix)
 	lineage, err := uuid.Parse(raw)
@@ -160,7 +169,7 @@ func (l *Lineages) session(ctx context.Context, name string) (iam.Principal, iam
 	}
 	identity, err := s.directory.Resolve(ctx, raw, owner)
 	v := session.StandingByName(lineage, owner, identity, err)
-	switch v.Answer(session.NeedRead) {
+	switch v.Answer(need) {
 	case session.AnswerServe:
 	case session.AnswerUnavailable:
 		log.Log(ctx, UnreadLevel(ctx), "api_lineage_unavailable", "lineage", name,

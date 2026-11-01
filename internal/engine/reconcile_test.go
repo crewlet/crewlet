@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,14 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // pinnedNow is the clock the reconcile tests run on. Pinned because the
@@ -47,17 +52,38 @@ var anOrigin = coord.RevisionOrigin{
 // authoring state, and an empty one would not be refused at all (see
 // nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
-  "providers":{"llm":{"zulu":{"model":"m"}}},
+  "providers":{"sandbox":{"fake":true},"llm":{"zulu":{"model":"m"}}},
   "workers":{"researcher":{"description":"reads sources and reports findings",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
+// unbuildableCompanyDoc meets every runnable rule and is refused by the
+// engine's own build: its one seat's executor runs in an E2B box, whose key is
+// a ${VAR} nothing on the node answers, and the E2B backend refuses an empty
+// key.
+const unbuildableCompanyDoc = `
+name: Acme
+providers:
+  sandbox:
+    e2b:
+      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+  llm:
+    coder: {agent: claude-code, model: sonnet, run_in: e2b}
+roles:
+  - name: SWE
+    handle: swe
+    llm: coder
+`
+
 // A second company, differing from companyDoc in the ways a reconcile has to
-// be visible through: one more seat, and a token budget.
+// be visible through: one more seat, and a token budget — a day ceiling above
+// the executor's launch floor, which a company with seats that run an
+// executor may not go below.
 const grownCompanyDoc = `
 name: Acme
 token_budget:
-  day: 4242
+  day: 4242000
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -72,6 +98,10 @@ roles:
     handle: designer
     llm: zulu
 `
+
+// grownDayCeiling is grownCompanyDoc's day ceiling, which tells it apart from
+// companyDoc once applied.
+const grownDayCeiling = 4242000
 
 // plane is one engine, one store, and the reconciler between them.
 type plane struct {
@@ -111,7 +141,7 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 	for _, opt := range opts {
 		opt(&options)
 	}
-	r, err := e.NewReconciler(options)
+	r, err := e.NewReconciler(t.Context(), options)
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
@@ -129,7 +159,7 @@ func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (auth
 	material := testKeyMaterial(t)
 	keyed := func() *engine.Engine {
 		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Secrets.Keys = []config.SecretKey{{ID: b.Secrets.ActiveKeyID, Material: material}}
 		})})
 	}
@@ -154,8 +184,9 @@ func (p *plane) seal(t *testing.T, document json.RawMessage) json.RawMessage {
 // activate stores a revision and points the fleet at it, returning its epoch.
 //
 // TWO STORES, which is the shape the engine itself now has: the payload goes
-// in the node's database, the pointer in the coordination store — SEALED in
-// both, as every writer stores it.
+// in the node's database as history, the pointer in the coordination store —
+// SEALED in both, as every writer stores it. Nothing here makes it what the
+// node boots on: only the reconciler's apply does.
 //
 // TAKES THE CALLER'S CONTEXT rather than reaching for t.Context(). Most cases
 // pass t.Context() and nothing changes, but the concurrency case below drives
@@ -165,7 +196,7 @@ func (p *plane) seal(t *testing.T, document json.RawMessage) json.RawMessage {
 func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := p.seal(t, yamlToJSON(t, doc))
-	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
+	id, err := p.store.Configs().Insert(ctx, store.Revision{
 		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: iam.ActorHuman,
 		OperatorID: revisionCredential, Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
@@ -201,7 +232,7 @@ const (
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
 	payload = p.seal(t, payload)
-	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := p.store.Configs().Insert(t.Context(), store.Revision{
 		CreatedByKind: iam.ActorOperator,
 		Source:        "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
@@ -298,7 +329,7 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	if got := len(before.Seats()); got != 2 {
 		t.Errorf("the previous epoch changed under the apply: %d seats", got)
 	}
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the new revision's", got)
 	}
 	// AND THE ORG IS THE REVISION'S: the seats are part of the document an
@@ -413,18 +444,20 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	}
 	afterFirst := p.engine.Company()
 
-	active, found, err := p.store.Configs().Active(t.Context())
+	target, found, err := p.fleet.Target(t.Context())
 	if err != nil || !found {
-		t.Fatalf("active: found=%v err=%v", found, err)
+		t.Fatalf("Target: found=%v err=%v", found, err)
+	}
+	payload, found, err := p.fleet.Payload(t.Context(), target.RevisionID)
+	if err != nil || !found {
+		t.Fatalf("Payload: found=%v err=%v", found, err)
 	}
 	// RE-ACTIVATING the SAME revision, which is the case that matters: the
 	// pointer is append-only, so it mints a new epoch every node is
 	// watching — that is how a rotated secret reaches a running fleet.
-	summary, err := p.store.Configs().Activate(t.Context(), active.ID, pinnedNow)
-	if err != nil {
-		t.Fatalf("re-activate: %v", err)
-	}
-	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: active.ID, Summary: summary, Payload: active.Payload, At: pinnedNow, Origin: anOrigin})
+	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: target.RevisionID, Summary: target.Summary, Payload: payload,
+		At: pinnedNow, Expect: target.RevisionID, Origin: anOrigin})
 	if err != nil {
 		t.Fatalf("re-publish: %v", err)
 	}
@@ -460,12 +493,16 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
-// RE-ACTIVATING THE REVISION THIS NODE HOLDS MOVES ITS ACTIVATION INSTANT.
+// RE-ACTIVATING THE REVISION THIS NODE BOOTS ON MOVES BOTH ITS INSTANTS.
 //
-// Re-activation is the credential-rotation gesture, and the local row's
-// instant is the one this node boots its chart with and the one its config
-// history shows. The early return for "already the fleet's revision" used to
-// leave it at the first activation's.
+// Re-activation is the credential-rotation gesture. The boot row's served
+// instant is the one this node boots its chart with, and its activation
+// instant the one its config history shows and the sweep dates it by. The
+// early return for "already the fleet's revision" used to leave them at the
+// first activation's.
+//
+// Mutation: compare the boot row with what the engine serves by id alone in
+// Reconciler.serve, and the instant stays the first activation's.
 func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -488,41 +525,264 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	active, found, err := p.store.Configs().Active(t.Context())
+	boot, found, err := p.store.Configs().Boot(t.Context())
 	if err != nil || !found {
-		t.Fatalf("active: found=%v err=%v", found, err)
+		t.Fatalf("boot: found=%v err=%v", found, err)
 	}
-	if active.ID != target.RevisionID || !active.ActivatedAt.Equal(later) {
-		t.Errorf("this node's active revision is %s activated at %s, want %s "+
-			"activated at the re-activation's %s", active.ID, active.ActivatedAt,
-			target.RevisionID, later)
+	if boot.ID != target.RevisionID || !boot.ServedAt.Equal(later) || !boot.ActivatedAt.Equal(later) {
+		t.Errorf("this node boots on %s applied at %s (activated %s), want %s applied at "+
+			"the re-activation's %s", boot.ID, boot.ServedAt, boot.ActivatedAt, target.RevisionID, later)
 	}
 }
 
-// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
-//
-// A node's active revision is what its GET /config serves, what it boots on,
-// and what it offers the whole fleet at its next start whenever it is newer
-// than the pointer. One that is not the fleet's, left there after the node
-// applied the fleet's epoch, is a node serving a company the fleet is not
-// running, and republishing it one restart later over the one that is.
-func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
-	t.Parallel()
-	activeID := func(t *testing.T, p *plane) string {
-		t.Helper()
-		active, found, err := p.store.Configs().Active(t.Context())
-		if err != nil || !found {
-			t.Fatalf("this node has no active revision (found=%v err=%v)", found, err)
-		}
-		return active.ID
-	}
+// rotatedKeyDoc is a company whose one seat's executor runs in an E2B box keyed
+// by a ${VAR}: it builds while the node's environment answers it, and the E2B
+// backend refuses it once it does not — the shape of a rotated credential one
+// node never received.
+const rotatedKeyDoc = `
+name: Acme
+providers:
+  sandbox:
+    e2b:
+      api_key: "${CREWLET_TEST_E2B_KEY_ROTATED}"
+  llm:
+    coder: {agent: claude-code, model: sonnet, run_in: e2b}
+roles:
+  - name: SWE
+    handle: swe
+    llm: coder
+`
 
-	// A revision marked active on this node AFTER it applied the fleet's:
-	// a write that lost a race and marked itself anyway, or one whose
-	// local activation landed after this node adopted a newer revision.
-	t.Run("a stray revision marked active after the apply", func(t *testing.T) {
+// A RE-ACTIVATION OF THE REVISION A NODE RUNS, WHICH THE NODE THEN REFUSES, IS
+// STILL THE FLEET'S.
+//
+// The rotation gesture re-activates the revision every node runs, and a node
+// whose environment lost the credential refuses it — so it keeps running that
+// revision, applied at the earlier instant, and its boot row and its fleet's row
+// are one row. With one instant per row, the boot row kept the one it applied
+// and the fleet's newer one was lost: a lost pointer was restored at the old
+// instant, and every tick out of retries found the fleet's row behind the
+// pointer and wrote it again, decrypting the revision each time.
+//
+// The re-activation is recorded by the apply, and where that write failed, by
+// the tick out of retries: the row names the pointer's revision either way, so
+// a repair that compared the revision alone would leave its instant behind.
+//
+// Not parallel: the credential is the process environment.
+//
+// Mutations: put `is_active = 0` back on the store's raise, and the fleet's
+// instant stays the applied one; compare the revision alone in
+// Reconciler.note, and the second case keeps the applied instant.
+func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// applyKeepFails refuses the store's write of the fleet's instant
+		// for every attempt, as a write that failed during the apply.
+		applyKeepFails bool
+	}{
+		{name: "recorded by the apply"},
+		{name: "repaired out of retries", applyKeepFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CREWLET_TEST_E2B_KEY_ROTATED", "e2b_test_key")
+			p := newPlane(t)
+			p.activate(t.Context(), t, rotatedKeyDoc)
+			if err := p.recon.Tick(t.Context()); err != nil {
+				t.Fatalf("apply with the credential: %v", err)
+			}
+			target, _, err := p.fleet.Target(t.Context())
+			if err != nil {
+				t.Fatalf("Target: %v", err)
+			}
+			payload, _, err := p.fleet.Payload(t.Context(), target.RevisionID)
+			if err != nil {
+				t.Fatalf("Payload: %v", err)
+			}
+			if err = os.Unsetenv("CREWLET_TEST_E2B_KEY_ROTATED"); err != nil {
+				t.Fatal(err)
+			}
+			later := pinnedNow.Add(time.Hour)
+			if _, err = p.fleet.Activate(t.Context(), coord.ActivationRequest{
+				RevisionID: target.RevisionID, Summary: "rotate", Payload: payload, At: later,
+				Expect: target.RevisionID, Origin: anOrigin,
+			}); err != nil {
+				t.Fatalf("re-activate: %v", err)
+			}
+			if tc.applyKeepFails {
+				p.refuseInstants(t)
+			}
+			for range configplane.MaxApplyAttempts {
+				_ = p.recon.Tick(t.Context())
+			}
+			if tc.applyKeepFails {
+				p.allowInstants(t)
+				if fleets, _, _ := p.store.Configs().Fleets(t.Context()); fleets.ActivatedAt.Equal(later) {
+					t.Fatalf("the apply recorded the re-activation; the case needs its write refused")
+				}
+			}
+			_ = p.recon.Tick(t.Context())
+			if row := p.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError {
+				t.Fatalf("the re-activation applied (%+v); the case needs it refused", row)
+			}
+			fleets, found, err := p.store.Configs().Fleets(t.Context())
+			if err != nil || !found || fleets.ID != target.RevisionID || !fleets.ActivatedAt.Equal(later) {
+				t.Errorf("the fleet's row is %s at %s (found=%v err=%v), want %s at the "+
+					"re-activation's %s", fleets.ID, fleets.ActivatedAt, found, err, target.RevisionID, later)
+			}
+			boot, _, err := p.store.Configs().Boot(t.Context())
+			if err != nil || boot.ID != target.RevisionID || !boot.ServedAt.Equal(pinnedNow) {
+				t.Errorf("this node boots on %s applied at %s (err %v), want %s at the instant "+
+					"it applied, %s", boot.ID, boot.ServedAt, err, target.RevisionID, pinnedNow)
+			}
+		})
+	}
+}
+
+// refuseInstants makes this node's store refuse every write that moves a
+// revision's activation instant, which is the store failing a write it was asked
+// for and nothing else; allowInstants takes the refusal away.
+func (p *plane) refuseInstants(t *testing.T) {
+	t.Helper()
+	if _, err := p.store.SQL().ExecContext(t.Context(), `CREATE TRIGGER refuse_the_instant
+		BEFORE UPDATE ON company_config
+		WHEN NEW.activated_at IS NOT OLD.activated_at
+		BEGIN SELECT RAISE(ABORT, 'the node store refused the write'); END`); err != nil {
+		t.Fatalf("install the trigger: %v", err)
+	}
+}
+
+func (p *plane) allowInstants(t *testing.T) {
+	t.Helper()
+	if _, err := p.store.SQL().ExecContext(t.Context(), `DROP TRIGGER refuse_the_instant`); err != nil {
+		t.Fatalf("drop the trigger: %v", err)
+	}
+}
+
+// refuseBootRow makes this node's store refuse every write that moves what the
+// node boots on — the store failing a local write it was asked for, a full
+// disk or a file somebody took away — and allowBootRow takes the refusal away.
+//
+// ON THE SERVED INSTANT, which [store.Configs.Serve] moves on both rows it
+// touches: it clears the previous boot row's and stamps the new one's, so
+// either half of the transaction trips this and the whole of it is rolled back,
+// leaving the node booting on what it booted on before.
+func (p *plane) refuseBootRow(t *testing.T) {
+	t.Helper()
+	if _, err := p.store.SQL().ExecContext(t.Context(), `CREATE TRIGGER refuse_the_boot_row
+		BEFORE UPDATE ON company_config
+		WHEN NEW.served_at IS NOT OLD.served_at
+		BEGIN SELECT RAISE(ABORT, 'the node store refused the write'); END`); err != nil {
+		t.Fatalf("install the trigger: %v", err)
+	}
+}
+
+func (p *plane) allowBootRow(t *testing.T) {
+	t.Helper()
+	if _, err := p.store.SQL().ExecContext(t.Context(), `DROP TRIGGER refuse_the_boot_row`); err != nil {
+		t.Fatalf("drop the trigger: %v", err)
+	}
+}
+
+// THE FLEET'S ROW IS REPAIRED BY THE TICKS THAT FOLLOW AN APPLY.
+//
+// The row is recorded during the apply, best effort, and it is what the node
+// restores when the pointer is gone; a write the apply could not make is left
+// for the next tick to repair — the converged one, or one out of retries on a
+// revision this node refuses, which is still the fleet's. A row left behind
+// restores a company the fleet has moved past.
+//
+// Mutation: drop Reconciler.note from either branch of Tick, or break its
+// comparison with the pointer, and that branch's case keeps the stale row.
+func TestTheFleetsRowIsRepairedAfterAnApply(t *testing.T) {
+	t.Parallel()
+	// behind moves the fleet's row off the pointer, as a keep that failed
+	// during the apply leaves it.
+	behind := func(t *testing.T, p *plane) {
+		t.Helper()
+		stale := store.Revision{
+			ID: "0192f00d-0000-7000-8000-00000000057a", CreatedBy: "maya",
+			CreatedByKind: iam.ActorHuman, Source: "api", Summary: "stale",
+			Payload: p.seal(t, yamlToJSON(t, companyDoc)), CreatedAt: pinnedNow.Add(-time.Hour),
+			ActivatedAt: pinnedNow.Add(-time.Hour),
+		}
+		if err := p.store.Configs().SawFleet(t.Context(), stale); err != nil {
+			t.Fatalf("move the fleet's row back: %v", err)
+		}
+	}
+	repaired := func(t *testing.T, p *plane) {
+		t.Helper()
+		target, _, err := p.fleet.Target(t.Context())
+		if err != nil {
+			t.Fatalf("Target: %v", err)
+		}
+		fleets, found, err := p.store.Configs().Fleets(t.Context())
+		if err != nil || !found || fleets.ID != target.RevisionID || !fleets.ActivatedAt.Equal(target.At) {
+			t.Errorf("the fleet's row is %s at %s (found=%v err=%v), want the pointer's %s at %s",
+				fleets.ID, fleets.ActivatedAt, found, err, target.RevisionID, target.At)
+		}
+	}
+	t.Run("converged", func(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
+		p.activate(t.Context(), t, grownCompanyDoc)
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		behind(t, p)
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("converged tick: %v", err)
+		}
+		repaired(t, p)
+	})
+	t.Run("out of retries", func(t *testing.T) {
+		t.Parallel()
+		p := newPlane(t)
+		p.activatePayload(t, "broken", brokenRevision)
+		for range configplane.MaxApplyAttempts {
+			_ = p.recon.Tick(t.Context())
+		}
+		behind(t, p)
+		_ = p.recon.Tick(t.Context())
+		if len(p.applies) != configplane.MaxApplyAttempts {
+			t.Fatalf("%d applies, want the tick after them out of retries", len(p.applies))
+		}
+		repaired(t, p)
+	})
+}
+
+// WHAT A NODE BOOTS ON IS WHAT ITS ENGINE APPLIED.
+//
+// The boot row is the revision this node starts on, and the reconciler is its
+// only online writer: once the engine has applied the fleet's revision, the
+// boot row names it, and a converged tick puts it back there if anything moved
+// it — a write the apply could not make, or an offline choice the fleet never
+// took. A boot row left elsewhere is a node that starts, one restart later, on
+// a company the fleet is not running.
+//
+// Mutation: drop Reconciler.serve from the converged branch of Tick and the
+// first case keeps the offer.
+func TestTheBootRowFollowsWhatTheEngineApplied(t *testing.T) {
+	t.Parallel()
+	bootID := func(t *testing.T, p *plane) store.Revision {
+		t.Helper()
+		boot, found, err := p.store.Configs().Boot(t.Context())
+		if err != nil || !found {
+			t.Fatalf("this node boots on nothing (found=%v err=%v)", found, err)
+		}
+		return boot
+	}
+
+	// An offline choice made the boot row under the running node, which
+	// the boot publish withheld because the fleet had moved on: the
+	// engine runs the fleet's revision, so that is what it boots on — and
+	// it says the offline change was not published, which the operator who
+	// made it would otherwise find out by accident.
+	t.Run("a boot row moved under the running node is put back", func(t *testing.T) {
+		t.Parallel()
+		logged := &logBuffer{}
+		p := newPlane(t, func(o *engine.ReconcilerOptions) {
+			o.Log = slog.New(slog.NewJSONHandler(logged, nil))
+		})
 		p.activate(t.Context(), t, grownCompanyDoc)
 		if err := p.recon.Tick(t.Context()); err != nil {
 			t.Fatalf("tick: %v", err)
@@ -531,33 +791,79 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Target: %v", err)
 		}
-		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		offered, err := p.store.Configs().Offer(t.Context(), store.Offer{Base: "an-older-revision"}, store.Revision{
 			CreatedByKind: iam.ActorOperator,
-			Source:        "test", CreatedBy: "operator", Summary: "stray",
+			Source:        "test", CreatedBy: "operator", Summary: "offline",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
 		})
 		if err != nil {
-			t.Fatalf("store the stray revision: %v", err)
+			t.Fatalf("offer: %v", err)
 		}
 		if err := p.recon.Tick(t.Context()); err != nil {
 			t.Fatalf("tick: %v", err)
 		}
-		if got := activeID(t, p); got != target.RevisionID {
-			t.Errorf("this node's active revision is %s, want the fleet's %s rather than the stray %s",
-				got, target.RevisionID, stray)
+		if got := bootID(t, p); got.ID != target.RevisionID || got.Offer != nil {
+			t.Errorf("this node boots on %s (offer %+v), want the revision it runs, %s, "+
+				"rather than the offline %s", got.ID, got.Offer, target.RevisionID, offered)
 		}
-		// Realigned, not re-applied: the epoch was already this node's.
+		// Put back, not re-applied: the epoch was already this node's.
 		if len(p.applies) != 1 {
 			t.Errorf("%d applies, want the one", len(p.applies))
 		}
+		said := logged.records(t, "offline_revision_not_published")
+		if len(said) != 1 || said[0]["revision"] != offered ||
+			said[0]["built_on"] != "an-older-revision" ||
+			said[0]["fleet_runs"] != target.RevisionID ||
+			said[0]["hint"] != configplane.WithheldOfferRemedy(offered, "an-older-revision") {
+			t.Errorf("the replaced offline change was said as %v, want once, naming %s "+
+				"built on an-older-revision and the fleet's %s", said, offered,
+				target.RevisionID)
+		}
 	})
 
-	// A fleet revision this node HOLDS and never marked active: an API write
-	// whose own local activation failed after the fleet took it.
-	t.Run("a held revision the fleet took and this node never marked", func(t *testing.T) {
+	// The boot published this node's offer and died before recording that
+	// the fleet took it: the boot row is still an offer, of the very revision
+	// the engine runs. Serving it clears the offer, and nothing was withheld,
+	// so nothing is said.
+	t.Run("an offer the fleet took is served without a warning", func(t *testing.T) {
+		t.Parallel()
+		logged := &logBuffer{}
+		p := newPlane(t, func(o *engine.ReconcilerOptions) {
+			o.Log = slog.New(slog.NewJSONHandler(logged, nil))
+		})
+		document := p.seal(t, yamlToJSON(t, grownCompanyDoc))
+		offered, err := p.store.Configs().Offer(t.Context(), store.Offer{}, store.Revision{
+			CreatedByKind: iam.ActorOperator, Source: "file", CreatedBy: "operator",
+			Summary: "offline", Payload: document, CreatedAt: pinnedNow,
+		})
+		if err != nil {
+			t.Fatalf("offer: %v", err)
+		}
+		if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+			RevisionID: offered, Summary: "offline", Payload: document, At: pinnedNow,
+			ExpectAbsent: true, Origin: anOrigin,
+		}); err != nil {
+			t.Fatalf("the boot's publish: %v", err)
+		}
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if got := bootID(t, p); got.ID != offered || got.Offer != nil {
+			t.Errorf("this node boots on %s (offer %+v), want %s served", got.ID,
+				got.Offer, offered)
+		}
+		if said := logged.records(t, "offline_revision_not_published"); len(said) != 0 {
+			t.Errorf("an offer the fleet took was said to be withheld: %v", said)
+		}
+	})
+
+	// A revision the fleet took that this node holds only as history: an
+	// API write, which stores its revision and moves the pointer and
+	// nothing else.
+	t.Run("a held revision the fleet took becomes the boot row once applied", func(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
-		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		previous, err := p.store.Configs().Insert(t.Context(), store.Revision{
 			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "before",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
@@ -576,17 +882,795 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		}
 		if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 			RevisionID: held, Summary: "written", Payload: document, At: pinnedNow,
-			Origin: anOrigin,
+			ExpectAbsent: true, Origin: anOrigin,
 		}); err != nil {
 			t.Fatalf("activate: %v", err)
+		}
+		if _, found, err := p.store.Configs().Boot(t.Context()); err != nil || found {
+			t.Fatalf("the write is the boot row before any apply (found=%v err=%v)", found, err)
 		}
 		if err := p.recon.Tick(t.Context()); err != nil {
 			t.Fatalf("tick: %v", err)
 		}
-		if got := activeID(t, p); got != held {
-			t.Errorf("this node's active revision is %s, want the one the fleet took, %s", got, held)
+		if got := bootID(t, p); got.ID != held {
+			t.Errorf("this node boots on %s, want the one the fleet took, %s", got.ID, held)
 		}
 	})
+}
+
+// THE FLEET ROW SAYS WHAT THIS NODE WOULD COME BACK ON, which is not what it
+// is running.
+//
+// The boot row moves only once an apply has succeeded, and that write is local
+// and best effort: a store that refuses it leaves the node running a revision
+// it would not start on, for as long as the repair takes. With only the revision
+// it serves on the row, a reader that keeps what a node needs in order to start
+// — the Kubernetes operator keeps a revision's sealed credentials while a node
+// still names it — dropped exactly what the node would have booted on, and the
+// node's next restart crash-looped on a revision it could no longer build.
+//
+// And the repair cannot wait for convergence: this node refuses the fleet's
+// next revision, so it never takes a converged tick again, and the tick out of
+// retries is the one that has to move the row.
+//
+// Mutations: publish the served revision as what the node boots on (take
+// Reconciler.Boots off the boot row and read it off served) and the first
+// assertion fails; drop Reconciler.serve from the out-of-retries branch of Tick
+// and the repair never lands.
+func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t.Context(), t, companyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply the revision this node boots on: %v", err)
+	}
+	boots := p.recon.Serving()
+
+	// From here the store takes no write that moves the boot row, so the
+	// apply below leaves this node running one revision and booting on
+	// another.
+	p.refuseBootRow(t)
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply the revision this node runs: %v", err)
+	}
+	runs := p.recon.Serving()
+	if runs == boots || runs == "" {
+		t.Fatalf("this node runs and boots on %q; the case needs two revisions", runs)
+	}
+
+	// And then the pointer moves to a revision this node cannot build: it
+	// never converges again, and every tick from here is a retry or a tick
+	// out of retries.
+	refused := p.activatePayload(t, "broken", brokenRevision)
+	for range configplane.MaxApplyAttempts {
+		_ = p.recon.Tick(t.Context())
+	}
+	boot, found, err := p.store.Configs().Boot(t.Context())
+	if err != nil || !found || boot.ID != boots {
+		t.Fatalf("this node boots on %s (found=%v err=%v); the case needs the store's "+
+			"refusal to have left it on %s", boot.ID, found, err, boots)
+	}
+	row := p.fleetRow(t)
+	if row.Epoch != refused || configplane.ApplyStatus(row.Status) != configplane.StatusError {
+		t.Fatalf("the fleet row is %+v, want the refusal at epoch %d", row, refused)
+	}
+	if row.Serving != runs || row.Boots != boots {
+		t.Errorf("the fleet says this node serves %q and boots on %q, want %s and %s — "+
+			"a reader keeping what this node needs in order to start reads the second",
+			row.Serving, row.Boots, runs, boots)
+	}
+
+	// The store takes the write again. The next tick is out of retries on a
+	// revision this node still refuses, and it is the one that repairs the
+	// boot row and says so.
+	p.allowBootRow(t)
+	_ = p.recon.Tick(t.Context())
+	if boot, _, err = p.store.Configs().Boot(t.Context()); err != nil || boot.ID != runs {
+		t.Errorf("this node boots on %s (err %v) once the store took the write, want the "+
+			"revision it runs, %s", boot.ID, err, runs)
+	}
+	if row = p.fleetRow(t); row.Serving != runs || row.Boots != runs {
+		t.Errorf("the fleet says this node serves %q and boots on %q, want both %s once "+
+			"the boot row was repaired", row.Serving, row.Boots, runs)
+	}
+}
+
+// A TICK THAT APPLIED NOTHING WRITES NOTHING TO THE BOOT ROW, repair ticks
+// included.
+//
+// The row is only ever moved to a revision this engine APPLIED, and until the
+// first apply succeeds what the node serves is what it BOOTED on — which the
+// row already names, at the instant this node applied it. The two instants on
+// that row differ exactly on the node this matters for: one that refused a
+// re-activation of the revision it runs carries the fleet's later activation
+// beside its own earlier one, and a tick that wrote the row would stamp the
+// later instant as the one this node applied, which is what the next boot
+// stamps the chart with. (The same guard is what leaves an offline change in
+// the row offered until an apply replaces it.)
+//
+// Mutation: drop the applied-epoch guard from Reconciler.serve and the tick
+// that refuses the fleet's revision restamps the boot row.
+func TestATickThatAppliedNothingWritesNoBootRow(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	configs := e.Backends().Store.Configs()
+	applied := store.Revision{
+		ID: "0192f00d-0000-7000-8000-00000000b007", CreatedBy: "maya",
+		CreatedByKind: iam.ActorHuman, Source: "api", Summary: "what this node booted on",
+		Payload:   sealed(t, e, companyDoc),
+		CreatedAt: pinnedNow.Add(-time.Hour), ActivatedAt: pinnedNow.Add(-time.Hour),
+	}
+	if err := configs.Serve(t.Context(), applied); err != nil {
+		t.Fatalf("serve the revision this node booted on: %v", err)
+	}
+	// THE RE-ACTIVATION THIS NODE REFUSED before it was restarted: the row
+	// carries the fleet's later activation of the same revision, and the
+	// instant this node applied it stays where it was.
+	reactivated := applied
+	reactivated.ActivatedAt = pinnedNow
+	if err := configs.SawFleet(t.Context(), reactivated); err != nil {
+		t.Fatalf("record the fleet's re-activation: %v", err)
+	}
+	booted, found, err := configs.Boot(t.Context())
+	if err != nil || !found || !booted.ServedAt.Equal(applied.ActivatedAt) ||
+		!booted.ActivatedAt.Equal(reactivated.ActivatedAt) {
+		t.Fatalf("this node boots on %s applied at %s (activated %s, found=%v err=%v); "+
+			"the case needs the two instants apart", booted.ID, booted.ServedAt,
+			booted.ActivatedAt, found, err)
+	}
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Booted = booted })
+
+	p.activatePayload(t, "broken", brokenRevision)
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	boot, _, err := configs.Boot(t.Context())
+	if err != nil || boot.ID != applied.ID || !boot.ServedAt.Equal(applied.ActivatedAt) {
+		t.Errorf("this node boots on %s applied at %s (err %v), want %s at the instant it "+
+			"applied, %s: no apply of this engine's moved the row", boot.ID, boot.ServedAt,
+			err, applied.ID, applied.ActivatedAt)
+	}
+	if row := p.fleetRow(t); row.Serving != applied.ID || row.Boots != applied.ID {
+		t.Errorf("the fleet says this node serves %q and boots on %q, want both to be the "+
+			"revision it booted on, %s", row.Serving, row.Boots, applied.ID)
+	}
+}
+
+// sealed is a document as a writer of e's fleet stores it, for a case that
+// writes a revision into the store without a reconciler of its own.
+func sealed(t *testing.T, e *engine.Engine, doc string) json.RawMessage {
+	t.Helper()
+	payload, err := secrets.Seal(e.Cipher(), yamlToJSON(t, doc))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	return payload
+}
+
+// A NODE WHOSE DATABASE IS DISCARDED AT EVERY START BOOTS ON NOTHING, however
+// many revisions it applies.
+//
+// Its boot row is written while it runs — its own readers use it, a config
+// write built on what this node knows and an offer's base among them — and
+// read by nobody afterwards: the engine deletes the file as the next start
+// opens it. Naming that revision in the fleet view would have a reader keep
+// what this node has no use for, and say nothing about what it will run.
+//
+// ON A STORE OPENED SCRATCH, which is how the reconciler learns it: from the
+// handle the node runs on, the one reading that cannot disagree with what the
+// open did. An option saying it again was left out by every harness that
+// built a reconciler on a scratch node, which then published a boot revision.
+//
+// Mutations: drop the scratch branch of Reconciler.Boots, or build the
+// reconciler's scratch from anything but the handle (false), and the row
+// names the revision the next start deletes.
+func TestAScratchNodeBootsOnNothing(t *testing.T) {
+	t.Parallel()
+	scratch := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{Scratch: true})
+	t.Cleanup(func() { _ = scratch.Close() })
+	if !scratch.Scratch() {
+		t.Fatal("a store opened scratch says it keeps what it writes")
+	}
+	// The ENGINE's store holds the history this case writes; the scratch
+	// one is the node's own, as on a node without `data`, and meets every
+	// revision through the pointer, as such a node does.
+	p := newPlane(t, func(o *engine.ReconcilerOptions) { o.Store = scratch })
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	row := p.fleetRow(t)
+	if row.Serving == "" || row.Boots != "" {
+		t.Errorf("this node serves %q and reports booting on %q, want the revision it "+
+			"applied and nothing at all", row.Serving, row.Boots)
+	}
+	boot, found, err := scratch.Configs().Boot(t.Context())
+	if err != nil || !found || boot.ID != row.Serving {
+		t.Errorf("the boot row holds %s (found=%v err=%v), want the revision this node "+
+			"applied, %s: it is written for this node's own readers and reported to "+
+			"nobody", boot.ID, found, err, row.Serving)
+	}
+}
+
+// THE FLEET ROW NAMES THE BOOT REVISION ON THE TICK THAT MOVES IT.
+//
+// What the row says this node boots on can never be AHEAD of the store — it
+// moves only on a read of the boot row or a write to it that succeeded — so
+// the order of the boot-row write and the fleet's record decides only how
+// soon the row says it. Both orders are the right one here: a clean apply's
+// record names the new boot revision beside the one it runs, rather than the
+// previous one until the next tick; and the converged tick that repairs a
+// write that failed says so on that tick, rather than one interval later. A
+// reader watching the row through a rollout reads a node whose two names
+// differ as one whose boot row failed to move, which these two are not.
+//
+// Mutations: record before serve in Reconciler.apply and the first half reads
+// the previous boot revision; serve after refresh in Tick's converged branch
+// and the second half reads the unrepaired one.
+func TestTheFleetRowNamesTheBootRevisionOnTheTickThatMovesIt(t *testing.T) {
+	t.Parallel()
+	// A NODE THAT ALREADY BOOTS ON SOMETHING, so that the name the row
+	// would carry one tick late is a revision rather than none.
+	e := newEngine(t, engine.Options{})
+	booted := bootOn(t, e, companyDoc)
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Booted = booted })
+
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply the fleet's revision: %v", err)
+	}
+	second := p.recon.Serving()
+	if second == booted.ID {
+		t.Fatalf("this node still runs %s; the case needs an apply past it", second)
+	}
+	if row := p.fleetRow(t); row.Serving != second || row.Boots != second {
+		t.Errorf("after a clean apply the fleet says this node serves %q and boots on "+
+			"%q, want both %s on the tick that applied it rather than %s", row.Serving,
+			row.Boots, second, booted.ID)
+	}
+
+	// A write to the boot row that fails, and the converged tick that
+	// repairs it once the store takes writes again.
+	p.refuseBootRow(t)
+	p.activate(t.Context(), t, companyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply the third revision: %v", err)
+	}
+	third := p.recon.Serving()
+	if row := p.fleetRow(t); row.Serving != third || row.Boots != second {
+		t.Fatalf("the fleet says this node serves %q and boots on %q, want %s and %s; "+
+			"the case needs the boot row's write to have failed", row.Serving, row.Boots,
+			third, second)
+	}
+	p.allowBootRow(t)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("converged tick: %v", err)
+	}
+	if row := p.fleetRow(t); row.Boots != third {
+		t.Errorf("on the converged tick that repaired the boot row the fleet says this "+
+			"node boots on %q, want %s", row.Boots, third)
+	}
+}
+
+// A BOOT ROW THIS NODE COULD NOT READ IS NEVER PUBLISHED AS NONE.
+//
+// What a node boots on reaches the fleet view as a name, and an empty one says
+// it boots on nothing. That is a claim a reader acts on — the Kubernetes
+// operator keeps a revision's sealed credentials while a node still names it —
+// so it is made only from a read that found the row empty, never from one that
+// failed. A reconciler that learned the row on its first tick published, for a
+// node whose reads failed on that tick while its apply succeeded, the revision
+// it runs and an empty boot revision: the operator kept the one, deleted what
+// only the revision in the row needed, and the node's next start could not
+// build what it booted on. The row is read as the reconciler is built, and a
+// read that fails later leaves the last answer standing.
+//
+// Mutations: drop the read from Engine.NewReconciler and the record names no
+// boot revision; record an empty one when Reconciler.serve's read fails and so
+// does it.
+func TestABootRowThisNodeCouldNotReadIsNeverPublishedAsNone(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	booted := bootOn(t, e, companyDoc)
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Booted = booted })
+
+	// From here every read of the boot row fails, the reads the apply
+	// itself makes do not, and the store still holds booted there.
+	restore := unreadableBootRow(t, p.store)
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply the fleet's revision: %v", err)
+	}
+	runs := p.recon.Serving()
+	if runs == booted.ID || runs == "" {
+		t.Fatalf("this node runs %q; the case needs an apply past %s", runs, booted.ID)
+	}
+	if held := bootRowID(t, p.store); held != booted.ID {
+		t.Fatalf("the boot row holds %s; the case needs the failed reads to have kept "+
+			"the apply from moving it off %s", held, booted.ID)
+	}
+	if row := p.fleetRow(t); row.Serving != runs || row.Boots != booted.ID {
+		t.Errorf("the fleet says this node serves %q and boots on %q, want %s and the "+
+			"revision its boot row still holds, %s", row.Serving, row.Boots, runs, booted.ID)
+	}
+
+	// The row reads again: the converged tick moves it, and says so.
+	restore()
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("converged tick: %v", err)
+	}
+	if row := p.fleetRow(t); row.Boots != runs || bootRowID(t, p.store) != runs {
+		t.Errorf("the fleet says this node boots on %q once the row reads again, want %s",
+			row.Boots, runs)
+	}
+}
+
+// A RECONCILER THAT CANNOT READ WHAT ITS NODE BOOTS ON IS NOT BUILT, as the boot
+// fails on a store it cannot read: built anyway, its first record would have
+// to name a boot revision it does not know.
+//
+// Mutation: ignore the read's error in Engine.NewReconciler and the reconciler
+// is built.
+func TestAReconcilerThatCannotReadWhatItsNodeBootsOnIsNotBuilt(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	bootOn(t, e, companyDoc)
+	unreadableBootRow(t, e.Backends().Store)
+	r, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet, Queue: e.Backends().Queue,
+		NodeID: "node-a",
+	})
+	if err == nil {
+		t.Fatalf("a reconciler was built over a boot row it could not read (boots on %q)",
+			r.Boots())
+	}
+}
+
+// THE FLEET ROW SAYS WHICH EPOCH THIS NODE LAST APPLIED, beside the one it last
+// attempted.
+//
+// A refusal says the node did not reach the epoch it attempted, never which one
+// it did reach — so a writer that saved epoch 6 could not tell from the row
+// whether a node that refused it runs 5, or nothing at all. That is the
+// comparison a node's own health push makes with its live epoch, and the fleet
+// view makes it per node from this. 0 before the first apply succeeds, which
+// the view leaves out rather than offer as an epoch.
+//
+// Mutation: record the attempted epoch as the applied one and the refusal
+// reads as epoch 6 applied.
+func TestTheFleetRowSaysWhichEpochThisNodeLastApplied(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	refusedFirst := p.activatePayload(t, "broken", brokenRevision)
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	if row := p.fleetRow(t); row.Epoch != refusedFirst || row.Applied != 0 {
+		t.Errorf("before any apply the fleet says this node attempted epoch %d and "+
+			"applied %d, want %d and 0", row.Epoch, row.Applied, refusedFirst)
+	}
+
+	// Epochs up to 5 move the pointer with no tick between them, so the one
+	// apply below is of epoch 5.
+	var applied int64
+	for range 4 {
+		applied = p.activate(t.Context(), t, companyDoc)
+	}
+	if applied != 5 {
+		t.Fatalf("the pointer is at epoch %d; the case needs 5", applied)
+	}
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("apply epoch 5: %v", err)
+	}
+	refused := p.activatePayload(t, "broken", brokenRevision)
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	row := p.fleetRow(t)
+	if row.Epoch != 6 || refused != 6 || row.Applied != 5 ||
+		configplane.ApplyStatus(row.Status) != configplane.StatusError {
+		t.Errorf("the fleet says this node attempted epoch %d (%s) and applied %d, want "+
+			"the refusal of 6 beside the 5 it runs", row.Epoch, row.Status, row.Applied)
+	}
+}
+
+// bootOn makes doc what e's node boots on, as an earlier run of the node left
+// its store — applied at an instant an hour before [pinnedNow] — and returns
+// the row as the boot reads it.
+func bootOn(t *testing.T, e *engine.Engine, doc string) store.Revision {
+	t.Helper()
+	configs := e.Backends().Store.Configs()
+	if err := configs.Serve(t.Context(), store.Revision{
+		ID: uuid.NewString(), CreatedBy: "maya", CreatedByKind: iam.ActorHuman,
+		Source: "api", Summary: "what this node booted on", Payload: sealed(t, e, doc),
+		CreatedAt: pinnedNow.Add(-time.Hour), ActivatedAt: pinnedNow.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("serve the revision this node boots on: %v", err)
+	}
+	booted, found, err := configs.Boot(t.Context())
+	if err != nil || !found {
+		t.Fatalf("this node boots on nothing (found=%v err=%v)", found, err)
+	}
+	return booted
+}
+
+// unreadableBootRow makes every read of db's boot row fail while the row stays
+// where it is, and returns what puts it back. The other rows read as they did,
+// so an apply that reads only those succeeds.
+//
+// A VALUE THE COLUMN CANNOT HOLD, the row's served instant written as text: the
+// read fails as it scans the row, which is a read of THIS row failing — a
+// corrupt page, a column a newer build wrote differently — rather than the
+// whole file going away, which the apply would trip over too.
+func unreadableBootRow(t *testing.T, db *store.DB) (restore func()) {
+	t.Helper()
+	var served int64
+	if err := db.SQL().QueryRowContext(t.Context(),
+		`SELECT served_at FROM company_config WHERE is_active <> 0`).Scan(&served); err != nil {
+		t.Fatalf("read the boot row's served instant: %v", err)
+	}
+	set := func(value any) {
+		t.Helper()
+		if _, err := db.SQL().ExecContext(t.Context(),
+			`UPDATE company_config SET served_at = ? WHERE is_active <> 0`, value); err != nil {
+			t.Fatalf("write the boot row's served instant: %v", err)
+		}
+	}
+	set("not an instant")
+	if _, _, err := db.Configs().Boot(t.Context()); err == nil {
+		t.Fatal("the boot row still reads; the case needs a read of it to fail")
+	}
+	return func() { set(served) }
+}
+
+// bootRowID is the revision db's boot row holds, read past the store's own
+// reader so that a case can see it while that reader fails.
+func bootRowID(t *testing.T, db *store.DB) string {
+	t.Helper()
+	var id string
+	if err := db.SQL().QueryRowContext(t.Context(),
+		`SELECT revision_id FROM company_config WHERE is_active <> 0`).Scan(&id); err != nil {
+		t.Fatalf("read the boot row: %v", err)
+	}
+	return id
+}
+
+// A REVISION THIS NODE REFUSES NEVER BECOMES WHAT IT BOOTS ON.
+//
+// The fleet's revision used to be marked as this node's own the moment the
+// tick fetched it, before it was validated: a node that refused it kept
+// running the previous company, and booted on the refused one at its next
+// start — where the boot refused it again, before the engine ran. So a
+// revision one node's build could not run took that node down on its next
+// restart, however healthy it had been. What the node RECORDS of the refused
+// revision is that the fleet is on it: that is the company it restores if the
+// pointer is lost, and what its row in the fleet view names beside the one it
+// serves.
+//
+// Mutation: make Reconciler.keep serve the revision (the old adopt), or call
+// Reconciler.serve on a refused apply, and the boot row is the refused one.
+func TestARevisionThisNodeRefusesNeverBecomesWhatItBootsOn(t *testing.T) {
+	t.Parallel()
+	author, node := fleetPeers(t)
+	author.activate(t.Context(), t, grownCompanyDoc)
+	served, _, err := author.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if err := node.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	for _, refusal := range []struct {
+		name     string
+		document json.RawMessage
+		// runnable is whether the runnable rules refuse it, before the
+		// engine sees it, rather than the engine's own build.
+		runnable bool
+	}{
+		{"invalid", json.RawMessage(`{"name":"Acme","roles":[{"name":"CEO","handle":"ceo"},` +
+			`{"name":"Again","handle":"ceo"}]}`), true},
+		{"unbuildable", yamlToJSON(t, unbuildableCompanyDoc), false},
+	} {
+		name := refusal.name
+		epoch := author.activatePayload(t, name, refusal.document)
+		target, _, err := author.fleet.Target(t.Context())
+		if err != nil {
+			t.Fatalf("Target: %v", err)
+		}
+		err = node.recon.Tick(t.Context())
+		if err == nil {
+			t.Fatalf("%s: the refused revision applied cleanly", name)
+		}
+		if got := strings.Contains(err.Error(), "is not a runnable company"); got != refusal.runnable {
+			t.Fatalf("%s: refused by the runnable rules = %v, want %v: %v",
+				name, got, refusal.runnable, err)
+		}
+		boot, found, err := node.store.Configs().Boot(t.Context())
+		if err != nil || !found || boot.ID != served.RevisionID {
+			t.Errorf("%s: this node boots on %s (found=%v err=%v), want the revision it "+
+				"serves, %s", name, boot.ID, found, err, served.RevisionID)
+		}
+		fleets, found, err := node.store.Configs().Fleets(t.Context())
+		if err != nil || !found || fleets.ID != target.RevisionID {
+			t.Errorf("%s: the fleet's revision is recorded as %s (found=%v err=%v), "+
+				"want the refused %s", name, fleets.ID, found, err, target.RevisionID)
+		}
+		if got := node.recon.Serving(); got != served.RevisionID {
+			t.Errorf("%s: Serving = %s, want %s", name, got, served.RevisionID)
+		}
+		row := author.fleetRow(t)
+		if row.Epoch != epoch || row.RevisionID != target.RevisionID ||
+			row.Serving != served.RevisionID ||
+			configplane.ApplyStatus(row.Status) != configplane.StatusError {
+			t.Errorf("%s: the fleet view says %+v, want an error at epoch %d on %s, "+
+				"serving %s", name, row, epoch, target.RevisionID, served.RevisionID)
+		}
+	}
+}
+
+// THIS NODE'S OWN READERS ARE TOLD WHAT ITS LAST ATTEMPT MADE OF A REVISION.
+//
+// A refusal leaves the applied epoch where it was, so read alone it is a node
+// still applying. The health push carries [engine.Reconciler.Attempt] beside
+// it, so a reader who may not read the fleet — a unit lead following their
+// save — is told this node refused the revision rather than that it is
+// applying it for good. Nothing before the first concluded attempt, which a
+// zero epoch would misstate.
+//
+// Mutation: report the attempt only once one succeeded, and the refusal reads
+// as the earlier success.
+func TestTheLastAttemptSaysARefusalTheAppliedEpochCannot(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	if attempt, ok := p.recon.Attempt(); ok {
+		t.Fatalf("an attempt %+v before any tick", attempt)
+	}
+	first := p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	refused := p.activatePayload(t, "broken", brokenRevision)
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	if p.recon.Applied() != first {
+		t.Fatalf("applied = %d after the refusal, want %d", p.recon.Applied(), first)
+	}
+	attempt, ok := p.recon.Attempt()
+	if !ok || attempt.Epoch != refused || attempt.RevisionID != target.RevisionID ||
+		configplane.ApplyStatus(attempt.Status) != configplane.StatusError {
+		t.Errorf("the last attempt is %+v (reported %v), want an error at epoch %d on %s",
+			attempt, ok, refused, target.RevisionID)
+	}
+}
+
+// A NODE SAYS WHAT IT BOOTED ON UNTIL IT APPLIES SOMETHING ELSE.
+//
+// A node that starts on its boot row and then refuses the fleet's revision is
+// still running the boot row's company, and its row in the fleet view is where
+// an operator sees that. Before its first successful apply, the reconciler
+// knows that only because it was told what the engine started on.
+//
+// Mutation: ignore ReconcilerOptions.Booted and the row serves nothing.
+func TestANodeServesWhatItBootedOnUntilAnApplySucceeds(t *testing.T) {
+	t.Parallel()
+	booted := store.Revision{ID: "0192f00d-0000-7000-8000-0000000b0070", ActivatedAt: pinnedNow}
+	p := newPlane(t, func(o *engine.ReconcilerOptions) { o.Booted = booted })
+	if got := p.recon.Serving(); got != booted.ID {
+		t.Fatalf("Serving = %q before any tick, want what the engine booted on, %s", got, booted.ID)
+	}
+	p.activatePayload(t, "broken", brokenRevision)
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	if row := p.fleetRow(t); row.Serving != booted.ID {
+		t.Errorf("the fleet view says this node serves %q, want %s", row.Serving, booted.ID)
+	}
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if got := p.recon.Serving(); got != target.RevisionID {
+		t.Errorf("Serving = %q after the apply, want %s", got, target.RevisionID)
+	}
+}
+
+// AN EPOCH IS NOT A REVISION: a pointer recreated under a running node can
+// name another revision at the epoch this node already applied.
+//
+// The node does not apply it — convergence is by epoch, and that is the
+// pointer's own contract — but nothing may then treat it as what the node
+// runs. A boot row moved to "the pointer's revision at the applied epoch" would
+// name a revision the engine never applied, and the next boot would start on
+// it unvalidated.
+//
+// Mutation: serve the converged tick's target rather than what the engine
+// applied and the boot row is the recreated pointer's revision.
+func TestAReusedEpochNeverMarksAnUnappliedRevisionAsTheBootRow(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	fleet := &swappablePlane{}
+	fleet.current.Store(&planeBox{e.Backends().Fleet})
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) { o.Fleet = fleet })
+	p.fleet = e.Backends().Fleet
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
+	applied, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// A FRESH COORDINATION STORE whose first activation — the same epoch —
+	// names another revision this node holds.
+	recreated := memory.NewFleet()
+	document := p.seal(t, yamlToJSON(t, companyDoc))
+	other, err := p.store.Configs().Insert(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
+		Summary: "elsewhere", Payload: document, CreatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("store the other revision: %v", err)
+	}
+	published, err := recreated.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: other, Summary: "elsewhere", Payload: document, At: pinnedNow.Add(time.Hour),
+		ExpectAbsent: true, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatalf("activate on the recreated store: %v", err)
+	}
+	if published.Epoch != epoch {
+		t.Fatalf("the recreated store is at epoch %d, want the reused %d", published.Epoch, epoch)
+	}
+	fleet.current.Store(&planeBox{recreated})
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	boot, found, err := p.store.Configs().Boot(t.Context())
+	if err != nil || !found || boot.ID != applied.RevisionID {
+		t.Errorf("this node boots on %s (found=%v err=%v), want the revision its "+
+			"engine applied, %s", boot.ID, found, err, applied.RevisionID)
+	}
+}
+
+// swappablePlane is a coordination plane a case can replace under a running
+// reconciler, as a rebuilt coordination store is replaced under a node.
+type swappablePlane struct{ current atomic.Pointer[planeBox] }
+
+// planeBox holds a plane in an atomic pointer, which takes a concrete type.
+type planeBox struct{ coord.Plane }
+
+func (s *swappablePlane) plane() coord.Plane { return s.current.Load().Plane }
+
+func (s *swappablePlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	return s.plane().Activate(ctx, req)
+}
+
+func (s *swappablePlane) Target(ctx context.Context) (coord.Activation, bool, error) {
+	return s.plane().Target(ctx)
+}
+
+func (s *swappablePlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+	return s.plane().Payload(ctx, revisionID)
+}
+
+func (s *swappablePlane) RecordApply(ctx context.Context, status coord.NodeApply) error {
+	return s.plane().RecordApply(ctx, status)
+}
+
+func (s *swappablePlane) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
+	return s.plane().Fleet(ctx)
+}
+
+// TWO TICKS ON ONE ENGINE FOLLOW THE POINTER IN ITS ORDER.
+//
+// The boot row moves only to what the engine applied, so an engine that let
+// two ticks interleave — each reading the pointer, then applying — could let
+// the one that read the OLDER epoch apply last, and walk the boot row back to
+// it. The first tick here is held inside its read of the older revision's
+// body until the pointer has moved on and, unless something stops it, a
+// second tick has read the newer one and applied it.
+//
+// Mutation: drop Engine.following from Tick and the second tick runs inside
+// the first, which then applies the older revision last.
+func TestTwoTicksOnOneEngineServeInPointerOrder(t *testing.T) {
+	t.Parallel()
+	author, node := fleetPeers(t)
+	author.activate(t.Context(), t, companyDoc)
+	older, _, err := author.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+
+	secondRead := make(chan struct{}, 1)
+	secondApplied := make(chan struct{}, 1)
+	second := planeFor(t, node.engine, func(o *engine.ReconcilerOptions) {
+		o.Fleet = &readSignal{Plane: author.fleet, read: secondRead}
+		o.NodeID = "node-a-second"
+		o.OnApply = func(int64, configplane.ApplyStatus) {
+			select {
+			case secondApplied <- struct{}{}:
+			default:
+			}
+		}
+	})
+	during := func() {
+		author.activate(t.Context(), t, grownCompanyDoc)
+		// Long enough for an unordered second tick to read the newer
+		// pointer and apply it; an ordered one is waiting on the first.
+		select {
+		case <-secondRead:
+			<-secondApplied
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	held := &heldPayload{Plane: author.fleet, revision: older.RevisionID,
+		entered: make(chan struct{}), during: during}
+	first := planeFor(t, node.engine, func(o *engine.ReconcilerOptions) { o.Fleet = held })
+
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = first.recon.Tick(t.Context()) })
+	// The second tick starts once the first is inside the older body.
+	<-held.entered
+	wg.Go(func() { _ = second.recon.Tick(t.Context()) })
+	wg.Wait()
+
+	newer, _, err := author.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	boot, found, err := node.store.Configs().Boot(t.Context())
+	if err != nil || !found || boot.ID != newer.RevisionID {
+		t.Errorf("this node boots on %s (found=%v err=%v), want the newer revision %s "+
+			"rather than the older %s", boot.ID, found, err, newer.RevisionID, older.RevisionID)
+	}
+}
+
+// heldPayload runs during inside the first read of one revision's body, after
+// the body has been read: the window between a tick's read of the pointer and
+// its apply.
+type heldPayload struct {
+	coord.Plane
+	revision string
+	during   func()
+	once     sync.Once
+	entered  chan struct{}
+}
+
+func (h *heldPayload) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+	payload, found, err := h.Plane.Payload(ctx, revisionID)
+	if revisionID == h.revision {
+		h.once.Do(func() {
+			close(h.entered)
+			h.during()
+		})
+	}
+	return payload, found, err
+}
+
+// readSignal says when a tick has read the pointer.
+type readSignal struct {
+	coord.Plane
+	read chan struct{}
+}
+
+func (r *readSignal) Target(ctx context.Context) (coord.Activation, bool, error) {
+	select {
+	case r.read <- struct{}{}:
+	default:
+	}
+	return r.Plane.Target(ctx)
 }
 
 func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
@@ -681,7 +1765,7 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
 	// The fixed revision's settings AND its seats: a revision carries both.
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the fixed revision's", got)
 	}
 	if got := p.seats(t); len(got) != 3 {
@@ -721,7 +1805,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); !errors.Is(err, secrets.ErrDecrypt) {
 		t.Fatalf("err = %v, want the revision refused as undecryptable", err)
 	}
-	if got := dayCeiling(p.engine.Company()); got == 4242 {
+	if got := dayCeiling(p.engine.Company()); got == grownDayCeiling {
 		t.Error("the node runs a revision it could not open")
 	}
 
@@ -730,7 +1814,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("a revision sealed under this node's keyring: %v", err)
 	}
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the sealed revision's", got)
 	}
 }
@@ -755,8 +1839,8 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 // kept.
 //
 // Mutation: let secrets.Open hand back a plaintext payload with a keyring in
-// hand, and the forged revision applies; drop the open in fetchRevision and it
-// is kept although it is refused.
+// hand, and the forged revision applies; keep it before the open in
+// Reconciler.applyRevision and it is kept although it is refused.
 func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	t.Parallel()
 	author, node := fleetPeers(t)
@@ -773,8 +1857,10 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
 	// AND IT SAYS WHERE THE BODY CAME FROM: the coordination store, where
-	// anything that reaches the broker could have written it.
-	for _, says := range []string{"coordination store", "without a seal", "forged"} {
+	// anything that reaches the broker could have written it; and what
+	// replaces it, an admin's whole document.
+	for _, says := range []string{"coordination store", "without a seal",
+		"anything that reaches the broker", "An admin", "whole document", "PUT /config"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
@@ -782,7 +1868,7 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if got := node.recon.Applied(); got == forged.Epoch {
 		t.Error("the node applied the epoch an unsealed revision was published at")
 	}
-	if got := dayCeiling(node.engine.Company()); got == 4242 {
+	if got := dayCeiling(node.engine.Company()); got == grownDayCeiling {
 		t.Error("the node runs the forged document's settings")
 	}
 	// THE FLEET VIEW the node reports into is the one it reads, the
@@ -824,7 +1910,7 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
 	document := yamlToJSON(t, grownCompanyDoc)
-	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := p.store.Configs().Insert(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
 		Summary: "unsealed", Payload: document, CreatedAt: pinnedNow,
 	})
@@ -841,13 +1927,62 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	for _, says := range []string{"this node's own copy", id, "crewlet config import"} {
+	for _, says := range []string{"this node's own copy", id, "An admin",
+		"whole document", "crewlet config import"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
 	}
-	if strings.Contains(err.Error(), "forged") {
+	if strings.Contains(err.Error(), "broker") {
 		t.Errorf("this node's own copy was answered as a forgery: %v", err)
+	}
+}
+
+// A PEER'S REVISION SEALED IN A FORM THIS BUILD DOES NOT READ IS NOT UNSEALED.
+//
+// A newer build's seal (here a successor's `enc:v2:`) is wrapped exactly as
+// this build's is, and the reader took every seal it could not parse for no
+// seal at all: the recorded error told the operator the body came from
+// outside the fleet and that a whole document replaces it, which would
+// discard what the newer peer wrote. It is refused, neither applied nor kept,
+// as every body that does not open is, and the error names the remedy, the
+// build that sealed it.
+//
+// Mutation: answer every seal secrets cannot parse as ErrUnsealedWithKey, or
+// drop openRefusal's arm for it, and the refusal speaks of a missing seal.
+func TestAPeersRevisionSealedInAFormThisBuildDoesNotReadIsNotUnsealed(t *testing.T) {
+	t.Parallel()
+	author, node := fleetPeers(t)
+
+	newer, err := author.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "0192f00d-0000-7000-8000-00000000f0f1", Summary: "from a newer build",
+		Payload: []byte(`{"__encrypted__":"enc:v2:k2:QUJDREVGR0hJSktMTU5PUA=="}`),
+		At:      pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatalf("publish the newer build's revision: %v", err)
+	}
+	err = node.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnknownEnvelope) || errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want a seal this build does not read, never an unsealed body", err)
+	}
+	for _, says := range []string{newer.RevisionID, "form this build doesn't read",
+		"newer build", "upgrade this node"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	for _, never := range []string{"without a seal", "PUT /config"} {
+		if strings.Contains(err.Error(), never) {
+			t.Errorf("the refusal says %q, which sends the operator to replace "+
+				"a document somebody sealed: %v", never, err)
+		}
+	}
+	if got := node.recon.Applied(); got == newer.Epoch {
+		t.Error("the node applied the epoch a revision it cannot read was published at")
+	}
+	if _, held, err := node.store.Configs().Get(t.Context(), newer.RevisionID); err != nil || held {
+		t.Errorf("the revision is in the node's own history (held=%v err=%v)", held, err)
 	}
 }
 
@@ -866,15 +2001,15 @@ func TestAReconcilerNeedsAStoreAndAnIdentity(t *testing.T) {
 	// every node that forgot it share a row — and the fleet view shows one
 	// anonymous entry where a dozen nodes should be.
 	e := newEngine(t, engine.Options{})
-	if _, err := e.NewReconciler(engine.ReconcilerOptions{NodeID: "n"}); !errors.Is(err, engine.ErrNoStore) {
+	if _, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{NodeID: "n"}); !errors.Is(err, engine.ErrNoStore) {
 		t.Errorf("err = %v, want ErrNoStore", err)
 	}
-	if _, err := e.NewReconciler(engine.ReconcilerOptions{
+	if _, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
 	}); !errors.Is(err, engine.ErrNoPublisher) {
 		t.Errorf("err = %v, want ErrNoPublisher", err)
 	}
-	if _, err := e.NewReconciler(engine.ReconcilerOptions{
+	if _, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet, Queue: e.Backends().Queue,
 	}); err == nil {
 		t.Error("a reconciler with no node id was built")
@@ -1234,8 +2369,9 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("the peer did not keep its own copy (held=%v err=%v)", held, err)
 	}
-	if !adopted.Active {
-		t.Error("the adopted revision is not the peer's active one")
+	if !adopted.Boots || !adopted.Fleets {
+		t.Errorf("the applied revision boots=%v fleets=%v on the peer, want both",
+			adopted.Boots, adopted.Fleets)
 	}
 	// AND IT NAMES WHO WROTE IT, AND HOW. The copy said `peer` from `fleet`,
 	// so the author was on the one node the write reached and nobody on every
@@ -1251,7 +2387,7 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	}
 	// The settings and the seats of the revision it converged on, not the
 	// one it booted with.
-	if got := dayCeiling(peer.engine.Company()); got != 4242 {
+	if got := dayCeiling(peer.engine.Company()); got != grownDayCeiling {
 		t.Errorf("the peer's token budget is %d, want the revision it "+
 			"converged on", got)
 	}
@@ -1423,6 +2559,48 @@ func TestAnUnreadableControlPlaneReopensTheGate(t *testing.T) {
 	}
 	if !p.recon.Admits() {
 		t.Error("the gate stayed shut on a posture that had failed open to serve")
+	}
+}
+
+// THE HEARTBEAT'S READ NAMES THE PLANE IT COULD NOT READ instead of failing
+// open, and shuts nothing the probe's read would not: it reopens the gate
+// exactly as [engine.Reconciler.Posture] does, so the admission a node
+// applies cannot depend on which of the two read last.
+func TestReadPostureReportsAnUnreadablePlaneAndStillReopensTheGate(t *testing.T) {
+	t.Parallel()
+	var blind atomic.Bool
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet = &blindPlane{planeBackend: o.Fleet, blind: &blind}
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.recon.ReadPosture(t.Context()); err != nil || got != configplane.PostureShed {
+		t.Fatalf("posture = %q, %v; want shed — the premise", got, err)
+	}
+	if p.recon.Admits() {
+		t.Fatal("a shedding node still admitted work — the premise")
+	}
+
+	blind.Store(true)
+	got, err := p.recon.ReadPosture(t.Context())
+	if err == nil {
+		t.Fatalf("an unreadable control plane answered %q, want an error", got)
+	}
+	if got != "" {
+		t.Errorf("posture = %q beside the error, want none", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("the gate stayed shut on a plane the heartbeat could not read")
 	}
 }
 

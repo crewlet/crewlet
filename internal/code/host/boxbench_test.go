@@ -32,7 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CODING BOX'S GIT, MEASURED (ADR-0063): what the two clone recipes that
+// A CODING BOX'S GIT, MEASURED (ADR-0086): what the two clone recipes that
 // fetch cost a box and the git node it clones from (BenchmarkBoxClone), what
 // the box's own git costs once its checkout is made and which of git's
 // box-side settings earn a place in the engine's box git environment
@@ -1166,7 +1166,7 @@ func newBenchBox(b *testing.B, f *codetest.SoloFleet, rows codetest.Rows, git st
 	run := f.Runs().Launch(boxSeat, rows.Position, host.BoxGrant{RepoID: rows.Repo.ID, Name: codetest.RepoName,
 		Access: code.AccessWrite, Branch: "refs/heads/" + boxBranch})
 	trailers, err := sandbox.TrailerEnv(boxSeat, run.LaunchID,
-		&types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"})
+		&types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"})
 	if err != nil {
 		b.Fatal(err)
 	}

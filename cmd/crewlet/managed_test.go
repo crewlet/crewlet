@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -131,67 +132,184 @@ func TestImportCompanyIsRefusedOnAManagedDeployment(t *testing.T) {
 	}
 }
 
-// A -company BOOTSTRAP SEED IS IGNORED ON A MANAGED DEPLOYMENT, loudly: an
-// empty store there waits for the managing system's first write, and a file
-// the node was never told about (the ./company.yaml default) must not become
-// the company in the meantime.
-func TestABootstrapSeedIsIgnoredOnAManagedDeployment(t *testing.T) {
+// A -company BOOTSTRAP SEED IS NEITHER IMPORTED NOR RUN ON A MANAGED
+// DEPLOYMENT, and is not even read: an empty store there waits for the
+// managing system's first write, and a file the node was never told about (the
+// ./company.yaml default) must not become the company in the meantime — nor
+// fail the boot of a node that ignores it because it no longer parses.
+//
+// It went through the import alone: the managed check dropped the seed for the
+// import, after the engine had already booted on the file, so a managed node
+// with an empty store ran the file's company and claimed its seats while
+// logging that the file is never imported. Resolved as the run resolves it and
+// decided as the run decides it, the engine is handed no company, nothing is
+// imported, and the ignored file is said, naming the writer.
+func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T) {
 	t.Parallel()
-	company := parse(t, companyYAML)
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, nil))
+	dir := t.TempDir()
+	managed := managedBootstrap(t, dir)
+	// A FILE THAT DOES NOT PARSE, at the default path: read, it would refuse
+	// the boot of a node that ignores it.
+	stray := filepath.Join(dir, "company.yaml")
+	if err := os.WriteFile(stray, []byte("name: [unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(t *testing.T, path string, named bool) (*config.Bootstrap, tierBSeed) {
+		t.Helper()
+		flags := flag.NewFlagSet("run", flag.ContinueOnError)
+		cfg := addConfigFlags(flags)
+		args := []string{"-config", managed}
+		if named {
+			args = append(args, "-company", path)
+		}
+		if err := flags.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		// THE DEFAULT, standing where the working directory's would.
+		*cfg.company = path
+		boot, seed, err := cfg.loadForRun(t.Context(), flags, "")
+		if err != nil {
+			t.Fatalf("a managed node refused a -company file it ignores: %v", err)
+		}
+		return boot, seed
+	}
 
-	unmanaged := config.DefaultBootstrap()
-	if got := managedSeed(t.Context(), &unmanaged, seedOf(company), log); got.Company == nil {
-		t.Fatal("an unmanaged deployment dropped its seed")
+	for _, named := range []bool{false, true} {
+		boot, seed := resolve(t, stray, named)
+		if seed.Company != nil || !seed.Managed || seed.Path != stray {
+			t.Fatalf("a managed node's seed (named %v) resolved to %+v, want the file "+
+				"named and never read", named, seed)
+		}
+		var logged bytes.Buffer
+		plan, err := decideOn(t, boot, seed, managed,
+			slog.New(slog.NewTextHandler(&logged, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts, err := bootOptions(boot, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Company != nil || plan.act != seedNone {
+			t.Errorf("a managed node with an empty store boots on %v to %q, want no "+
+				"company and nothing imported", companyLabel(opts.Company), plan.act)
+		}
+		if !strings.Contains(logged.String(), "company_seed_ignored") ||
+			!strings.Contains(logged.String(), "operator") ||
+			!strings.Contains(logged.String(), stray) {
+			t.Errorf("the ignored seed was not said, naming the file and the writer: %s",
+				logged.String())
+		}
+	}
+
+	// AN ABSENT DEFAULT IS NO SEED, and nothing to say.
+	boot, seed := resolve(t, filepath.Join(dir, "absent.yaml"), false)
+	if seed.Managed || seed.Company != nil {
+		t.Errorf("an absent default on a managed node resolved to %+v, want no seed", seed)
+	}
+	var logged bytes.Buffer
+	if _, err := decideOn(t, boot, seed, managed,
+		slog.New(slog.NewTextHandler(&logged, nil))); err != nil {
+		t.Fatal(err)
 	}
 	if logged.Len() != 0 {
-		t.Errorf("an unmanaged seed warned: %s", logged.String())
+		t.Errorf("a managed node with no seed warned: %s", logged.String())
 	}
 
-	managed := config.DefaultBootstrap()
-	managed.API.Auth.CompanyWriters = []string{"operator"}
-	got := managedSeed(t.Context(), &managed, seedOf(company), log)
-	if got.Company != nil || got.Override {
-		t.Errorf("a managed deployment kept its seed: %+v", got)
+	// AND A STORE THAT HOLDS A COMPANY BOOTS ON IT, as with no file at all.
+	serveStored(t, managed, runnableRevisionDoc)
+	boot, seed = resolve(t, stray, false)
+	plan, err := decideOn(t, boot, seed, managed, quiet())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(logged.String(), "company_seed_ignored") ||
-		!strings.Contains(logged.String(), "operator") {
-		t.Errorf("the ignored seed was not said, naming the writer: %s", logged.String())
+	if plan.company == nil || plan.company.Name != "Nimbus" || plan.activatedAt.IsZero() {
+		t.Errorf("a managed node over a stored company boots on %v at %s, want the "+
+			"stored revision with its instant", companyLabel(plan.company), plan.activatedAt)
 	}
 }
 
-// AND THE ENGINE IS NEVER BOOTED ON THAT SEED: an empty managed store boots
-// unconfigured, waiting for the managing system's first write, and the
-// reconciler is handed the seed already dropped.
+// A MANAGED NODE OVER A REVISION THIS BUILD CANNOT RUN NAMES THE ONE WAY OUT
+// THAT CLEARS THE REFUSAL, and says nothing else.
 //
-// The drop used to be made only at the import, after the engine had booted on
-// the file — so a managed deployment with a ./company.yaml beside it ran that
-// file's company, a company nobody had activated and no peer could see.
-func TestAManagedDeploymentNeverBootsOnItsBootstrapSeed(t *testing.T) {
+// The refusal first named an offline `crewlet config import`, which a managed
+// deployment refuses, so the operator was sent to a second refusal; then the
+// managing system's write through a serving node, which moves the fleet and
+// never this node's store — the only thing this boot reads — so every restart
+// was refused the same way. And the ignored-seed warning had already been said
+// before the stored revision was read, so it stood beside the refusal that
+// stopped the boot.
+//
+// So the case FOLLOWS THE REMEDY the refusal names — the list removed from
+// this node's Tier A, a corrected document imported offline, the node started,
+// the list restored — and holds the boot to deciding on the corrected company
+// at both starts.
+//
+// Mutations: name the offline import alone, or the write through a serving
+// node, and the remedy case fails; warn before reading the store and the
+// silence case does; refuse the offline import whatever Tier A says and the
+// remedy is never followed.
+func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	cfg := managedBootstrap(t, dir)
-	boot, err := config.LoadBootstrap(cfg, config.EnvOnly())
+	managed := managedBootstrap(t, dir)
+	id := serveStored(t, managed, storedRevisionDoc)
+	boot, err := config.LoadBootstrap(managed, config.EnvOnly())
 	if err != nil {
-		t.Fatalf("load Tier A: %v", err)
+		t.Fatal(err)
 	}
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, nil))
+	seed, err := managedSeed(boot, companyFile(t, dir, "company.yaml", nil), false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	opts, seed, err := bootOptions(t.Context(), cfg, boot, seedOf(parse(t, companyYAML)), log)
+	var logged bytes.Buffer
+	_, err = decideOn(t, boot, seed, managed,
+		slog.New(slog.NewTextHandler(&logged, nil)))
+	if err == nil {
+		t.Fatal("a managed node booted onto a revision this build cannot run")
+	}
+	for _, want := range []string{id, "company_writers", "operator",
+		"start the build that wrote it", "remove api.auth.company_writers",
+		"`crewlet config import`", "only while the fleet still runs " + id,
+		"restore api.auth.company_writers", "nonexistent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	for _, dead := range []string{"-import-company", "-api <node>", "config activate"} {
+		if strings.Contains(err.Error(), dead) {
+			t.Errorf("the refusal names %s, which does not clear it: %v", dead, err)
+		}
+	}
+	if strings.Contains(logged.String(), "company_seed_ignored") {
+		t.Errorf("the ignored seed was said beside the refusal: %s", logged.String())
+	}
+
+	// THE REMEDY, as the refusal states it. The same store under a Tier A
+	// that names no writers takes an offline import ...
+	taken := bootstrapForStore(t, dir)
+	corrected := companyFile(t, dir, "corrected.yaml", func(doc string) string {
+		return strings.Replace(doc, "name: Nimbus", "name: Nimbus Corrected", 1)
+	})
+	if _, errs, err := configCmd(t, taken, "import", corrected); err != nil {
+		t.Fatalf("the offline import the refusal names: %v (%s)", err, errs)
+	}
+	// ... the node starts on it ...
+	takenBoot, err := config.LoadBootstrap(taken, config.EnvOnly())
 	if err != nil {
-		t.Fatalf("bootOptions: %v", err)
+		t.Fatal(err)
 	}
-	if opts.Company != nil {
-		t.Errorf("a managed deployment's empty store boots the engine on %s, want "+
-			"no company: the seed is never imported there", companyName(opts.Company))
+	plan, err := decideOn(t, takenBoot, tierBSeed{}, taken, quiet())
+	if err != nil || plan.company == nil || plan.company.Name != "Nimbus Corrected" {
+		t.Fatalf("a start after the remedy decided (%v, %v), want the corrected company",
+			companyLabel(plan.company), err)
 	}
-	if seed.Company != nil {
-		t.Error("the reconciler is handed the seed a managed deployment never imports")
-	}
-	if !strings.Contains(logged.String(), "company_seed_ignored") {
-		t.Errorf("the dropped seed was not said: %s", logged.String())
+	// ... and with the writers restored it starts on it again.
+	plan, err = decideOn(t, boot, seed, managed, quiet())
+	if err != nil || plan.company == nil || plan.company.Name != "Nimbus Corrected" {
+		t.Errorf("a managed restart after the remedy decided (%v, %v), want the "+
+			"corrected company", companyLabel(plan.company), err)
 	}
 }
 

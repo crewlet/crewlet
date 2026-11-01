@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A BOX'S ADMISSION: admit for a request under /box/git/ — the same answers to
@@ -219,12 +220,12 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	g, given := run.grantNamed(name)
 	switch {
 	case !given:
-		b.refuse("not_granted", fmt.Sprintf("this run was not given %s: its run_sandbox call named %s",
-			strconv.Quote(name), grantedNames(run)))
+		b.refuse("not_granted", fmt.Sprintf("this run was not given %s: it has checked out %s; check a "+
+			"repository out with "+toolname.CodeCheckout+" before you fetch or push it", strconv.Quote(name), grantedNames(run)))
 		return admission{}, false
 	case op == auth.GitPush && g.Access < code.AccessWrite:
 		b.refuse("read_only", fmt.Sprintf("this run was given %s to read: a push needs access: write in "+
-			"its run_sandbox call", strconv.Quote(name)))
+			"its "+toolname.CodeCheckout+" call", strconv.Quote(name)))
 		return admission{}, false
 	}
 
@@ -281,7 +282,8 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	case repo.ID != g.RepoID:
 		b.refuse("not_granted", fmt.Sprintf("%s is no longer the repository this run was given (renamed "+
-			"since the launch); call run_sandbox again%s", strconv.Quote(name), floorNote))
+			"since it was checked out); check it out again with "+toolname.CodeCheckout+" under its new name%s",
+			strconv.Quote(name), floorNote))
 		return admission{}, false
 	}
 	// ANSWERED UNDER ITS CURRENT NAME, as admit answers a fetch it lets

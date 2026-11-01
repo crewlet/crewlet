@@ -79,8 +79,9 @@ const nobody: ViewerState = {
   login: "",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
+  chatlet: false,
   handle: "",
   owner: "",
   name: "",
@@ -93,11 +94,14 @@ const nobody: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 const ada: ViewerState = {
   ...nobody,
   login: "ada.lovelace",
-  grants: ["tracker"],
+  grants: ["worklet"],
   handle: "ada",
   owner: "ada",
   name: "Ada Lovelace",
@@ -181,14 +185,14 @@ describe("who the block says this is", () => {
     expect(whoLine(ada, "Founder", own)).toEqual({
       name: "Ada Lovelace",
       detail: "ada.lovelace · Founder",
-      grants: "Tracker",
+      grants: "Worklet",
     });
     // NO NAME OF THEIR OWN: their login, and the seat under it — never the
     // seat's name in their place.
     expect(whoLine(ada, "Founder", { login: "ada.lovelace" })).toEqual({
       name: "ada.lovelace",
       detail: "Founder",
-      grants: "Tracker",
+      grants: "Worklet",
     });
     // A seat named as the person adds nothing to the login.
     expect(whoLine(ada, "Ada Lovelace", own).detail).toBe("ada.lovelace");
@@ -206,14 +210,12 @@ describe("who the block says this is", () => {
   test("a person with no role to show draws their login alone under their name", async () => {
     engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
-    // WAITED FOR, NOT READ OFF THE BUTTON: the block is drawn under the seat's
-    // name before the session's answer gives the login it then shows there.
-    const detail = () =>
-      screen
-        .getByRole("button", { name: /Ada Lovelace/ })
-        .querySelector(".crewlet-account-row__detail")?.textContent;
-    await waitFor(() => expect(detail()).toBe("ada.lovelace"));
-    const who = screen.getByRole("button", { name: /Ada Lovelace/ });
+    const who = await screen.findByRole("button", { name: /Ada Lovelace/ });
+    // THE LOGIN IS DRAWN ONCE THE SESSION HAS ANSWERED, a commit after the
+    // row: waited for, not read at once.
+    await waitFor(() =>
+      expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace"),
+    );
     expect(who.textContent).not.toContain("human seat");
   });
 
@@ -308,9 +310,9 @@ describe("who the block says this is", () => {
         login: "erin.ng",
         name: "Erin Ng",
         seat: "erin",
-        grants: ["tracker"],
+        grants: ["worklet"],
       }),
-    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Tracker" });
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Worklet" });
     // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
     expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
       "No seat",
@@ -392,7 +394,7 @@ describe("who the block says this is", () => {
     expect(row.getAttribute("title")).toBe("Your account and signing out");
     // THE ACCESS IS SAID IN THE MENU, never as the row's title, which would
     // answer a question the reader had not asked.
-    expect(row.getAttribute("title")).not.toMatch(/Tracker/);
+    expect(row.getAttribute("title")).not.toMatch(/Worklet/);
   });
 
   // THE MENU SAYS ONLY WHAT THE ROW DOES NOT: the reader's access above the
@@ -403,7 +405,7 @@ describe("who the block says this is", () => {
     fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
     const header = menu.querySelector(".crewlet-menu__header")!;
-    expect(header.textContent).toBe("AccessTracker");
+    expect(header.textContent).toBe("AccessWorklet");
     expect(menu.getAttribute("aria-describedby")).toBe(header.id);
     expect(menu.textContent).not.toContain("Signed in as");
     expect(header.textContent).not.toContain("ada.lovelace");
@@ -433,7 +435,7 @@ describe("who the block says this is", () => {
     expect(person.getAttribute("title")).toBe("Your account and signing out");
     fireEvent.click(person);
     const own = await screen.findByRole("menu", { name: "Your account" });
-    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessTracker");
+    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessWorklet");
   });
 
   // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
@@ -598,10 +600,12 @@ describe("what the account offers", () => {
   });
 
   test("nobody at all is offered a way to sign in, back to where they are", async () => {
-    location.hash = "#/work";
+    location.hash = "#/worklet";
     actions({ kind: "nobody" });
     fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
-    await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/work")}`));
+    await waitFor(() =>
+      expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/worklet")}`),
+    );
   });
 
   // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu opens it
@@ -611,10 +615,7 @@ describe("what the account offers", () => {
   // gesture to the menu and the item list goes red.
   test("the menu opens the Account page and holds no proof gesture of its own", async () => {
     actions({ kind: "session", login: "ada.lovelace" });
-    const labels = screen
-      .getAllByRole("menuitem")
-      .map((item) => item.querySelector(".crewlet-menu__label")?.textContent);
-    expect(labels).toEqual(["Account", "Sign out", "Sign out everywhere"]);
+    expect(menuLabels()).toEqual(["Account", "Sign out", "Sign out everywhere"]);
     // SIGNING OUT EVERYWHERE SAYS WHAT IT ENDS, in the danger ink.
     const everywhere = screen.getByRole("menuitem", { name: /^Sign out everywhere/ });
     expect(everywhere.textContent).toContain("Every device, and stops your tokens");
@@ -622,6 +623,19 @@ describe("what the account offers", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /^Account/ }));
     await waitFor(() => expect(location.hash).toBe("#/account"));
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // FOLDED, THE FACE HAS NO GLYPH BESIDE IT, so its menu is the way to the
+  // preferences, for whoever this is: they are the browser's, not a session's.
+  test("folded, the menu offers the preferences to a reader and to nobody", () => {
+    const onPreferences = vi.fn();
+    actions(signedIn, onPreferences);
+    expect(menuLabels()).toEqual(["Account", "Preferences", "Sign out", "Sign out everywhere"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Preferences/ }));
+    expect(onPreferences).toHaveBeenCalledTimes(1);
+    cleanup();
+    actions({ kind: "nobody" }, onPreferences);
+    expect(menuLabels()).toEqual(["Preferences", "Sign in"]);
   });
 });
 
@@ -643,16 +657,21 @@ function heldSocket() {
 function MenuRow({
   account,
   onSignOutEverywhere,
+  onPreferences,
 }: {
   account: Account;
   onSignOutEverywhere: () => void;
+  onPreferences?: () => void;
 }) {
-  const menu = useAccountMenu(account, "Tracker", onSignOutEverywhere);
+  const menu = useAccountMenu(account, "Worklet", onSignOutEverywhere, "", onPreferences);
   return <AccountRow avatar={<span />} name="Ada Lovelace" menu={menu} />;
 }
 
-/** The account's menu, drawn on its own with a toaster to report into, and opened. */
-function actions(account: Account) {
+/**
+ * The account's menu, drawn on its own with a toaster to report into, and
+ * opened. `onPreferences` is the folded sidebar's way to the preferences.
+ */
+function actions(account: Account, onPreferences?: () => void) {
   const onSignOutEverywhere = vi.fn();
   const client = heldSocket();
   render(
@@ -660,7 +679,11 @@ function actions(account: Account) {
       <Router>
         <ToastProvider>
           <LayerHost>
-            <MenuRow account={account} onSignOutEverywhere={onSignOutEverywhere} />
+            <MenuRow
+              account={account}
+              onSignOutEverywhere={onSignOutEverywhere}
+              onPreferences={onPreferences}
+            />
           </LayerHost>
         </ToastProvider>
       </Router>
@@ -668,6 +691,13 @@ function actions(account: Account) {
   );
   fireEvent.click(screen.getByRole("button", { name: /Ada Lovelace/ }));
   return { onSignOutEverywhere, asked: client.asked };
+}
+
+/** The menu's items, by the words each one says. */
+function menuLabels(): (string | null | undefined)[] {
+  return screen
+    .getAllByRole("menuitem")
+    .map((item) => item.querySelector(".crewlet-menu__label")?.textContent);
 }
 
 /** The confirmation signing out everywhere asks, drawn on its own. */
@@ -967,5 +997,60 @@ describe("the preferences", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// FOLDED, THE FOOT IS THE PLACES AS TILES AND THE READER'S FACE ALONE, and
+// nothing the full foot offers is lost: Settings is a tile, the face opens the
+// same menu, and the preferences open from it as a dialog.
+describe("the folded foot", () => {
+  const settings = {
+    key: "settings",
+    label: "Settings",
+    icon: <span />,
+    href: "#/settings/models",
+    onPrefetch: () => {},
+    current: false,
+  };
+
+  function folded() {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <Router>
+            <ToastProvider>
+              <LayerHost>
+                <UserBlock viewer={ada} seatName="" places={[settings]} compact />
+              </LayerHost>
+            </ToastProvider>
+          </Router>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("draws each place as a tile linked where its glyph goes", () => {
+    folded();
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(
+      within(nav)
+        .getByRole("link", { name: /^Settings/ })
+        .getAttribute("href"),
+    ).toBe("#/settings/models");
+    // THE PREFERENCES' GLYPH IS NOT DRAWN: the face's menu holds them.
+    expect(screen.queryByRole("button", { name: "Preferences" })).toBeNull();
+  });
+
+  test("opens the preferences from the face's menu, as a dialog of the same controls", async () => {
+    folded();
+    // THE FACE IS NAMED BY THE ROW'S OWN WORDS, ending in what it opens.
+    fireEvent.click(await screen.findByRole("button", { name: /, your menu$/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Preferences/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Preferences" });
+    expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
+    expect(within(dialog).getByRole("radiogroup", { name: "Density" })).toBeDefined();
+    expect(within(dialog).getByRole("combobox", { name: "Theme" })).toBeDefined();
   });
 });

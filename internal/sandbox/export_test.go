@@ -2,29 +2,35 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"testing"
-)
 
-// WriteRuntime is [writeRuntime] for this package's external cases: a
-// stand-in they put on a step's PATH is an executable this suite writes, so
-// it is written and settled by the one writer
-// TestEveryExecutableThisSuiteWritesIsSettled holds every such write to —
-// written any other way, its first exec can fail ETXTBSY under a fork beside
-// it, and the step it stands in for reads as the recipe being wrong.
-func WriteRuntime(t *testing.T, path, body string) {
-	t.Helper()
-	writeRuntime(t, path, body)
-}
+	"github.com/crewlet/crewlet/internal/hostbox"
+)
 
 // NewContainerBoxAt is a container box whose directory is root, for the file
 // contract suite: a container box's reads and writes happen on the HOST side
 // of its bind mount, so its file contract can be certified without a container
 // runtime. Nothing it reaches runs a command. It answers the box and the host
 // directory its home is — the one the mount would carry, which is not root
-// itself, since root also holds the engine's records about the box.
+// itself, since root also holds the engine's records about the box. The home
+// is made as Create makes it: every access to the box goes through it.
 func NewContainerBoxAt(root string) (Sandbox, string) {
 	layout := boxLayout{id: "contract", root: root}
+	if err := os.MkdirAll(layout.home(), hostbox.DirMode); err != nil {
+		panic(fmt.Sprintf("NewContainerBoxAt: %v", err))
+	}
 	return &containerBox{layout: layout, cli: containerCLI{path: "docker"}, container: "contract"}, layout.home()
+}
+
+// WriteExecutable is [writeExecutable], for the stubs the package's external
+// suite writes and its shell runs (setuprecipe_test.go, clone_test.go): those
+// cases share this binary, and so every fork its other cases make — and
+// TestEveryExecutableThisSuiteWritesIsWrittenUnderTheForkLock holds every
+// executable write of either suite to the one writer.
+func WriteExecutable(t *testing.T, path, script string) {
+	t.Helper()
+	writeExecutable(t, path, script)
 }
 
 // CapReads holds a local box's whole reads to n bytes, for the file contract

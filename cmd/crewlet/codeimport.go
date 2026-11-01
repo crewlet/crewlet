@@ -24,6 +24,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet code import` — another host's repository, pushed into one the code
@@ -131,7 +132,7 @@ import (
 // resumed import of the same history, and is refused.
 
 // codeImportUsage is the import's synopsis.
-const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-url URL] " +
+const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-api URL] " +
 	"[-git PATH] [-dry-run]"
 
 // importStepBudget is the most one step's pack may carry: the push limit less
@@ -195,7 +196,7 @@ func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) 
 func prepareImport(ctx context.Context, environ config.Source, args []string, stdout, stderr io.Writer) (
 	*importer, bool, error) {
 
-	// THE TWO SUBJECTS LEAD, before any flag (`work purge`'s idiom): the
+	// THE TWO SUBJECTS LEAD, before any flag (`worklet purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
 	source, rest := splitSubject(args)
@@ -462,13 +463,13 @@ func (n *importNotHeld) findings() []string {
 	var out []string
 	if n.badCount > 0 {
 		out = append(out, fmt.Sprintf("%s the code host takes no push of (git's check-ref-format "+
-			"rules, at most %d bytes of UTF-8): %s — rename them in the source", counted(n.badCount, "ref", "refs"),
+			"rules, at most %d bytes of UTF-8): %s. Rename them in the source", counted(n.badCount, "ref", "refs"),
 			code.MaxRefNameBytes, listed(n.bad, n.badCount)))
 	}
 	if n.reservedCount > 0 {
 		out = append(out, fmt.Sprintf("%s the code host keeps for its seats' own branches, which live under "+
-			"%s<handle>/ — %s, and %s<name> as a branch itself, would block them, since no ref is created "+
-			"beside a directory of its name: %s — rename them in the source",
+			"%s<handle>/ (%s, and %s<name> as a branch itself, would block them, since no ref is created "+
+			"beside a directory of its name): %s. Rename them in the source",
 			counted(n.reservedCount, "branch", "branches"), code.SeatNamespaceRoot,
 			strings.TrimSuffix(code.SeatNamespaceRoot, "/"), code.SeatNamespaceRoot,
 			listed(n.reserved, n.reservedCount)))
@@ -610,7 +611,7 @@ func (imp *importer) checkPushAccess(ctx context.Context, probe string) error {
 		return fmt.Errorf("git pushed to %s without saying what became of the push", imp.name)
 	}
 	return fmt.Errorf("nothing was imported: before downloading the source, the import asks %s whether it takes "+
-		"a push to %s — a dry run of one, as every step is pushed — and git answered:\n%w", imp.client.base,
+		"a push to %s (a dry run of one, as every step is pushed), and git answered:\n%w", imp.client.base,
 		imp.name, err)
 }
 
@@ -864,7 +865,7 @@ func (imp *importer) oversizedBlobs(ctx context.Context) ([]string, error) {
 			path = "no path"
 		}
 		findings = append(findings, fmt.Sprintf("blob %s (%s) is %s, past code.limits.max_blob_bytes (%s): large "+
-			"binaries belong in tracker files", b.oid, path, humanBytes(b.size), humanBytes(limit)))
+			"binaries belong in a Worklet project's files", b.oid, path, humanBytes(b.size), humanBytes(limit)))
 	}
 	if more := over - len(found); more > 0 {
 		findings = append(findings, fmt.Sprintf("and %s past code.limits.max_blob_bytes",
@@ -1012,7 +1013,7 @@ func (imp *importer) resume(ctx context.Context, src importSource) ([]queuedRef,
 		switch {
 		case src.head != "" && byRef[src.head]:
 			branch := strings.TrimPrefix(src.head, "refs/heads/")
-			fmt.Fprintf(imp.stdout, "the source's default branch is %s; code.repos says %s — importing %s as %s; "+
+			fmt.Fprintf(imp.stdout, "the source's default branch is %s; code.repos says %s: importing %s as %s; "+
 				"push a %s for the repository's HEAD\n", branch, imp.repo.DefaultBranch, branch, branch,
 				imp.repo.DefaultBranch)
 			defaultRef = src.head
@@ -1057,8 +1058,8 @@ func (imp *importer) resume(ctx context.Context, src importSource) ([]queuedRef,
 	}
 	slices.Sort(theirsOnly)
 	if n := len(src.refs) + len(theirsOnly); n > code.MaxRefsPerRepo {
-		return nil, nil, refuseImport([]string{fmt.Sprintf("%s would hold %d refs — the source's %d and %d of its "+
-			"own — past the %d one repository holds", imp.name, n, len(src.refs), len(theirsOnly),
+		return nil, nil, refuseImport([]string{fmt.Sprintf("%s would hold %d refs (the source's %d and %d of its "+
+			"own), past the %d one repository holds", imp.name, n, len(src.refs), len(theirsOnly),
 			code.MaxRefsPerRepo)})
 	}
 	if already > 0 {
@@ -1088,7 +1089,7 @@ func diverged(name string, r sourceRef, at string, held bool) error {
 	case strings.HasPrefix(r.ref, "refs/tags/"):
 		why = "a tag never moves: " + why
 	}
-	return fmt.Errorf("nothing was imported: %s is at %s on %s and %s in the source — %s", r.ref, at, name, r.oid,
+	return fmt.Errorf("nothing was imported: %s is at %s on %s and %s in the source: %s", r.ref, at, name, r.oid,
 		why)
 }
 
@@ -1728,15 +1729,20 @@ func (p *importPlanner) mergeTooLarge(ctx context.Context, step *importStep, lac
 		size = "more than " + size
 	}
 	branches := make([]string, len(lacking))
+	// The commits as git spells them, unquoted, as the one this sentence
+	// opens with is: an object name is copied into a command, not read as a
+	// value somebody typed.
+	parents := make([]words.Said, len(lacking))
 	for i, parent := range lacking {
 		branches[i] = fmt.Sprintf("git --git-dir=mirror.git branch import-%s %s", shortOID(parent), parent)
+		parents[i] = words.Said(parent)
 	}
 	return fmt.Errorf("commit %s of %s alone packs to %s, past code.limits.max_push_bytes (%s): it brings in "+
-		"the history of %s — about %s in the source's own packs — and no other branch of the source can carry "+
+		"the history of %s (about %s in the source's own packs), and no other branch of the source can carry "+
 		"it, so nothing can push that history in steps before it. Give it a branch in a mirror of the source "+
 		"(git clone --mirror %s mirror.git, then %s) and import from the mirror: the import steps that history "+
 		"on it first, and the commit is then a small step. Delete the branch from %s after, if it is not wanted",
-		c.oid, c.ref, size, humanBytes(p.limit), strings.Join(lacking, " and "), humanBytes(brings), p.imp.source,
+		c.oid, c.ref, size, humanBytes(p.limit), words.And(parents), humanBytes(brings), p.imp.source,
 		strings.Join(branches, "; "), p.imp.name)
 }
 
@@ -1870,8 +1876,8 @@ func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
 		return 0, err
 	case n < 1:
 		return 0, fmt.Errorf("a push of %s alone, as %s, is wider than one push's record may be (%w): the "+
-			"token's id or the seat bound to it fills the record, and no push by this token can land — "+
-			"import with a token whose id, and whose seat's handle, are shorter", refs[0].ref,
+			"token's id or the seat bound to it fills the record, and no push by this token can land. "+
+			"Import with a token whose id, and whose seat's handle, are shorter", refs[0].ref,
 			principalName(imp.principal), refusal)
 	}
 	return n, nil
@@ -1945,8 +1951,8 @@ func (p *importPlanner) hold(ctx context.Context, step *importStep) error {
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("%s would hold %s of packs once the next step lands — %s before it, and %s that step "+
-		"stores — past code.limits.repo_max_bytes (%s): raise it, and run the same command again. What is "+
+	return fmt.Errorf("%s would hold %s of packs once the next step lands (%s before it, and %s that step "+
+		"stores), past code.limits.repo_max_bytes (%s): raise it, and run the same command again. What is "+
 		"left of the source, that step included, holds about %s in the source's own packs, and its steps "+
 		"store more than that: each keeps whole what its deltas cannot reach in an earlier step", p.imp.name,
 		humanBytes(p.held+stored), humanBytes(p.held), humanBytes(stored), humanBytes(limit), humanBytes(rest))
@@ -1988,7 +1994,7 @@ func (p *importPlanner) tooLarge(step *importStep, commit bool) error {
 		// Its pack fits the limit and what it stores does not: a step of
 		// a great many small objects, whose indexes take it past
 		// code.MaxPackBytes. No setting raises that.
-		return fmt.Errorf("%s (%s) alone stores %s with its indexes — %s objects — past the %s one push may store, "+
+		return fmt.Errorf("%s (%s) alone stores %s with its indexes (%s objects), past the %s one push may store, "+
 			"and cannot be pushed in smaller steps", c.ref, c.oid, humanBytes(step.stored()),
 			strconv.FormatInt(step.objects, 10), humanBytes(p.imp.maxStored))
 	}
@@ -2231,7 +2237,7 @@ func (imp *importer) plan(ctx context.Context, p *importPlanner) error {
 		steps = append(steps, step)
 		total += step.size
 	}
-	fmt.Fprintf(imp.stdout, "plan: %s, ≈ %s — estimated from how the source stores its objects; an import "+
+	fmt.Fprintf(imp.stdout, "plan: %s, ≈ %s, estimated from how the source stores its objects; an import "+
 		"measures each step before it pushes it, and cuts one that packs past %s shorter\n",
 		counted(len(steps), "step", "steps"), humanBytes(total), humanBytes(imp.budget))
 	for i, s := range steps {
@@ -2241,10 +2247,10 @@ func (imp *importer) plan(ctx context.Context, p *importPlanner) error {
 		note := ""
 		switch {
 		case s.size > p.limit:
-			note = " — past the push limit by its estimate: measured when it is pushed, and refused if it packs " +
+			note = ", past the push limit by its estimate: measured when it is pushed, and refused if it packs " +
 				"that large"
 		case s.overRepo:
-			note = " — past code.limits.repo_max_bytes by its estimate, with what the repository holds: measured " +
+			note = ", past code.limits.repo_max_bytes by its estimate, with what the repository holds: measured " +
 				"when it is pushed, and refused if it stores that much"
 		}
 		fmt.Fprintf(imp.stdout, "  step %d/%d: %s (%s)%s\n", i+1, len(steps), s.describe(), s.sized(), note)
@@ -2334,7 +2340,7 @@ func (imp *importer) execute(ctx context.Context, p *importPlanner) (importDone,
 		}
 		stopPlanning()
 		if plan.err != nil {
-			return done, fmt.Errorf("%w\n\nthe import stopped before step %d; %s — run the same command again "+
+			return done, fmt.Errorf("%w\n\nthe import stopped before step %d; %s. Run the same command again "+
 				"once the cause is fixed: it resumes", plan.err, done.steps+1, landedBefore(done.steps))
 		}
 		step := plan.step
@@ -2403,7 +2409,7 @@ func (imp *importer) push(ctx context.Context, step *importStep) stepOutcome {
 	case unsaid > 0:
 		return stepOutcome{err: fmt.Errorf("git pushed without saying what became of %d of its refs", unsaid)}
 	case len(unplanned) > 0:
-		return stepOutcome{err: fmt.Errorf("git pushed %s the step did not name — %s — which the plan never "+
+		return stepOutcome{err: fmt.Errorf("git pushed %s the step did not name (%s), which the plan never "+
 			"measured", counted(len(unplanned), "ref", "refs"), listed(unplanned[:min(len(unplanned), importNamed)],
 			len(unplanned)))}
 	}
@@ -2452,7 +2458,7 @@ func (imp *importer) stopped(landed int, out stepOutcome) error {
 			break
 		}
 	}
-	return fmt.Errorf("the import stopped at step %d (%s); %s — fix the cause and run the same command again: "+
+	return fmt.Errorf("the import stopped at step %d (%s); %s. Fix the cause and run the same command again: "+
 		"it resumes%s", landed+1, why, landedBefore(landed), hint)
 }
 

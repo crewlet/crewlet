@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
@@ -34,7 +35,7 @@ func TestANodeCarriesSeatMemoryWhoeverRunsTheBroker(t *testing.T) {
 		rides     func(back *Backends) *nats.Conn
 	}{
 		{"an embedded broker", func(t *testing.T, b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}, func(back *Backends) *nats.Conn { return back.Conn() }},
 		{"an operator's NATS server", func(t *testing.T, b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS

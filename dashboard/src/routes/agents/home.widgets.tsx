@@ -12,17 +12,18 @@ import { useMemo } from "react";
 import { List, ListItem, StatCard, StatGroup, Tag, type StatCardTone } from "@crewlethq/ui";
 import { CalendarClockGlyph, UserGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState, SeatCard } from "~/components/common.tsx";
+import { SeatCard } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, inTime, plural, tsKey } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { activityOf, indexOrg, nameOfIn, seatLookup } from "~/lib/seats.ts";
+import { activityOf, indexOrg, nameOfIn, seatLookup, stateGroupWord, toneOf } from "~/lib/seats.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { scopeLabel } from "~/routes/agents/Schedules.tsx";
 import {
   ChoiceNote,
   WidgetCard,
+  WidgetQuery,
   defineWidgets,
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
@@ -65,13 +66,16 @@ function AgentCard({ params }: { params: Readonly<Record<string, string>> }) {
   );
 }
 
-/** The roster's state buckets an operator acts on, in the roster's order. */
-const STATES = [
-  { key: "working", label: "Working", tone: "info" },
-  { key: "needs", label: "Waiting on a person", tone: "warning" },
-  { key: "stopped", label: "Stopped", tone: "danger" },
-  { key: "idle", label: "Idle", tone: "neutral" },
-] as const satisfies readonly { key: string; label: string; tone: StatCardTone }[];
+/**
+ * The roster's state buckets an operator acts on, each headed by the roster's
+ * own group word (`stateGroupWord`) and in the tone its pill takes (`toneOf`),
+ * so a tile here and a group on the roster can never name one state twice.
+ */
+const STATES = (["working", "needs", "stopped", "idle"] as const).map((key) => ({
+  key,
+  label: stateGroupWord(key),
+  tone: toneOf(key) satisfies StatCardTone,
+}));
 
 /** Two names and how many more: "Crewlet-PM, Crewlet-SWE and 3 more". */
 function namesLine(names: string[]): string {
@@ -136,10 +140,13 @@ function NextSchedules() {
   const rows = upcoming(data?.schedules ?? []);
   return (
     <WidgetCard title="Upcoming schedules" from="schedules">
-      <QueryState
+      <WidgetQuery
         error={error}
         refusal={refusal}
         loading={loading && !data}
+        // NOTHING TO READ A GAP FROM: the schedules' answer carries no flag
+        // saying what it could not account for.
+        gaps={[]}
         empty={
           data && rows.length === 0
             ? {
@@ -182,7 +189,7 @@ function NextSchedules() {
             {`All ${plural(data?.schedules.length ?? 0, "schedule")}`}
           </a>
         ) : null}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

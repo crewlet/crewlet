@@ -14,9 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A CHANGE'S MERGE IS BUILT HERE AND LANDS AS ONE MERGE RECORD (ADR-0066,
+// A CHANGE'S MERGE IS BUILT HERE AND LANDS AS ONE MERGE RECORD (ADR-0089,
 // M5-D11): a merge_change (code.WriteMergeChange) is an engine write — the
 // same admission, the same sync to its caller's floor, the same scratch named
 // by its push id, the same one budget of git run time, the same self-contained
@@ -474,8 +475,8 @@ func (wr *writing) buildMerge(ctx context.Context, sc *cache.Scratch, j mergeJud
 	}
 	if !m.clean {
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s does not merge cleanly into %s at %s: %d paths "+
-			"conflict; rebase it onto its target (code_rebase_change) and resolve them in a coding box "+
-			"(run_sandbox)", named, w.Ref, shortID(j.tip), len(m.conflicts)+m.omitted))
+			"conflict; rebase it onto its target (%s) and resolve them in a checkout of the repository ("+toolname.CodeCheckout+")",
+			named, w.Ref, shortID(j.tip), len(m.conflicts)+m.omitted, toolname.CodeRebaseChange))
 		return "", res, true, err
 	}
 	if w.Method == code.MergeMethodSquash && m.tree == tip.tree {

@@ -13,10 +13,14 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 func TestMain(m *testing.M) {
+	// FIRST: the session cases serve a phase's tools, and a CLI told to start
+	// this binary as their relay starts it with `mcp-relay` alone.
+	mcprelay.DispatchIfRelay()
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
 	// The package logger bound its handler at package-var init, which
 	// runs before this. Rebind it or every case prints its own log.
@@ -573,3 +577,45 @@ func TestAFailoverAfterNoVisibleTextAnnouncesNothing(t *testing.T) {
 }
 
 var errFake = fmt.Errorf("member exploded")
+
+// A CANCELLED CALL IS NOT WALKED: the person who stopped it is not waiting
+// for the next member's answer, and a fallback logged for it reads as an
+// outage of a member that did nothing wrong. Both shapes hold it: a member
+// that classified the cancellation, and one that called it a server failure
+// while its caller's context had ended.
+func TestACancelledCallStopsTheWalk(t *testing.T) {
+	t.Parallel()
+	for name, head := range map[string]*fake{
+		"classified":   failing("head", llm.KindCancelled),
+		"unclassified": failing("head", llm.KindServer),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			next := answering("next", "late")
+			var fallbacks atomic.Int32
+			c := build(t, Options{OnFallback: func(Fallback) { fallbacks.Add(1) }},
+				member("head", head), member("next", next))
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if _, err := c.Complete(ctx, llm.Request{}); err == nil {
+				t.Fatal("a cancelled call answered")
+			}
+			if next.calls.Load() != 0 || fallbacks.Load() != 0 {
+				t.Errorf("next member called %d times, %d fallbacks: a cancellation walked the chain",
+					next.calls.Load(), fallbacks.Load())
+			}
+		})
+	}
+}
+
+// A cancellation is its own kind, read from the context it carries.
+func TestACancellationIsItsOwnKind(t *testing.T) {
+	t.Parallel()
+	if got := llm.KindOf(fmt.Errorf("wrapped: %w", context.Canceled)); got != llm.KindCancelled {
+		t.Errorf("KindOf(context.Canceled) = %v, want canceled", got)
+	}
+	if llm.KindCancelled.Retryable() || llm.KindCancelled.String() != "canceled" {
+		t.Errorf("KindCancelled: retryable %v, string %q", llm.KindCancelled.Retryable(),
+			llm.KindCancelled.String())
+	}
+}

@@ -14,9 +14,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // The close codes this socket ends a connection with, on top of the ones the
@@ -54,8 +54,9 @@ import (
 //
 // ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
 // "try again later", for a credential this node will not vouch for now and
-// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes this socket for a fault: a node that cannot
-// serve keeps its socket open and degrades it instead — see [FrameDegraded].
+// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes
+// this socket for a fault: a node that cannot serve keeps its socket open and
+// degrades it instead — see [FrameDegraded].
 const (
 	// CloseUnauthenticated ends a socket whose credential no longer
 	// resolves to anybody: its session ended, expired or was revoked, or
@@ -136,21 +137,56 @@ const (
 	// boot reconcile is still running has to be able to say "ask me in a
 	// moment" rather than "there is nothing".
 	CodeUnavailable = "unavailable"
+
+	// CodeArtifactTrashed is a question about an artifact's CONTENT — its
+	// datastore, its room — asked by somebody the artifact is disclosed to,
+	// while it is in the trash. The REST routes' `409 artifact_trashed`,
+	// under the same code: the artifact's state, which its owner's restore
+	// changes. DISTINCT FROM not_found, which is what the same question is
+	// answered with for a caller the artifact is answered as absent to: told
+	// not_found, a client stopped asking about content a restore brings back
+	// whole, and a screen called a binned sheet one that does not exist.
+	CodeArtifactTrashed = "artifact_trashed"
+
+	// The five answers to a question about a configuration revision this
+	// node cannot open, under the REST routes' own codes and in their words
+	// (internal/api/configapi's UnreadableRevisionError): a revision this
+	// node keeps sealed under a key its keyring lost, one it keeps stored
+	// without a seal, the fleet's revision met only through its pointer,
+	// sealed under a key this node was never given or put there without a
+	// seal, and a revision of either origin sealed in a form this build does
+	// not read. The frame's `detail` says what happened and what fixes it;
+	// each cause is fixed in a different place, which is why they are five
+	// codes and not one. Answered `query_failed`, the config screen called a
+	// missing key a failure nobody could explain.
+	CodeUnreadableRevision      = "unreadable_revision"
+	CodeUnsealedRevision        = "unsealed_revision"
+	CodeUnreadableFleetRevision = "unreadable_fleet_revision"
+	CodeUnsealedFleetRevision   = "unsealed_fleet_revision"
+	CodeUnknownSealRevision     = "unknown_seal_revision"
 )
 
 // The failures a query surface reports precisely; everything else is a
 // query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
+	// ErrUnauthorized is what a [RefusedError] is to [errors.Is]. Only a
+	// RefusedError reaches a client as a refusal: a bare one names no
+	// decision.
 	ErrUnauthorized = errors.New("stream: this caller may not ask that")
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node")
+
+	// ErrArtifactTrashed is a question about the content of an artifact in
+	// the trash, answered [CodeArtifactTrashed].
+	ErrArtifactTrashed = errors.New("stream: the artifact is in the trash")
 )
 
-// RefusedError is [ErrUnauthorized] carrying WHY: the rule's reason and the
-// grants that would have admitted the caller, which the error frame answers
-// with beside the code.
+// RefusedError is [ErrUnauthorized] carrying WHY: the code the authority
+// table's mapping gives the refusal, and the rule's reason and the grants that
+// would have admitted the caller, which the error frame answers with beside
+// it. Built by [RefusedFor] and by nothing else.
 //
 // An error rather than a field on the answer, because the query surface
 // reports a refusal the way it reports every failure — as the error — and the
@@ -158,6 +194,8 @@ var (
 type RefusedError struct {
 	// What is what was refused, for the log.
 	What string
+	// Code is the frame's code, as [authz.RefusalFields] gives it.
+	Code httpjson.Code
 	Refused
 }
 
@@ -167,6 +205,74 @@ func (e *RefusedError) Error() string {
 
 // Unwrap is what keeps every errors.Is(err, ErrUnauthorized) arm answering it.
 func (e *RefusedError) Unwrap() error { return ErrUnauthorized }
+
+// errUnspokenRefusal is a refusal on authority the mapping words in a code, or
+// with a field, this socket's vocabulary does not have — see [RefusedFor].
+var errUnspokenRefusal = errors.New("stream: a refusal this socket cannot say")
+
+// RefusedFor is how one refusal the authority table made is answered over this
+// socket, a question's and a watch's alike: the code and the fields the
+// table's ONE MAPPING ([authz.RefusalFields]) gives it, exactly as the REST
+// twin and every other surface answer it. The frames used to spell
+// `unauthorized` beside the decision's reason and grants for themselves, which
+// agreed with the mapping only for as long as nothing refused here was
+// refused any other way.
+//
+//   - `unauthorized` is a [RefusedError] carrying the rule's reason, the
+//     grants that would have admitted the caller and, for a role below the
+//     verb's on an artifact, the role it needs.
+//   - `not_found` — a caller with NO RELATION to an artifact — is
+//     [ErrNotFound] and carries nothing, byte for byte the frame for an id
+//     nothing holds, as the mapping makes it everywhere else.
+//
+// A CODE OR A FIELD THIS SOCKET DOES NOT SPEAK IS A FAULT, never a frame. The
+// mapping answers a stale proof `step_up_required` and a machine token on a
+// verb that needs a person present `token_refused`, and neither is in this
+// vocabulary — a socket cannot carry a step-up, the dashboard replays one over
+// REST alone, and the frames' codes are held against the dashboard's in both
+// directions. No question may be decided by a verb that asks either
+// (internal/api/queries refuses the registration, and a walk in internal/authz
+// holds the verbs an answer or a watch decides by inside itself), so this is
+// unreachable; reached, it is this build's mistake, answered as one —
+// `query_failed`, its words in the log — rather than as a refusal a reader
+// would take for a permission they lack. A field the mapping gains that the
+// frame has no key for is the same mistake, caught here rather than dropped.
+func RefusedFor(what string, d authz.Decision) error {
+	_, code, detail := authz.RefusalFields(d)
+	switch code {
+	case CodeNotFound:
+		if len(detail) == 0 {
+			return fmt.Errorf("%w: %s", ErrNotFound, what)
+		}
+	case CodeUnauthorized:
+		if refused, ok := frameRefusal(detail); ok {
+			return &RefusedError{What: what, Code: code, Refused: refused}
+		}
+	}
+	return fmt.Errorf("%w: %s was refused %s (%s)", errUnspokenRefusal, what, code, d.Reason)
+}
+
+// frameRefusal is the mapping's fields as an `unauthorized` frame carries
+// them, and whether the frame carries every one: a reason and a grants list
+// always, a role where the mapping gave one, and nothing else.
+func frameRefusal(detail httpjson.Detail) (Refused, bool) {
+	var refused Refused
+	for key, value := range detail {
+		ok := false
+		switch key {
+		case authz.DetailReason:
+			refused.Reason, ok = value.(string)
+		case authz.DetailGrants:
+			refused.Grants, ok = value.([]string)
+		case authz.DetailRole:
+			refused.Role, ok = value.(string)
+		}
+		if !ok {
+			return Refused{}, false
+		}
+	}
+	return refused, refused.Reason != "" && refused.Grants != nil
+}
 
 // BadParamsError is [ErrBadParams] carrying the refusal's own sentence.
 //
@@ -193,13 +299,30 @@ func (e *BadParamsError) Error() string {
 // Unwrap makes a BadParamsError an [ErrBadParams] to errors.Is.
 func (e *BadParamsError) Unwrap() error { return ErrBadParams }
 
+// RevisionError is a question about a configuration revision this node cannot
+// open, carrying the code and the sentence the REST route answers it with: one
+// of the five Code…Revision codes, and the detail that names what fixes it.
+//
+// A TYPE FOR [BadParamsError]'s REASON: the frame has to carry something the
+// code alone cannot, and here it is which key or which document to restore.
+type RevisionError struct {
+	What   string
+	Code   httpjson.Code
+	Detail string
+}
+
+func (e *RevisionError) Error() string {
+	return fmt.Sprintf("stream: %s: %s: %s", e.What, e.Code, e.Detail)
+}
+
 // Query answers one client question.
 //
 // WHO IS ASKING TRAVELS IN THE CONTEXT, which the guard resolved before this
 // handler ran — never as an argument beside it, because two identities on one
 // call are two chances to answer about different people. A query the caller
-// may not ask returns [ErrUnauthorized] rather than deciding for itself what
-// to do about it, so the refusal reaches the client as a code it handles.
+// may not ask returns what [RefusedFor] makes of the decision that refused it,
+// rather than deciding for itself what to do about it, so the refusal reaches
+// the client as a code it handles, in the words every surface uses.
 type Query func(ctx context.Context, what string, params map[string]any) (any, error)
 
 // request is one client-to-server frame.
@@ -216,16 +339,29 @@ type request struct {
 	Seat string `json:"seat"`
 
 	// Artifact is the artifact an `artifact_join`, `artifact_leave` or
-	// `presence` frame is about, by its id. Since is a join's catch-up
-	// point: the `through` the socket last held, zero for none.
+	// artifact `presence` frame is about, by its id. Since is a join's
+	// catch-up point: the `through` the socket last held, zero for none.
 	Artifact string `json:"artifact"`
 	Since    int64  `json:"since"`
+
+	// Room is the kind of room a `presence` frame is about, which names the
+	// field its room is named by: `artifact` for an artifact's room
+	// (Artifact, joined first with `artifact_join`), and `chat` for a chat
+	// room's (ChannelID, which the frame itself joins: a tab looks at one
+	// room at a time, and an empty ChannelID leaves the one it was in). A
+	// frame naming no kind this build keeps is dropped.
+	Room presence.RoomKind `json:"room"`
 
 	// Activity and Focus are a `presence` frame's: what the socket is doing
 	// in the room and where it is looking. Who is doing it is never the
 	// frame's to say: it is the principal the socket resolved.
-	Activity artifacts.PresenceActivity `json:"activity"`
-	Focus    artifacts.Focus            `json:"focus"`
+	Activity presence.Activity `json:"activity"`
+	Focus    presence.Focus    `json:"focus"`
+
+	// ChannelID is the chat room a chat `presence` frame is about. A field
+	// on the shared request rather than a second decoder, because a frame
+	// is decoded before its kind is known.
+	ChannelID string `json:"channel_id"`
 }
 
 // THE PER-FRAME CREDENTIAL IS GONE, and it went with `allow_anonymous_read`.
@@ -245,8 +381,11 @@ type request struct {
 // The credential is the session cookie a signed-in browser sends on its own —
 // a browser cannot set a header on a WebSocket constructor, so the cookie is
 // the whole of what the dashboard presents — or an Authorization bearer from
-// any other client. Nothing is read off the URL: a query string is written
-// into every proxy's access log ([auth.Guard.Credential]).
+// any other client. No credential is read off the URL: a query string is
+// written into every proxy's access log ([auth.Guard.Credential]). What the
+// dashboard's handshake does put there is the tab's READER, which is no
+// credential, and the guard has refused a handshake made for anybody else
+// before this handler runs ([auth.ReaderParam]).
 //
 // # Who is calling is the GUARD's answer, read once
 //
@@ -256,7 +395,16 @@ type request struct {
 // REST route beside it served them. The guard resolves both shapes, the
 // middleware has already run it for this path, and the handler reads the
 // result from the context like every other surface does.
-func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) http.Handler {
+//
+// # The company's own chat rides the same socket
+//
+// chat is the arm that pushes it ([ChatHub]), and a NIL ONE IS A NODE THAT
+// SERVES NO CHATLET: every method on it is a no-op, so the socket needs no
+// branch. A parameter rather than something the service builds, because the
+// hub is the process's — the engine is attached to it on every node, whether
+// or not that node serves this socket — and this handler is one of its users.
+func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
+	chat *ChatHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r, refusal := resolved(guard, w, r)
 		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
@@ -310,8 +458,8 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		}
 		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET
 		// (ADR-0033): what it carries is the overview, which is
-		// everybody's, and what of it a reader may not read — a seat's
-		// body, the audit trail, an inbox without the tracker — is withheld
+		// everybody's, and what of it a reader may not read (a seat's
+		// body, the audit trail, an inbox without Worklet) is withheld
 		// per kind and per payload by the audience the client is built with
 		// below, never by refusing the socket. It used to refuse a caller
 		// without the board's read grant, which left a person invited with
@@ -324,8 +472,8 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		// the guard happens to do. Refused before the upgrade, where the
 		// status is visible to the page's HTTP re-ask.
 		if !principal.Stage.MayAct() {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonStage, nil))
+			authz.EnvelopeRefusal(w, r, authz.Policy{},
+				authz.Decision{Reason: authz.ReasonStage})
 			return
 		}
 		// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again
@@ -343,7 +491,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
 		// library's own check is switched off below, and why the plain
 		// GET the dashboard re-asks this path with is not judged.
-		if upgrading(r) && origins.RefuseCrossSite(w, r) {
+		if auth.WebSocketUpgrade(r) && origins.RefuseCrossSite(w, r) {
 			return
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -358,7 +506,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			return
 		}
 		//nolint:contextcheck // the resolved request's; see where it is resolved
-		serveSocket(r.Context(), conn, svc, query, cred)
+		serveSocket(r.Context(), conn, svc, query, chat, cred)
 	})
 }
 
@@ -368,20 +516,6 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 // reached.
 type CrossSite interface {
 	RefuseCrossSite(w http.ResponseWriter, r *http.Request) bool
-}
-
-// upgrading reports whether a request asks to become a WebSocket, which is
-// what a browser's handshake carries and the dashboard's plain re-ask of this
-// path does not.
-func upgrading(r *http.Request) bool {
-	for _, value := range r.Header.Values("Upgrade") {
-		for _, token := range strings.Split(value, ",") {
-			if strings.EqualFold(strings.TrimSpace(token), "websocket") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // resolved is the request carrying the guard's answer, and the guard's
@@ -412,7 +546,7 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, cred credential,
+	svc *Service, query Query, chat *ChatHub, cred credential,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -434,8 +568,17 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// LEAVING EVERY ROOM, ITS PRESENCE INCLUDED, on every path out: a tab
 	// that closed must not stay in an artifact's room for its peers to see.
 	defer svc.leave(client)
+	// AND JOINED TO CHAT, as the seat this socket's principal acts as and
+	// holds Chatlet through ([chatViewerOf]) — the SAME principal the
+	// audience above was built from, decided once: a principal that moves
+	// closes this socket (lifetime.go), so the seat is never resolved
+	// again. A principal that may not be shown chat is not joined at all.
+	// Left before the queue closes, so the socket is out of every room's
+	// presence first.
+	chat.join(client, chatViewerOf(who.current()))
+	defer chat.leave(client)
 	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart,
-		holders: svc.holders}
+		holders: svc.holders, now: svc.now}
 	// THE SOCKET'S ROOM FRAMES, in the order it sent them, on a goroutine of
 	// their own: a join reads the artifact and its datastore, and the read
 	// loop must not wait on that to answer a ping. One goroutine rather than
@@ -444,7 +587,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var roomWorker sync.WaitGroup
 	roomWorker.Go(func() {
 		for req := range rooms.ops {
-			svc.roomOp(who.context(ctx), client, req)
+			svc.roomOp(who.context(ctx), client, chat, req)
 		}
 	})
 
@@ -494,7 +637,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 // roomOpsDepth is how many room frames one socket may have waiting for its room
 // goroutine before its read loop waits for room.
 //
-// SIXTEEN: presence frames are held to [artifacts.PresenceClientRate] a second
+// SIXTEEN: presence frames are held to [presence.ClientRate] a second
 // before they are queued and joins are rare, so this is more than a second of
 // an honest tab's frames, and the read loop waits only behind a join that is
 // slow to decide, which is backpressure on that one socket.
@@ -517,15 +660,24 @@ func (r *socketRooms) queue(ctx context.Context, req request) {
 }
 
 // roomOp carries out one room frame, as whoever the latest decision of the
-// socket's credential resolved.
-func (s *Service) roomOp(ctx context.Context, client *Client, req request) {
+// socket's credential resolved: an artifact's room on this service, a chat
+// room's on the chat arm, which decides who may be in a chat room as it
+// decides who is shown what is said there.
+func (s *Service) roomOp(ctx context.Context, client *Client, chat *ChatHub, req request) {
 	switch req.Kind {
 	case "artifact_join":
 		s.joinArtifact(ctx, client, req)
 	case "artifact_leave":
 		s.leaveArtifact(client, req)
 	case "presence":
-		s.presenceFrame(ctx, client, req)
+		switch req.Room {
+		case presence.RoomArtifact:
+			s.presenceFrame(ctx, client, req)
+		case presence.RoomChat:
+			if client.Posture().ServesQueries() {
+				chat.presenceFrame(ctx, client, req.ChannelID, req.Activity, req.Focus)
+			}
+		}
 	}
 }
 
@@ -625,8 +777,10 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			rooms.queue(ctx, req)
 		case "presence":
 			// HELD TO ITS ALLOWANCE HERE, on the read loop, so a socket
-			// that does not throttle itself fills no queue.
-			if rooms.presence.take(time.Now()) {
+			// that does not throttle itself fills no queue — a chat
+			// room's typing frames under the same allowance as an
+			// artifact's cursor, since both are this one frame.
+			if rooms.presence.take(seats.now()) {
 				rooms.queue(ctx, req)
 			}
 		case "query":
@@ -736,6 +890,13 @@ type watching struct {
 	client  *Client
 	chart   authz.Chart
 	holders iam.Holders
+
+	// now is the service's clock ([Options.Now]), which every decision
+	// here is taken at: the guard that resolved this socket's caller and
+	// the timer that ends its credential read the same one (lifetime.go),
+	// and a watch decided on a private wall-clock reading would judge a
+	// recency window by a different clock from the guard that proved it.
+	now func() time.Time
 }
 
 // watchWhat is what a watch refusal's error frame names in `what`, which is
@@ -830,7 +991,7 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 	return func(ctx context.Context, login string) error {
 		d := authz.Decide(ctx, principal, authz.ActionInbox, authz.Object{
 			Kind: authz.KindPerson, Owner: login, Unresolved: true,
-		}, w.chart, time.Now())
+		}, w.chart, w.now())
 		switch {
 		case d.Allowed, errors.Is(d.Err, authz.ErrUnresolved):
 			return nil
@@ -841,9 +1002,24 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 		}
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"asked", login, "reason", string(d.Reason))
-		return &watchAnswer{code: CodeUnauthorized,
-			refused: NewRefused(d.Reason, d.Grants)}
+		return refusedWatch(ctx, d)
 	}
+}
+
+// refusedWatch is a watch the authority table refused, answered through
+// [RefusedFor] — the frame a query refused on the same decision carries — or,
+// for a refusal this socket cannot say, as the fault [RefusedFor] makes it.
+func refusedWatch(ctx context.Context, d authz.Decision) *watchAnswer {
+	err := RefusedFor(watchWhat, d)
+	var refused *RefusedError
+	switch {
+	case errors.As(err, &refused):
+		return &watchAnswer{code: refused.Code, refused: &refused.Refused}
+	case errors.Is(err, ErrNotFound):
+		return &watchAnswer{code: CodeNotFound}
+	}
+	log.ErrorContext(ctx, "stream_watch_refusal_unspoken", "error", err)
+	return &watchAnswer{code: CodeQueryFailed}
 }
 
 // watchAnswer is a watch that was not installed: the code its error frame
@@ -905,7 +1081,7 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	seat string) *watchAnswer {
 
 	d := authz.Decide(ctx, principal, authz.ActionInbox,
-		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, time.Now())
+		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, w.now())
 	switch {
 	case d.Unknown():
 		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,
@@ -914,7 +1090,7 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	case !d.Allowed:
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"seat", seat, "reason", string(d.Reason))
-		return &watchAnswer{code: CodeUnauthorized, refused: NewRefused(d.Reason, d.Grants)}
+		return refusedWatch(ctx, d)
 	}
 	return nil
 }
@@ -958,20 +1134,32 @@ func (w *watching) recheck(ctx context.Context) {
 // runQuery answers one question onto the client's own queue.
 func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	data, err := query(ctx, req.What, req.Params)
+	var refused *RefusedError
+	var revision *RevisionError
 	switch {
 	case err == nil:
 		client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: req.What, Data: data})
 	case errors.Is(err, ErrUnknownQuery):
 		client.Reply(queryError(req, CodeUnknownQuery))
-	case errors.Is(err, ErrUnauthorized):
-		env := queryError(req, CodeUnauthorized)
-		var refused *RefusedError
-		if errors.As(err, &refused) {
-			env.Refused = &refused.Refused
-		}
+	case errors.As(err, &refused):
+		// THE MAPPING'S CODE AND FIELDS, carried whole from [RefusedFor]. A
+		// bare [ErrUnauthorized] names no decision, so it is answered by the
+		// default arm as the fault it is rather than as a refusal nobody
+		// could say the reason for.
+		env := queryError(req, refused.Code)
+		env.Refused = &refused.Refused
 		client.Reply(env)
 	case errors.Is(err, ErrNotFound):
 		client.Reply(queryError(req, CodeNotFound))
+	case errors.Is(err, ErrArtifactTrashed):
+		client.Reply(queryError(req, CodeArtifactTrashed))
+	case errors.As(err, &revision):
+		// THE REST ROUTE'S CODE AND WORDS, so a revision this node cannot
+		// open is told the same thing on both transports. The keyring's own
+		// error went to the log where the question read it.
+		refusal := queryError(req, revision.Code)
+		refusal.Detail = httpjson.Sentence(revision.Detail)
+		client.Reply(refusal)
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the
@@ -986,9 +1174,11 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		}
 		client.Reply(refusal)
 	case errors.Is(err, ErrUnavailable):
-		// THE REFUSAL, ITS WORDS AND ITS HINT RIDE THE FRAME, because a
-		// node catching up and a node that will refuse this read until an
-		// operator acts are both `unavailable` — see [Unavailable].
+		// THE REFUSAL, A PERSON'S SENTENCE FOR IT AND ITS HINT RIDE THE
+		// FRAME, because a node catching up and a node that will refuse
+		// this read until an operator acts are both `unavailable` — see
+		// [Unavailable]. Its own detail goes to the log.
+		LogUnavailable(ctx, log, "stream_query_unavailable", err, "what", req.What)
 		env := queryError(req, CodeUnavailable)
 		env.unavailable(UnavailableOf(err))
 		client.Reply(env)
@@ -997,7 +1187,7 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		// carry a database path or a driver's own message, and being
 		// admitted to a question does not make a reader somebody that path
 		// is meant for.
-		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
+		LogFailed(ctx, log, "stream_query_failed", err, "what", req.What)
 		client.Reply(queryError(req, CodeQueryFailed))
 	}
 }

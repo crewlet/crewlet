@@ -12,9 +12,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -68,50 +69,42 @@ roles:
 	}
 }
 
-// leadPrompt is everything the CEO's executor sends its model on the first
-// round of a turn c builds, the model answering nothing back.
+// leadPrompt is everything the CEO's executor is launched with on the first
+// iteration of a turn c builds: the standing instructions and the brief its
+// run is handed.
 func leadPrompt(t *testing.T, c *Company) string {
 	t.Helper()
-	sent := &promptRecorder{}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: sent}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
 	if err != nil {
 		t.Fatalf("phase registry: %v", err)
 	}
 	c.Models = models
+	sent := &promptRecorder{}
 	r, err := c.RunnerFor(t.Context(), "ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
-		Reply: turn.NoReply()})
+		Reply: turn.NoReply(), Launcher: sent, Sessions: testSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
-	// The turn fails, its model refusing every call: only what it was sent
-	// is under test.
+	// Only what the run was handed is under test.
 	_, _, _ = r.Execute(t.Context(), 1, "", nil)
 	return sent.first()
 }
 
-// promptRecorder is a model that records the messages of the first request it is
-// sent and refuses every request.
+// promptRecorder is an executor launcher that records the prompt of the first
+// run it is handed and launches nothing.
 type promptRecorder struct {
 	mu   sync.Mutex
 	text string
 	seen bool
 }
 
-func (*promptRecorder) Model() string { return "recorder" }
-
-func (s *promptRecorder) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+func (s *promptRecorder) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.seen {
-		s.seen = true
-		var b strings.Builder
-		for _, m := range req.Messages {
-			b.WriteString(m.Content)
-			b.WriteString("\n")
-		}
-		s.text = b.String()
+		s.seen, s.text = true, req.System+"\n"+req.Brief+"\n"
 	}
-	return nil, errors.New("the recorder answers nothing")
+	return runner.Launched{}, errors.New("the recorder launches nothing")
 }
 
 func (s *promptRecorder) first() string {
@@ -139,6 +132,7 @@ func TestTheEnginesChartSeamsResolveThroughItsOwnChain(t *testing.T) {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -157,7 +151,7 @@ roles:
 	}
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg,
 		Environment: config.MapSource{slack: "U0HANDED"}})
@@ -196,4 +190,45 @@ roles:
 			t.Errorf("a question for U0HANDED is put to %+v, want the founder by name", got)
 		}
 	})
+}
+
+// A RUNNER'S ROSTER KNOWS WHICH CHAT THE COMPANY RUNS. On the engine's own a
+// person answers to their seat's handle, so a lead's roster gives it and is
+// told to mention them by it; on a company whose chat is nobody's they have
+// no account to be mentioned on. Read off the prompt a runner the epoch builds sends, because
+// the backend is decided by the epoch's configuration and handed to the roster
+// by [Company.RunnerFor], and the roster alone cannot see it.
+func TestARunnersRosterKnowsWhichChatTheCompanyRuns(t *testing.T) {
+	t.Parallel()
+	for backend, want := range map[string]string{
+		"chatlet": "  - Chat: @founder",
+		"none":    "nobody to @-mention",
+	} {
+		t.Run(backend, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := config.ParseCompany([]byte(`
+name: Acme
+chat:
+  backend: ` + backend + `
+roles:
+  - name: CEO
+    handle: ceo
+    manages: [founder]
+  - name: Founder
+    handle: founder
+    kind: human
+`))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			c, err := NewCompany(cfg)
+			if err != nil {
+				t.Fatalf("NewCompany: %v", err)
+			}
+			if prompt := leadPrompt(t, c); !strings.Contains(prompt, want) {
+				t.Errorf("on %s chat the CEO's prompt never says %q about its "+
+					"human report:\n%s", backend, want, prompt)
+			}
+		})
+	}
 }

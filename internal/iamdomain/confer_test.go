@@ -55,11 +55,11 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 		})
 	}
 	user := rig.writer.As(principalNamed("ana.user", iam.KindPerson, iam.Apps))
-	if err := enrol(user, "ci:widen", []iam.Grant{iam.GrantTracker}); !errors.Is(err,
+	if err := enrol(user, "ci:widen", []iam.Grant{iam.GrantWorklet}); !errors.Is(err,
 		iamdomain.ErrRefused) {
 		t.Errorf("a party using every app enrolled somebody (%v)", err)
 	}
-	if err := enrol(anAdmin(rig), "ci:future", []iam.Grant{iam.GrantTracker,
+	if err := enrol(anAdmin(rig), "ci:future", []iam.Grant{iam.GrantWorklet,
 		"swarm"}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("an administrator conferred a name this build does not know (%v)", err)
 	}
@@ -105,12 +105,12 @@ func TestAServiceAccountMayHoldAdmin(t *testing.T) {
 	if err := rig.draining(func() error {
 		_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 			PersonID: other, Kind: iam.KindMachine, Stage: iam.StageActive,
-			Login: "ci:files", Grants: []iam.Grant{iam.GrantTracker},
+			Login: "ci:files", Grants: []iam.Grant{iam.GrantWorklet},
 			OpID: operationKey(), Reason: "a pipeline",
 		})
 		return err
 	}); err != nil {
-		t.Fatalf("a service account holding the tracker was refused: %v", err)
+		t.Fatalf("a service account holding Worklet was refused: %v", err)
 	}
 	rig.drain()
 	if err := rig.draining(func() error {
@@ -143,7 +143,7 @@ func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 	}
 	user := rig.writer.As(principalNamed("ana.user", iam.KindPerson, iam.Apps))
 	if err := invite(user, "sarah@example.com",
-		[]iam.Grant{iam.GrantTracker}); !errors.Is(err, iamdomain.ErrRefused) {
+		[]iam.Grant{iam.GrantWorklet}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party using every app issued an invitation (%v) — an "+
 			"invitation decides who may do anything at all", err)
 	}
@@ -164,7 +164,7 @@ func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	offered := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	offered := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
 	// THE LINK'S SECRET AND THE SEAT, per invitation: a redemption presents
 	// the one and binds the other, and these cases are about what the
 	// invitation confers.
@@ -219,7 +219,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		other   string
 	}{
 		{"a permission the invitation did not carry", "a1@example.com",
-			[]iam.Grant{iam.GrantTracker, iam.GrantAdmin}, ""},
+			[]iam.Grant{iam.GrantWorklet, iam.GrantAdmin}, ""},
 		{"an address the invitation was not issued to", "a3@example.com",
 			offered, "someone-else@example.com"},
 	} {

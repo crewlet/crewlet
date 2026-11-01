@@ -165,6 +165,9 @@ func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 	if !errors.As(err, &managed) {
 		t.Fatalf("a callback begun by alice = %v, want the managed refusal", err)
 	}
+	// AND THE PERSON IS TOLD WHERE THE APP IS ADDED, not which token the
+	// config surface refused.
+	toldAs(t, "a managed document", err, "managed outside Crewlet")
 	if asked.Load() != 0 {
 		t.Error("the callback exchanged GitHub's one-time code before refusing")
 	}
@@ -202,10 +205,7 @@ func TestAGitHubAppIsRecordedAsTheOperatorWhoBeganIt(t *testing.T) {
 	if _, err := s.setup.AppFlow().Complete(t.Context(), "one-time-code", state); err != nil {
 		t.Fatalf("the writer's callback: %v", err)
 	}
-	active, found, err := s.configs.Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("active: %v %v", found, err)
-	}
+	active := s.active(t)
 	by := iam.ActorFor(writer)
 	if active.CreatedBy != by.Name || active.OperatorID != by.OperatorID ||
 		!strings.Contains(active.Summary, "GitHub App") {

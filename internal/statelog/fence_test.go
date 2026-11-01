@@ -48,7 +48,7 @@ func standingAt(p statelog.Position) func() statelog.Position {
 // answer mean what it says, and asks each question of the position it is
 // about.
 //
-// It is the one implementation both identity-claiming domains' fences run, so
+// It is the one implementation every identity-claiming domain's fence runs, so
 // this is the table the rule lives in; each domain's own tests pin that its
 // fence reaches it. Five properties, each a way a fence was or could be wrong:
 //

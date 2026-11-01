@@ -61,8 +61,9 @@ schedules:
     task: "Run the smoke-test pipeline and triage failures"
     target: each               # unit schedules only — each | lead
     enabled: true              # set false to keep it in config without firing
-    timeout_seconds: 180       # hard wall-clock cap on the turn (default 180 s —
-                               #   roomy for a multi-tool turn, stops runaway loops)
+    timeout_seconds: 1800      # hard wall-clock cap on the turn, its run included
+                               #   (default 1800 s — twice a slow ritual's box, run
+                               #   and review, so reaching it means stuck)
     catchup: true              # fire one recent missed tick on restart (see Catchup)
 ```
 
@@ -74,7 +75,7 @@ schedules:
 | `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
 | `target` | `each` | **Unit schedules only.** Who runs it (see [Delivery](#delivery-who-runs-it)). Ignored for role schedules. [Human seats](humans-in-the-org.md) never run schedules: `each` fans out to direct agent roles only, an enabled `lead` schedule under a (possibly inherited) human lead is a config error, and human seats cannot define role schedules. |
 | `enabled` | `true` | `false` keeps the schedule in config but never fires it. An enabled schedule nothing can run — `each` on a unit with no direct agent member, `lead` under a person, or a schedule on a human seat — is refused in the company document, a member made a person's seat included. A `lead` schedule on a unit nothing leads is admitted and skipped by the scheduler, which logs `schedule_no_runners` whenever it is due. |
-| `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
+| `timeout_seconds` | `1800` | Hard wall-clock cap on the scheduled turn, its executor's run included. See [Hard wall-clock timeout](#hard-wall-clock-timeout). |
 | `catchup` | `true` | Whether to fire a recent missed tick on (re)start. |
 
 Config load (and so `crewlet validate`) checks each schedule's shape: a
@@ -142,7 +143,7 @@ units:
     id: backend                          # the unit's key; `name` above is display
     type: team
     lead: backend-lead                   # the lead seat's handle
-    channel: C_BACKEND
+    channel: backend                     # a channel NAME, not an id or `#backend`
     schedules:
       # target defaults to `each` → every direct member posts their own update
       - name: daily-standup
@@ -295,10 +296,11 @@ standup lost for a seat nobody paused.
 
 ### Hard wall-clock timeout
 
-Each scheduled turn carries `timeout_seconds` (default 180), on the fire's own
-`task_assigned` payload. The turn engine checks it **between rounds**: a turn
-past the cap starts no further executor and reviewer round and ends `failed`,
-with a `turn.guard_breach` event of kind `scheduled_timeout` and
+Each scheduled turn carries `timeout_seconds` (default 1800, half an hour —
+see *Half an hour, for a ritual* below), on the fire's own `task_assigned`
+payload. The turn engine checks it **between rounds**: a turn past the cap
+starts no further executor and reviewer round and ends `failed`, with a
+`turn.guard_breach` event of kind `scheduled_timeout` and
 `error_kind: scheduled_timeout` on its `agent_turn_completed` event, so a
 runaway loop can't monopolise the runner. A failing or timed-out run never
 blocks the next tick.
@@ -313,9 +315,49 @@ timeouts beneath it. Round one always runs: a cap that refused before any work
 started would report a turn as timed out having done nothing, which is a
 misconfiguration rather than a slow turn.
 
-A resumed turn — one re-entering a suspended [code sandbox](code-sandbox.md)
-run — carries **no** cap. The cap bounds the turn a fire started; the resumed
-half is finishing work the box already did.
+**The cap spans the whole turn, its executor's run included.** An agent
+seat's executor is its coding CLI's own [run in a box](code-sandbox.md), and
+the turn parks while the run works, so a turn is several segments — the
+launch, then one per collection — and a reviewer that sends the work back
+launches the run again. The cap is an instant, measured from when the fire's
+turn began and carried on the park, so every later segment is held to the
+same one: the round a segment collects always runs, and none after it starts
+once the instant has passed. The run itself is the part that can outlast the
+cap by hours, so the instant is written on its row too
+([`PendingRun.Deadline`](code-sandbox.md)): the completion poll ends a run
+still working past it as if it had finished, logging
+`sandbox_run_past_deadline`, and the collection that follows reads what it did
+up to then and resumes its turn to judge it, rather than cutting it off with
+its work unrecorded.
+
+**Half an hour, for a ritual.** The clock runs from the moment the fire's turn
+begins, so everything up to the end of the run is on it: the turn-start
+prefetch (each auxiliary call held to thirty seconds), a seat's first-turn
+[onboarding pass](turn-engine.md#first-turn-onboarding), the box's start (a
+container's within the two minutes its runtime is given, a cold image pull
+included) and the seat's
+[setup](code-sandbox.md#setup-steps--provisioning-the-box) applied, then the
+run itself — for a standup, reading what it needs, posting once and
+submitting: some five to ten of its CLI's own rounds, ten minutes at the slow
+end — and the reviewer. A slow ritual that is not stuck takes about a quarter
+of an hour. Half an hour is twice that, so a reviewer's send-back still fits
+and a turn that reaches the cap is stuck rather than slow. It stops there
+because a longer cap is not free: a seat takes no other work while its run
+works, so the messages sent to a seat whose ritual is wedged wait until the
+cap ends it. Give a schedule whose runs routinely need longer — each one that
+does logs `sandbox_run_past_deadline` — a `timeout_seconds` of its own.
+
+**A schedule that fires every few minutes.** The cap is also what frees a
+seat before its next fire, which half an hour does for a daily or weekly
+ritual by hours and does not for a schedule that fires more often than that.
+The scheduler fires on time whatever the seat is doing; a fire that comes due
+while the turn before it still holds the seat waits on the seat's inbox, then
+runs as a turn of its own once that one ends — fires are never merged. So
+such a schedule runs late whenever one of its turns outlasts its period, and
+falls further behind with every fire while they keep doing so: fire it less
+often, or give it a `timeout_seconds` comfortably below its period, which
+cuts a turn that runs long before the next fire is due — the reviewer still
+judges what its run did by then.
 
 ---
 
@@ -328,7 +370,7 @@ scheduling:
   enabled: true              # master switch
   tick_seconds: 10           # scheduler poll interval
   jitter_seconds: 0          # max per-schedule deterministic spread (see below)
-  catchup_min_seconds: 120   # lower clamp on the catchup window
+  catchup_min_seconds: 120   # lower clamp on the catchup window (at least 1)
   catchup_max_seconds: 7200  # upper clamp on the catchup window
 ```
 

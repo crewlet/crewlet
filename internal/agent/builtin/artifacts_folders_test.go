@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // companyShare is a top-level folder's "Everyone at the company" preset.
@@ -46,7 +47,8 @@ func folderRig(t *testing.T) (artifactRig, map[string]artifactsdomain.Folder) {
 // A FOLDER PATH NAMING SEVERAL FOLDERS IS REFUSED WITH EACH CANDIDATE, and
 // nothing is created: a company "Drafts" and the agent's own private "Drafts"
 // share a name at the top level, so the agent is told both ids, owners and
-// audiences and passes the one it means.
+// audiences and passes the one it means. The argument to change, `invalid`:
+// the same path never lands, an id does.
 func TestAFolderPathNamingSeveralFoldersIsRefusedWithItsCandidates(t *testing.T) {
 	t.Parallel()
 	r, _ := folderRig(t)
@@ -54,7 +56,7 @@ func TestAFolderPathNamingSeveralFoldersIsRefusedWithItsCandidates(t *testing.T)
 	own := r.f.folder("f-drafts-own", "", "drafts", "agent-cto", iam.ActorAgent)
 	got := r.call(t, turnFor(t, "agent-cto"), builtin.CreateArtifactFolderTool,
 		map[string]any{"parent": "Drafts", "name": "Q3"})
-	if tools.RefusalOf(got) != tools.RefusalConflict {
+	if tools.RefusalOf(got) != tools.RefusalInvalid {
 		t.Fatalf("an ambiguous parent answered %v: %s", tools.RefusalOf(got), got.Output)
 	}
 	for _, want := range []string{company.ID, own.ID, "everyone at the company", "only its owner"} {
@@ -180,7 +182,7 @@ func TestAMissingFolderIsRefusedWithTheNearestPaths(t *testing.T) {
 func (r artifactRig) loggedCall(t *testing.T, turn *turnctx.Turn, name string, args map[string]any) tools.Result {
 	t.Helper()
 	got := r.call(t, turn, name, args)
-	turn.CallLog().Record(name, args)
+	turn.CallLog().Record(name, toolargs.Of(nil, args))
 	return got
 }
 

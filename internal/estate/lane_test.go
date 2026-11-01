@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A QUEUED PUSH HOLDS NO SLOT A READ IS ANSWERED THROUGH. A proposal waits —
@@ -83,7 +83,7 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		reads, cancelReads := context.WithTimeout(t.Context(), 2*Production().ReadAttempt)
-		if _, err := f.client.Work().Tasks(reads, tracker.Query{}, time.Now()); err != nil {
+		if _, err := f.client.Work().Tasks(reads, worklet.Query{}, time.Now()); err != nil {
 			cancelReads()
 			t.Fatalf("with %d pushes held on the node, a tracker read of it = %v, want it "+
 				"answered: a queued push held a slot the node's reads are answered through",

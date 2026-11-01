@@ -15,7 +15,7 @@ import (
 // RETIRED PACKS, AND THE SWEEP THAT REMOVES THEM.
 //
 // A pack a record retires leaves code_packs for code_packs_retired, a RETIRED
-// reference ([RetiredPackReferences], ADR-0051): its row keeps its object from
+// reference ([RetiredPackReferences], ADR-0074): its row keeps its object from
 // the collector for [RetireGrace] and does nothing else, so a reader that
 // began on the pack before the retirement — a cache that has not synced past
 // it, a clone of the largest bundle a row can name — finishes its read.

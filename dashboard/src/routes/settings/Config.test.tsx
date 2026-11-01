@@ -16,10 +16,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { configHunks, ConfigScreen, RevisionPeek } from "./Config.tsx";
+import { configHunks, ConfigScreen, nodeOnRevision, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type ConfigChange } from "~/protocol/index.ts";
+import type { FleetNode } from "~/protocol/types.ts";
 
 // EXACTLY what internal/api/configapi/answers.go returns for these two
 // questions. Change the server and this fixture has to change with it, which
@@ -722,4 +723,119 @@ test("the active revision carries no note under its block", async () => {
   const { container } = mount("#/config?lens=active");
   await waitFor(() => expect(container.querySelector(".crewlet-codeblock, pre")).not.toBeNull());
   expect(screen.queryByText(/Click into the revision|Ctrl\+A/)).toBeNull();
+});
+
+// A NODE IS COUNTED BY THE REVISION IT RUNS. A node that refused a revision
+// reports it as its last attempt beside `error` and serves the one before;
+// the panel counted it among the nodes on this revision — "report this
+// revision", tagged "applied" — while it ran another company.
+describe("which nodes run a revision", () => {
+  const id = revisions[0]!.revision_id;
+  const before = revisions[1]!.revision_id;
+  const node = (name: string, over: Partial<FleetNode> = {}): FleetNode => ({
+    id: name,
+    roles: [],
+    broker: "member",
+    seats: 0,
+    config_epoch: 3,
+    config_status: "ok",
+    config_revision_id: id,
+    config_serving_revision_id: id,
+    ...over,
+  });
+  const refused = node("refused-0", {
+    config_status: "error",
+    config_error: "env var CREWLET_X is not set",
+    config_serving_revision_id: before,
+  });
+  // Re-activated to rotate a credential, refused, and still running it.
+  const rotated = node("rotated-0", {
+    config_status: "error",
+    config_error: "secret OPENAI_API_KEY is not set",
+  });
+
+  /** The revision's peek over a fleet of `nodes`, its pointer naming the revision. */
+  function mountPeek(nodes: FleetNode[]) {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const fleet = {
+      nodes,
+      seats: [],
+      duties: [],
+      unplaceable: [],
+      unmanned_roles: [],
+      this_node: nodes[0]!.id,
+      target_epoch: 3,
+      activation: { epoch: 3, revision_id: id, at: "2026-08-23T15:00:00Z", summary: "" },
+    };
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      Promise.resolve(what === "config_audit" ? revisions : what === "fleet" ? fleet : {});
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <RevisionPeek id={id} />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("each node is running it, refused it, running another, or silent", () => {
+    expect(nodeOnRevision(node("n"), id)).toBe("here");
+    expect(nodeOnRevision(refused, id)).toBe("refused");
+    // A PARTIAL APPLY IS A REFUSAL TOO: it never counts as converged.
+    expect(
+      nodeOnRevision(
+        node("n", { config_status: "degraded", config_serving_revision_id: before }),
+        id,
+      ),
+    ).toBe("refused");
+    // A refusal of ANOTHER revision is that revision's story: here the node
+    // simply runs something else.
+    expect(nodeOnRevision(refused, before)).toBe("here");
+    expect(
+      nodeOnRevision(
+        node("n", { config_revision_id: before, config_serving_revision_id: before }),
+        id,
+      ),
+    ).toBe("elsewhere");
+    expect(nodeOnRevision({ id: "quiet", roles: [], broker: "member", seats: 0 }, id)).toBe(
+      "silent",
+    );
+    // A REFUSED RE-ACTIVATION OF THE REVISION A NODE RUNS — the credential
+    // rotation — names that revision as attempted and as served: the status
+    // is what says it was refused. Mutation: read the revision it runs
+    // before the refusal and this is "here".
+    expect(nodeOnRevision(rotated, id)).toBe("refused");
+  });
+
+  // THE ROTATION THAT DID NOT TAKE is said where an operator checks it: a
+  // refusal in the danger tone, naming the revision it still runs and why,
+  // and not counted among the nodes that run the revision. Mutation: read
+  // the revision a node runs before its refusal and node rotated-0 is tagged
+  // "runs it" with no reason, and the count reads 2 of 2.
+  test("the peek says a refused re-activation of the revision a node runs as a refusal", async () => {
+    mountPeek([node("current-0"), rotated]);
+    expect(await screen.findByText("1 of 2 nodes run this revision.")).toBeDefined();
+    const line = (name: string) => screen.getByText(name).closest<HTMLElement>(".row")!;
+    const tag = within(line("rotated-0")).getByText(`refused, runs ${id.slice(0, 10)}`);
+    expect(tag.closest(".crewlet-tag")!.className).toContain("crewlet-tag--danger");
+    expect(within(line("rotated-0")).getByText("secret OPENAI_API_KEY is not set")).toBeDefined();
+    expect(within(line("rotated-0")).queryByText("runs it")).toBeNull();
+  });
+
+  test("the peek counts only the nodes that run it, and names what a refusal runs", async () => {
+    mountPeek([
+      node("current-0"),
+      refused,
+      node("other-0", { config_revision_id: before, config_serving_revision_id: before }),
+    ]);
+    expect(await screen.findByText("1 of 3 nodes run this revision.")).toBeDefined();
+    const line = (name: string) => screen.getByText(name).closest<HTMLElement>(".row")!;
+    expect(within(line("current-0")).getByText("runs it")).toBeDefined();
+    const tag = within(line("refused-0")).getByText(`refused, runs ${before.slice(0, 10)}`);
+    expect(tag.closest(".crewlet-tag")!.className).toContain("crewlet-tag--danger");
+    expect(within(line("refused-0")).getByText("env var CREWLET_X is not set")).toBeDefined();
+    expect(within(line("other-0")).getByText(`on ${before.slice(0, 10)}`)).toBeDefined();
+    expect(within(line("other-0")).queryByText(/could not apply/)).toBeNull();
+  });
 });

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type condenseCall struct {
@@ -148,53 +148,52 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 
 // THE COORDINATOR'S OWN PREFIX FITS THE ROOM A RUNNER LEAVES IT. A runner
 // composes its failure to MaxFailureBytes; the coordinator may then put the
-// sentence saying nobody was asked the question in front of it, and what it
-// gets must still be what one condensation reads — or the compactor refuses
-// it before any model is asked. The refusal at its longest, a question as
-// long as a box file can be, with its separator, leaves most of the reserve
-// for what redaction can add where the pieces join.
+// sentence saying the run was ended at its turn's wall-clock cap in front of it
+// ([endedAtDeadline]), and what it gets must still be what one condensation
+// reads, or the compactor refuses it before any model is asked. The sentence,
+// with its separator, leaves most of the reserve for what redaction can add
+// where the pieces join.
 func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 	t.Parallel()
-	prefix := len(questionRefusal(MaxFileBytes)) + len(":\n")
+	deadline := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	prefix := len(endedAtDeadline(Result{Error: "x"}, deadline, "").Error) - len("x")
 	if prefix > failureReserve/2 {
-		t.Errorf("the question's refusal takes %d of the %d-byte reserve; want at most half", prefix, failureReserve)
+		t.Errorf("the deadline's sentence takes %d of the %d-byte reserve; want at most half", prefix, failureReserve)
 	}
 	if MaxFailureBytes+failureReserve != MaxCondenseBytes {
 		t.Errorf("MaxFailureBytes %d + reserve %d != what one condensation reads, %d",
 			MaxFailureBytes, failureReserve, MaxCondenseBytes)
 	}
 
-	// End to end: the longest failure a runner composes, a question
-	// nobody can be asked (no model condenses it), and the failure the
-	// condenser is then handed — WHOLE: the refusal in front of the
-	// runner's failure, every byte of both. The pre-trim that brings an
-	// oversized failure inside what a condensation reads would keep the
-	// handed text inside the bound however small the reserve, so what
-	// shows the reserve holding the prefix is that nothing was trimmed.
+	// End to end: the longest failure a runner composes, ended at its
+	// deadline, and the failure the condenser is then handed: WHOLE, the
+	// sentence in front of the runner's failure, every byte of both. The
+	// pre-trim that brings an oversized failure inside what a condensation
+	// reads would keep the handed text inside the bound however small the
+	// reserve, so what shows the reserve holding the prefix is that nothing
+	// was trimmed.
 	//
 	// Mutation: set failureReserve to zero, and the failure reaches the
 	// condenser with its middle taken out.
 	var shown string
 	condenser := &fakeCondenser{answer: func(part RunPart, text string, _ int) (string, error) {
-		if part == PartQuestion {
-			return "", errors.New("no rewrite of the question could be had")
+		if part == PartFailure {
+			shown = text
 		}
-		shown = text
 		return "(condensed)", nil
 	}}
 	c := &Coordinator{condense: condenser}
 	failure := lines("stderr", MaxFailureBytes/48)
 	failure += strings.Repeat("e", MaxFailureBytes-len(failure))
-	question := strings.Repeat("q", MaxQuestionBytes+1)
-	got := c.fitResult(t.Context(), PendingRun{}, Result{
-		Error: failure, NeedsInput: true, Question: question,
-	})
-	if got.NeedsInput {
-		t.Fatal("a question no line of which fits, with no model to condense it, was asked")
+	ended := endedAtDeadline(Result{Error: failure}, deadline, "")
+	got := c.fitText(t.Context(), PendingRun{}, ended)
+	if got.Success || got.Error != "(condensed)" {
+		t.Fatalf("the ended run reads success %v, failure %.80q; want it failed and its failure condensed",
+			got.Success, got.Error)
 	}
-	if want := questionRefusal(len(question)) + ":\n" + failure; shown != want {
-		t.Errorf("the condenser was handed %d bytes; want the refusal and the runner's failure "+
-			"whole, %d bytes", len(shown), len(want))
+	if !strings.HasSuffix(ended.Error, failure) || shown != ended.Error {
+		t.Errorf("the condenser was handed %d bytes; want the deadline's sentence and the runner's "+
+			"failure whole, %d bytes", len(shown), len(ended.Error))
 	}
 	if strings.Contains(shown, "one condensation reads") {
 		t.Error("the failure was trimmed to fit what a condensation reads, so the reserve did not hold its prefix")
@@ -280,7 +279,7 @@ func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if got, err := readHostFile(filepath.Join(dir, "absent"), "absent", MaxFileBytes); got != nil || err != nil {
+	if got, err := readHomeFile(boxLayout{id: "b", root: dir}, "absent", "absent", MaxFileBytes); got != nil || err != nil {
 		t.Errorf("a missing file = %q, %v; want empty, the poll's contract", got, err)
 	}
 	local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()})

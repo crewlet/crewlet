@@ -25,12 +25,13 @@ type BoxURLs struct {
 	// Receiver is the in-box telemetry receiver's base
 	// ([sandbox.OtelReceiverURLVar]).
 	Receiver BoxURL
-	// Bridge is the agent-mode tool bridge's base ([mcpbridge.BaseURLVar]).
+	// Bridge is the tool bridge's base, through which a box's executor reaches
+	// its seat's tools ([mcpbridge.BaseURLVar]).
 	Bridge BoxURL
 	// Git is the code host's base a coding box clones and pushes through
 	// ([sandbox.BoxGitURLVar]): a git node's public listener and /box/git,
 	// or a balancer over every git node's — any git node admits a box, by
-	// its run's row (ADR-0063). Unset, no run is given a repository.
+	// its run's row (ADR-0086). Unset, no run is given a repository.
 	Git BoxURL
 }
 

@@ -666,19 +666,19 @@ func (n *node) mergingWith(repo, change string, set func(*code.Mergeability)) co
 
 // THE GATE READS NO DECISION: a merge counts the change's own review objects
 // — its reviews' verdicts, its findings and its checks — and never a decision
-// the tracker records (ADR-0023's asks), so no file of the code host imports
-// the tracker or spells one of its tables: neither M4's readiness nor the
+// Worklet records (ADR-0023's asks), so no file of the code host imports
+// Worklet or spells one of its tables: neither M4's readiness nor the
 // merge gate that widens it (gatejudge.go), nor any decide that will judge a
 // merge by it. A decision a seat asked for on a task is an answer about the
 // task, and a change gated by one would merge on a word nobody gave about its
 // code.
 //
-// Mutation: import internal/tracker in gatejudge.go, or read
+// Mutation: import internal/worklet in gatejudge.go, or read
 // `tracker_comments` there → red.
 func TestTheGateReadsNoDecision(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
-	tracker := regexp.MustCompile(`\btracker_[a-z_]+\b`)
+	workletTable := regexp.MustCompile(`\btracker_[a-z_]+\b`)
 	walked := 0
 	err := sourcetree.Walk(filepath.Join(root, "internal", "code"), func(path string, d fs.DirEntry,
 		err error) error {
@@ -696,15 +696,15 @@ func TestTheGateReadsNoDecision(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		for _, spec := range f.Imports {
-			if p, _ := strconv.Unquote(spec.Path.Value); p == "github.com/crewlet/crewlet/internal/tracker" ||
-				strings.HasPrefix(p, "github.com/crewlet/crewlet/internal/tracker/") {
-				t.Errorf("%s imports %s: the code host counts its own review objects, never a tracker "+
+			if p, _ := strconv.Unquote(spec.Path.Value); p == "github.com/crewlet/crewlet/internal/worklet" ||
+				strings.HasPrefix(p, "github.com/crewlet/crewlet/internal/worklet/") {
+				t.Errorf("%s imports %s: the code host counts its own review objects, never a Worklet "+
 					"decision", rel, p)
 			}
 		}
 		for _, lit := range stringLiterals(f) {
-			if table := tracker.FindString(lit); table != "" {
-				t.Errorf("%s spells the tracker's table %s: a merge counts no tracker decision", rel, table)
+			if table := workletTable.FindString(lit); table != "" {
+				t.Errorf("%s spells Worklet's table %s: a merge counts no Worklet decision", rel, table)
 			}
 		}
 		return nil

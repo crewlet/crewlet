@@ -810,7 +810,7 @@ func TestALinearizableReadAtTheStartOfALogIsStampedAndBounded(t *testing.T) {
 // A NODE THAT NEVER REACHES THE TARGET REFUSES `behind`, WITH A DERIVED HINT.
 //
 // A flat hint is wrong in both directions on the same fleet: too early on a
-// node grinding through a bulk apply, too late on one that caught up in
+// node grinding through a long backlog, too late on one that caught up in
 // milliseconds. The hint divides the lag by the drain this node has actually
 // been observed at.
 func TestAReadThatCannotReachItsTargetRefusesWithADerivedHint(t *testing.T) {
@@ -933,7 +933,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 			RetryAfter: statelog.RetryHint(code, 1_000, 100)}
 		// WRAPPED, because a surface meets it inside whatever the domain
 		// said about it.
-		got := statelog.RetryAfter(fmt.Errorf("tracker: read: %w", refused), otherwise)
+		got := statelog.RetryAfter(fmt.Errorf("worklet: read: %w", refused), otherwise)
 		switch {
 		case !code.Retryable() && got != 0:
 			t.Errorf("read refusal %q says come back in %s, and waiting on "+
@@ -979,7 +979,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		if c.retryable {
 			want = otherwise
 		}
-		refused := fmt.Errorf("tracker: publish: %w",
+		refused := fmt.Errorf("worklet: publish: %w",
 			&statelog.Unavailable{Reason: c.reason, Detail: "a detail"})
 		if got := statelog.RetryAfter(refused, otherwise); got != want {
 			t.Errorf("write refusal %q says come back in %s, want %s", c.reason,
@@ -1055,8 +1055,8 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 // A DEFERRED SCOPE THIS NODE COULD NOT READ IS REFUSED IN THIS PACKAGE'S
 // WORDS, NEVER THE STORE'S.
 //
-// Every surface that answers a refusal sends its detail to the caller — the
-// query registry in a REST body and a socket frame, `/work` in its own — so a
+// Every surface that answers a refusal sends its detail to the caller (the
+// query registry in a REST body and a socket frame, `/worklet` in its own), so a
 // detail built from the probe's error handed a driver's message or a database
 // path to anybody holding the question's grant. The refusal says what could
 // not be read and where the reason is; the reason goes to the log. The

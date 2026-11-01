@@ -53,7 +53,7 @@ func (c engineCode) GitRoutes() (GitRoutes, error) {
 }
 
 // CodeReads is the code domain's read through this node's estate router — the
-// copy that serves, wherever it is (ADR-0049) — or why this node's running
+// copy that serves, wherever it is (ADR-0072) — or why this node's running
 // runtime serves none ([engine.OperatorCode], [engine.Engine.CodeUnserved]),
 // asked again after the reason for GitRoutes' reason.
 func (c engineCode) CodeReads() (queries.CodeReads, error) {

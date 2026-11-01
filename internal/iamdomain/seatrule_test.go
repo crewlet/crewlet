@@ -490,11 +490,16 @@ func TestARetriedCreateThisNodeHasNotAppliedIsUnavailable(t *testing.T) {
 			"the first call's record — the case is about that answer",
 			again.Result, err)
 	}
-	if !errors.Is(err, statelog.ErrUnavailable) || again.Link != nil ||
+	// A WRITE THAT LANDED, NOT A CONDITION: the answer carries what it is,
+	// so no surface tells an administrator the create did not happen.
+	var unread *iamdomain.NotReadBack
+	if !errors.As(err, &unread) || unread.Invitation ||
+		unread.Result.Outcome == statelog.OutcomeUnknown ||
+		!errors.Is(err, statelog.ErrUnavailable) || again.Link != nil ||
 		again.LinkClosed {
 		t.Errorf("the second call, on a node that has not applied the create, "+
-			"answered link %+v, closed %v (%v), want unavailable and neither",
-			again.Link, again.LinkClosed, err)
+			"answered link %+v, closed %v (%v), want a person's create not read "+
+			"back, unavailable, and neither", again.Link, again.LinkClosed, err)
 	}
 
 	rig.drain()
@@ -819,7 +824,7 @@ func TestANodeRunningNoCompanyRefusesEveryBindingByName(t *testing.T) {
 			PersonID: uuid.Must(uuid.NewV7()).String(), Stage: iam.StageActive,
 			Email: "priya@example.com", Login: iam.LoginFromAddress("priya@example.com"),
 			Password: aPassword(),
-			Grants:   []iam.Grant{iam.GrantTracker}, Seat: "platform-lead",
+			Grants:   []iam.Grant{iam.GrantWorklet}, Seat: "platform-lead",
 			Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})
@@ -906,7 +911,7 @@ func applyInvitationByHand(t *testing.T, rig *writeRig, id, address, secret,
 	blind := blindOf(t, address)
 	mutation, err := iamdomain.EncodeInvitation(iamdomain.Invitation{
 		V: iamdomain.DocumentVersion, ID: id, EmailBlind: blind, Sealed: sealed,
-		InvitedBy: "ana.admin", Grants: []iam.Grant{iam.GrantTracker},
+		InvitedBy: "ana.admin", Grants: []iam.Grant{iam.GrantWorklet},
 		Verifier: iamdomain.InvitationVerifier(secret), Seat: seat,
 		ExpiresAt: expires,
 	})

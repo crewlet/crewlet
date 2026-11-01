@@ -33,7 +33,7 @@ import (
 // exit, every request that failed on its way to its run — its sync, its
 // scratch, a fault, a rule this build cannot read, a body it cannot decode,
 // a failed advertisement — was answered and recorded by nobody, which left
-// ADR-0055's audit and the repository's heat (its pushes counted here) a
+// ADR-0078's audit and the repository's heat (its pushes counted here) a
 // push short of what the node did. Before admission there is nobody to name:
 // a request that is not git's, a credential refused, a repository the node
 // does not have and a host stopping are answered before the node knows who

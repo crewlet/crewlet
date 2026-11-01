@@ -59,6 +59,12 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AN ADDRESS GITHUB CANNOT REACH IS AN ADVISORY, said once: what does
+	// not arrive, and what makes it arrive. See [Result.Undeliverable].
+	if r.Undeliverable.Kind != "" {
+		out = append(out, r.Undeliverable)
+	}
+
 	// AND NO CREDENTIAL TO REGISTER THE HOOK THE COMPANY ASKED FOR.
 	//
 	// The organization credential is optional and the form does not ask for
@@ -86,16 +92,8 @@ func (r *Result) Findings() []integration.Finding {
 	// organization token as the fix — beside a roster asking for apps to be
 	// installed, which can never carry `admin:org_hook`. So the one
 	// instruction on screen could not clear the one warning on screen.
-	if r.Coverage != "" {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingCoveragePartial,
-			Subject: "github coverage",
-			Detail:  r.Coverage,
-			// NO REMEDY FIELD. The sentence's own last clause is the
-			// remedy, and it is optional — a second line telling somebody
-			// to do something would make a decision they already took
-			// read as work outstanding.
-		})
+	if r.Coverage.Kind != "" {
+		out = append(out, r.Coverage)
 	}
 
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.
@@ -135,7 +133,7 @@ func (r *Result) Findings() []integration.Finding {
 	// buys a seat is that its TOOLS act as somebody, so that is what a
 	// refused one costs — claiming the seat is unreachable was a second
 	// false statement, true only of a seat with no app either, which this
-	// run cannot see and [ReconcileSeatApps] reports on.
+	// run cannot see and the access sync reports on.
 	for _, seat := range r.Seats {
 		if !seat.Refused() {
 			continue

@@ -86,7 +86,7 @@ func (h *changeHost) asked() ([]code.ReadQuery, []code.ChangeProposal, []code.Gi
 func openingRun() sandbox.PendingRun {
 	run := pushedRun()
 	run.Repos[0].Open = &sandbox.OpenChange{Target: "refs/heads/main"}
-	run.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: "0190d8f0-5555-7000-8000-0123456789ab",
+	run.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "0190d8f0-5555-7000-8000-0123456789ab",
 		Key: "ENG-42", Project: "ENG"}
 	run.Launch.StartedAt = time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	return run

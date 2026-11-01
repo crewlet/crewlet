@@ -27,7 +27,7 @@ import (
 // for its row and the adoption — in ONE function, land. It has two callers:
 // the relay, which reads git's commands off the hook and hands them over, and
 // an engine write (write.go), a push the engine builds itself rather than one
-// git received (ADR-0062) — a merge_change among them (merge.go), whose
+// git received (ADR-0085) — a merge_change among them (merge.go), whose
 // proposal is its merge record (landing.Merge). A second copy of these steps for the engine's
 // pushes would be a second implementation of what a push is (ADR-0008), and
 // the first rule it got wrong would be one only it broke: Command.Forced,
@@ -746,7 +746,7 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 // back: a seat branch deleted since the box checked it out — by the seat's
 // own tool, by a person, by the branch's expiry — leaves its commits in the
 // repository, since nothing removes an object a ref stopped reaching and a
-// compaction keeps what no ref reaches (ADR-0060), and git sends a commit no
+// compaction keeps what no ref reaches (ADR-0083), and git sends a commit no
 // ref the box was shown reaches. Refused, the host's own write would be
 // answered as a forgery of it. So every commit committed as the engine is
 // asked whether the REPOSITORY holds it — ONE `cat-file --batch-check` of them

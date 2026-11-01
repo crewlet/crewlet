@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // recordSpy records whose record each person write landed on.
@@ -23,29 +23,29 @@ type recordSpy struct {
 	written []string
 }
 
-func (s *recordSpy) wrote(handle string) (tracker.WriteResult, error) {
+func (s *recordSpy) wrote(handle string) (worklet.WriteResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.written = append(s.written, handle)
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
 	}}, nil
 }
 
 func (s *recordSpy) MarkInbox(_ context.Context, _, handle string,
-	_ inbox.Gesture[tracker.Reason], _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
 func (s *recordSpy) WritePins(_ context.Context, _, handle string,
-	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.PinGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
 func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []string,
-	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
@@ -77,7 +77,7 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 			t.Parallel()
 			caller := c.caller
 			caller.ID, caller.Stage = uuid.New(), iam.StageActive
-			caller.Grants = []iam.Grant{iam.GrantTracker}
+			caller.Grants = []iam.Grant{iam.GrantWorklet}
 			trk := newFakeTracker()
 			var listed bool
 			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
@@ -86,7 +86,7 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 				},
 				Authorize: builtin.Decide(chartRefuses),
 			}) {
-				if tool.Name() != tracker.ListWorkViewsTool {
+				if tool.Name() != worklet.ListWorkViewsTool {
 					continue
 				}
 				if _, declared := tool.Parameters()["properties"].(map[string]any)["viewer"]; declared {
@@ -163,7 +163,7 @@ func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 			t.Parallel()
 			caller := c.caller
 			caller.ID, caller.Stage = uuid.New(), iam.StageActive
-			caller.Grants = []iam.Grant{iam.GrantTracker}
+			caller.Grants = []iam.Grant{iam.GrantWorklet}
 			ctx := iam.WithPrincipal(context.Background(), caller)
 
 			var mu sync.Mutex
@@ -190,11 +190,11 @@ func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 				// mark naming nothing is refused before it is decided.
 				args := map[string]any{}
 				switch tool.Name() {
-				case tracker.MarkInboxTool:
+				case worklet.MarkInboxTool:
 					args["read"] = []any{"r-1"}
-				case tracker.SetPinsTool:
+				case worklet.SetPinsTool:
 					args["views"] = map[string]any{"add": []any{"v-1"}}
-				case tracker.MyWorkTool:
+				case worklet.MyWorkTool:
 				default:
 					continue
 				}

@@ -4,14 +4,14 @@
  * (`totals=spend_tokens:median` — nearest rank, so the figure is one task's
  * real spend rather than an average of two), with how many tasks it is over.
  *
- * ABSENT ON A COMPANY WHOSE TRACKER IS NOT THE ENGINE'S. A Jira or GitLab
+ * ABSENT ON A COMPANY WHOSE TRACKER IS NOT WORKLET. A Jira or GitLab
  * tracker is not charged per task here, so `work_items` is not served at all
  * (`unknown_query`) — and a tile saying "no finished tasks" there would be a
  * claim about the company's work this node cannot see. Any other refusal is
  * said in the tile.
  *
- * AND NOT ASKED OF A READER WITHOUT TRACKER: a finished task is the
- * tracker's, so the tile says what would open it rather than sending a
+ * AND NOT ASKED OF A READER WITHOUT WORKLET: a finished task is Worklet's,
+ * so the tile says what would open it rather than sending a
  * question the engine would refuse.
  */
 
@@ -21,7 +21,7 @@ import { medianTaskParams } from "./model.ts";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
+import { WORKLET, accessNames } from "~/lib/access.ts";
 
 export function TaskMedianTile({
   since,
@@ -38,15 +38,15 @@ export function TaskMedianTile({
   const ask = useServicesAsk();
   const ready = Boolean(since && until);
   const answer = useQuery("work_items", ready ? medianTaskParams(since!, until!) : undefined, {
-    enabled: ready && viewer.tracker && ask.tracker,
+    enabled: ready && viewer.worklet && ask.tracker,
   });
-  // A TASK IS CREWLET WORKS', so where the company runs none there is no
+  // A TASK IS WORKLET'S, so where the company runs none there is no
   // median to draw and no tile.
   if (!runs.tracker || answer.error === "unknown_query") return null;
-  if (!viewer.loading && !viewer.tracker) {
+  if (!viewer.loading && !viewer.worklet) {
     return (
       <div className="spend-tile">
-        <span className="spend-tile-figure spend-muted">{`Needs ${accessNames([TRACKER])} access`}</span>
+        <span className="spend-tile-figure spend-muted">{`Needs ${accessNames([WORKLET])} access`}</span>
         <span className="spend-label">median tokens per finished task</span>
       </div>
     );

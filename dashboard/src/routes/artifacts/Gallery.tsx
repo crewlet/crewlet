@@ -34,7 +34,7 @@
  *
  * The page bar holds the find field and New. How the answer is cut (the type,
  * the order, the trash and the shape) is the toolbar's, quiet and under the
- * Make row, as Work and Agents draw theirs.
+ * Make row, as Worklet and Agents draw theirs.
  *
  * # Who owns it
  *

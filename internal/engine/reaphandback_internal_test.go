@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -104,7 +105,7 @@ func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, After: retries.after,
 		Lease: e.launchFence,
@@ -249,9 +250,8 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
 	asked := time.Now().UTC().Add(-time.Hour)
-	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		Question: "which branch?", AskedAt: asked,
-	}); err != nil {
+	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	raw, err := json.Marshal(reply)
@@ -262,10 +262,15 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	if err != nil || !found {
 		t.Fatalf("Get = %v, %v", found, err)
 	}
-	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
-		Events: []json.RawMessage{raw}, PostedAt: asked.Add(time.Minute),
-	}, sandbox.Fence{}); err != nil || !ok {
+	answer, err := e.answers.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaChat,
+		By: "ana", ByKind: "human"}, sandbox.RecordedAnswer{
+		EventIDs: []string{reply.ID.String()}, Events: []json.RawMessage{raw},
+		PostedAt: asked.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, answer, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID),

@@ -13,7 +13,7 @@ description: >
 
 These are the tools of a person's Crewlet company, served to you at the
 company's `/operator/mcp` endpoint under the person's own credential:
-`list_artifacts`, `get_artifact`, `list_dashboard_sources`, `get_company_brand`,
+`list_artifacts`, `get_artifact`, `list_dashboard_sources`, `get_artifact_format`, `get_company_brand`,
 `create_artifact`, `publish_artifact`, `update_artifact`, `share_artifact`,
 `unshare_artifact`, `upload_artifact_asset`, `create_artifact_folder` and
 `move_artifact`, and the datastore's `read_artifact_data`,
@@ -77,11 +77,15 @@ figures over live data, a `dashboard` artifact (see Dashboards).
    `old_str` and `new_str` pairs, quoted from the source at your base and each
    occurring exactly once. Replacing a whole page with `content` costs far more
    and risks losing a colleague's change.
-4. **Build big things in the sandbox.** Inline content is at most 1 MiB per
-   call. For a multi-file site, a seat asks its coding run to build into a
-   directory, then publishes it in the same turn with
-   `source: {sandbox: "dist"}`; the box is readable only until that Execute
-   phase ends. A project's file is copied in with `from_project_file`.
+4. **Build big things in the box.** Inline content is at most 1 MiB per
+   call. A seat's executor run builds a multi-file site into a directory of
+   its workspace and publishes it while it works, with
+   `source: {sandbox: "dist"}`, or one file with `from_sandbox`: the engine
+   reads a box only for the run working in it, so publish before the run
+   finishes. Without a box, a site past the bound goes up over several
+   `publish_artifact` calls, each carrying some of its `files`: a publish
+   keeps the files it leaves out. A project's file is copied in with
+   `from_project_file`.
 5. **Share it with the people who must use it.** When an agent creates an
    artifact for a person who asked, that person is made its editor
    automatically. Share with other seats or units with `share_artifact`. An
@@ -224,8 +228,8 @@ refused at publish naming every field to fix, never dropped.
   write it into the spec: declare the dataset and let the board compute it.
 - **Every viewer sees their own rows.** An engine dataset is answered as the
   person viewing the board, by the same rules as the screens they already
-  use: `scope: "mine"` is each viewer's own work, and somebody without the
-  tracker sees that the figure is closed to them. Sharing a board never
+  use: `scope: "mine"` is each viewer's own work, and somebody without
+  Worklet sees that the figure is closed to them. Sharing a board never
   shares the data behind it, so publish one board for everybody rather than
   one per person.
 - **Integration data arrives through the store.** Crewlet holds no
@@ -352,6 +356,12 @@ as any page, framed on its own.
 - **A brand kit is drafted, then adopted.** Anybody may draft one as a `brand`
   artifact; only an administrator adopts a version, and until then nothing
   takes it.
+- **Read the brand format before you write `brand.json`.**
+  `get_artifact_format` with `kind: "brand"` lists every key with its type and
+  rule, the one-source rule for a typeface, the logo and SVG rules and an
+  example that reads clean. Write only what it lists: never probe the format
+  with keys you know to be wrong. A kit holds `brand.json` and the files it
+  names, nothing else (no notes file).
 
 ## Filing artifacts in folders
 
@@ -400,5 +410,10 @@ as any page, framed on its own.
   should. Stop, report what was done and what is left, and let the next turn
   continue.
 - A policy refusal lists every finding at once. Fix them all, then publish
-  again.
+  again. A refusal of a closed format (a brand kit, a deck, a canvas, a
+  dashboard, a doc's index) points at `get_artifact_format`: read it before the
+  next attempt rather than guessing.
+- Told to stop retrying a tool: stop. Raise a blocker on the work item with
+  what you tried and the last refusal, finish what does not depend on it and
+  end the turn.
 <!-- contract:end -->

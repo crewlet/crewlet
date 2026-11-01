@@ -11,7 +11,7 @@
 
 import { afterEach, expect, test, vi } from "vitest";
 
-import { copyPageLink } from "./pageLink.ts";
+import { copyLink, copyPageLink } from "./pageLink.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -39,4 +39,16 @@ test("a write that lands copies the whole URL and is Copied", async () => {
   clipboard({ writeText });
   expect(await copyPageLink()).toBe("Copied");
   expect(writeText).toHaveBeenCalledWith(location.href);
+});
+
+test("a page's hash is copied as the whole URL it opens at, not the hash alone", async () => {
+  // A ROOM'S LINK FROM ITS MENU is the room's own address, which is not the
+  // one the reader is on while a pane is open beside it; pasted bare, a hash
+  // opens nothing on anybody else's machine.
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  clipboard({ writeText });
+  expect(await copyLink("#/chatlet/room-1")).toBe("Copied");
+  const copied = new URL(writeText.mock.calls[0]![0] as string);
+  expect(copied.origin).toBe(location.origin);
+  expect(copied.hash).toBe("#/chatlet/room-1");
 });

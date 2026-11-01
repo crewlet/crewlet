@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MaxQueryBytes bounds a code search's text, in bytes, measured with the
@@ -161,7 +162,7 @@ func (q Query) check() error {
 		return refuse(ErrQueryTooLong, "a code search takes at most %d bytes and this one's text is %d: "+
 			"search for a line's distinctive part, not a pasted passage", MaxQueryBytes, len(q.Text))
 	case !q.Mode.Valid():
-		return refuse(ErrBadQuery, "mode %q is none of %v", q.Mode, Modes)
+		return refuse(ErrBadQuery, "mode %q is none of %s", q.Mode, words.Or(Modes))
 	}
 	for _, repo := range q.Repos {
 		if !gitref.ValidRepoName(repo) {

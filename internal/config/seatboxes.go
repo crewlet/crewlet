@@ -10,24 +10,25 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
-// SeatBox is one box a seat's work runs in, placed as the engine places it.
+// SeatBox is one box a seat's executor can launch in, placed as the engine
+// places it.
 type SeatBox struct {
-	// Seat is the seat whose work runs in the box, and At where it is
+	// Seat is the seat whose executor runs in the box, and At where it is
 	// written.
 	Seat *Role
 	At   Path
 
-	// Cell is where the box runs: the cell its placer names, else the
+	// Cell is where the box runs: the cell its entry names, else the
 	// catalogue's default, which is how the engine resolves an empty one at
 	// launch. Empty when neither answers, which validation refuses on its
 	// own ([Company.validateSandboxPlacement]).
 	Cell Placement
 
-	// Executor is the providers.llm entry whose agent-mode run this box is,
-	// and empty for the seat's run_sandbox box.
+	// Executor is the providers.llm entry the box's run launches on: the
+	// first runner-capable member of the seat's executor chain placed in
+	// this cell.
 	Executor string
 
 	// Steps are the setup steps the box is given, in the order the engine
@@ -42,28 +43,25 @@ type BoxStep struct {
 	Step *SandboxSetupStep
 }
 
-// SeatBoxes is every box a seat's work runs in, seat by seat in the order
-// [Company.EachRole] walks them, placed as the engine places each one.
+// SeatBoxes is every box a seat's executor can launch in, seat by seat in the
+// order [Company.EachRole] walks them, placed as the engine places each one.
 //
-// TWO KINDS OF BOX, and a seat has at most one. The box an AGENT-MODE
-// EXECUTOR runs every turn in, which its providers.llm entry places
-// (`run_in`) whatever the gate says, and which a seat with no gate at all
-// still runs in — and such a seat has no other, because its surface never
-// offers run_sandbox (the runner's offersSandbox): it already holds a shell,
-// and a gate reading `self` says exactly that. Otherwise the seat's
-// RUN_SANDBOX box, which an enabled gate offers it. Either box's cell, when
-// its placer names none, is the catalogue's default, resolved at launch
-// ([SandboxProvider.RunIn]); and either is given the engine-wide steps
-// followed by the seat's own, which is what the engine's runEnvironment
-// builds for both.
+// ONE BOX PER SEAT PER CELL ITS EXECUTOR CAN LAND IN. Every agent seat's
+// executor is its coding CLI's own run, and a launch takes the first member of
+// the seat's executor chain that can run it and is not sitting out on its
+// node — so any runner-capable member may be the one launched, and each is
+// placed by its own `run_in`, else the catalogue's default
+// ([SandboxProvider.RunIn]). Two members in one cell open the same kind of
+// box, so the cell is counted once, under the first of them. Each box is
+// given the engine-wide steps followed by the seat's own, which is what the
+// engine's runEnvironment builds for it.
 //
-// A SECOND RESOLUTION OF THE ENGINE'S, for [Company.ExecutorProvider]'s
-// reason: validation has to answer before anything is built. The executor's
-// entry is resolved by that function, so the two cannot disagree about which
-// seats run in agent mode; the rest — the cell each box falls to, that such a
-// seat is offered no run_sandbox, and the steps and their order — is held to
-// the engine's own launch paths by a case in internal/engine, since a table
-// here would agree with this function whatever the engine did.
+// A SECOND RESOLUTION OF THE ENGINE'S only in its placing: the chain is
+// [phase.Resolve]'s, the call the engine launches through, so the two cannot
+// disagree about which entries a seat reaches. The rest — the cell each box
+// falls to, and the steps and their order — is held to the engine's own
+// launch path by a case in internal/engine, since a table here would agree
+// with this function whatever the engine did.
 //
 // Nothing when the company configures no sandbox: no box exists, and the
 // seats that would need one are refused on their own.
@@ -73,17 +71,10 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 		if !catalogue.Enabled() {
 			return
 		}
-		fallback, hasExecutor := c.executorFallback()
-		placed := func(cell Placement) Placement {
-			if cell == "" {
-				return catalogue.RunIn()
-			}
-			return cell
-		}
-		for role, path := range c.EachRole() {
-			if role.Kind == org.KindHuman {
-				// Addressable and never spawned: a human seat runs no
-				// turn, so it opens no box of either kind.
+		for seat := range c.executorSeats() {
+			runners := c.runners(seat.chain)
+			if len(runners) == 0 {
+				// Refused on its own: a chain no launch can run.
 				continue
 			}
 			steps := make([]BoxStep, 0, len(catalogue.Setup))
@@ -92,34 +83,42 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 					At: idx(field("providers.sandbox.setup"), i), Step: &catalogue.Setup[i],
 				})
 			}
-			gate := role.Sandbox
-			if gate != nil {
+			if gate := seat.role.Sandbox; gate != nil {
 				for i := range gate.Setup {
 					steps = append(steps, BoxStep{
-						At: idx(at(path, "sandbox.setup"), i), Step: &gate.Setup[i],
+						At: idx(at(seat.path, "sandbox.setup"), i), Step: &gate.Setup[i],
 					})
 				}
 			}
-			if hasExecutor {
-				key, entry, resolved := c.executorProvider(role, fallback)
-				if resolved && entry.AgentMode() {
-					if !yield(SeatBox{Seat: role, At: path, Cell: placed(entry.RunIn), Executor: key, Steps: steps}) {
-						return
-					}
-					// ONE BOX, whatever the gate says: an agent-mode
-					// executor is never offered run_sandbox, since it
-					// already holds a shell and a second box would hold
-					// the work where the turn cannot see it.
+			placed := map[Placement]bool{}
+			for _, key := range runners {
+				cell := c.EntryCell(key)
+				if placed[cell] {
 					continue
 				}
-			}
-			if gate != nil && gate.Enabled && gate.RunIn != PlacementSelf {
-				if !yield(SeatBox{Seat: role, At: path, Cell: placed(gate.RunIn), Steps: steps}) {
+				placed[cell] = true
+				if !yield(SeatBox{Seat: seat.role, At: seat.path, Cell: cell, Executor: key, Steps: steps}) {
 					return
 				}
 			}
 		}
 	}
+}
+
+// EntryCell is the cell a run launched on providers.llm.<key> is placed in:
+// the entry's own `run_in`, else the catalogue's default — which is how the
+// engine's manager resolves an empty one at launch. Empty where neither
+// answers: no catalogue, or no such entry and no default.
+//
+// ONE RESOLUTION for every reader that has to agree with the launch — the
+// boxes validation places ([Company.SeatBoxes]) and what `crewlet llm doctor`
+// tells an operator a run on the entry needs — so the cell a check reasons
+// about is the cell the run is put in.
+func (c *Company) EntryCell(key string) Placement {
+	if cell := c.Providers.LLM[key].RunIn; cell != "" {
+		return cell
+	}
+	return c.Providers.Sandbox.RunIn()
 }
 
 // setupFileRefused reports whether a box in cell refuses to write a setup
@@ -131,8 +130,7 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 // [hostbox.ContainerHome].
 //
 // An E2B box writes one through its own agent, which takes almost any path
-// ([e2bRefusesSetupFile]). A `self` seat has no box of its own, so nothing
-// is judged for it.
+// ([e2bRefusesSetupFile]).
 func setupFileRefused(cell Placement, file string) bool {
 	switch cell {
 	case PlacementDirect:
@@ -192,9 +190,9 @@ func e2bRefusesSetupFile(file string) bool {
 // A direct box writes a setup file only inside its own home, and a container
 // box only under its home mount, and each refuses anything else when the box
 // is provisioned — a refusal that fails the acquisition and tears the box
-// down. So a document whose step names /usr/local/bin for a seat that runs
-// `direct` validated cleanly and then failed every box that seat opened, at
-// setup, long after the write. The reference example shipped exactly that.
+// down. So a document whose step names /usr/local/bin for a seat whose
+// executor runs `direct` validated cleanly and then failed every box that
+// seat opened, at setup, long after the write. The reference example shipped exactly that.
 // An E2B box takes almost any path, and refuses the few shapes
 // [e2bRefusesSetupFile] names the same way.
 //
@@ -215,7 +213,7 @@ func e2bRefusesSetupFile(file string) bool {
 //
 // AN ADMISSION RULE, not a runnable one: the company runs, and only the boxes
 // that step reaches fail — so a stored revision that keeps such a step is
-// applied and warned about, as [Company.validateSandboxCodingAgents] is, rather
+// applied and warned about, as [LLMProvider.validateCredentials] is, rather
 // than taking a node off the fleet's epoch.
 //
 // One problem per file and cell, at the file's entry in the step that writes
@@ -298,11 +296,8 @@ func setupFileRefusal(step, file string, cell Placement, first SeatBox, others i
 		why = fmt.Sprintf("it writes a setup file only under its home mount at %s",
 			hostbox.ContainerHome)
 	}
-	whose := fmt.Sprintf("Seat %q runs its code work in one", first.Seat.Seat().Handle())
-	if first.Executor != "" {
-		whose = fmt.Sprintf("Seat %q runs its executor in one (providers.llm.%s, in agent mode)",
-			first.Seat.Seat().Handle(), first.Executor)
-	}
+	whose := fmt.Sprintf("Seat %q runs its executor in one (providers.llm.%s)",
+		first.Seat.Seat().Handle(), first.Executor)
 	switch {
 	case others == 1:
 		whose += ", and 1 more seat does too"

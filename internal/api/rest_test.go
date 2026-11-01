@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE DOCUMENTED READ ROUTES EXIST.
@@ -58,7 +58,7 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 
 	// The routes every node serves from its company and its projection. A
 	// question whose SOURCE is absent is left unregistered by design (a
-	// company on Confluence has no native pages) and answers 404 for a
+	// company on Confluence has no Doclet pages) and answers 404 for a
 	// reason that is not "the route was never built", so those are
 	// exercised separately below.
 	for _, path := range []string{
@@ -91,6 +91,19 @@ func TestTheIntegrationsMapIsNotServedAnonymously(t *testing.T) {
 	}
 }
 
+// AND /link-hosts, which every principal of the company may read, is still
+// read by one: "everybody" is everybody the guard resolves, never a caller
+// presenting nothing. What it carries is only hosts, but whose hosts they are
+// is the company's to show its own people.
+func TestTheLinkHostsAreNotServedAnonymously(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	restApp(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/link-hosts", nil))
+	if got := rec.Result().StatusCode; got != http.StatusUnauthorized {
+		t.Errorf("GET /link-hosts = %d, want 401: a caller presenting nothing is nobody", got)
+	}
+}
+
 // A ROUTE WHOSE SOURCE IS ABSENT IS STILL A ROUTE. It answers the query
 // layer's own "no such question" rather than the mux's "no such path", and
 // the difference matters: one says this node cannot answer, the other says
@@ -99,23 +112,23 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// No native knowledge base wired, which is a company on Confluence, so
+	// No Doclet wired, which is a company on Confluence, so
 	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/pages", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/doclet/pages", nil)))
 	res := rec.Result()
 	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
+		t.Fatalf("GET /doclet/pages = %d, want the query layer's 404", res.StatusCode)
 	}
 	// The mux's own 404 says `no_route`; the query layer's says the
 	// question is unknown. That is how a caller tells them apart — both are
 	// JSON now, so the content type no longer does.
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatalf("GET /pages answered no JSON: %v", err)
+		t.Fatalf("GET /doclet/pages answered no JSON: %v", err)
 	}
 	if body["error"] != "unknown_query" {
-		t.Errorf("GET /pages answered %v; the mux's own no_route means the "+
+		t.Errorf("GET /doclet/pages answered %v; the mux's own no_route means the "+
 			"route is not registered at all, which is the bug this covers",
 			body["error"])
 	}
@@ -233,7 +246,7 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 
 // A DOCUMENTED PATH UNDER A WILDCARD IS THE ONE THAT FAILS SILENTLY.
 //
-// Every literal `/work/<word>` route in the table sits above `/work/{id}`, and
+// Every literal `/worklet/<word>` route in the table sits above `/worklet/{id}`, and
 // one that is registered on the query channel and listed in
 // docs/reference/api-endpoints.md but MISSING from the table fails without a
 // sound: the wildcard matches that path, so the request is answered as a TASK
@@ -254,13 +267,13 @@ func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/views", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/worklet/views", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/views = %d, want 400: the query refuses a "+
+		t.Fatalf("GET /worklet/views = %d, want 400: the query refuses a "+
 			"missing `container`, and any other status means the path was "+
-			"answered by /work/{id} instead", res.StatusCode)
+			"answered by /worklet/{id} instead", res.StatusCode)
 	}
 	var body map[string]string
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -284,9 +297,9 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet,
-		"/work/views?container=project:ENG", nil)))
+		"/worklet/views?container=project:ENG", nil)))
 	if got := rec.Result().StatusCode; got != http.StatusOK {
-		t.Errorf("GET /work/views?container=project:ENG = %d, want 200", got)
+		t.Errorf("GET /worklet/views?container=project:ENG = %d, want 200", got)
 	}
 }
 
@@ -294,107 +307,112 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
-func (stubWorkReader) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (
-	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{Handle: q.Handle}, nil
+func (stubWorkReader) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (
+	worklet.InboxAnswer, error) {
+	return worklet.InboxAnswer{Handle: q.Handle}, nil
 }
 
-func (stubWorkReader) Routing(context.Context, tracker.RoutingQuery, time.Time) (
-	tracker.RoutingAnswer, error) {
-	return tracker.RoutingAnswer{}, nil
+func (stubWorkReader) Routing(context.Context, worklet.RoutingQuery, time.Time) (
+	worklet.RoutingAnswer, error) {
+	return worklet.RoutingAnswer{}, nil
 }
 
-func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{}, nil
+func (stubWorkReader) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{}, nil
 }
 
-func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
-	return tracker.TaskDetail{}, tracker.ErrNoTask
+func (stubWorkReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+	return worklet.TaskDetail{}, worklet.ErrNoTask
 }
 
 func (stubWorkReader) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
-	return tracker.TaskTurns{}, tracker.ErrNoTask
+	statelog.Freshness) (worklet.TaskTurns, error) {
+	return worklet.TaskTurns{}, worklet.ErrNoTask
 }
 
-func (stubWorkReader) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (stubWorkReader) EveryView(context.Context, worklet.EveryViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (stubWorkReader) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (stubWorkReader) ExpandedQuery(context.Context, map[string]any, tracker.Viewer,
-	time.Time, *time.Location) (tracker.Query, error) {
-	return tracker.Query{}, nil
+func (stubWorkReader) ExpandedQuery(context.Context, map[string]any, worklet.Viewer,
+	time.Time, *time.Location) (worklet.Query, error) {
+	return worklet.Query{}, nil
 }
 
-func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (
-	tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (stubWorkReader) Catalogue(context.Context, worklet.CatalogueQuery) (
+	worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
-	return tracker.ProjectListing{}, nil
+func (stubWorkReader) Projects(context.Context, worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
+	return worklet.ProjectListing{}, nil
 }
 
-func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
-	return tracker.ProjectDetail{}, nil
+func (stubWorkReader) Project(context.Context, worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
+	return worklet.ProjectDetail{}, nil
 }
 
-func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time,
-	_ *time.Location) (tracker.WorkloadAnswer, error) {
-	return tracker.WorkloadAnswer{
-		Rows: []tracker.WorkloadRow{{Handle: q.Unit, Open: 1}},
+func (stubWorkReader) Workload(_ context.Context, q worklet.WorkloadQuery, _ time.Time,
+	_ *time.Location) (worklet.WorkloadAnswer, error) {
+	return worklet.WorkloadAnswer{
+		Rows: []worklet.WorkloadRow{{Handle: q.Unit, Open: 1}},
 	}, nil
 }
 
-func (stubWorkReader) Activity(context.Context, tracker.ActivityQuery, time.Time) (
-	tracker.ActivityAnswer, error) {
-	return tracker.ActivityAnswer{}, nil
+func (stubWorkReader) Activity(context.Context, worklet.ActivityQuery, time.Time) (
+	worklet.ActivityAnswer, error) {
+	return worklet.ActivityAnswer{}, nil
 }
 
-func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
-	*time.Location) (tracker.MyWork, error) {
-	return tracker.MyWork{}, nil
+func (stubWorkReader) MyWork(context.Context, worklet.MyWorkQuery, time.Time,
+	*time.Location) (worklet.MyWork, error) {
+	return worklet.MyWork{}, nil
 }
 
-func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
-	tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (stubWorkReader) Person(context.Context, worklet.PersonQuery, time.Time) (
+	worklet.PersonState, error) {
+	return worklet.PersonState{}, nil
 }
 
-func (stubWorkReader) Flow(context.Context, tracker.FlowQuery, time.Time,
-	*time.Location) (tracker.FlowAnswer, error) {
-	return tracker.FlowAnswer{}, nil
+func (stubWorkReader) Flow(context.Context, worklet.FlowQuery, time.Time,
+	*time.Location) (worklet.FlowAnswer, error) {
+	return worklet.FlowAnswer{}, nil
 }
 
-func (stubWorkReader) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
-	return tracker.FeedPage{}, nil
+func (stubWorkReader) CompanyFeed(context.Context, worklet.FeedQuery) (worklet.FeedPage, error) {
+	return worklet.FeedPage{}, nil
 }
 
-func (stubWorkReader) Decisions(context.Context, tracker.DecisionsQuery, time.Time,
-	*time.Location) (tracker.DecisionsAnswer, error) {
-	return tracker.DecisionsAnswer{}, nil
+func (stubWorkReader) Decisions(context.Context, worklet.DecisionsQuery, time.Time,
+	*time.Location) (worklet.DecisionsAnswer, error) {
+	return worklet.DecisionsAnswer{}, nil
+}
+
+func (stubWorkReader) AnsweredAsks(context.Context, worklet.DecisionsQuery, time.Time,
+	*time.Location) (worklet.AnsweredAnswer, error) {
+	return worklet.AnsweredAnswer{}, nil
 }
 
 func (stubWorkReader) TurnPlaces(context.Context, []string,
-	statelog.Freshness) (map[string]tracker.TurnPlace, error) {
-	return map[string]tracker.TurnPlace{}, nil
+	statelog.Freshness) (map[string]worklet.TurnPlace, error) {
+	return map[string]worklet.TurnPlace{}, nil
 }
 
-func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
-	statelog.Freshness) (tracker.ResolvedThread, error) {
-	return tracker.ResolvedThread{}, nil
+func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,
+	statelog.Freshness) (worklet.ResolvedThread, error) {
+	return worklet.ResolvedThread{}, nil
 }
 
 // THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".
 //
-// Same hazard the burndown had, one route later: `/work/{id}` matches the
+// Same hazard the burndown had, one route later: `/worklet/{id}` matches the
 // path, so a table entry with no route behind it answers 404 about a task
 // nobody named. The answer proves the query was reached — `work_inbox` reads
 // the caller's own record, which for the fixture's unbound token is kept under
@@ -407,12 +425,12 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/inbox", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/worklet/inbox", nil)))
 	res := rec.Result()
 
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("GET /work/inbox = %d, want 200: any other status means "+
-			"/work/{id} answered the path instead", res.StatusCode)
+		t.Fatalf("GET /worklet/inbox = %d, want 200: any other status means "+
+			"/worklet/{id} answered the path instead", res.StatusCode)
 	}
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {

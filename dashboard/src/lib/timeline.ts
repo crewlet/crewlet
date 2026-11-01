@@ -295,7 +295,7 @@ export interface TimelineTick {
 /**
  * The week rules, Monday first.
  *
- * MONDAY for `lib/work.ts`'s reason: `internal/tracker/dates.go` pins the
+ * MONDAY for `lib/work.ts`'s reason: `internal/worklet/dates.go` pins the
  * week's start there, so the relative tokens a saved view can carry mean
  * Monday and an axis ruled on Sunday would cut "this week" in two.
  *

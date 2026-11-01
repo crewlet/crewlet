@@ -266,7 +266,7 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 			!strings.Contains(text, "`code_get_change`") {
 			t.Errorf("a wake under %s does not send its seat to the change:\n%s", r, text)
 		}
-		if p.WakesActor(string(r)) {
+		if p.WakesActor(n) {
 			t.Errorf("%s wakes whoever made the change", r)
 		}
 	}

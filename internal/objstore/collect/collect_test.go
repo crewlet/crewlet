@@ -35,6 +35,8 @@ type fakeSource struct {
 	// pageRead, when set, is called as each page of a walk is read, with
 	// the source's lock held.
 	pageRead func()
+	// barrierErr is what every barrier answers, when set.
+	barrierErr error
 }
 
 func (s *fakeSource) Name() string { return "tracker" }
@@ -43,7 +45,7 @@ func (s *fakeSource) Barrier(context.Context) (statelog.Position, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.barriers++
-	return statelog.Position{}, nil
+	return statelog.Position{}, s.barrierErr
 }
 
 func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
@@ -631,16 +633,61 @@ func TestTwoCollectorsAtOnceAreSafe(t *testing.T) {
 	}
 }
 
-// THE BARRIER IS TAKEN BEFORE THE STORE IS LISTED, so the estate a pass judges
-// by is at least as new as the moment it began.
-func TestAPassPinsTheEstateFirst(t *testing.T) {
+// THE BARRIER IS TAKEN BEFORE THE FIRST JUDGEMENT, once a pass, so the estate
+// every batch is judged by is the same one and at least as new as the moment
+// the pass began.
+//
+// Mutation: pin per batch, or not at all, and the count is wrong.
+func TestAPassPinsTheEstateBeforeItJudges(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
+	for i := range JudgeBatch + 1 {
+		h.put(fmt.Sprintf("orphan-%d", i))
+	}
+	h.clock.advance(PendingGrace + time.Hour)
 	if _, err := h.c.Collect(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if h.source.barriers != 1 {
-		t.Fatalf("%d barriers, want one per pass", h.source.barriers)
+		t.Fatalf("%d barriers over two batches, want one per pass", h.source.barriers)
+	}
+}
+
+// AN ESTATE THAT CANNOT BE BROUGHT CURRENT DELETES NOTHING, and the pass says
+// why: judged by a view older than the pass, an object a record named a moment
+// ago would read as nobody's.
+func TestAPassWhoseBarrierFailsDeletesNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	orphan := h.put("orphan")
+	h.source.barrierErr = errors.New("the log is at its ceiling")
+	h.clock.advance(PendingGrace + time.Hour)
+	r, err := h.c.Collect(t.Context())
+	if err == nil || r.Deleted != 0 || r.Completed || !strings.Contains(r.Skipped, "ceiling") {
+		t.Fatalf("a pass whose barrier failed = %+v, %v; want the failure, reported, "+
+			"and nothing deleted", r, err)
+	}
+	if !h.held(orphan) {
+		t.Fatal("an object was deleted by a pass that could not bring its estate current")
+	}
+}
+
+// A PASS WITH NOTHING PAST THE GRACE TAKES NO BARRIER: it decides nothing, and
+// a barrier is a record on the domain's log. Taken anyway, every pass wrote a
+// record to every estate's log each hour, and a node's first pass wrote one to
+// logs nothing else had ever written to, at boot.
+//
+// Mutation: pin before the listing again, and this fails.
+func TestAPassWithNothingToJudgeWritesNoBarrier(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.put("young") // uploaded now: inside the grace, so never judged
+	r, err := h.c.Collect(t.Context())
+	if err != nil || !r.Completed || r.Aged != 0 {
+		t.Fatalf("a pass over a young store = %+v, %v", r, err)
+	}
+	if h.source.barriers != 0 {
+		t.Fatalf("a pass that judged nothing took %d barrier(s), want none", h.source.barriers)
 	}
 }
 

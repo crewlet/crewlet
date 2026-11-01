@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -136,7 +138,7 @@ func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error)
 type noAppFlow struct{}
 
 func (noAppFlow) Complete(context.Context, string, string) (string, error) { return "", nil }
-func (noAppFlow) InstallURL(string) string                                 { return "" }
+func (noAppFlow) InstallURL(context.Context, string) string                { return "" }
 
 // active is a company revision that is active, for the cases about a
 // configured node.
@@ -241,6 +243,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
 	}
+	if opts.Models == nil {
+		opts.Models = noRoutes{}
+	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
@@ -267,6 +272,11 @@ func withRequired(opts api.Options) api.Options {
 	}
 	if opts.Credentials == nil {
 		opts.Credentials = &fakeCredentials{}
+	}
+	if opts.ChatLive == nil {
+		// A HUB WITH NOTHING TO SAY: no rooms to decide by, so it pushes
+		// no committed frame and no presence, and never started.
+		opts.ChatLive = stream.NewChatHub(stream.ChatHubOptions{})
 	}
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
@@ -301,8 +311,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
-		"AuthEvents", "Inbox", "Credentials", "Nodes", "Code", "Audit",
+		"Config", "Secrets", "Setup", "Models", "Retention", "Capacity", "FleetBroker", "Backup",
+		"AuthEvents", "Inbox", "Credentials", "ChatLive", "Nodes", "Code", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
@@ -437,6 +447,11 @@ func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 	if seats, ok := body["seats"].([]any); !ok || len(seats) != 0 {
 		t.Errorf("seats = %#v, want an empty list", body["seats"])
 	}
+	// THE ONE ENGINE FIELD WHOSE ABSENCE IS ITS ANSWER: no apply attempt has
+	// concluded in this process, and a zero epoch would claim one did.
+	if attempt, present := body["config_attempt"]; present {
+		t.Errorf("config_attempt = %v before any attempt, want it absent", attempt)
+	}
 }
 
 func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
@@ -446,12 +461,19 @@ func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 3, Posture: "serve", AppliedEpoch: 41,
 			StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
+			ConfigAttempt: &api.ConfigAttempt{Epoch: 42, RevisionID: "rev-42", Status: "error"},
 		}},
 	})
 	_, body := get(t, a, "/health")
 
 	if body["in_flight"] != float64(3) || body["applied_epoch"] != float64(41) {
 		t.Errorf("body = %v", body)
+	}
+	// A REFUSAL THE APPLIED EPOCH CANNOT SAY: still 41, and epoch 42's
+	// revision refused here.
+	want := map[string]any{"epoch": float64(42), "revision_id": "rev-42", "status": "error"}
+	if !reflect.DeepEqual(body["config_attempt"], want) {
+		t.Errorf("config_attempt = %v, want %v", body["config_attempt"], want)
 	}
 	seats, _ := body["seats"].([]any)
 	if len(seats) != 2 {

@@ -10,9 +10,9 @@
  * state — or the changes waiting on somebody (`needs`, `reviewer`), each its
  * own index of who they wait on. A page is what the engine READ, never what it
  * kept, so one can be short, or empty with a cursor, and the grid pages with
- * Load more until no cursor comes back, its first page held still from the
- * press (`lib/usePaged.ts`). The order is the engine's, and no head re-sorts
- * the pages held.
+ * Load more until no cursor comes back, each page joined to the one before it
+ * (`lib/usePaged.ts`). The order is the engine's, and no head re-sorts the
+ * pages loaded.
  *
  * THE ENGINE KEEPS NO INDEX OF EVERY CHANGE: a listing names a state, a
  * repository, a work item, a reviewer or what its changes wait on, and is
@@ -50,6 +50,7 @@ import {
   EmptyState,
   EmptyValue,
   Meter,
+  peekRowActivation,
   Select,
   Skeleton,
   TableDateCell,
@@ -60,7 +61,7 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -79,7 +80,7 @@ import {
 import { fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeChangeState,
   CodeChangeSummary,
@@ -89,9 +90,9 @@ import type {
 import { REPO_PARAM, changeObject } from "./paths.ts";
 
 /**
- * How often the listing's first page is read again while it is open and
- * nothing past it is loaded: a MINUTE, the cadence the workspace reads the
- * code log at (Repositories, Pushes). The code log has no push to the
+ * How often the listing's first page is read again while it is open: a
+ * MINUTE, the cadence the workspace reads the code log at (Repositories,
+ * Pushes). The code log has no push to the
  * dashboard, so another seat's review reaches the open listing by this read
  * or not at all — and a change's readiness moves with every record about it.
  */
@@ -175,15 +176,13 @@ export function Changes() {
   // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
   // first page, by name, as Pushes offers them.
   const choices = useCodeQuery("code_repos");
-  const hold = usePageHold<CodeChangesAnswer>(params);
   const first = useCodeQuery("code_changes", params, {
     enabled: "params" in asked,
     pollMs: CHANGES_POLL_MS,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_changes", { ...params, cursor }),
     changesOf,
     changeIdOf,
@@ -257,14 +256,8 @@ export function Changes() {
           >
             <ChangesGrid
               rows={rows}
-              onLoadMore={paged.more ? paged.older : undefined}
-              loadedNote={
-                paged.more || paged.held
-                  ? `${plural(rows.length, "change")} loaded${
-                      paged.held ? ", paused while more are loaded" : ""
-                    }`
-                  : undefined
-              }
+              onLoadMore={paged.more ? paged.next : undefined}
+              loadedNote={paged.more ? `${plural(rows.length, "change")} loaded` : undefined}
             />
           </QueryState>
           {paged.pageError && <PageFailed error={paged.pageError} />}
@@ -318,7 +311,9 @@ function ChangesGrid({
       // THE ENGINE'S ORDER, over the whole set its filters walk.
       serverSorted
       rowHref={(c) => peekHref(changeObject(c.repo, c.number))}
-      onRowActivate={peekRow((c: CodeChangeSummary) => open(changeObject(c.repo, c.number)))}
+      onRowActivate={peekRowActivation((c: CodeChangeSummary) =>
+        open(changeObject(c.repo, c.number)),
+      )}
       onLoadMore={onLoadMore}
       loadedNote={loadedNote}
       aria-label="Changes"

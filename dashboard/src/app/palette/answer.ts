@@ -41,6 +41,7 @@ import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { searchTooLong } from "~/lib/search.ts";
 import { ANSWER_IDLE_MS, answerable, normalizeQuestion } from "./hits.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /** One document an answer was written from; source [n] is the n-th. */
 export interface AnswerSource {
@@ -75,7 +76,7 @@ export type AnswerState =
   | { kind: "asking" }
   | { kind: "answered"; answer: KnowledgeAnswerReceipt }
   /** The engine said no — the budget, the backend — in its own sentence. */
-  | { kind: "refused"; sentence: string }
+  | { kind: "refused"; sentence: string; remedy: Remedy | null }
   /** Nobody can say whether it was answered; nothing is retried by itself. */
   | { kind: "unknown"; reason: string };
 
@@ -164,7 +165,18 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
               state = { kind: "unknown", reason: result.reason };
               break;
             case "refused":
-              state = { kind: "refused", sentence: result.sentence };
+              // IN THE ENGINE'S OWN WORDS where it has them. The act route
+              // answers a refusal's `detail` only in a person's words
+              // (ADR-0060), as a spent budget's names whose ceiling it was,
+              // and the dashboard's sentence for the class is written about a
+              // change ("could not make the change just now"), which a
+              // question is not. A refusal nobody has worded for a person yet
+              // carries no detail, and the class's sentence is all there is.
+              state = {
+                kind: "refused",
+                sentence: result.detail || result.sentence,
+                remedy: result.remedy,
+              };
               break;
           }
           setSettled({ key, state });

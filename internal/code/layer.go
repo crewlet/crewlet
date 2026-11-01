@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A PUBLISHED LAYER'S FILES, READ AND CHECKED WITHOUT GIT, AND ITS BYTES CUT
@@ -870,8 +871,8 @@ func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]in
 			"version %d (0: none), not 2", f.graph.BloomVersion))
 	}
 	if !slices.Equal(f.graph.Bases, baseGraphs) {
-		return layerFiles{}, bad("graph.bases", formatf("the commit-graph layer is written over the layers %v, and "+
-			"the chain below it is %v", f.graph.Bases, baseGraphs))
+		return layerFiles{}, bad("graph.bases", formatf("the commit-graph layer is written over the layers %s, and "+
+			"the chain below it is %s", words.And(f.graph.Bases), words.And(baseGraphs)))
 	}
 	return f, nil
 }
@@ -1125,7 +1126,7 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 	switch {
 	case sections[0] < 1 || sections[1] < 1:
 		return nil, fmt.Errorf("code: store a layer: a layer is a multi-pack-index and its bitmap at the least, "+
-			"and its sections are %v", sections)
+			"and its sections are %s", words.And(sections[:]))
 	case total > MaxLayerParts*LayerPartBytes:
 		return nil, fmt.Errorf("code: store a layer: it is %d bytes, past the %d one layer's %d parts of %d may "+
 			"hold (MaxLayerParts)", total, MaxLayerParts*LayerPartBytes, MaxLayerParts, LayerPartBytes)

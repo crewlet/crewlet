@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,10 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -116,8 +118,13 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// silently disarming it: built as a Service with an empty
 		// Options, this construction began failing the day the directory
 		// became mandatory, and both jobs vanished behind a warning.
+		//
+		// AND WITH THE ENGINE'S ANSWER TO WHETHER A QUIET CHANNEL IS STILL
+		// OWED, so the ask a coding run is working on — or one waiting in a
+		// seat's held inbox — is not closed under it: see [colleagueOwed].
 		if queue := e.backends.Queue; queue != nil {
-			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue, nil)
+			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue,
+				colleagueOwed{engine: e, runs: sandbox.NewCoordStore(fleet)}, nil)
 			if err != nil {
 				// Logged rather than fatal, matching a2aService: a
 				// company whose channels are not swept is degraded,
@@ -135,11 +142,15 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
-		// AND THE PARTS A DETACHED RUN KEEPS BESIDE ITS RECORD, once the
-		// record is gone — a write that raced the run's end. Ageless for
-		// the runs' own reason, so a decision removes them; see
-		// [maintenance.SandboxRunPartJobs].
-		jobs = append(jobs, maintenance.SandboxRunPartJobs(fleet)...)
+		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes'
+		// reason: its bucket has no age, so the record of a seat the
+		// company no longer has is forgotten only by a decision taken
+		// against the revision the fleet is pointed at — a grace after a
+		// sweep first saw the seat gone. Registered whatever chat backend
+		// the company runs, because the records outlive a move off Chatlet
+		// and the job costs one listing of an empty bucket where
+		// there are none. See [maintenance.ChatReadJobs].
+		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -167,7 +178,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// move, a one-sided dependency — and tell the tasks a close
 			// unblocked. Every one is GATED, so a tick with nothing to do
 			// costs one indexed read.
-			jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+			jobs = append(jobs, worklet.Jobs(worklet.DutyDeps{
 				DB: trackerEstate, Writer: n.writer,
 				NodeID: core.nodeID,
 				// AND THE LEAD MAP, for the one repair whose commit
@@ -180,14 +191,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			})...)
 			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
 			// than a repair and is therefore PER NODE —
-			// `tracker_notifications` is Divergent, so each node holds
-			// its own rows and a singleton would tidy one and let the
-			// rest grow for ever. Contributed here rather than in
-			// tracker.Jobs because that list runs under the duty and
+			// `tracker_notifications` is Divergent, so each data node
+			// holds its own rows and a singleton would tidy one and let
+			// the rest grow for ever. Contributed here rather than in
+			// worklet.Jobs because that list runs under the duty and
 			// this one must not. Its horizon is the one the PUBLISHED
 			// company states, asked at every sweep — the one the
-			// applier reads per batch — see [tracker.InboxJobs].
-			jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
+			// applier reads per batch (see [worklet.InboxJobs]).
+			jobs = append(jobs, worklet.InboxJobs(trackerEstate, e.inboxRetention)...)
 		}
 		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
@@ -397,6 +408,33 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 		return nil, err
 	}
 	return company.Seats(), nil
+}
+
+// humanSeatHandles is the chat read-state reconcile's roster: every HUMAN seat
+// of the revision the fleet is pointed at, or an error saying why that is
+// unknown ([Engine.servedFleetRevision]).
+//
+// HUMAN SEATS, because a read state is kept under the seat a person acts as
+// and only a human seat is ever acted as by a person or a bound machine: a
+// record under any other handle is one nobody can reach, which this roster
+// lets the reconcile forget a grace after it is first seen rather than keep
+// for as long as an agent seat of that name exists. And the SEAT rather than
+// its holder, because the record is the seat's: a person removed or moved
+// from a seat the company still has leaves it to the seat's next holder, as
+// the seat's inbox stays.
+func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
+	company, err := e.servedFleetRevision(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var handles []string
+	for role := range company.Org.AllRoles() {
+		if role.EffectiveKind() == org.KindHuman {
+			handles = append(handles, role.Handle())
+		}
+	}
+	slices.Sort(handles)
+	return handles, nil
 }
 
 // Maintenance exposes the retention sweep.

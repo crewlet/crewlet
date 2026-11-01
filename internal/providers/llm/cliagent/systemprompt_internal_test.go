@@ -328,14 +328,23 @@ func TestTheHarnessNoteOpensATranscriptsSystemSection(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 			req := llm.Request{Agent: tc.agent, Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: identity},
 				{Role: llm.RoleUser, Content: "status?"},
 			}}
 			if tc.tools {
-				req.Tools = []llm.ToolDef{{Name: "read_file", Description: "read a file"}}
+				// A call offering tools renders a fenced transcript of its
+				// own (see prompt_test.go), so the note is asked of the
+				// system message it is written into.
+				req.Tools = newTestHost(t)
+				got := withHarnessNote(req).Messages[0].Content
+				if want := harnessNote + harnessToolsNote + "\n\n" + identity; got != want {
+					t.Errorf("the system message is %q, want the note, the tools sentence and "+
+						"then the seat's prompt", got)
+				}
+				return
 			}
+			p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 			comp, err := ask(t, p, req)
 			if err != nil {
 				t.Fatalf("Complete: %v", err)
@@ -344,15 +353,11 @@ func TestTheHarnessNoteOpensATranscriptsSystemSection(t *testing.T) {
 			if n := strings.Count(prompt, "## system"); n != 1 {
 				t.Errorf("the transcript has %d system sections, want one:\n%s", n, prompt)
 			}
-			note := harnessNote
-			if tc.tools {
-				note += harnessToolsNote
-			}
-			if want := "## system\n\n" + note + "\n\n" + identity + "\n"; !strings.HasPrefix(prompt, want) {
+			if want := "## system\n\n" + harnessNote + "\n\n" + identity + "\n"; !strings.HasPrefix(prompt, want) {
 				t.Errorf("the transcript does not open with the note and then the seat's "+
 					"prompt, in one section:\n%s", prompt)
 			}
-			if !tc.tools && strings.Contains(prompt, harnessToolsNote) {
+			if strings.Contains(prompt, harnessToolsNote) {
 				t.Errorf("a call offering no tools is told to act through Crewlet's tools:\n%s", prompt)
 			}
 		})
@@ -401,8 +406,7 @@ func TestTheHarnessNoteIsTheSameBytesOnEveryCall(t *testing.T) {
 	const cto, pm = "You are Agent CTO at Nimbus.", "You are Agent PM at Nimbus."
 	rec := t.TempDir()
 	p := bothChannelsProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_RECORD_ARGV": rec})
-	tools := []llm.ToolDef{{Name: "read_file", Description: "read a file"}}
-	req := llm.Request{Agent: true, Tools: tools, Messages: []llm.Message{
+	req := llm.Request{Agent: true, Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: cto},
 		{Role: llm.RoleUser, Content: "status?"},
 	}}
@@ -415,7 +419,7 @@ func TestTheHarnessNoteIsTheSameBytesOnEveryCall(t *testing.T) {
 		t.Fatalf("the caller's system message became %q — the next round would carry "+
 			"the note twice", req.Messages[0].Content)
 	}
-	if _, err := ask(t, p, llm.Request{Agent: true, Tools: tools, Messages: []llm.Message{
+	if _, err := ask(t, p, llm.Request{Agent: true, Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: pm},
 		{Role: llm.RoleUser, Content: "status?"},
 	}}); err != nil {
@@ -441,7 +445,7 @@ func TestTheHarnessNoteIsTheSameBytesOnEveryCall(t *testing.T) {
 	if len(seen) != 2 {
 		t.Errorf("three calls from two requests carried %d distinct texts, want 2: %v", len(seen), seen)
 	}
-	if want := harnessNote + harnessToolsNote + "\n\n"; len(prefixes) != 1 || prefixes[want] != 3 {
+	if want := harnessNote + "\n\n"; len(prefixes) != 1 || prefixes[want] != 3 {
 		t.Errorf("the text in front of the seats' prompts = %v, want %q on all three calls", prefixes, want)
 	}
 }

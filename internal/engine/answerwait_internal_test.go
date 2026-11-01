@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -20,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -42,8 +45,6 @@ roles:
   - name: SWE
     handle: swe
     llm: zulu
-    sandbox:
-      enabled: true
 `
 
 // pauseHolds is what a queue reports holding a seat's inbox under.
@@ -112,7 +113,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 	hold := &refusedOnce{inner: seatHold{engine: e}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: &resumeSpy{}, Hold: hold,
 		Lease: e.launchFence,
 	})
@@ -131,7 +132,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 		t.Fatal("the premise: the queue refused the hold")
 	}
 
-	got := e.Dispatch(t.Context(), "swe", []*events.Event{{ID: uuid.New(), Type: "task_assigned"}})
+	got := e.mailboxTurn(t.Context(), "swe", []*events.Event{{ID: uuid.New(), Type: "task_assigned"}})
 	if got.Outcome != queue.OutcomeDefer {
 		t.Errorf("outcome = %v, want the delivery deferred at the head", got.Outcome)
 	}
@@ -210,16 +211,34 @@ func TestMayResumeAnswerNamesWhatEachRefusalWaitsOn(t *testing.T) {
 
 // A BUDGET REFUSAL NAMES WHEN ITS WINDOW TURNS OVER, which is the instant a
 // retried resume waits for: Berlin's midnight, an hour after the day was spent.
+// AND A STARVED WINDOW HOLDS A RESUME AS A FULL ONE DOES: every answer's resume
+// relaunches the executor, and a window with less room than a launch needs
+// refuses that launch as surely as one with none — admitted, the attempt was
+// refused at its launch, and the next was admitted into the same refusal until
+// the answer's attempts were spent and the answer declined.
+//
+// Mutation: hold on a refusing window alone and the starved row is admitted.
 func TestABudgetRefusalNamesTheEndOfItsWindow(t *testing.T) {
 	t.Parallel()
-	r := newParkRig(t, "100")
-	r.spend(t, 100)
-	reason, resets, refusing := r.e.budgetRefusing(t.Context(), "lead")
-	if !refusing || reason == "" {
-		t.Fatalf("budgetRefusing = %q, %v, want the spent day refusing", reason, refusing)
-	}
-	if !resets.Equal(berlinMidnight) {
-		t.Errorf("the refusal lifts at %v, want the day's end %v", resets, berlinMidnight)
+	for name, tc := range map[string]struct {
+		cap, floor string
+		spent      int
+	}{
+		"a spent window":   {cap: "100", floor: "0", spent: 100},
+		"a starved window": {cap: "100", floor: "50", spent: 60},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newFlooredParkRig(t, tc.cap, tc.floor)
+			r.spend(t, tc.spent)
+			refusal, held := r.e.budgetHold(t.Context(), r.e.Company(), "lead")
+			if !held || refusal.Reason == "" || refusal.Condition != waitBudget {
+				t.Fatalf("budgetHold = %+v, %v, want the window holding the resume", refusal, held)
+			}
+			if !refusal.Until.Equal(berlinMidnight) {
+				t.Errorf("the refusal lifts at %v, want the day's end %v", refusal.Until, berlinMidnight)
+			}
+		})
 	}
 }
 
@@ -264,7 +283,7 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 	swe := seatIn(t, e, "swe")
 	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe,
 		Pause: &coord.SeatPause{Seat: swe, By: "ana"}})
-	answeredRun(t, e.sandbox.Load().pending, "t-paused")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-paused")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
@@ -304,7 +323,7 @@ func spyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy) {
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
 	})
@@ -324,7 +343,7 @@ func TestAnAnswerWaitingOnAModelResumesWithTheApplyThatBringsOne(t *testing.T) {
 	applyOK(t, e, sandboxDoc(""))
 	waitHeld(t, e, "swe")
 	coordinator, resumer := spyRuntime(t, e)
-	answeredRun(t, e.sandbox.Load().pending, "t-model")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-model")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
@@ -349,14 +368,14 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 	e.notify.admits = admitting.Load
 	e.notify.mu.Unlock()
 	coordinator, resumer := spyRuntime(t, e)
-	answeredRun(t, e.sandbox.Load().pending, "t-posture")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-posture")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
 		t.Fatalf("%d resumes ran on a node refusing new work", n)
 	}
 
-	r, err := e.NewReconciler(ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
+	r, err := e.NewReconciler(t.Context(), ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
 		Queue: e.backends.Queue, NodeID: "node-posture"})
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
@@ -410,7 +429,7 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: store,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: store,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: admit, After: retries.after, Lease: e.launchFence,
 	})
@@ -421,8 +440,8 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 	e.sandbox.Store(&sandboxRuntime{pending: store, coordinator: coordinator})
 
 	// TWO ANSWERS THE SEAT'S LAST HOLDER RECORDED, and the seat changes hands.
-	answeredRun(t, rt.pending, "t-first")
-	answeredRun(t, rt.pending, "t-second")
+	answeredRun(t, e.answers, rt.pending, "t-first")
+	answeredRun(t, e.answers, rt.pending, "t-second")
 	if !host.Release(t.Context(), "swe", seat.ReasonPlacement) {
 		t.Fatal("the seat was not released")
 	}
@@ -440,7 +459,15 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	retries.fire()
+	// ONE AFTER THE OTHER: a seat resumes one of its runs at a time
+	// (sandbox.SeatCoding), so the second is resumed once the first has let go
+	// of the seat, on the re-check that letting go arms.
+	for range 3 {
+		if resumer.count() == 2 {
+			break
+		}
+		retries.fire()
+	}
 	if n := resumer.count(); n != 2 {
 		t.Fatalf("%d resumes, want both inherited answers resumed", n)
 	}
@@ -530,7 +557,7 @@ func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
 	resumer.mu.Lock()
 	resumer.failing = 1
 	resumer.mu.Unlock()
-	answeredRun(t, e.sandbox.Load().pending, "t-stop")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-stop")
 	recoverHeld(t, e, coordinator, "swe")
 	eventually(t, "the first attempt to fail", func() bool { return resumer.count() == 1 })
 
@@ -546,13 +573,19 @@ func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
 const answerRetryFirst = time.Second
 
 // answeredRun records a run on the swe seat that asked a question and whose
-// answer is recorded and owed its resume.
-func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
+// answer is recorded and owed its resume, sealed under seal as the node that
+// recorded it would have.
+func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
+	// THE SEAT'S ID, as every run's row carries it: what an answer the run
+	// lets go of is handed back to. A row without it is one whose ending can
+	// never finish, which holds the seat for good.
+	seatID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
-		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", CreatedAt: time.Now().UTC(),
+		TurnID: turnID, AgentID: seatID.String(), AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
+		CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -561,8 +594,8 @@ func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
 	asked := time.Now().UTC()
-	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		Question: "which branch?", Audience: "requester", AskedAt: asked}); err != nil {
+	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	run, _, err := store.Get(ctx, turnID)
@@ -576,10 +609,49 @@ func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
-		Events: []json.RawMessage{raw}, PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
-	}, sandbox.Fence{}); err != nil || !won {
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaChat,
+		By: "ana", ByKind: "human"}, sandbox.RecordedAnswer{
+		EventIDs: []string{reply.ID.String()}, Events: []json.RawMessage{raw},
+		PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, answer, sandbox.Fence{}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
+	}
+}
+
+// A RESUMED SEGMENT REFUSED FOR BUDGET IS HELD ON THE WINDOW THAT REFUSES IT,
+// never lost and never retried at once. Its relaunch — a reviewer's send-back,
+// or the run an answer carries on — was refused below the executor floor: the
+// coordinator holds the job collected, its seat behind it, until that window
+// turns over ([sandbox.ErrResumeHeld]). Abandoned for having acted, the turn was
+// lost for a budget; handed back for an ordinary retry, each attempt ran the
+// review again into the same refusal.
+//
+// Mutation: answer the refusal with the plain error and nothing holds; hold on
+// any error and a failure that is not the budget's waits a window out.
+func TestAResumeRefusedForBudgetIsHeldOnItsWindow(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "50")
+	r.spend(t, 60)
+	refused := executorHeadroom(t.Context(), staticRemaining{left: 40}, 50)
+	held := r.e.heldByBudget(t.Context(), r.e.Company(), "lead", refused)
+	if held == nil || !errors.Is(held, sandbox.ErrResumeHeld) ||
+		held.Refusal.Condition != waitBudget || !held.Refusal.Until.Equal(berlinMidnight) {
+		t.Fatalf("held = %+v, want the resume held on the day that starves it, until %v",
+			held, berlinMidnight)
+	}
+	if !errors.Is(held, toolloop.ErrBudgetExhausted) {
+		t.Error("the hold hides the refusal it is for")
+	}
+	if other := r.e.heldByBudget(t.Context(), r.e.Company(), "lead",
+		errors.New("the runner could not be built")); other != nil {
+		t.Errorf("a failure that is not the budget's is held: %+v", other)
+	}
+	roomy := newFlooredParkRig(t, "100", "50")
+	if turned := roomy.e.heldByBudget(t.Context(), roomy.e.Company(), "lead", refused); turned != nil {
+		t.Errorf("a refusal whose window has room again is held: %+v", turned)
 	}
 }

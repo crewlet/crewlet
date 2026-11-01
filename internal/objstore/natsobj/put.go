@@ -44,8 +44,8 @@ const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 // AT LEAST ONE, because a put holds a message out to move at all. A heartbeat
 // shorter than one message's crossing — a lease under 11.25 s — cannot keep
 // that margin behind even one, and under 5.6 s a renewal behind it at the
-// floor lands after its lease; `crewlet validate` warns of such a lease on a
-// node whose uploads cross a link (config.LinkLeaseFloor).
+// floor lands after its lease. No node holds such a lease: config refuses
+// one under config.MinLeaseTTL, which is over config.LinkLeaseFloor.
 //
 // AT MOST [memberWindow], the window sized by throughput: a longer lease buys
 // a link no wider window, because sixty-four messages bought nothing over

@@ -407,7 +407,7 @@ func TestAChangeIsNamedByItsNumberOrItsReference(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string]map[string]any{
 		"a reference":           {"change": "site!7"},
-		"a number on its repo":  {"repo": "site", "change": 7},
+		"a number on its repo":  {"repo": "site", "change": 7.0}, // a JSON number, as encoding/json decodes one
 		"a number as a string":  {"repo": "site", "change": "7"},
 		"a reference and repo":  {"repo": "site", "change": "site!7"},
 		"a number as JSON says": {"repo": "site", "change": json.Number("7")},
@@ -424,8 +424,8 @@ func TestAChangeIsNamedByItsNumberOrItsReference(t *testing.T) {
 	}{
 		"another repository's reference": {map[string]any{"repo": "web", "change": "site!7"}, "name one repository"},
 		"no change":                      {map[string]any{"repo": "site"}, "needs `change`"},
-		"a number below one":             {map[string]any{"repo": "site", "change": 0}, "needs `change`"},
-		"a number and no repository":     {map[string]any{"change": 7}, "needs a `repo`"},
+		"a number below one":             {map[string]any{"repo": "site", "change": 0.0}, "needs `change`"},
+		"a number and no repository":     {map[string]any{"change": 7.0}, "needs a `repo`"},
 		"a part of none":                 {map[string]any{"change": "site!7", "part": "everything"}, "`part` is one of"},
 		"a revision of the summary":      {map[string]any{"change": "site!7", "revision": 2}, "`revision` chooses"},
 		"since a revision of findings": {map[string]any{"change": "site!7", "part": "findings", "since_revision": 1},
@@ -698,8 +698,9 @@ func TestFindingsAreReanchoredToTheAskedRevision(t *testing.T) {
 
 // A GET_CHANGE PAGE FITS ONE TOOL ANSWER: every part of a change at its
 // bound — a description at its longest beside a page of revisions whose
-// target branches are the longest a ref may be, in the characters JSON writes
-// six bytes for; a page of findings with their longest bodies and
+// target branches are the longest a ref may be, in the character every JSON
+// encoder writes as two bytes (`"`, which the answers' plain encoding escapes as
+// any encoder must, where `<` it writes as itself); a page of findings with their longest bodies and
 // suggestions; reviews with their longest summaries; comments with their
 // longest bodies; a git node's page cut at its bound; a readiness with a
 // merge of many long conflicting paths — is answered within one tool answer,
@@ -717,7 +718,7 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 		const line = "The upload retries once a minute, five times, and then gives up. "
 		return strings.Repeat(line, n/len(line)+1)[:n]
 	}
-	wide := strings.Repeat("<", code.MaxRefNameBytes-len("refs/heads/"))
+	wide := strings.Repeat(`"`, code.MaxRefNameBytes-len("refs/heads/"))
 	f := siteChange()
 	f.detail.Body = prose(code.MaxChangeBodyBytes)
 	f.revisions = nil
@@ -743,7 +744,7 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 	}
 	conflicts := make([]string, 100)
 	for i := range conflicts {
-		conflicts[i] = fmt.Sprintf("%03d/%s", i, strings.Repeat("<", 600))
+		conflicts[i] = fmt.Sprintf("%03d/%s", i, strings.Repeat(`"`, 600))
 	}
 	f.detail.Mergeability.Conflicts = conflicts
 	for _, c := range []struct {
@@ -832,10 +833,10 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 	t.Run("a row past one answer", func(t *testing.T) {
 		t.Parallel()
 		g := siteChange()
-		huge := strings.Repeat("<", code.MaxCommentBytes)
+		huge := strings.Repeat(`"`, code.MaxCommentBytes)
 		g.comments = []code.CommentRow{{ID: "cm-1", ThreadID: "cm-1", Author: "agent-cto",
 			AuthorKind: code.PartyAgent, Body: huge}}
-		g.detail.Body = strings.Repeat("<", code.MaxChangeBodyBytes)
+		g.detail.Body = strings.Repeat(`"`, code.MaxChangeBodyBytes)
 		for part, says := range map[string]string{"comments": "the next comment of site!7 alone is past one answer",
 			"summary": "description and authors alone are past one answer"} {
 			got := refusedCode(t, codeRegistry(t, codeDeps(newChangeHost(g))), codeTurn(t), builtin.CodeGetChangeTool,

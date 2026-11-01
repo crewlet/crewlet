@@ -1,4 +1,4 @@
--- Goals leave the native tracker: the object, its owners, its targets and the
+-- Goals leave Worklet: the object, its owners, its targets and the
 -- references those targets counted work through.
 --
 -- # What went, and why it went whole
@@ -22,7 +22,7 @@
 --
 -- # The record kind is RETIRED rather than deleted
 --
--- `goal` joins `sprint` in [tracker.RetiredKinds]. An older peer publishing
+-- `goal` joins `sprint` in [worklet.RetiredKinds]. An older peer publishing
 -- during a rolling upgrade, or a goal record still inside
 -- `stream.tracker_retention`, carries a record version this build reads
 -- perfectly — it is the KIND that is gone — so without the retirement gate it

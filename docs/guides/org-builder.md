@@ -37,17 +37,22 @@ signed in:
 
 | The engine answers `GET /config` with | The builder shows |
 |---|---|
-| the active revision | the organization, ready to edit |
-| `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
-| `404 no_active_revision`, while the organization names a company | "This node is still catching up". Try again once the node has applied the fleet's revision, or use another node |
+| the active revision — the fleet's, which every node answers whatever it runs | the organization, ready to edit |
+| `404 no_active_revision` — the fleet has no activation and this node knows no company — and the organization the node pushes names no company | creating the company |
+| `404 no_active_revision`, while the organization names a company | "This node is still catching up". Try again shortly, or use another node |
+| `503 unavailable`: the node could not read the fleet's activation from the coordination store | "The engine could not serve the configuration", saying so, with **Retry**. A coordination store electing a leader is out for a few seconds |
 | `401` or `403`, to somebody signed in | "Reading the configuration needs Admin access.", with **Sign in as somebody else** |
 | `401` or `403`, to nobody signed in | "Editing the organization needs you to sign in.", with **Sign in**, which comes back to the builder |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
 
-A node that has not caught up is never offered create mode: its own store is
-empty while the fleet runs a company, and a create from there could only be
-refused.
+A node that has not applied the fleet's revision yet — one that has just
+joined, or one that refused it and runs the revision before — still answers
+`GET /config` with the fleet's revision, so the builder edits the company
+there as on any other node, and is never offered create mode while the fleet
+runs one. A node whose engine runs a company while it answers that there is
+none is not offered create mode either: a company exists, and a create would
+replace it.
 
 A node that is draining refuses every check and save with `503 draining`, and
 one that is still starting with `503 starting`, and the builder treats either
@@ -83,7 +88,7 @@ two seats may share one:
 | `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
 | `unit=<key>` and `add=…` | the Add under that unit |
-| `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
+| `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Worklet's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
 draft is loaded, and not while a kept draft waits for **Keep** or
@@ -137,9 +142,13 @@ the engine runs) or **people** (human seats). A template never invents a
 contact identity, so human leads are created without one, and the only identity
 written is the one you type for your own seat — which is optional too: leave it
 empty if you will work only through the dashboard. A human seat with no contact
-identity is legitimate, but no agent can @-mention that person, so the review
-names each one and the configuration keeps warning about it at the seat's
-`contact` until an identity is added.
+identity is legitimate. On the engine's own chat an agent mentions a person by
+their seat's handle — a lead's roster gives each human report as `@handle`, and
+the note on human colleagues says to mention them there — so nothing is missing;
+on a company that talks on Mattermost or Slack, nothing addressed to the seat
+there reaches anybody, so
+the configuration warns about it at the seat's `contact` — and the review lists
+that warning with the others — until an id on that workspace is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
@@ -155,24 +164,26 @@ beside it.
 After a successful create, three steps remain. **Open Principles** opens
 Company › Principles in edit, to write the mission, the vision and the standing
 policies every agent reads. The builder cannot take the other two: connecting
-chat and trackers in Company › Integrations, and adding a model provider, which
-no dashboard screen adds. The engine applies the new company
-without one, but until the provider is added no agent seat takes a turn:
-whatever is sent to a seat waits on its inbox and runs once the provider
-exists. The panel gives the terminal steps for it, which
-[Giving the company a model](#giving-the-company-a-model) explains — unless
-another system [manages the company
-document](../concepts/configuration.md#managed-configuration), in which case it
-says the model is added there.
+chat and trackers in Company › Integrations, and adding a model provider. The
+engine applies the new company without one, but until the provider is added no
+agent seat takes a turn: whatever is sent to a seat waits on its inbox and runs
+once the provider exists. **Add a model** opens
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+on its wizard, which adds the model, signs it in and tests it; the panel also
+gives the terminal steps for it, folded, which
+[Giving the company a model](#giving-the-company-a-model) explains. On a company
+another system [manages](../concepts/configuration.md#managed-configuration),
+it says the model is added there instead.
 
 ### Giving the company a model
 
-Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives,
-signed in on the node's host, so adding the first one is done in a terminal
-there — beside the node's `crewlet.yaml`. The company the builder created is
-in the store and in no file, so the steps start by writing it to one. The
-builder's panel after a create gives them, and so does its caution while the
-company has no model:
+Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives.
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+adds one from the dashboard, signed in and tested. To add it at the node's host
+instead, in a terminal beside the node's `crewlet.yaml`: the company the builder
+created is in the store and in no file, so the steps start by writing it to
+one. The builder's panel after a create gives them, and so does its caution
+while the company has no model:
 
 ```bash
 # Stop crewlet run first (Ctrl+C), and run these beside its
@@ -182,11 +193,15 @@ company has no model:
 # 1. Write the running company to a file
 crewlet config export > company.yaml
 
-# 2. Add the model to it
+# 2. Add the model to it, and the sandbox every seat's executor
+#    runs in: here this machine, as your user
 providers:
   llm:
     default:
       model: sonnet
+  sandbox:
+    local: {}
+    default_run_in: direct
 
 # 3. Sign its CLI in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
@@ -212,13 +227,15 @@ crewlet run
   cannot — alone it never reaches the quorum the store needs — so there
   step 3 runs with `-api` naming a member that is running, with one of its
   Tier A tokens in `CREWLET_API_TOKEN`.
-- **The file comes from `crewlet config export`**, the active revision as it
-  is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
-  those are redacted, and `crewlet llm` refuses a company file that still
-  carries a `__redacted__` mask — the import would restore one, but `crewlet
-  llm` writes no revision and restores nothing. A `${NAME}` reference comes
-  out as the reference, and a credential written inline comes out in the
-  clear (a company the builder created holds none).
+- **The file comes from `crewlet config export`**, the company the node's
+  store knows — the fleet's revision as the node last saw it, or an offline
+  change made on it since — as it is stored, rather than from
+  `GET /config?format=yaml` or **Copy as YAML**: those are redacted, and
+  `crewlet llm` refuses a company file that still carries a `__redacted__`
+  mask — the import would restore one, but `crewlet llm` writes no revision
+  and restores nothing. A `${NAME}` reference comes out as the reference, and
+  a credential written inline comes out in the clear (a company the builder
+  created holds none).
 - **The entry needs only its model.** `default` drives Claude Code, the
   default CLI, on your subscription; `-capture-token` mints a headless token
   and stores it in the fleet's [secret store](../concepts/secret-store.md)
@@ -230,9 +247,36 @@ crewlet run
   installed, signed in and still matches the profile Crewlet drives it with.
   For another CLI or an API key, write the entry
   [LLM Backends](../concepts/llm-backends.md) describes instead.
-- **The import is offline**, with the node stopped: it marks the revision
-  active in the node's store, and the node publishes it to the fleet as it
-  starts. The work that waited on the seats' inboxes runs on the new model.
+- **The sandbox is this machine.** A `direct` box runs the CLI as your user
+  on the node's own host, and calls the seat's tools back through the node's
+  own listener on loopback, so there is nothing else to set — the node only
+  needs its `api.port`, whatever its roles. A `container` or `e2b` cell, or a
+  seats node started with `api.port: 0`, instead needs
+  `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it (see
+  [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+  The CLI runs fully permissioned there, so `direct` is for a first run on
+  your own machine while its seats take work from you alone, a dedicated host
+  you are willing to hand to an autonomous agent, or the entry that needs the
+  host itself; before a seat takes work from anyone else, place the runs in
+  `container` with [an image of your
+  own](../concepts/code-sandbox.md#bring-your-own-image) (see [Choosing a
+  cell](../concepts/code-sandbox.md#choosing-a-cell)).
+- **The import is offline**, with the node stopped: it makes the file what
+  the node boots on, built on the fleet's revision the export came from, and
+  the node publishes it to the fleet as it starts — as long as the fleet
+  still runs that revision. The work that waited on the seats' inboxes runs
+  on the new model. If another node changed the company while this one was
+  stopped, the import is withheld rather than published over that change:
+  the node starts on it, logs `offline_revision_not_published` at warn, and
+  moves to the fleet's revision once it applies it. Add the model to the
+  fleet's company through a running node then: a `PATCH /config` carrying
+  only step 2's `providers` block — its `llm` entry, and its `sandbox` block
+  unless the fleet's company already has one, since a company with an agent
+  seat and a model is refused without it — which is built on the fleet's
+  revision and keeps the other node's change. Importing `company.yaml` with
+  `-api` would replace the whole document with the one exported before that
+  change. See [Offline commands make an
+  offer](../concepts/configuration.md#offline-commands-make-an-offer).
 
 None of this applies to a company another system
 [manages](../concepts/configuration.md#managed-configuration): an offline
@@ -434,10 +478,11 @@ engine applies such a company and places its seats, but no agent seat takes a
 turn until a provider exists: work sent to a seat waits on its inbox and runs
 once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
-The builder does not write providers, and the dashboard does not add one:
-Settings › Models & keys edits a model the configuration already declares.
-The caution folds away the steps that add one — the panel's own, starting from
-the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
+The builder does not write providers: the caution sends the reader to
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard),
+where a model is added, signed in and tested, and folds away the steps that add
+one from a terminal at the node's host, starting from the company the store
+holds ([Giving the company a model](#giving-the-company-a-model)).
 On a company another system [manages](../concepts/configuration.md#managed-configuration)
 it gives no steps and says the model is added there, by whoever reads it, a
 writer the document names included: the steps end in an offline
@@ -618,10 +663,12 @@ credentials are written in the configuration document.
 | Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
 
 Shown with the reason they are not changed here: per-phase models
-(`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
-workers, placement, learning, tool credentials (names only) and whether the
-seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
-each depend on a company-level block the builder does not edit.
+(`llm_review` and the other `llm_*` fields), the executor box (the seat's
+setup steps, variables, tool servers and turn cap; where it runs is its model
+entry's `run_in`), workers, placement, learning, tool credentials (names only)
+and whether the seat is the Datadog fallback. The executor box, placement,
+workers and tool credentials each depend on a company-level block the builder
+does not edit.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
 **Work** for a human seat) and opens the same dialog as the chart's Delete.
@@ -775,6 +822,14 @@ what holds it. The same refusal meets a held seat replaced
 ([Replacing a seat](#replacing-a-seat)), and a document written outside the
 builder that makes a held human seat an agent's.
 
+A node that cannot read who holds the seats a change removes refuses it
+`503 seat_holders_unavailable`, and nothing is written. Where waiting clears
+it (the engine names a wait), the check asks again by itself and reads *Could
+not reach the engine to check* meanwhile; where waiting does not (the node has
+been evicted, or its identity log is full), each seat the change removes shows
+the engine's own sentence for what clears it, and stays so until the draft
+changes or the node can read them again.
+
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
 
@@ -863,9 +918,12 @@ the same `If-Match` ([Editing as a unit lead](#editing-as-a-unit-lead)).
 A save whose answer is lost (a dropped connection, a gateway timeout) may
 still have been stored. The builder never assumes either way: it reads the
 revision history and treats the save as done when it finds a revision whose
-parent is the draft's base and whose summary carries the write id. If the
-save did not land, it says so and offers to save again. If the engine cannot
-be asked, editing pauses and the review offers **Check again** and **Save
+parent is the draft's base and whose summary carries the write id. It walks
+back from the active revision to find it, so it finds a save somebody has
+built on since as well: the builder then says "Saved. Revision `<id>`, built
+on it, is active now.", naming that later revision, which every node applies
+with your changes in it. If the save did not land, it says so and offers to
+save again. If the engine cannot be asked, editing pauses and the review offers **Check again** and **Save
 again**; a second save carries the same write id, so a first save that did
 land is recognized as yours rather than replayed on top of itself.
 
@@ -873,8 +931,10 @@ The same holds when you leave the builder, or the tab reloads, before the
 answer arrives. The kept draft is marked with the save's write id before the
 save is sent, so the next time the builder opens in this tab it settles that
 save first: if it landed, the builder says "Your last save was stored and is
-being applied" and does not offer the draft again (replaying it onto its own
-revision would apply every change twice); if it did not, the draft comes back
+being applied" — or, when a revision built on it is active by then, "Your
+last save was stored. Revision `<id>`, built on it, is active now." — and
+does not offer the draft again (replaying it onto its own revision would
+apply every change twice); if it did not, the draft comes back
 as any kept draft does. While the engine still cannot say, editing stays
 paused, with **Check again**. Coming back to the builder while that save is
 still on its way, the builder waits for the save's own answer before it
@@ -885,18 +945,25 @@ settles anything.
 A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
-revision and go on serving the previous one. Until this node has
-applied it, the org chart and Teams still draw the previous organization,
-and say so.
+revision and go on serving the previous one — and start on that one again if
+it restarts. Until this node has applied it, the org chart and Teams still
+draw the previous organization, and say so: *Still applying* while it may yet,
+and *This node refused* the revision once its attempt failed, since it runs
+the one before until a later revision is activated. The configuration itself answers
+the saved revision at once, on every node: `GET /config`, the next check and
+**Copy as YAML** read it whether or not the node serving them has applied it.
 
 The strip under the toolbar follows the revision:
 
 | It reads | Meaning |
 |---|---|
 | Saved revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
-| Applied on N of M nodes. | the fleet is converging |
-| Applied. | every node reported this epoch |
-| Node `<id>` refused this revision: `<reason>`. | that node kept the previous epoch. **Open the fleet** for the rest |
+| Applied on N of M nodes. | the fleet is converging: N nodes have applied it |
+| Applied. | every node has applied it: each reported this revision applied at this epoch, runs it, or has applied a later epoch |
+| Node `<id>` refused this revision: `<reason>`. | that node goes on running the revision it ran before. **Open the fleet** for the rest |
+| This node refused this revision and goes on running the one before. | a unit lead's view, which reads no fleet: the node serving the dashboard attempted the revision and failed. Why is on **Settings › Nodes**, which is `admin`'s |
+| Revision `<id>` has been activated since. | another revision was activated before every node had applied yours — often one built on it, carrying your changes. Every node has either applied yours or gone straight to the later one without running yours (two activations inside one reconcile tick are never attempted one by one) and failed to apply it there. Said too of a save whose answer was lost, found afterwards, by when another revision had been activated. The strip stops following it; **Settings › Nodes** shows how the nodes take the newer one |
+| Whether it has been applied can't be followed from here. The org chart shows its changes once this node applies them. | a unit lead's save whose answer was lost. Without `admin` the strip reads no fleet, and the save carries no epoch to compare this node's against until this node attempts the saved revision, when the strip follows it from there |
 
 Beside it: **View changes**, which opens what the save changed on the
 Configuration screen (the saved revision against the one the draft was
@@ -908,6 +975,51 @@ brought back in step. `crewlet config import company.yaml` writes it back.
 Both read the company document, so a lead without `admin` is offered
 neither.
 
+Without `admin`, the strip follows a save by the node serving the dashboard
+alone: its health push says the epoch it applied and what its last attempt
+made of which revision, so a refusal there is said as one rather than as an
+apply that never ends. With `admin`, each node's row in the fleet view is read
+by the same rule, since the row carries the epoch the node last applied beside
+the one it last attempted, as the push does: a node that moved past the save's
+epoch has applied the save once it has applied an epoch at or past it — even
+if it has refused a still later one since — or when it runs the saved
+revision, which only the row says. While the dashboard has lost its connection
+to the engine, the strip and the org chart's note keep what the node last said
+about the save rather than going back to saying it is being applied, and so
+does a screen opened during the outage: Teams after the chart, or the Builder
+after another page.
+
+A node that restarts forgets the epoch it applied, on its push and on its row
+alike: a node with the `data` role boots on the revision it applied before,
+and reports no applied epoch until it applies one again. So such a node that
+restarted and then refused a later revision reads as having gone past your
+save rather than as having applied it. (A node without `data` boots on
+nothing and runs no company until it applies one, so for it that reading is
+simply true.) The one exception is the strip of somebody with `admin`, for a
+node that booted on your revision itself: its row says it runs it. A verdict
+the strip gave before the restart can then change from **Applied.** to
+*Revision `<id>` has been activated since.*, and the org chart's note can
+come back as *This node did not apply* your revision although it did.
+**Settings › Nodes** shows the revision each node runs. Neither the push nor
+the row says which activation a restarted node booted on, so the dashboard
+cannot tell such a node from one that never ran your revision; carrying that
+across a restart belongs with
+[#322](https://github.com/crewlet/crewlet/issues/322), an activation's
+identity across pointer lifetimes.
+
+A save whose answer was lost ([When the answer does not
+arrive](#when-the-answer-does-not-arrive)) carries no epoch of its own. The
+strip takes the one in the fleet's activation, and only while that activation
+names the saved revision (for a lead, the one in this node's last attempt,
+only while it names the saved revision); while the node cannot read the activation from the
+coordination store, it goes on saying the engine is applying it and keeps
+asking, rather than counting every node as past an epoch it does not know.
+Once either names it, the tab keeps that epoch for the save, so a revision
+activated afterwards does not turn an applied or refused save back into one
+that cannot be followed; the org chart's note follows the save from then on
+too, and learns the epoch from this node's last attempt itself when the
+Builder is not open.
+
 ### Keeping a company file in sync
 
 A company kept as `company.yaml` in a repository and a company edited in the
@@ -915,9 +1027,10 @@ builder are two writers of one document, and the flag a node starts with
 decides which one wins a restart
 ([Configuration](../concepts/configuration.md)):
 
-- `crewlet run -company company.yaml` only fills an empty store. Once a
-  company exists the file is ignored, so a restart never undoes a builder
-  save.
+- `crewlet run -company company.yaml` only creates a company where none
+  exists. Once one does — the node boots on it or has seen the fleet run it,
+  or the fleet runs one — the file is ignored, so a restart never undoes a
+  builder save.
 - `crewlet run -import-company company.yaml` makes the file the company again
   at every start. A restart with it replaces whatever the builder saved since
   the file last changed.
@@ -929,14 +1042,15 @@ it minted, while a file that leaves them out is minted afresh from its names
 on every import, so a name corrected there would replace that seat or unit. Credentials
 in the copy read as `__redacted__` (a whole `${NAME}` reference is shown as it
 is). Importing the file over the running company restores each masked value
-from the active revision by the identity of what holds it (a seat by its
-handle, a unit by its key) — `crewlet config import` through a running node
-or offline, and a node starting on the file with either flag, which restores
-from its own active revision. A store with no active revision has nothing to
-restore from, and a member that is new or renamed in the file has nothing of
-its own there, so either is refused naming the field; that is one more reason
-a file kept in a repository should hold `${NAME}` references rather than
-values.
+from the company by the identity of what holds it (a seat by its handle, a
+unit by its key): `crewlet config import` through a running node restores
+from the fleet's revision; offline, and a node starting on the file with
+either flag, from the company the node's own store knows — the fleet's
+revision as it last saw it, or an offline change made on it since. A store
+that knows no company has nothing to restore from, and a member that is new
+or renamed in the file has nothing of its own there, so either is refused
+naming the field; that is one more reason a file kept in a repository should
+hold `${NAME}` references rather than values.
 
 ## A draft survives a reload
 
@@ -1010,10 +1124,13 @@ under the same key, is the same one to the engine, so a change made to it is
 held to the values it recorded like any other: a field somebody set
 differently is a conflict for you to decide.
 
-If this node still serves the older revision (it has not applied the newer one
-yet, or a load balancer sent the read to a node that has not), the update
-waits: "Still catching up. Try again shortly." If the configuration the draft
-edits is no longer active at all, the banner offers **Discard and reload**.
+Every node answers `GET /config` with the fleet's revision, so the update
+reads the newer revision wherever the request lands, on a node that has not
+applied it yet too. If the revision it reads is still the draft's own, or one
+the builder cannot trace back to the newer revision through its parents, the
+update waits: "Still catching up. Try again shortly." If the configuration the
+draft edits is no longer active at all, the banner offers **Discard and
+reload**.
 
 ## Editing as a unit lead
 

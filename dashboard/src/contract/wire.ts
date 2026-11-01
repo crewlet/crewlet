@@ -8,8 +8,10 @@
  * addressed to a ROOM rather than to every tab (`inbox_changed`, sent only to
  * a socket whose `watch` of that seat was allowed, and `artifact_changed`,
  * `artifact_data` and `artifact_presence`, sent only to the sockets whose
- * `artifact_join` of that artifact was allowed), the two answers to a query,
- * and the pong.
+ * `artifact_join` of that artifact was allowed), the company's own chat
+ * (`chat_*`, each frame sent only to the viewers its room admits, a person's
+ * read state only to their own sockets), the two answers to a query, and the
+ * pong.
  *
  * EXACTLY THE ENGINE'S `stream.Kind` CONSTANTS, held both ways by
  * `internal/api/stream`'s push-kind gate. A kind the engine sends that this
@@ -34,6 +36,14 @@ export type PushKind =
   | "artifact_changed"
   | "artifact_data"
   | "artifact_presence"
+  | "chat_posted"
+  | "chat_edited"
+  | "chat_deleted"
+  | "chat_reacted"
+  | "chat_room_changed"
+  | "chat_membership_changed"
+  | "chat_cursor_moved"
+  | "chat_presence"
   | "result"
   | "error"
   | "pong";
@@ -75,9 +85,9 @@ export interface InboxChange {
  * `TestTheDashboardMergesEveryVersionedField`.
  *
  * An `agents` push carries these only when their version moved since the last
- * push for the same call — they move once a round or once a tool call, while
- * the row is pushed five times a second as a round streams — and names every
- * version always. The store keeps the copy it holds of a field the push left
+ * push for the same call — they move once a round, once a tool call or once a
+ * CLI run, while the row is pushed five times a second as a round streams —
+ * and names every version always. The store keeps the copy it holds of a field the push left
  * out, and asks for the call whole (`live_call`) when a push names a version
  * newer than the one it holds: the push that moved it was dropped. A field
  * named here that the engine does not version is one a push never leaves out
@@ -90,6 +100,7 @@ export const LIVE_CALL_DETAIL = {
   narration: ["round_narration"],
   executions: ["tool_executions"],
   rounds: ["rounds"],
+  invocations: ["invocations"],
 } as const;
 
 /**
@@ -121,6 +132,21 @@ export const MAX_EVENTS = 400;
 export const QUERY_TIMEOUT_MS = 10_000;
 
 /**
+ * How many queries one socket runs at once.
+ *
+ * EXACTLY THE ENGINE'S OWN (`stream.MaxInFlightQueries`: four, the size of
+ * the node's reader pool), held there by `internal/api/stream`'s
+ * `TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns`. Past it the engine stops
+ * reading the socket until a query finishes, so a burst a screen asks of its
+ * own (Chatlet's link previews, one `chat_unfurls` per message in a
+ * transcript and per link in a room's Shared list, `lib/wave.ts`) is bounded
+ * to one wave of these: the reads around it then wait behind one read rather
+ * than behind several, which is the delay a bound past the socket's would
+ * bring back.
+ */
+export const MAX_IN_FLIGHT_QUERIES = 4;
+
+/**
  * The longest text `colleague{q}` resolves, in UTF-8 bytes.
  *
  * EXACTLY THE ENGINE'S OWN (`queries.ColleagueQueryMax`), held there by
@@ -131,8 +157,9 @@ export const QUERY_TIMEOUT_MS = 10_000;
 export const COLLEAGUE_QUERY_MAX = 200;
 
 /**
- * The longest phrase the engine's two ranked searches take — `work_search`,
- * `knowledge` and the `answer_knowledge` question — in UTF-8 bytes.
+ * The longest phrase the engine's ranked searches take — `work_search`,
+ * `knowledge`, `chat_search` and the `answer_knowledge` question — in UTF-8
+ * bytes.
  *
  * EXACTLY THE ENGINE'S OWN (`knowledge.MaxQueryBytes`), held there by
  * `internal/api/queries`'s search gate: the engine refuses a longer phrase as
@@ -172,17 +199,3 @@ export type SeatActivity = "working" | "needs" | "stopped" | "idle";
  * same gate.
  */
 export type StoppedReason = "paused" | "unplaced" | "budget" | "provider";
-
-/**
- * The tool an executor hands work to its workers through, and the argument
- * that lists the tasks it hands them.
- *
- * A seat whose running call — `live_call.running_call`, the one call in flight
- * — is this tool is running that many workers, which is what the state line
- * says ("3 workers on ENG-405") instead of the phase. EXACTLY THE ENGINE'S
- * `subagent.ToolName` and the `tasks` its schema requires, held by
- * `internal/agent/subagent`'s gate: a rename there would otherwise leave every
- * fan-out drawn as an ordinary executor with nothing to say it moved.
- */
-export const DELEGATE_TOOL = "delegate";
-export const DELEGATE_TASKS = "tasks";

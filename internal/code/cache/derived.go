@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE DERIVED FILES (ADR-0056). A node-local derived file is DECLARED here,
+// THE DERIVED FILES (ADR-0079). A node-local derived file is DECLARED here,
 // lives inside its incarnation, and the cache's sweep, Verify, check, scrub,
 // budget, plan and writers gate read the declaration — a derived file is added
 // by adding a declaration, never beside them.
@@ -1036,7 +1037,7 @@ func (d Derived) Validate() error {
 	}
 	for _, in := range d.Inputs {
 		if !in.Valid() {
-			return bad("Inputs", "holds %q, which is none of %v", in, Inputs)
+			return bad("Inputs", "holds %q, which is none of %s", in, words.Or(Inputs))
 		}
 	}
 	if len(d.Writes) == 0 {
@@ -1064,9 +1065,9 @@ func (d Derived) Validate() error {
 		case err != nil:
 			return err
 		case !w.Step.Valid():
-			return bad(field+".Step", "is %q, none of %v", w.Step, Steps)
+			return bad(field+".Step", "is %q, none of %s", w.Step, words.Or(Steps))
 		case !w.Trigger.Valid():
-			return bad(field+".Trigger", "is %q, none of %v", w.Trigger, Triggers)
+			return bad(field+".Trigger", "is %q, none of %s", w.Trigger, words.Or(Triggers))
 		case !writerFile(w.Writer.File):
 			return bad(field+".Writer.File", "is %q: a clean slash path of a .go file under internal/code/",
 				w.Writer.File)
@@ -1154,7 +1155,7 @@ func (d Derived) Validate() error {
 	}
 	switch {
 	case !d.Check.Valid():
-		return bad("Check", "is %q, none of %v", d.Check, Checks)
+		return bad("Check", "is %q, none of %s", d.Check, words.Or(Checks))
 	case d.gitReads() && d.Check == CheckEntryDigest:
 		// git's files carry git's own trailer, and the scrub is what holds
 		// them behind the serving: an entry's digest is read by the cache's
@@ -1166,12 +1167,12 @@ func (d Derived) Validate() error {
 		}
 	}
 	if !d.Freshness.Valid() {
-		return bad("Freshness", "is %q, none of %v", d.Freshness, Freshnesses)
+		return bad("Freshness", "is %q, none of %s", d.Freshness, words.Or(Freshnesses))
 	}
 	for _, e := range Events {
 		switch ch := d.On(e); {
 		case !ch.Valid():
-			return bad("On("+string(e)+")", "is %q, none of %v", ch, Changes)
+			return bad("On("+string(e)+")", "is %q, none of %s", ch, words.Or(Changes))
 		case ch == Prefix && !d.chained():
 			// A PREFIX IS A CUT OF THE INSTALLED CHAIN, which only the chain's
 			// own declarations hold: anything else has no prefix to keep.
@@ -1181,7 +1182,7 @@ func (d Derived) Validate() error {
 	}
 	switch {
 	case !d.Seed.Valid():
-		return bad("Seed", "is %q, none of %v", d.Seed, SeedRules)
+		return bad("Seed", "is %q, none of %s", d.Seed, words.Or(SeedRules))
 	case d.Seed == SeedMove && !d.tree():
 		return bad("Seed", "is %q, which moves the directory a declaration owns whole, and this one owns none",
 			d.Seed)
@@ -1201,7 +1202,7 @@ func (d Derived) Validate() error {
 func (w Write) validateGit(field string, bad func(field, format string, args ...any) error) error {
 	switch {
 	case !w.Lane.Valid():
-		return bad(field+".Lane", "is %q, none of %v", w.Lane, gitproc.Classes)
+		return bad(field+".Lane", "is %q, none of %s", w.Lane, words.Or(gitproc.Classes))
 	case w.Deadline == nil:
 		return bad(field+".Deadline", "is nil: say how long its process may run")
 	case w.BytesPerObject <= 0:
@@ -1236,7 +1237,7 @@ func (w Write) validateInProcess(field string, bad func(field, format string, ar
 		return bad(field+".BaseBytes", "is %d, and no admission charges an in-process write: its Charge "+
 			"says what it holds", w.BaseBytes)
 	case len(w.Args) != 0:
-		return bad(field+".Args", "is %q, and an in-process write hands git nothing", w.Args)
+		return bad(field+".Args", "is %s, and an in-process write hands git nothing", words.And(w.Args))
 	case strings.TrimSpace(w.Charge) == "":
 		return bad(field+".Charge", "is empty: say, in a sentence, what the write holds while it runs")
 	}

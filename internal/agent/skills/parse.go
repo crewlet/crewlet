@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The authoring format: YAML frontmatter, then a markdown body.
@@ -109,8 +110,8 @@ func parsePhases(names []string) ([]prompts.Phase, error) {
 	for _, name := range names {
 		phase := prompts.Phase(strings.ToLower(strings.TrimSpace(name)))
 		if !slices.Contains(known, phase) {
-			return nil, fmt.Errorf("skills: unknown phase %q (want one of %v)",
-				name, known)
+			return nil, fmt.Errorf("skills: unknown phase %q (want one of %s)",
+				name, words.Or(known))
 		}
 		if !slices.Contains(out, phase) {
 			out = append(out, phase)

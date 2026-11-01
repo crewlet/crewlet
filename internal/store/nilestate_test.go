@@ -31,14 +31,14 @@ import (
 //	panic: runtime error: invalid memory address or nil pointer dereference
 //	[signal SIGSEGV: segmentation violation code=0x1 addr=0x0]
 //	store.(*DB).Read(0x0, …)                      store/pinned.go:167
-//	tracker.Evictions(…, 0x0, …)                  tracker/evictions.go:66
+//	worklet.Evictions(…, 0x0, …)                  worklet/evictions.go:66
 //	engine.(*retention).tombstones(…)             engine/retention.go:591
 //	engine.(*retention).tick(…)                   engine/retention.go:267
 //	created by engine.(*Engine).startRetention
 //
 // `internal/engine`'s caller already switched on [store.ErrNoEstate] with a
 // comment explaining that a tick in flight reaches a closing estate;
-// `internal/tracker`'s already documented that it goes through the store
+// `internal/worklet`'s already documented that it goes through the store
 // handle rather than a `*sql.DB` precisely so it would get that error. Both
 // were right. The guard was in [DB.txOpts] — one frame too deep — and
 // `pooled(d.busy)` in [DB.Read] and [DB.Tx] is an ARGUMENT, evaluated before
@@ -124,6 +124,16 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		"SetUsageWatermark": func(t *testing.T) {
 			wantErrNoEstate(t, d.SetUsageWatermark(ctx, time.Now()))
 		},
+		"UsageRepublished": func(t *testing.T) {
+			_, ok, err := d.UsageRepublished(ctx)
+			wantErrNoEstate(t, err)
+			if ok {
+				t.Error("a handle that is not open answered the generations it last republished under")
+			}
+		},
+		"SetUsageRepublished": func(t *testing.T) {
+			wantErrNoEstate(t, d.SetUsageRepublished(ctx, "node-a@1"))
+		},
 		"UsageDayWindow": func(t *testing.T) {
 			_, ok, err := d.UsageDayWindow(ctx, "2026-09-23")
 			wantErrNoEstate(t, err)
@@ -164,6 +174,13 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		"ReplicatedFile": func(t *testing.T) {
 			if got := d.ReplicatedFile(); got != "" {
 				t.Errorf("ReplicatedFile() = %q, want no file", got)
+			}
+		},
+		// False is "keeps what is written here", which a handle that never
+		// opened a file cannot contradict: nothing was discarded either.
+		"Scratch": func(t *testing.T) {
+			if d.Scratch() {
+				t.Error("Scratch() = true on a handle that is not open, want false")
 			}
 		},
 		"EmbeddingDim": func(t *testing.T) {
@@ -237,7 +254,7 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		//
 		// What is not open is the REPLICATED ESTATE, and it is reached through
 		// a [store.ReplicatedHandle] — whose own roster is the next test — at
-		// every site across internal/search, internal/tracker and
+		// every site across internal/search, internal/worklet and
 		// internal/engine that once took a nil peer and segfaulted.
 		"Configs": func(t *testing.T) { _ = d.Configs() },
 		"Events":  func(t *testing.T) { _ = d.Events() },

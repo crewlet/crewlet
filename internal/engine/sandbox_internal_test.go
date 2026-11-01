@@ -91,15 +91,15 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 	return nil
 }
 
-// runOn is the coding run seat's code work resolves to under runner, over the
-// given seat environment, failing the test on a refusal.
-func runOn(t *testing.T, c *Company, seat *org.Role, runner string, seatEnv map[string]string) codingRun {
+// runOn is the coding run seat's executor launches with on the head of its
+// chain, over the given seat environment.
+func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) codingRun {
 	t.Helper()
-	run, err := newCodingRun(c, seat, phase.Sandbox, runner, seatEnv)
+	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
-		t.Fatalf("%s's code work under %s was refused: %v", seat.Name, runner, err)
+		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return run
+	return newCodingRun(member.Provider.(*cliagent.Provider), seatEnv)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
@@ -120,6 +120,7 @@ func TestAnAPIKeyEntrysBoxCarriesItsResolvedKey(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     claude:
       model: ${LLM_MODEL}
@@ -129,11 +130,13 @@ roles:
     handle: eng
     llm: claude
 `)
-	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil)
+	run := runOn(t, c, seatNamed(t, c, "Engineer"), nil)
 	if run.model != "claude-sonnet-5" {
 		t.Errorf("the box's model = %q, want the resolved model", run.model)
 	}
-	if want := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-entry"}; !maps.Equal(run.env, want) {
+	// TZ rides with it: the zone the engine reads the run's limit reset in.
+	want := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-entry", "TZ": run.env["TZ"]}
+	if run.env["TZ"] == "" || !maps.Equal(run.env, want) {
 		t.Errorf("the run environment = %v, want exactly %v", run.env, want)
 	}
 }
@@ -152,6 +155,7 @@ func TestASeatsOwnClaudeCodeSignInKeepsTheEntrysOut(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     claude:
       model: claude-sonnet-5
@@ -168,7 +172,7 @@ roles:
 		{"ANTHROPIC_API_KEY": "sk-ant-seat"},
 		{"CLAUDE_CODE_USE_BEDROCK": "1"},
 	} {
-		run := runOn(t, c, seat, codingagent.ClaudeCodeName,
+		run := runOn(t, c, seat,
 			e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: own}, nil).env)
 		for name, value := range own {
 			if run.env[name] != value {
@@ -182,45 +186,18 @@ roles:
 
 	// A seat that brings no sign-in still gets the entry's, or this would
 	// just be an entry whose key never travels.
-	run := runOn(t, c, seat, codingagent.ClaudeCodeName,
+	run := runOn(t, c, seat,
 		e.runEnvironment(t.Context(), nil, seat, &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}, nil).env)
 	if run.env["ANTHROPIC_API_KEY"] != "sk-ant-company" || run.env["GITHUB_TOKEN"] != "ghp_x" {
 		t.Errorf("a seat with no sign-in of its own: run environment %v", run.env)
 	}
 }
 
-// llm_sandbox falls back to `llm`, which IS the seat's own model: the turn's
-// work happens in one conversation, so there is no separate executor key to
-// inherit — sandboxed work is that same work, done somewhere else.
-func TestTheSandboxModelFallsBackToTheSeatsOwn(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
-	const doc = `
-name: Acme
-providers:
-  llm:
-    big: {model: opus}
-    coder: {model: sonnet}
-roles:
-  - name: Engineer
-    handle: eng
-    llm: big
-`
-	c := companyFor(t, doc)
-	if got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).model; got != "opus" {
-		t.Fatalf("the sandbox model = %q, want the seat's own model", got)
-	}
-	// And its own key still wins, or the fallback would be the only path.
-	c = companyFor(t, doc+"    llm_sandbox: coder\n")
-	if got := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).model; got != "sonnet" {
-		t.Fatalf("the sandbox model = %q, want llm_sandbox's own", got)
-	}
-}
-
 // AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
 //
 // The run used to be handed a FAMILY instead — the profile's vendor — from
-// which OpenCode rebuilt `anthropic/<model>`. So an agent-mode OpenCode entry
-// ran its box on a model its text calls never named, and no value of `model`
+// which OpenCode rebuilt `anthropic/<model>`. So an OpenCode executor ran its
+// box on a model its text calls never named, and no value of `model`
 // worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
@@ -235,17 +212,13 @@ providers:
     oc:
       agent: opencode
       model: ${OC_MODEL}
-      mode: agent
 roles:
   - name: Engineer
     handle: eng
     llm: oc
 `)
 	seat := seatNamed(t, c, "Engineer")
-	run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
-	if err != nil {
-		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
-	}
+	run := runOn(t, c, seat, nil)
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatal(err)
@@ -266,8 +239,11 @@ roles:
 }
 
 // A LOGIN OPENCODE KEEPS IN ITS OWN DATABASE FOLLOWS A RUN INTO A LOCAL BOX: the
-// entry's exported login, mapped where the runner imports it from — and an
-// entry nobody has signed in maps nothing, rather than a path that is not there.
+// entry's exported login, mapped where the runner imports it from — mapped
+// whether or not anybody has signed the entry in yet, because the box reads
+// the login as it stands when it is seeded and is given only what it holds
+// then. A map of what was there when the run was resolved named a login the
+// shared directory may have moved past by the time the box was seeded.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c := companyFor(t, `
@@ -278,86 +254,31 @@ providers:
     oc:
       agent: opencode
       model: anthropic/claude-sonnet-5
-      mode: agent
 roles:
   - name: Engineer
     handle: eng
     llm: oc
 `)
 	seat := seatNamed(t, c, "Engineer")
-	run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(run.files) != 0 {
-		t.Errorf("an entry nobody signed in mapped %v into the box", run.files)
-	}
-
 	member, err := c.Models.Head(seat, phase.Execute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
 	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
-	if err := os.MkdirAll(shared, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(doc, []byte(`[{"id":"cred_1"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run, err = newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := run.files[codingagent.CredentialDocument]; got != doc {
-		t.Errorf("the box is seeded with %q at %s, want the shared login %q (files %v)",
-			got, codingagent.CredentialDocument, doc, run.files)
-	}
-}
-
-// A RUNNER NEVER READS ANOTHER CLI'S ENTRY.
-//
-// A run_sandbox launch takes its runner from role.sandbox.coding_agent (Claude
-// Code when nothing names one) and its model from llm_sandbox independently,
-// so an OpenCode text seat that enabled a sandbox handed Claude Code
-// `--model openrouter/…`, and a Claude Code entry under the OpenCode runner
-// became `anthropic/sonnet` with a login OpenCode never reads. Both are
-// refused before a box exists, naming the fix.
-func TestACodingRunOnAnotherCLIsEntryIsRefused(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
-	c := companyFor(t, `
-name: Acme
-providers:
-  llm:
-    oc: {agent: opencode, model: anthropic/claude-sonnet-5}
-    cc: {agent: claude-code, model: sonnet}
-roles:
-  - name: Writer
-    handle: writer
-    llm: oc
-  - name: Coder
-    handle: coder
-    llm: cc
-`)
-	for _, tc := range []struct {
-		seat, runner, cli string
-	}{
-		{"Writer", codingagent.ClaudeCodeName, "opencode"},
-		{"Coder", codingagent.OpenCodeName, "claude-code"},
-	} {
-		seat := seatNamed(t, c, tc.seat)
-		_, err := newCodingRun(c, seat, phase.Sandbox, tc.runner, nil)
-		var modelErr *SandboxModelError
-		if !errors.As(err, &modelErr) {
-			t.Fatalf("%s under %s: err = %v (%T), want *SandboxModelError", tc.seat, tc.runner, err, err)
+	for _, signedIn := range []bool{false, true} {
+		if signedIn {
+			if err := os.MkdirAll(shared, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(doc, []byte(`[{"id":"cred_1"}]`), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if !strings.Contains(err.Error(), "role.sandbox.coding_agent: "+tc.cli) {
-			t.Errorf("%s: the refusal does not offer the entry's own runner:\n%v", tc.seat, err)
-		}
-		// And the entry's own runner is let through, or this would just
-		// refuse every entry.
-		if _, err := newCodingRun(c, seat, phase.Sandbox, tc.cli, nil); err != nil {
-			t.Errorf("%s under its own CLI's runner was refused: %v", tc.seat, err)
+		run := runOn(t, c, seat, nil)
+		if got := run.files[codingagent.CredentialDocument]; got != doc || len(run.files) != 1 {
+			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
+				"and nothing else (files %v)", signedIn, got, codingagent.CredentialDocument, doc, run.files)
 		}
 	}
 }
@@ -382,6 +303,7 @@ func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       agent: claude-code
@@ -391,7 +313,7 @@ roles:
     handle: eng
     llm: subscription
 `)
-	run := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil)
+	run := runOn(t, c, seatNamed(t, c, "Engineer"), nil)
 	files, env := run.files, run.env
 	host, mapped := files[".claude/.credentials.json"]
 	if !mapped {
@@ -405,13 +327,19 @@ roles:
 	}
 }
 
-// Seeding files that do not exist would fail inside the run with a puzzling
-// error instead of the CLI's plain "not authenticated".
-func TestNoLoginOffersNoCredentialFiles(t *testing.T) {
+// A BOX IS OFFERED EVERY FILE OF THE LOGIN, signed in or not: the map names
+// where the login is kept, and the box is seeded with whatever the login holds
+// when it is seeded — nothing at all for an entry nobody signed in, so the CLI
+// inside says its own plain "not authenticated" rather than failing on a file
+// that is not there. A map of only the files present when the run was
+// resolved named a login the shared directory may have moved past by the
+// time the box was seeded, and a box given half of a newer sign-in.
+func TestEveryLoginFileIsOfferedWhetherOrNotItIsHeld(t *testing.T) {
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       agent: claude-code
@@ -421,9 +349,15 @@ roles:
     handle: eng
     llm: subscription
 `)
-	files := runOn(t, c, seatNamed(t, c, "Engineer"), codingagent.ClaudeCodeName, nil).files
-	if len(files) != 0 {
-		t.Errorf("files that do not exist were offered to the box: %v", files)
+	seat := seatNamed(t, c, "Engineer")
+	files := runOn(t, c, seat, nil).files
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	if want := filepath.Join(shared, ".credentials.json"); files[".claude/.credentials.json"] != want || len(files) != 1 {
+		t.Errorf("an entry nobody signed in offered %v, want its one login file at %s", files, want)
 	}
 }
 
@@ -463,15 +397,6 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // NOT PARALLEL: it puts a stub container runtime first on PATH, and t.Setenv
 // refuses a parallel test.
 func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
-	// EXACTLY ONE CELL IS EXEMPT, and it is exempt because it is not a
-	// backend: `self` is the executor's own agent-mode run, so nothing
-	// builds a provider for it. Asserted rather than assumed, so a fifth
-	// cell added tomorrow cannot quietly join the exemption.
-	for _, p := range config.Placements {
-		if p.NeedsBackend() != (p != config.PlacementSelf) {
-			t.Fatalf("%q disagrees with itself about needing a backend", p)
-		}
-	}
 	// A STUB `docker`, FIRST ON PATH. Building the `container` cell looks
 	// its runtime up there ([sandbox.ResolveContainerRuntime]) — on
 	// purpose, so a host that cannot run the cell is told when the config
@@ -483,7 +408,7 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	// those machines. The stub is only found, never run: building a
 	// provider starts no container.
 	stubVendorCLI(t, "docker")
-	for _, placement := range config.BackendPlacements() {
+	for _, placement := range config.Placements {
 		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
 			// API authenticates every call, so a provider built without
@@ -512,8 +437,8 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			continue
 		}
 		if provider == nil {
-			t.Errorf("run_in %q built no provider and no error, so a "+
-				"sandbox-enabled seat plans around a box it never gets", placement)
+			t.Errorf("run_in %q built no provider and no error, so an "+
+				"executor placed there plans around a box it never gets", placement)
 		}
 	}
 }
@@ -548,7 +473,7 @@ func TestTheRuntimesDeclaredEnvironmentIsResolvedAtTheEdge(t *testing.T) {
 // A CATALOGUE WITH NOTHING IN IT IS NOT A SANDBOX, and the distinction is the
 // one an operator's half-finished edit lands on: `providers.sandbox: {}`
 // parses, and if it reported itself enabled the engine would build a manager
-// with no backends and offer run_sandbox to every gated seat.
+// with no backends and launch every seat's executor into nothing.
 func TestAnEmptyCatalogueIsNotEnabled(t *testing.T) {
 	t.Parallel()
 	if (&config.SandboxProvider{}).Enabled() {
@@ -564,7 +489,7 @@ func TestAnEmptyCatalogueIsNotEnabled(t *testing.T) {
 func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
-	for _, placement := range config.BackendPlacements() {
+	for _, placement := range config.Placements {
 		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)
@@ -601,6 +526,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	e := &Engine{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
@@ -762,6 +688,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    discardQueue{}, Pending: store, Manager: manager, Resume: resume,
 		Account: accountant(fleet, dayCap(orgCap), dayCap(seatCap)),
@@ -786,7 +713,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: json.RawMessage(
-		`{"pending_tool_name":"run_sandbox"}`)}); err != nil || !suspended {
+		`{"version":4,"iteration":1}`)}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})
@@ -908,52 +835,41 @@ func TestAnOverCapCodingRunIsChargedToTheFleetOnce(t *testing.T) {
 	}
 }
 
-// leftover is a seat's remaining allowance, or a counter that cannot be read.
-type leftover struct {
-	left int
-	err  error
-}
-
-func (l leftover) Remaining(context.Context) (int, error) { return l.left, l.err }
-
-// THE PRE-FLIGHT FLOOR, three-valued like every other budget read in this
-// engine. turn_engine.sandbox_min_budget_tokens was validated, schema'd and
-// documented and read by nothing, so a company that set it got a new revision
-// and no behaviour.
-func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
+// A NODE WITH NO COORDINATOR RETIRES BESIDE A RUN RECORD NOTHING CAN READ. The
+// listing it refuses on skips the record rather than failing, so a seat with
+// no readable run is retired and one with a readable run is still refused, and
+// the unreadable record is left exactly as it was for the documented repair:
+// nothing can deliver to it, and nothing deletes or rewrites what it could not
+// read.
+func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-
-	// Below the floor: refused, and the message says what to do instead —
-	// a coding run costs a box, a clone and a toolchain install before it
-	// produces a token.
-	err := sandboxHeadroom(ctx, leftover{left: 500}, 2000)
-	if err == nil {
-		t.Fatal("a seat with 500 tokens launched a run needing 2000")
+	swe, pm := uuid.New(), uuid.New()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: swe.String(), Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
 	}
-	for _, want := range []string{"500", "2000", "your own tools"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal is missing %q: %v", want, err)
-		}
+	garbled := []byte("{not json")
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", garbled); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
 	}
-
-	// A READ THAT FAILED is refused too: launching a box on an unknown
-	// budget is how a company discovers its ceiling by spending past it.
-	if err := sandboxHeadroom(ctx,
-		leftover{err: errors.New("the coordination store is unreachable")}, 2000); err == nil {
-		t.Error("a run launched on a budget nobody could read")
+	bare := &Engine{backends: &Backends{Fleet: fleet}}
+	// Refused over the READABLE run, and over it alone: a listing that failed
+	// on the unreadable record would refuse too, for the wrong reason.
+	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil ||
+		!strings.Contains(err.Error(), "still has 1 coding runs") {
+		t.Fatalf("the retirement of a seat with one readable run = %v, want it refused over "+
+			"that run", err)
 	}
-
-	// And the two states that legitimately pass, or the assertions above
-	// hold for a floor that refuses everything.
-	if err := sandboxHeadroom(ctx, leftover{left: 50_000}, 2000); err != nil {
-		t.Errorf("a seat with headroom was refused: %v", err)
+	if err := bare.retireSeatRuns(t.Context(), pm, "pm", "retirement:1", 3); err != nil {
+		t.Fatalf("a seat with no readable run was refused beside an unreadable record: %v", err)
 	}
-	if err := sandboxHeadroom(ctx, nil, 2000); err != nil {
-		t.Errorf("a company with no token budget was refused: %v", err)
-	}
-	if err := sandboxHeadroom(ctx, leftover{left: 0}, 0); err != nil {
-		t.Errorf("an unset floor refused a run: %v", err)
+	if record, found, err := fleet.SandboxRun(t.Context(), "t-garbled"); err != nil || !found ||
+		string(record.Value) != string(garbled) {
+		t.Fatalf("the unreadable record is %q (found %v, err %v), want it left as written",
+			record.Value, found, err)
 	}
 }
 
@@ -1000,6 +916,7 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    &publishRecorder{}, Pending: store, Manager: manager,
 		Resume: &resumer{engine: equipped},

@@ -100,6 +100,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, estate store.Repli
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: oneSeatDay{}, Log: pub, Estate: estate, NodeID: statelogtest.SuiteWriter,
 		Caught:      caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return time.UTC },
 		Now:         func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
 		FireHistory: fireHistory,
@@ -132,6 +133,14 @@ func (oneSeatDay) UsageWatermark(context.Context) (time.Time, bool, error) {
 }
 
 func (oneSeatDay) SetUsageWatermark(context.Context, time.Time) error { return nil }
+
+// UsageRepublished answers that the node never republished every day, and the
+// suite's publisher never sees the fleet's generations, so it starts no pass.
+func (oneSeatDay) UsageRepublished(context.Context) (string, bool, error) {
+	return "", false, nil
+}
+
+func (oneSeatDay) SetUsageRepublished(context.Context, string) error { return nil }
 
 // UsageDayWindow, UsageDayContaining and PinUsageDay record no cut: every day
 // is the company clock's own, which never moves here.

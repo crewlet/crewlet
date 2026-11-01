@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE MERGE GATE, JUDGED: whether a live change meets the gate of the branch
@@ -694,12 +695,12 @@ func (g gateJudge) approval() Precondition {
 		return Precondition{Kind: PreconditionApproval, State: PreconditionComputing, Detail: fmt.Sprintf(
 			"whether revision %d needs an approval waits for its facts against %s, which say whether every "+
 				"path it touches is %s, which %s's approvals_unless exempts", n, target,
-			listedOr(g.rules.ApprovalsUnless), target)}
+			words.Or(g.rules.ApprovalsUnless), target)}
 	}
 	if classed, ok := g.everyPathOf(g.rules.ApprovalsUnless); ok {
 		return Precondition{Kind: PreconditionApproval, State: PreconditionMet, Detail: fmt.Sprintf(
 			"revision %d needs no approval: every path it touches is %s, which %s's approvals_unless exempts", n,
-			listed(classed), target)}
+			words.And(classed), target)}
 	}
 	return p
 }
@@ -725,7 +726,7 @@ func (g gateJudge) humanApproval() Precondition {
 		p.Detail = fmt.Sprintf("revision %d touches none of %s's human paths", n, target)
 		if len(waived) > 0 {
 			p.Detail = fmt.Sprintf("revision %d touches %s only with changes of a class its unless waives", n,
-				listed(waived))
+				words.And(waived))
 		}
 		return p
 	}
@@ -733,7 +734,7 @@ func (g gateJudge) humanApproval() Precondition {
 		if a.Kind == PartyPerson {
 			p.State = PreconditionMet
 			p.Detail = fmt.Sprintf("revision %d touches %s, held to a person's approval, and %s's approval counts",
-				n, listed(held), a.named())
+				n, words.And(held), a.named())
 			return p
 		}
 	}
@@ -746,11 +747,11 @@ func (g gateJudge) humanApproval() Precondition {
 	if len(p.WaitsOn) == 0 {
 		p.WaitsOn = []Party{g.owner}
 		p.Detail = fmt.Sprintf("revision %d touches %s, which %s holds to a person's approval, and no person who "+
-			"may approve it is asked: its owner %s asks one", n, listed(held), target, g.owner.named())
+			"may approve it is asked: its owner %s asks one", n, words.And(held), target, g.owner.named())
 		return p
 	}
 	p.Detail = fmt.Sprintf("revision %d touches %s, which %s holds to a person's approval: it waits on %s", n,
-		listed(held), target, namedAll(p.WaitsOn))
+		words.And(held), target, namedAll(p.WaitsOn))
 	return p
 }
 
@@ -1080,23 +1081,11 @@ func maintainedBy(repo RepoRef, r Roster) string {
 
 // ownersNamed is path owners in a sentence: each by its kind and reference.
 func ownersNamed(owners []Owner) string {
-	words := make([]string, len(owners))
+	said := make([]words.Said, len(owners))
 	for i, o := range owners {
-		words[i] = string(o.Kind) + " " + o.Ref
+		said[i] = words.Said(string(o.Kind) + " " + o.Ref)
 	}
-	return listed(words)
-}
-
-// listedOr is classes in a sentence joined by "or".
-func listedOr(classes []ChangeClass) string {
-	words := make([]string, len(classes))
-	for i, c := range classes {
-		words[i] = string(c)
-	}
-	if len(words) < 2 {
-		return strings.Join(words, "")
-	}
-	return strings.Join(words[:len(words)-1], ", ") + " or " + words[len(words)-1]
+	return words.And(said)
 }
 
 // appendOnce is list with v appended where it holds no v yet.

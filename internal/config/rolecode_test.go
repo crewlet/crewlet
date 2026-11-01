@@ -8,30 +8,19 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/github"
 )
 
-// ONE TIER VOCABULARY, WRITTEN THREE TIMES, WHICH MUST NOT DRIFT.
+// ONE TIER VOCABULARY, WRITTEN TWICE, WHICH MUST NOT DRIFT.
 //
-// role.code.access is the one per-seat code tier every code host reads: the
-// GitHub App's permission set is the tier's, and the native code host caps a
-// seat's grant by it (internal/code's Tier, ADR-0058). config is the leaf
-// every integration package depends on, so it restates the vocabulary rather
-// than importing internal/github and inverting that; internal/code spells its
-// tiers as config's own constants, and is held here all the same, element by
-// element. The cost of restating is exactly this: a tier added on one side and
-// not the other would validate here and be read as read-only there, or be
-// refused here and be perfectly good there.
+// role.code.access is the tier the engine's own code host caps a seat's grant
+// by (internal/code's Tier, ADR-0081). config owns the vocabulary, since it is
+// where a person writes and the validator reads it, and internal/code spells
+// its tiers as config's constants; it is held here all the same, element by
+// element, because a tier added on one side and not the other would validate
+// here and be read as read-only there, or be refused here and be perfectly
+// good there. A GitHub App reads no tier: its access is its own permissions.
 func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 	t.Parallel()
-	if len(config.CodeAccessTiers) != len(github.Tiers) {
-		t.Fatalf("config knows %v, github knows %v", config.CodeAccessTiers, github.Tiers)
-	}
-	for i, tier := range config.CodeAccessTiers {
-		if string(github.Tiers[i]) != tier {
-			t.Errorf("tier %d: config says %q, github says %q", i, tier, github.Tiers[i])
-		}
-	}
 	if tiers := code.Tiers(); len(tiers) != len(config.CodeAccessTiers) {
 		t.Errorf("config knows %v, the native code host %v", config.CodeAccessTiers, tiers)
 	} else {
@@ -41,13 +30,10 @@ func TestRoleCodeAccessIsTheOneVocabulary(t *testing.T) {
 			}
 		}
 	}
-	if config.TierReadOnly != string(github.DefaultTier) {
-		t.Errorf("config defaults to %q, github to %q", config.TierReadOnly, github.DefaultTier)
-	}
 	var silent *config.RoleCode
-	if got := silent.AccessOrDefault(); got != string(github.DefaultTier) {
-		t.Errorf("a seat with no code block runs at %q, and github's default is %q",
-			got, github.DefaultTier)
+	if got := silent.AccessOrDefault(); got != config.TierReadOnly {
+		t.Errorf("a seat with no code block runs at %q, want the least tier %q",
+			got, config.TierReadOnly)
 	}
 	// The native host reads an unset tier as the default tier's cap.
 	if unset, def := code.Tier("").Cap(), code.Tier(silent.AccessOrDefault()).Cap(); unset != def {
@@ -118,7 +104,7 @@ func TestACodeAccessIsOneOfItsThreeTiers(t *testing.T) {
 			if !strings.Contains(p.Message, "is not an access tier") {
 				continue
 			}
-			if !strings.Contains(p.Message, "read_only, review, full_access") {
+			if !strings.Contains(p.Message, `"read_only", "review" or "full_access"`) {
 				t.Errorf("code.access %q: the refusal does not name the three tiers: %s", bad, p.Message)
 			}
 			if strings.Contains(p.Message, "hyphen") {
@@ -128,32 +114,15 @@ func TestACodeAccessIsOneOfItsThreeTiers(t *testing.T) {
 	}
 }
 
-// THE TIER LEFT THE GITHUB BLOCK, WITH NO ALIAS. No release ever shipped
-// `integrations.github.tier`, so a document still carrying it is refused by
-// the strict decoder at the key it wrote, rather than read as a second
-// spelling of role.code.access that a later edit would have to keep in step.
-func TestTheGitHubBlockHasNoTier(t *testing.T) {
-	t.Parallel()
-	const doc = "name: Acme\nroles:\n  - name: Dev\n    integrations:\n      github: {tier: review}\n"
-	_, err := config.ParseCompanyDocument([]byte(doc))
-	if !errors.Is(err, config.ErrUnknownField) {
-		t.Fatalf("a seat's integrations.github.tier parsed: %v", err)
-	}
-	if got, want := faultsOf(err), []found{{"roles[0].integrations.github.tier", 5, "unknown_field"}}; !reflect.DeepEqual(got, want) {
-		t.Errorf("refused at %+v, want %+v", got, want)
-	}
-}
-
 // A CODE TIER ON A HUMAN SEAT IS REFUSED AT `code`, AND ONLY ON ADMISSION. A
-// person acts on every code host as their own identity — their bound token
-// holds maintain on the native host, their own login acts on GitHub — so a
-// tier on their seat would cap nothing and read as a setting that does. A
+// person acts on the native code host as their own identity (their bound
+// token holds maintain there), so a tier on their seat would cap nothing and
+// read as a setting that does. A
 // written document is refused for it; a block that says nothing is not, and a
 // written read_only is.
 //
 // AN ADMISSION RULE, like a human seat's own GitHub App beside it, because
-// nothing running reads a tier off a human seat: GitHub's seat apps, the setup
-// roster and the native grant each skip one. So a revision being APPLIED that
+// nothing running reads a tier off a human seat: the native grant skips one. So a revision being APPLIED that
 // carries one runs, which is what lets a later build relax the rule — a tier
 // that caps a person is the plausible relaxation — without this build
 // refusing, mid rolling upgrade, a revision its newer peer admitted and
@@ -206,7 +175,7 @@ func TestACodeAccessOnAHumanSeatIsRefused(t *testing.T) {
 // WAS. The org model is what the native code host's grant reads a seat's tier
 // from, so a seat whose copy the chart dropped would be capped at read_only
 // on every repository whatever its document says. And silence stays silence:
-// each code host reads it as read_only through its own reading, so a default
+// the native host reads it as read_only through its own reading, so a default
 // written into the chart would be a second statement of that rule.
 func TestTheChartCarriesASeatsCodeAccessAsWritten(t *testing.T) {
 	t.Parallel()
@@ -221,27 +190,6 @@ func TestTheChartCarriesASeatsCodeAccessAsWritten(t *testing.T) {
 		if got := company.Roles[0].Seat().CodeAccess; got != want {
 			t.Errorf("a seat written %q carries code access %q into the chart, want %q",
 				block, got, want)
-		}
-	}
-}
-
-// A SEAT WITH AN APP HALF BUILT IS NOT HELD. Creating the app and installing
-// it are two acts by a person, and the second can be a day after the first,
-// so the engine must be able to tell the states apart rather than minting
-// against a record that cannot answer.
-func TestASeatIsHeldOnlyWithAnAppAnInstallationAndAKey(t *testing.T) {
-	t.Parallel()
-	full := config.RoleGitHub{AppID: 7, InstallationID: 9, PrivateKey: "${SEAT_PEM}"}
-	if !full.Held() {
-		t.Error("a seat with an app, an installation and a key is not held")
-	}
-	for name, block := range map[string]config.RoleGitHub{
-		"no installation yet": {AppID: 7, PrivateKey: "${SEAT_PEM}"},
-		"no key":              {AppID: 7, InstallationID: 9},
-		"nothing":             {},
-	} {
-		if block.Held() {
-			t.Errorf("%s reports held", name)
 		}
 	}
 }

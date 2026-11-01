@@ -116,11 +116,11 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 	}
 }
 
-// failingRuns is a run store that cannot be listed, and failingLeases a lease
+// unlistableRuns is a run store that cannot be listed, and failingLeases a lease
 // listing that cannot be read.
-type failingRuns struct{}
+type unlistableRuns struct{}
 
-func (failingRuns) ListRuns(context.Context) ([]sandbox.PendingRun, error) {
+func (unlistableRuns) ListRuns(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, errors.New("the coordination store refused the listing")
 }
 
@@ -163,7 +163,7 @@ func TestAnUnreadHoldsSourceIsAnError(t *testing.T) {
 		r    holdsReader
 		want string
 	}{
-		"a run store that cannot be listed": {holdsReader{runs: failingRuns{}, leases: listedLeases(holder),
+		"a run store that cannot be listed": {holdsReader{runs: unlistableRuns{}, leases: listedLeases(holder),
 			askEach: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "run store"},
 		"seat leases that cannot be read": {holdsReader{runs: listedRuns(nil), leases: failingLeases{},
 			askEach: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "seat leases"},

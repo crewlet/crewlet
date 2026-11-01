@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -27,9 +29,20 @@ import (
 //   - store-login stores the login FAKE_LOGIN_KEY names;
 //   - store-list prints the logins it holds;
 //   - store-usage <session> prints that session's usage report;
+//   - store-device-login plays a device-code sign-in ([fakeDeviceLogin]);
+//   - store-status plays a status command ([fakeStatus]);
 //   - store-file-login writes a login FILE, $HOME/.fake/creds.json, holding
 //     FAKE_LOGIN_KEY — a CLI that keeps its login in a file, for the cases
 //     about one;
+//   - store-two-file-login writes ONE LOGIN IN TWO FILES, $HOME/.fake/auth.json
+//     and $HOME/.fake/config.toml, each naming FAKE_LOGIN_KEY — kimi-code's
+//     and gemini-cli's shape, for the cases about a login that is a set;
+//   - store-token-login writes only $HOME/.fake/auth.json, naming
+//     FAKE_LOGIN_KEY — a sign-in of that two-file shape that renews its token
+//     and leaves the other file as it found it;
+//   - store-token-only-login writes $HOME/.fake/auth.json as store-token-login
+//     does and REMOVES $HOME/.fake/config.toml — a sign-in of that shape that
+//     renews its token and drops the other file;
 //   - anything else is a call: it answers with the key it holds, records the
 //     usage FAKE_SESSION_USAGE names under the session `--session` named, and
 //     then refreshes its login to FAKE_STORE_REFRESH, or drops every login on
@@ -43,9 +56,13 @@ import (
 // the file it names; FAKE_STORE_EXPORT_FAIL_KEY every one made while the
 // database holds a login with that key), quoting them on stderr too under
 // FAKE_STORE_EXPORT_QUOTE;
-// and FAKE_MIDRUN_VERB names a verb during which FAKE_MIDRUN_BODY is written
-// to FAKE_MIDRUN_PATH — another writer's login landing while this command is
-// running.
+// and FAKE_MIDRUN_VERB names a verb during which FAKE_MIDRUN_WRITES ([midrun])
+// is written, each file in path order — another writer's login landing while
+// this command is running, with the operator epoch it moved where it moved one
+// — after which the verb waits for the file FAKE_MIDRUN_AWAIT names to exist,
+// where it names one: another writer's hold the case stands up while this
+// command is running, a written file telling the case the command has started
+// and the awaited one telling the command the hold stands.
 func fakeStore() {
 	data := filepath.Join(os.Getenv("XDG_DATA_HOME"), "fake")
 	db := filepath.Join(data, "db.json")
@@ -79,7 +96,26 @@ func fakeStore() {
 		_ = os.MkdirAll(tmp, 0o700)
 	}
 	if v := os.Getenv("FAKE_MIDRUN_VERB"); v != "" && v == verb {
-		_ = os.WriteFile(os.Getenv("FAKE_MIDRUN_PATH"), []byte(os.Getenv("FAKE_MIDRUN_BODY")), 0o600)
+		var writes map[string]string
+		if err := json.Unmarshal([]byte(os.Getenv("FAKE_MIDRUN_WRITES")), &writes); err != nil {
+			fmt.Fprintf(os.Stderr, "FAKE_MIDRUN_WRITES is not a JSON object of paths: %v", err)
+			os.Exit(2)
+		}
+		for _, path := range slices.Sorted(maps.Keys(writes)) {
+			_ = os.WriteFile(path, []byte(writes[path]), 0o600)
+		}
+		if awaited := os.Getenv("FAKE_MIDRUN_AWAIT"); awaited != "" {
+			// Bounded, so a case that never lets it go fails on its own
+			// deadline rather than leaving a process behind it.
+			deadline := time.Now().Add(fakeAwaitBound)
+			for _, err := os.Stat(awaited); err != nil; _, err = os.Stat(awaited) {
+				if !time.Now().Before(deadline) {
+					fmt.Fprintf(os.Stderr, "FAKE_MIDRUN_AWAIT: %s never appeared", awaited)
+					os.Exit(2)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}
 	switch verb {
 	case "store-export":
@@ -145,6 +181,22 @@ func fakeStore() {
 		file := filepath.Join(os.Getenv("HOME"), ".fake", "creds.json")
 		_ = os.MkdirAll(filepath.Dir(file), 0o700)
 		_ = os.WriteFile(file, []byte(`{"token":"`+os.Getenv("FAKE_LOGIN_KEY")+`"}`), 0o600)
+	case "store-two-file-login":
+		dir := filepath.Join(os.Getenv("HOME"), ".fake")
+		_ = os.MkdirAll(dir, 0o700)
+		_ = os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"token":"`+os.Getenv("FAKE_LOGIN_KEY")+`"}`), 0o600)
+		_ = os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`provider = "`+os.Getenv("FAKE_LOGIN_KEY")+`"`), 0o600)
+	case "store-token-login", "store-token-only-login":
+		file := filepath.Join(os.Getenv("HOME"), ".fake", "auth.json")
+		_ = os.MkdirAll(filepath.Dir(file), 0o700)
+		_ = os.WriteFile(file, []byte(`{"token":"`+os.Getenv("FAKE_LOGIN_KEY")+`"}`), 0o600)
+		if verb == "store-token-only-login" {
+			_ = os.Remove(filepath.Join(filepath.Dir(file), "config.toml"))
+		}
+	case "store-device-login":
+		fakeDeviceLogin()
+	case "store-status":
+		fakeStatus()
 	case "store-list":
 		for _, c := range read() {
 			fmt.Println(c["id"])
@@ -184,6 +236,11 @@ func fakeStore() {
 // fakeQuotedTail is how much of a document [fakeStore] quotes when it cannot
 // parse it.
 const fakeQuotedTail = 40
+
+// fakeAwaitBound is how long [fakeStore] waits for FAKE_MIDRUN_AWAIT's file: far
+// past the moment any case creates it, which is as soon as it has seen the
+// command start and taken a lock nobody else holds.
+const fakeAwaitBound = time.Minute
 
 // storeProvider builds a provider whose CLI is [fakeStore].
 func storeProvider(t *testing.T, env map[string]string, extra map[string]any) *Provider {
@@ -398,7 +455,7 @@ func TestALoginIsMadeInTheLoginHomeAndRemovedByLogout(t *testing.T) {
 	if err := p.Logout(t.Context(), &out, &errOut); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if p.ws.HasLogin() || readDocument(t, p) != "" {
+	if hasLogin(t, p.ws) || readDocument(t, p) != "" {
 		t.Error("the login survived a logout")
 	}
 }
@@ -462,7 +519,7 @@ func TestABundleCarriesTheDocument(t *testing.T) {
 	t.Parallel()
 	source := storeProvider(t, nil, nil)
 	writeDocument(t, source, `[{"id":"cred_1","key":"k-bundled"}]`)
-	blob, err := source.ExportBundle()
+	blob, err := source.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -618,7 +675,7 @@ func TestALogoutDuringACallIsNotUndoneByTheSeat(t *testing.T) {
 	}
 
 	// The operator logs out mid-call; the CLI refreshes both kinds.
-	for _, path := range ws.LoginFiles() {
+	for _, path := range loginOnDisk(t, ws) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -632,7 +689,18 @@ func TestALogoutDuringACallIsNotUndoneByTheSeat(t *testing.T) {
 	if err := checkout.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if got := ws.LoginFiles(); len(got) != 0 {
+	if got := loginOnDisk(t, ws); len(got) != 0 {
 		t.Errorf("the seat put the login back after a logout: %v", got)
 	}
+}
+
+// midrun is FAKE_MIDRUN_WRITES for writes, content by path: what [fakeStore]
+// writes during the verb FAKE_MIDRUN_VERB names.
+func midrun(t *testing.T, writes map[string]string) string {
+	t.Helper()
+	raw, err := json.Marshal(writes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

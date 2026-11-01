@@ -1,13 +1,15 @@
 // @vitest-environment node
 
 import { describe, expect, test } from "vitest";
+import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
 import { readCeiling } from "./budget.ts";
 import { CONFIG_WRITE_REASONS } from "./useWriteAccess.ts";
 import {
   ceilingSummary,
   ceilingText,
   changesFrom,
-  companyPatch,
+  documentPatch,
+  documentCeilings,
   refusalWords,
   seatWithCeilings,
 } from "./ceilings.ts";
@@ -58,8 +60,34 @@ describe("a ceiling as a field shows it", () => {
 
 describe("what a change writes", () => {
   test("the company's is a merge patch of only the windows changed, null removing one", () => {
-    expect(companyPatch({ day: 50_000_000 })).toEqual({ token_budget: { day: 50_000_000 } });
-    expect(companyPatch({ week: null })).toEqual({ token_budget: { week: null } });
+    expect(documentPatch({ kind: "company" }, { day: 50_000_000 })).toEqual({
+      token_budget: { day: 50_000_000 },
+    });
+    expect(documentPatch({ kind: "company" }, { week: null })).toEqual({
+      token_budget: { week: null },
+    });
+  });
+
+  // A NESTED KEY OF THE SAME DOCUMENT: a merge patch merges `assistant` key by
+  // key, so its model chain and its step cap survive a ceiling raised here.
+  test("each person's assistant ceiling is a merge patch one level down", () => {
+    expect(documentPatch({ kind: "assistant" }, { day: 200_000, week: null })).toEqual({
+      assistant: { token_budget: { day: 200_000, week: null } },
+    });
+    expect(
+      documentCeilings(
+        { kind: "assistant" },
+        { token_budget: { day: 1 }, assistant: { llm: ["p"], token_budget: { day: 9 } } },
+      ),
+    ).toEqual({ day: 9 });
+    expect(documentCeilings({ kind: "assistant" }, { token_budget: { day: 1 } })).toBeUndefined();
+    expect(documentCeilings({ kind: "company" }, { token_budget: { day: 1 } })).toEqual({ day: 1 });
+  });
+
+  test("the history names each person's assistant as whose ceiling changed", () => {
+    expect(ceilingSummary({ kind: "assistant" }, { day: 200_000 }, { day: 100_000 })).toBe(
+      "Raise Ask Crewlet's per-person daily token ceiling from 100k to 200k",
+    );
   });
 
   // THE SEAT AS READ, masks included — the engine restores a mask against the
@@ -117,11 +145,39 @@ describe("what the engine's answer means", () => {
         scope,
       ).reload,
     ).toBe(true);
-    expect(refusalWords({ kind: "unreachable", detail: "" }, scope)).toEqual({
+    expect(
+      refusalWords({ kind: "unsettled", answered: false, detail: "", status: 0 }, scope),
+    ).toEqual({
       message:
-        "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
+        "The engine did not answer. The change may or may not have landed. Reload before trying again.",
       reload: true,
     });
+    // AN ENGINE THAT ANSWERED AND FAILED is said as one, with its own words.
+    expect(
+      refusalWords(
+        { kind: "unsettled", answered: true, detail: "the store could not commit", status: 500 },
+        scope,
+      ),
+    ).toEqual({
+      message:
+        "The engine failed: the store could not commit. The change may or may not have landed. Reload before trying again.",
+      reload: true,
+    });
+    // A PROXY'S 403 OR 413 IS NO REFUSAL OF THE ENGINE'S, however it is
+    // spelled: unmarked, it says nothing about the change, and never asks for
+    // a grant.
+    for (const status of [403, 413]) {
+      const read = classifyConfigRefusal({
+        status,
+        body: { error: "unauthorized", detail: "blocked by policy" },
+        fromEngine: false,
+      });
+      expect(refusalWords(read, scope)).toEqual({
+        message:
+          "The engine did not answer. The change may or may not have landed. Reload before trying again.",
+        reload: true,
+      });
+    }
     // A REFUSAL ON AUTHORITY names the grant, never a token this browser
     // does not hold.
     expect(refusalWords({ kind: "guarded", code: "unauthorized" }, scope)).toEqual({

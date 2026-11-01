@@ -45,7 +45,7 @@ func installedSeat(t *testing.T, handle string, id int64) github.SeatApp {
 	t.Helper()
 	_, pem := testKey(t)
 	return github.SeatApp{
-		Handle: handle, Name: handle, Tier: github.TierReadOnly,
+		Handle: handle, Name: handle, Permissions: tierPerms("read_only", false),
 		AppID: id, Slug: handle, InstallationID: id, Key: pem,
 	}
 }
@@ -109,8 +109,8 @@ func TestALookupSkipsSeatsThatCannotRead(t *testing.T) {
 		Seats: []github.SeatApp{
 			// No app at all, then created and installed nowhere, then
 			// one that works.
-			{Handle: "fresh", Tier: github.TierReadOnly},
-			{Handle: "half", AppID: 41, Slug: "half", Tier: github.TierReadOnly},
+			{Handle: "fresh", Permissions: tierPerms("read_only", false)},
+			{Handle: "half", AppID: 41, Slug: "half", Permissions: tierPerms("read_only", false)},
 			installed,
 		},
 	}}
@@ -132,14 +132,14 @@ func TestALookupWithNoInstalledAppRefusesRatherThanAnsweringEmpty(t *testing.T) 
 	t.Parallel()
 	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
 		APIBase: "https://api.github.example", Org: "acme",
-		Seats: []github.SeatApp{{Handle: "fresh", Tier: github.TierReadOnly}},
+		Seats: []github.SeatApp{{Handle: "fresh", Permissions: tierPerms("read_only", false)}},
 	}}
 
 	people, err := lookup.Of(t.Context(), "acme", "api", "issue", 16)
 	if err == nil {
 		t.Fatalf("a company with no installed app answered %v", people)
 	}
-	if !strings.Contains(err.Error(), "no agent's app could read this thread") {
+	if !strings.Contains(err.Error(), "no agent's app could read this repository") {
 		t.Errorf("error = %v, and it does not say why nobody was looked up", err)
 	}
 }

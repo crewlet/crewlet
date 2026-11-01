@@ -10,12 +10,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { KPI_IDS, KPI_LABELS, Kpis, type KpiId } from "./Kpis.tsx";
-import { crewOf, rangeOf, DEFAULT_RANGE } from "./model.ts";
+import { crewOf, rangeOf, DEFAULT_RANGE, type Waiting } from "./model.ts";
+import { PARTIAL_FIGURE } from "./board/kit.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type WorkFlowAnswer } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -27,10 +28,11 @@ function pending<T>(): QueryResult<T> {
 /** An admin bound to a seat, with the whole state a screen reads. */
 const VIEWER: ViewerState = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -43,9 +45,15 @@ const VIEWER: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
-function draw(figures?: readonly KpiId[]) {
+function draw(
+  figures?: readonly KpiId[],
+  over: { waiting?: Waiting | null; flow?: QueryResult<WorkFlowAnswer> } = {},
+) {
   const store = new Store();
   const socket = new LiveSocket(store);
   render(
@@ -56,9 +64,9 @@ function draw(figures?: readonly KpiId[]) {
           range={rangeOf(DEFAULT_RANGE)}
           crew={crewOf([])}
           viewer={VIEWER}
-          waiting={null}
+          waiting={over.waiting ?? null}
           waitingError={null}
-          flow={pending()}
+          flow={over.flow ?? pending()}
           spend={pending()}
           now={Date.parse("2026-09-22T09:00:00Z")}
         />
@@ -97,4 +105,54 @@ test("a figure on its own is named by that figure and fills its row", () => {
   const row = screen.getByRole("region", { name: KPI_LABELS.waiting });
   expect(row.getAttribute("data-count")).toBe("1");
   expect(labels()).toHaveLength(1);
+});
+
+/** A flow answer over a quiet fortnight, saying whether it accounted for everything. */
+function flowAnswer(complete: boolean): QueryResult<WorkFlowAnswer> {
+  const day = (i: number) => new Date(Date.parse("2026-09-09T00:00:00Z") + i * 86_400_000);
+  const points = Array.from({ length: 14 }, (_, i) => ({
+    window: day(i).toISOString().slice(0, 10),
+    start: day(i).toISOString(),
+    end: day(i + 1).toISOString(),
+    not_started: 0,
+    active: 0,
+    done: 0,
+    closed: 0,
+    completed: 0,
+  }));
+  return {
+    data: {
+      bucket: "day",
+      points,
+      now: { not_started: 0, active: 0, blocked: 0, overdue: 0 },
+      blocked_history: false,
+      complete,
+    },
+    loading: false,
+    error: null,
+    refusal: null,
+    refetch: () => {},
+  };
+}
+
+// A FIGURE OVER AN ANSWER THAT COULD NOT ACCOUNT FOR EVERYTHING says so on
+// its second line.
+test.each([
+  ["waiting", { waiting: { count: 0, floor: false, oldestAt: null, partial: true } }],
+  ["progress", { flow: flowAnswer(false) }],
+  ["completed", { flow: flowAnswer(false) }],
+] as const)("the %s figure says it may be incomplete", (figure, over) => {
+  draw([figure], over);
+  const tile = document.querySelector(".home-kpis > .crewlet-statcard")!;
+  expect(tile.textContent).toContain(PARTIAL_FIGURE);
+});
+
+test("a figure over a whole answer makes its claim", () => {
+  draw(["waiting"], { waiting: { count: 0, floor: false, oldestAt: null, partial: false } });
+  const tile = document.querySelector(".home-kpis > .crewlet-statcard")!;
+  expect(tile.querySelector(".crewlet-statcard__number")?.textContent).toBe("0");
+  expect(tile.textContent).not.toContain(PARTIAL_FIGURE);
+  cleanup();
+  draw(["progress"], { flow: flowAnswer(true) });
+  expect(document.body.textContent).not.toContain(PARTIAL_FIGURE);
 });

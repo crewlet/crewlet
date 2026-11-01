@@ -14,9 +14,11 @@ import (
 
 // THE FLEET SINGLETONS, and the one gate they all pass through.
 //
-// A duty here is company-wide work exactly one node does at a time: the
-// scheduler tick, the retention sweep, the sandbox waiter's poll, the two
-// learning passes. The `worker:{duty}` lease is what makes it one node.
+// A duty here is company-wide work exactly one node does at a time — the
+// scheduler tick, the maintenance sweep, the state logs' trim and every other
+// caller of [Engine.workerDuty], all of which architecture.md's and
+// seat-ownership.md's duty tables name (dutydocs_internal_test.go holds them
+// to the callers). The `worker:{duty}` lease is what makes it one node.
 //
 // The lease alone is not the whole answer, because it decides WHICH node
 // among the ones asking — and `node.roles` is how an operator says which

@@ -37,8 +37,8 @@
 -- kept". What `stream.tracker_retention` trims is the LOG'S REPLAY WINDOW,
 -- which is a different thing from this SQL table — the table outlives the trim
 -- and travels in every donated snapshot. Every history surface a person or a
--- seat reaches — `task_activity`, `GET /work/activity`, the item page's
--- History and Woke tabs, the admin audit — reads `tracker_history` and has
+-- seat reaches (`task_activity`, `GET /worklet/activity`, the item page's
+-- History and Woke tabs, the admin audit) reads `tracker_history` and has
 -- never read these spans.
 --
 -- # What the recompute was also doing, and still does
@@ -59,7 +59,7 @@
 --
 -- The rows are a pure function of `tracker_history`, so nothing has to be
 -- preserved for that day. But the rebuild is a GO job rather than a migration:
--- a span's `grp` comes from the status table in `internal/tracker/policy.go`,
+-- a span's `grp` comes from the status table in `internal/worklet/policy.go`,
 -- so SQL could only reach it by hard-coding a CASE that drifts from the Go —
 -- and a DML backfill against the replicated estate is what the applier's
 -- exclusivity rule forbids. The way back is the way `tracker_measure_spans`

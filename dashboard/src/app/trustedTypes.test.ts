@@ -85,6 +85,25 @@ describe("the dashboard under Trusted Types", () => {
     ).toEqual([]);
   });
 
+  // THE ASSISTANT DRAWS A MODEL'S WORDS, the one text in the product written
+  // by something that may have read anything. Every module of its panel and
+  // its transport is read by the rule above, and this says so by name, so a
+  // move that took the panel out of the walk is a failure rather than a pass.
+  test("the assistant's panel, its prose and its transport are among the modules read", () => {
+    const paths = new Set(modules().map((m) => m.path));
+    for (const path of [
+      "app/assistant/chunk/Drawer.tsx",
+      "app/assistant/chunk/Thread.tsx",
+      "app/assistant/chunk/blocks.tsx",
+      "lib/markdown.ts",
+      "protocol/assistant.ts",
+    ]) {
+      expect(paths.has(path), path).toBe(true);
+      const mod = modules().find((m) => m.path === path)!;
+      expect(sinksIn(mod.text, mod.lang), path).toEqual([]);
+    }
+  });
+
   test("the rule finds every kind of sink it names", () => {
     const sample = [
       "el.innerHTML = s;",

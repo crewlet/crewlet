@@ -2,9 +2,10 @@ package engine
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/decision"
 )
 
 // WHERE AN ASKER MAY PROMISE TO REPORT A DECISION is the chart's, read from the
@@ -18,6 +19,7 @@ func TestTheChannelDirectoryIsTheChartsSurfacesAndUnitChannels(t *testing.T) {
 	e.epoch.current.Store(companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: sonnet
@@ -39,15 +41,17 @@ units:
         handle: dev
         integrations:
           slack:
+            enabled: false
             bot_token: ${DEV_SLACK_BOT}
             signing_secret: ${DEV_SLACK_SIGNING}
           mattermost:
+            enabled: false
             bot_token: ${DEV_MM_BOT}
       - name: Ops
         handle: ops
 `))
 	directory := liveChannels{engine: e}
-	if got := directory.ChatSurfaces("dev"); !slices.Equal(got, []tracker.InformSurface{tracker.InformSlack}) {
+	if got := directory.ChatSurfaces("dev"); !slices.Equal(got, []decision.InformSurface{decision.InformSlack}) {
 		t.Errorf("dev can post on %v, want slack alone — Mattermost is switched "+
 			"off for the company, so dev's bot there is started by nothing", got)
 	}
@@ -62,5 +66,52 @@ units:
 	}
 	if got := (liveChannels{engine: &Engine{}}).ChatSurfaces("dev"); got != nil {
 		t.Errorf("a node with no company can post on %v", got)
+	}
+}
+
+// THE ENGINE'S OWN CHAT IS A SURFACE EVERY AGENT SEAT CAN POST ON, with no bot
+// to hold: on a company whose chat is Chatlet, a seat posts as itself, and the
+// inform it promises is discharged by its own chat tools. It was left out, so
+// every inform a Chatlet company's seat promised was refused as a surface
+// it could not post on. A person has no turn to hold open, and a company whose
+// chat is a vendor's has no Chatlet at all.
+func TestTheEnginesOwnChatIsEveryAgentSeatsSurface(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    gateway:
+      model: sonnet
+chat:
+  backend: CHAT
+units:
+  - name: Engineering
+    channel: engineering
+    roles:
+      - name: Dev
+        handle: dev
+      - name: Ana
+        handle: ana
+        kind: human
+`
+	chatlet := &Engine{}
+	chatlet.epoch.current.Store(companyFor(t, strings.Replace(doc, "CHAT", "chatlet", 1)))
+	directory := liveChannels{engine: chatlet}
+	if got := directory.ChatSurfaces("dev"); !slices.Equal(got,
+		[]decision.InformSurface{decision.InformChat}) {
+		t.Errorf("an agent seat of a Chatlet company can post on %v, want "+
+			"the engine's own chat", got)
+	}
+	if got := directory.ChatSurfaces("ana"); len(got) != 0 {
+		t.Errorf("a person can promise an inform on %v — a person has no turn "+
+			"to hold open until the post is made", got)
+	}
+
+	none := &Engine{}
+	none.epoch.current.Store(companyFor(t, strings.Replace(doc, "CHAT", "none", 1)))
+	if got := (liveChannels{engine: none}).ChatSurfaces("dev"); len(got) != 0 {
+		t.Errorf("a company with no chat surface offers %v", got)
 	}
 }

@@ -85,7 +85,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	appendFile(t, tierA, fmt.Sprintf("api:\n  external_url: %s\n", base))
 	var out, errs bytes.Buffer
 	err = runIAM(noEnviron, []string{"token", "-login", "jane.founder", "-label", "laptop",
-		"-grants", string(iam.GrantTracker), "-config", tierA, "-api", base},
+		"-grants", string(iam.GrantWorklet), "-config", tierA, "-api", base},
 		strings.NewReader(password+"\n"), &out, &errs)
 	if err != nil {
 		t.Fatalf("iam token -login against a real node: %v\n%s", err, errs.String())

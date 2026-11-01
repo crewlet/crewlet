@@ -53,10 +53,9 @@ func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
 	}).Text
 	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
 		"Engineer", "Acme")
-	// NOT "Available tools": that is the heading a text-mode prompt gives the
-	// JSON definitions of the tools the seat DOES hold, in the same
-	// conversation, and two sections under one heading saying different
-	// things is a model reading whichever it saw last.
+	// NOT "Available tools": the tools the seat holds reach its CLI as its
+	// MCP server's, and a section headed as though it listed them tells the
+	// model it may call what it first has to discover.
 	excludes(t, p, "## Available tools")
 	// Nothing to discover is no section at all, not a heading over nothing.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{Discoverable: " \n"}).Text,
@@ -183,32 +182,6 @@ func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 		"Goal: Ship quality code.", "Responsibilities: Write tests.")
 }
 
-// THE SANDBOX SECTION FOLLOWS THE TOOL, NOT THE ROLE'S GATE.
-//
-// It used to be rendered for every seat whose gate was enabled, which an
-// agent-mode executor's seat may be — and that seat is never offered
-// run_sandbox, so its coding CLI was taught a tool its bridge never lists,
-// every turn. The caller says whether the tool is offered; the gate alone
-// renders nothing.
-func TestExecutorPromptSandboxSectionIsGatedOnTheOfferedTool(t *testing.T) {
-	t.Parallel()
-	// Absent for the ~all seats that are not offered the tool, so it never
-	// bloats the common prompt.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
-
-	o := acme()
-	o.Role("eng").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
-	excludes(t, BuildExecutor(seatIn(o, "eng"), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
-
-	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{OffersSandbox: true}).Text
-	// The run is detached and the SAME turn resumes with the result, which
-	// is what stops the model ending the turn to "report later".
-	contains(t, p, "run_sandbox", "resumes", "SAME turn")
-	// And it no longer talks about planning the arc in a tools_needed list
-	// that does not exist.
-	excludes(t, p, "tools_needed")
-}
-
 // THE CODE GUIDANCE NEEDS THE CODE TOOLS: it is rendered for a seat that holds
 // every code tool its claims rest on — a company hosting code registers them
 // together — and for no other, so no prompt sends a seat to tools its surface
@@ -222,7 +195,7 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 	const heading = "## Reading the company's code"
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, heading, "code_*")
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"submit_work", "run_sandbox"}}).Text, heading)
+		AvailableTools: []string{"submit_work", "delegate"}}).Text, heading)
 
 	held := append([]string{"submit_work"}, CodeHistoryTools()...)
 	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held})
@@ -240,32 +213,6 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 		}
 		excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: some}).Text, heading)
 	}
-}
-
-// A BOX'S CLONE IS BLOBLESS, AND THE CODE GUIDANCE SAYS SO where the seat
-// holds both halves of the choice it closes: the code tools, and run_sandbox,
-// whose `repos` is offered with them. Inside the code_history section, so the
-// outline keeps it with the rule it qualifies; absent where either is missing
-// — to a seat with no sandbox it is prose about a box it never gets, and with
-// no code tools there is no section for it to close.
-//
-// Mutations: the OffersSandbox gate dropped → the no-sandbox prompt says it,
-// red; the sentence opened as a section of its own, or put in the sandbox
-// section → the code_history slice lacks it, red.
-func TestTheCodeHistoryGuidanceSaysABoxCloneIsBlobless(t *testing.T) {
-	t.Parallel()
-	held := append([]string{"submit_work", "run_sandbox"}, CodeHistoryTools()...)
-	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held, OffersSandbox: true})
-	section, ok := slice(p, KeyCodeHistory)
-	if !ok {
-		t.Fatalf("no %q section rendered", KeyCodeHistory)
-	}
-	contains(t, section, "`run_sandbox` clones is blobless",
-		"its history is for building, not for answering questions")
-
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: held}).Text, "blobless")
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"submit_work", "run_sandbox"}, OffersSandbox: true}).Text, "blobless")
 }
 
 // THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: it is rendered for a seat
@@ -425,16 +372,15 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 // whole turn's budget counts the roster once on that premise.
 //
 // Measured with EVERY GATE ON in both, the way production sends them to a
-// seat that holds every gated tool: the review's sandbox rule and `a2a_ask`,
-// and the executor's escalation, workers, sandbox and tools to discover
-// (referenceExecutor). An ungated review is the smallest one there is, and a
+// seat that holds every gated tool: the review's `a2a_ask`, and the
+// executor's escalation, workers and tools to discover (referenceExecutor). An ungated review is the smallest one there is, and a
 // comparison made on it held for a review that had grown every rule it can
 // render.
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	t.Parallel()
 	s := lead()
 	exec := BuildExecutor(s, referenceExecutor(t)).Text
-	review := BuildReview(s, ReviewInput{OffersSandbox: true, OffersA2A: true}).Text
+	review := BuildReview(s, ReviewInput{OffersA2A: true}).Text
 	if len(review) >= len(exec) {
 		t.Errorf("review prompt (%d) is not smaller than the executor's (%d)",
 			len(review), len(exec))
@@ -460,7 +406,7 @@ var forbiddenToolNames = []string{
 func TestPhaseContractsNameNoVendorTools(t *testing.T) {
 	t.Parallel()
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, forbiddenToolNames...)
-	excludes(t, BuildReview(engineer(), ReviewInput{OffersSandbox: true, OffersA2A: true}).Text,
+	excludes(t, BuildReview(engineer(), ReviewInput{OffersA2A: true}).Text,
 		forbiddenToolNames...)
 }
 
@@ -470,7 +416,7 @@ func TestPhaseContractHeadersNameNoSpecificPlatforms(t *testing.T) {
 	t.Parallel()
 	contains(t, ExecutorHeader, "originating channel's reply tool")
 	// The review header with every gated rule rendered, so none hides a name.
-	review := reviewHeader(ReviewInput{OffersSandbox: true, OffersA2A: true})
+	review := reviewHeader(ReviewInput{OffersA2A: true})
 	for _, product := range []string{"Slack", "Jira", "Confluence", "Copilot", "GitHub"} {
 		if strings.Contains(ExecutorHeader, product) {
 			t.Errorf("ExecutorHeader names %q", product)

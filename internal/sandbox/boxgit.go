@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// A CODING BOX'S GIT ON THE ENGINE'S OWN CODE HOST (ADR-0063): where it dials,
+// A CODING BOX'S GIT ON THE ENGINE'S OWN CODE HOST (ADR-0086): where it dials,
 // the credential it presents and the configuration it runs with — all of it
 // environment the engine hands the launch, never a file in the box and never
 // a setup step of the operator's.

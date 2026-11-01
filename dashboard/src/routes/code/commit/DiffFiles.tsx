@@ -17,7 +17,7 @@ import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { parsePatch } from "~/lib/patch.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
 
 /** What git's status letter says of a file. */
@@ -39,11 +39,10 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
   const [file, setFile] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
   const params = useMemo(() => ({ name: repo, base, head }), [repo, base, head]);
-  const hold = usePageHold<CodeGitAnswer>(params);
-  const first = useCodeQuery("code_diff", params, { hold: hold.holding });
+  const first = useCodeQuery("code_diff", params);
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_diff", { ...params, cursor }),
     (a: CodeGitAnswer): readonly CodeDiffFile[] => a.diff?.files ?? [],
     (f: CodeDiffFile) => f.path_b64 ?? f.path,
@@ -116,7 +115,7 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
                 <Button
                   size="small"
                   variant="secondary"
-                  onClick={paged.older}
+                  onClick={paged.next}
                   disabled={paged.paging}
                   loading={paged.paging}
                 >

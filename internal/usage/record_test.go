@@ -160,7 +160,8 @@ func TestANewerBuildsKindIsDeferredNotAStop(t *testing.T) {
 	env, err := usage.Domain{}.Envelope(payload)
 	if err != nil {
 		t.Fatalf("the envelope of a newer build's kind = %v — an unreadable envelope "+
-			"stops this domain's applier on every node still on this build", err)
+			"stops this domain's applier on every data node still on this "+
+			"build", err)
 	}
 	if env.Kind != "a_kind_from_a_later_build" || env.Subject.Kind != env.Kind {
 		t.Fatalf("envelope = %+v, want the newer build's kind carried through", env)

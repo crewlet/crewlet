@@ -29,7 +29,7 @@
 // from rows alone, and a drift between that fake and the reader fails there,
 // named, before any push case muddies it. After every case each git node's
 // cache, synced at the log's head, must hold exactly the repository's rows —
-// its refs, its HEAD, its packs — which is the cache's one rule (ADR-0054).
+// its refs, its HEAD, its packs — which is the cache's one rule (ADR-0077).
 //
 // RunFleet runs the cases only a fleet can — a push decided by its
 // repository's committer whichever node received it, a committer that dies
@@ -67,7 +67,7 @@
 // and its host together (GitNode.Git) — the repository's home first, stamped
 // so by the walk, and the next git node the same write where one ran nothing
 // or went silent (code.git_write); and Cluster.GitWriteThrough asks one
-// through a member's own router. The cases (F32–F38, ADR-0062) hold what a
+// through a member's own router. The cases (F32–F38, ADR-0085) hold what a
 // person's clone then reads of the commit — its author, its committer, its
 // dates, its tree — and what the push row says of who built it, that one
 // write asked again is one push, that a conflict and a refusal store nothing,

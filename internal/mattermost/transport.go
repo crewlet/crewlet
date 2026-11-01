@@ -54,14 +54,14 @@ type Config struct {
 
 // SeatConfig is one agent's bot, as configured.
 //
-// NO CHANNEL, deliberately. The seat's `integrations.mattermost.channel` is a
-// PROVISIONING input — [joinChannels] adds the bot to it, on the reconcile's
-// own cadence and off the live org — and this transport has never aimed a
-// message anywhere: an agent speaks through the Mattermost MCP server on this
-// same token. Carried here it was read by nothing except the engine's rebuild
-// fingerprint, so renaming a channel dropped and re-opened every seat's
-// websocket, and each one replayed its backfill window, to rebuild a transport
-// that could not tell the difference.
+// NO CHANNELS, deliberately. The seat's `integrations.mattermost.channels` are
+// its access scope, which the per-seat access sync applies on its own cadence,
+// and this transport has never aimed a message anywhere: an agent speaks
+// through the Mattermost MCP server on this same token. Carried here they
+// would be read by nothing except the engine's rebuild fingerprint, so
+// changing a seat's channels would drop and re-open every seat's websocket,
+// and each one would replay its backfill window, to rebuild a transport that
+// could not tell the difference.
 type SeatConfig struct {
 	Handle string
 	Token  string
@@ -696,12 +696,15 @@ func (t *Transport) StatusRefresh() time.Duration {
 	return t.throttle
 }
 
-// DMChannelPrefix implements [notify.StatusPoster]: NONE.
+// AddressRule implements [notify.StatusPoster].
 //
-// Mattermost ids are opaque 26-character alphanumerics, so a prefix test
-// would mark arbitrary public channels as direct messages and raise
-// indicators for traffic nobody addressed to this agent.
-func (t *Transport) DMChannelPrefix() string { return "" }
+// THE PROMPT'S OWN RULE, not a second one: the indicator raises on exactly
+// the messages the prompt tells the agent it owes an answer to. It carries
+// no channel-id prefix, because Mattermost ids are opaque 26-character
+// alphanumerics and a prefix test would mark arbitrary public channels as
+// direct messages — raising an indicator, and demanding a reply, for traffic
+// nobody addressed to this agent.
+func (t *Transport) AddressRule() notify.AddressRule { return AddressRule() }
 
 // SetStatus implements [notify.StatusPoster] by raising the typing indicator.
 //
@@ -714,15 +717,16 @@ func (t *Transport) DMChannelPrefix() string { return "" }
 // [Transport.StatusRefresh]), so on this backend it is the most frequent call
 // the transport makes — which is what `typing_status: addressed` exists to
 // bound, and why a failure here is a DEBUG line rather than anything louder.
-func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ string) bool {
+func (t *Transport) SetStatus(ctx context.Context, post notify.StatusPost) bool {
 	t.mu.Lock()
-	s, ok := t.seats[handle]
+	s, ok := t.seats[post.Handle]
 	t.mu.Unlock()
 	if !ok {
 		return false
 	}
-	if err := s.client.Typing(ctx, s.seat.UserID, channel, thread); err != nil {
-		log.DebugContext(ctx, "mattermost_typing_failed", "handle", handle, "error", err.Error())
+	if err := s.client.Typing(ctx, s.seat.UserID, post.Channel, post.Thread); err != nil {
+		log.DebugContext(ctx, "mattermost_typing_failed", "handle", post.Handle,
+			"error", err.Error())
 		return false
 	}
 	return true

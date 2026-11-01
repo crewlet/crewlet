@@ -1,6 +1,6 @@
 // Package home is a repository's HOME git node at work on its changes: the
 // first git node of the repository's rendezvous order over the live git nodes
-// (ADR-0059), the node its git reads are asked of first, is the one that owes
+// (ADR-0082), the node its git reads are asked of first, is the one that owes
 // its CHANGE WORK — reading each change's head revision against its target
 // and recording what it found (internal/code's Revise), merging it into its
 // target's tip and recording whether it merges cleanly (internal/code's
@@ -53,7 +53,7 @@
 // moving to another node moves its work with it, the new home finding it in
 // its next listing.
 //
-// NO LEASE AND NO EPOCH, as the compactor's (ADR-0060): two nodes that each
+// NO LEASE AND NO EPOCH, as the compactor's (ADR-0083): two nodes that each
 // take themselves for a repository's home — a presence view split for a
 // moment — both read and both propose, and the records' own guards take one:
 // facts of a revision no later than the facts held of it are refused

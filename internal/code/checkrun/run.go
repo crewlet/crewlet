@@ -324,7 +324,7 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 			Fresh: stale}); err == nil && len(row.Checks) == 1 && row.Checks[0].State.Ended() {
 			return nil, ""
 		}
-		running, err := box.JobRunning(ctx, job)
+		state, err := box.Job(ctx, job)
 		switch {
 		case err != nil && errors.Is(err, sandbox.ErrBoxGone):
 			return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
@@ -335,7 +335,14 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 					fmt.Sprintf("its box did not answer %d polls in a row: %v", LostPolls, err)), opID
 			}
 			continue
-		case !running:
+		case state == sandbox.JobLost:
+			// A JOB NOTHING ALIVE SAW END ([sandbox.JobLost]) left no status
+			// a check can be measured by — its process went with the
+			// engine that watched it — so it reads as its box lost, never
+			// as a command that exited.
+			return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
+				"its command's process went with the engine that watched it, so it left no exit status"), opID
+		case state != sandbox.JobRunning:
 			return a.exited(ctx, box, began), opID
 		}
 		lost = 0

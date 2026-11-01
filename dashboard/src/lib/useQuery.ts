@@ -104,24 +104,6 @@ export interface QueryOptions {
    * allowed, and a refused or dropped one must not leave a screen frozen.
    */
   refetchOnInboxOf?: string;
-  /**
-   * Hold the answer still: while true, nothing asks the question again ON ITS
-   * OWN — no poll tick, no reconnect, no return of the tab, no inbox push —
-   * and turning it on or off asks nothing either; the first poll tick after
-   * it turns off asks. A change of the question, a write from this tab and
-   * `refetch()` still ask: they are the reader's own, and the screen they
-   * were made on is redrawn from an answer that includes them.
-   *
-   * FOR AN ANSWER SOMETHING ELSE CONTINUES FROM. A pager's older pages follow
-   * the cursor its newest page was answered with (`lib/usePaged.ts`), and the
-   * newest page read again under newer rows pushes its last ones out of both:
-   * a silent hole in the middle of the list. So a pager holds its newest page
-   * from the moment the reader asks for an older one.
-   *
-   * NOT `pollMs` UNSET, which is a change of the question's cadence and asks
-   * again at once: the very read a hold is there to refuse.
-   */
-  hold?: boolean;
 }
 
 /**
@@ -153,14 +135,7 @@ export function useQuery<K extends QueryName>(
     refetchOnReconnect = true,
     refetchOnFocus = false,
     refetchOnInboxOf = "",
-    hold = false,
   } = options;
-
-  // THE HOLD IS READ WHERE A READ AGAIN WOULD START, never a dependency of the
-  // ask: holding still is not a new question, and a flag the ask's effect
-  // re-ran on would ask the moment it turned on.
-  const holding = useRef(hold);
-  holding.current = hold;
 
   const [state, setState] = useState<{
     data: QueryMap[K] | null;
@@ -193,17 +168,15 @@ export function useQuery<K extends QueryName>(
   const refetch = useCallback(() => setAsked((n) => n + 1), []);
 
   // A RECONNECT ASKS AGAIN, COUNTED: the ask's effect re-runs on the count,
-  // which only a socket coming back moves — and not while the answer is held.
-  // It re-ran on the flag `refetchOnReconnect && connected`, so a socket
-  // going AWAY asked too, a read that could only wait for the reconnect that
-  // asked again over it, and no hold could let a reconnect pass without the
-  // flip of its own flag asking.
+  // which only a socket coming back moves. It re-ran on the flag
+  // `refetchOnReconnect && connected`, so a socket going AWAY asked too: a
+  // read that could only wait for the reconnect that asked again over it.
   const [reconnects, setReconnects] = useState(0);
   const wasConnected = useRef(connected);
   useEffect(() => {
     const was = wasConnected.current;
     wasConnected.current = connected;
-    if (connected && !was && refetchOnReconnect && !holding.current) {
+    if (connected && !was && refetchOnReconnect) {
       setReconnects((n) => n + 1);
     }
   }, [connected, refetchOnReconnect]);
@@ -248,16 +221,7 @@ export function useQuery<K extends QueryName>(
         // recovered node looking broken for most of that minute.
         const next = retryMs !== null ? Math.min(pollMs ?? retryMs, retryMs) : pollMs;
         if (generation.current === mine && next) {
-          // A HELD ANSWER LETS ITS TICK PASS and keeps the cadence, so the
-          // first tick after the hold asks.
-          const tick = (): void => {
-            if (holding.current) {
-              timer = setTimeout(tick, next);
-              return;
-            }
-            void run();
-          };
-          timer = setTimeout(tick, next);
+          timer = setTimeout(() => void run(), next);
         }
       }
     };
@@ -295,7 +259,7 @@ export function useQuery<K extends QueryName>(
   useEffect(() => {
     if (!enabled || !refetchOnFocus) return;
     const wake = () => {
-      if (document.visibilityState === "visible" && !holding.current) refetch();
+      if (document.visibilityState === "visible") refetch();
     };
     document.addEventListener("visibilitychange", wake);
     return () => document.removeEventListener("visibilitychange", wake);
@@ -312,7 +276,7 @@ export function useQuery<K extends QueryName>(
       const now = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
       if (now === seen) return;
       seen = now;
-      if (!holding.current) refetch();
+      refetch();
     });
   }, [store, enabled, refetchOnInboxOf, refetch]);
 

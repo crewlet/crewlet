@@ -18,11 +18,17 @@
  * carries that revision's tag, so anything that lands in between is a
  * conflict to reload rather than an overwrite.
  *
- * A SAVE IS NOT AN APPLY. The answer names the epoch the revision activated
- * at; until this node has applied it, the gate still enforces the ceiling
- * before, and so does every figure on the screen. The state says "applying"
- * until the health push reports this node at that epoch, and then the caller
- * re-reads what it draws.
+ * A SAVE IS NOT AN APPLY. The answer names the revision and the epoch it
+ * activated at; until this node has applied it, the gate still enforces the
+ * ceiling before, and so does every figure on the screen. The state follows
+ * where this node stands on it (`nodeStanding`, the rule every follower of a
+ * config write reads): applying until the health push says this node applied
+ * it, and then the caller re-reads what it draws — or refused, when this node's
+ * attempt at it failed, said as that rather than as an apply still running,
+ * since the applied epoch a refusal leaves where it was would have said
+ * "applying" for the life of the page while the gate went on enforcing the
+ * ceiling before. A save a later activation passed before this node applied
+ * it is re-read like an apply: there is nothing more to wait for.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -41,14 +47,16 @@ import type { ConfigWarning, TokenBudget } from "~/protocol/types.ts";
 import {
   ceilingSummary,
   changesFrom,
-  companyPatch,
+  documentCeilings,
+  documentPatch,
   refusalWords,
   seatWithCeilings,
   type CeilingChanges,
   type CeilingScope,
   type Period,
 } from "./ceilings.ts";
-import { useEngineHealth } from "./store-hooks.ts";
+import { nodeStanding, type Standing } from "./nodeStanding.ts";
+import { useLastHealth } from "./useLastHealth.ts";
 
 /** What the last change came to. */
 export type CeilingWriteState =
@@ -60,11 +68,17 @@ export type CeilingWriteState =
   /** The check passed and found what the change would introduce. */
   | { readonly kind: "warned"; readonly warnings: readonly ConfigWarning[] }
   | { readonly kind: "saving" }
-  /** Stored and activated at `epoch`; `applied` once THIS node runs it. */
+  /**
+   * Stored as `revisionId` and activated at `epoch`. `standing` is where THIS
+   * node — the one whose budgets answer the screen draws — stands on it:
+   * `applying`, `refused` (it runs the ceiling before), or settled by
+   * `applied` or `passed`, after which the caller has been asked to re-read.
+   */
   | {
       readonly kind: "saved";
+      readonly revisionId: string;
       readonly epoch: number;
-      readonly applied: boolean;
+      readonly standing: Standing["kind"];
       readonly summary: string;
     }
   | { readonly kind: "refused"; readonly message: string; readonly reload: boolean };
@@ -95,14 +109,17 @@ export function useCeilingWrite(
   {
     onApplied,
   }: {
-    /** Called once this node applies the saved revision — re-read what the screen draws. */
+    /**
+     * Called once this node applies the saved revision, or a later activation
+     * passes it — re-read what the screen draws.
+     */
     onApplied?: () => void;
   } = {},
 ): CeilingWrite {
   const [state, setState] = useState<CeilingWriteState>({ kind: "idle" });
   const prepared = useRef<Prepared | null>(null);
   const inflight = useRef<AbortController | null>(null);
-  const health = useEngineHealth();
+  const health = useLastHealth();
   const appliedRef = useRef(onApplied);
   appliedRef.current = onApplied;
 
@@ -121,12 +138,18 @@ export function useCeilingWrite(
     async (write: Prepared, signal: AbortSignal) => {
       setState({ kind: "saving" });
       const outcome =
-        scope.kind === "company"
-          ? await savePatch(write.body, write.etag, write.summary, signal)
-          : await putEntity("roles", scope.handle, write.body, write.etag, write.summary, signal);
+        scope.kind === "seat"
+          ? await putEntity("roles", scope.handle, write.body, write.etag, write.summary, signal)
+          : await savePatch(write.body, write.etag, write.summary, signal);
       prepared.current = null;
       if (outcome.kind === "saved") {
-        setState({ kind: "saved", epoch: outcome.epoch, applied: false, summary: write.summary });
+        setState({
+          kind: "saved",
+          revisionId: outcome.revisionId,
+          epoch: outcome.epoch,
+          standing: "applying",
+          summary: write.summary,
+        });
         return;
       }
       if (outcome.kind === "valid") {
@@ -156,16 +179,16 @@ export function useCeilingWrite(
           let held: TokenBudget;
           let unchanged: Record<string, unknown>;
           let build: (changes: CeilingChanges) => Record<string, unknown>;
-          if (scope.kind === "company") {
+          if (scope.kind !== "seat") {
             const read = await getConfig(signal);
             if (read.kind !== "document") {
               setState({ kind: "refused", ...refusalWords(read, scope) });
               return;
             }
             etag = read.etag;
-            held = budgetOf(read.document.token_budget);
+            held = budgetOf(documentCeilings(scope, read.document));
             unchanged = {};
-            build = companyPatch;
+            build = (changes) => documentPatch(scope, changes);
           } else {
             const read = await getEntity("roles", scope.handle, signal);
             if (read.kind !== "entity") {
@@ -193,15 +216,21 @@ export function useCeilingWrite(
           // 3. The check, beside the company's own warnings as they stand, so
           // only what THIS change introduces is shown.
           const check = (body: Record<string, unknown>): Promise<ConfigWriteOutcome> =>
-            scope.kind === "company"
-              ? dryRunPatch(body, etag, signal)
-              : dryRunEntity("roles", scope.handle, body, etag, signal);
+            scope.kind === "seat"
+              ? dryRunEntity("roles", scope.handle, body, etag, signal)
+              : dryRunPatch(body, etag, signal);
           const [before, after] = await Promise.all([check(unchanged), check(write.body)]);
           if (after.kind === "saved") {
             // A CHECK THE ENGINE STORED. No route this page sends a check to
             // answers one with 201, but a 201 means a revision exists, and
             // saying so is the only answer that cannot become a second save.
-            setState({ kind: "saved", epoch: after.epoch, applied: false, summary: write.summary });
+            setState({
+              kind: "saved",
+              revisionId: after.revisionId,
+              epoch: after.epoch,
+              standing: "applying",
+              summary: write.summary,
+            });
             return;
           }
           if (after.kind !== "valid") {
@@ -245,13 +274,23 @@ export function useCeilingWrite(
 
   // APPLIED WHEN THIS NODE SAYS SO — the node whose budgets answer the screen
   // draws — and not a moment before, or the re-read would draw the ceiling it
-  // was replacing and call it the new one.
-  const appliedEpoch = health?.applied_epoch ?? 0;
+  // was replacing and call it the new one. Applied and passed settle the save
+  // and ask for that re-read once; a refusal is followed on, since a node
+  // that restarts attempts the revision again, and a later activation it
+  // applies, or passes, settles the save as either does. BY ITS LAST PUSH
+  // (`useLastHealth`), and by none before the first: a socket that drops says
+  // nothing about the save, and read as a standing it put a refused ceiling
+  // back to the saved figure, applying, until the socket came back.
+  const standing =
+    state.kind === "saved" && health !== null
+      ? nodeStanding(health, { revisionId: state.revisionId, epoch: state.epoch }).kind
+      : null;
   useEffect(() => {
-    if (state.kind !== "saved" || state.applied || appliedEpoch < state.epoch) return;
-    setState({ ...state, applied: true });
-    appliedRef.current?.();
-  }, [state, appliedEpoch]);
+    if (state.kind !== "saved" || standing === null || standing === state.standing) return;
+    if (state.standing === "applied" || state.standing === "passed") return;
+    setState({ ...state, standing });
+    if (standing === "applied" || standing === "passed") appliedRef.current?.();
+  }, [state, standing]);
 
   const busy = state.kind === "checking" || state.kind === "saving";
   return { state, submit, confirm, reset, busy };

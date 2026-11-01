@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/objectives"
 )
 
 // fakeInbox is the engine's half of the inbox feed: it keeps what the app
@@ -90,7 +91,7 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 	// The tracker ALONE, the app the inbox question takes: a holder of
 	// admin may watch any seat, so a case about the routing would pass
 	// through a hole in the authority instead.
-	reader := []iam.Grant{iam.GrantTracker}
+	reader := []iam.Grant{iam.GrantWorklet}
 	authorize(&b,
 		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: reader},
 		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: reader},
@@ -101,12 +102,14 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 		iam.TokenLogin("bob"):   "bob-seat",
 		iam.TokenLogin("carol"): "carol-seat",
 	}
+	judge := &pushTimes{}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		Inbox:     feed,
 		SeatBindings: auth.SeatBindings{
 			Directory: inboxBindings(seats), Chart: inboxChart(seats),
 		},
+		Objectives: judge,
 	})
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
@@ -130,11 +133,14 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 
 	// Two batches IN ORDER, so a socket that received alice's frame would
 	// have it queued in front of its own.
+	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
 	feed.fire(t, inbox.Movement{Source: "tracker",
 		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: "assignee",
+		At: stored,
 	})
 	feed.fire(t, inbox.Movement{Source: "tracker",
 		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: "mention",
+		At: stored.Add(time.Second),
 	})
 
 	got := alice.nextInbox(t)
@@ -154,6 +160,36 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 			"person's screen learned about somebody else's inbox", other.Seat)
 	}
 	carol.drainUntilPong(t)
+	// AND THE PUSH IS TIMED, from the instant the movement's record was
+	// stored and through the node's own meter — whatever rooms the node
+	// serves, which here is none — while the frame says nothing of when.
+	if got := judge.seen(); len(got) != 2 || !got[0].Equal(stored) ||
+		!got[1].Equal(stored.Add(time.Second)) {
+		t.Errorf("the inbox pushes were timed from %v, want alice's from %s and bob's "+
+			"a second after", got, stored)
+	}
+}
+
+// pushTimes is an objective meter keeping the instant each change visibility
+// event was timed from.
+type pushTimes struct {
+	mu     sync.Mutex
+	stamps []time.Time
+}
+
+func (p *pushTimes) RecordSince(n objectives.Name, stamp time.Time, _ bool) {
+	if n != objectives.ChangeVisibility {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stamps = append(p.stamps, stamp)
+}
+
+func (p *pushTimes) seen() []time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]time.Time(nil), p.stamps...)
 }
 
 // A GAP IN WHAT THIS NODE HEARS IS EVERY WATCHED INBOX READ AGAIN.
@@ -171,7 +207,7 @@ func TestAGapInTheInboxFeedTellsEveryWatchedInboxToReadAgain(t *testing.T) {
 	t.Parallel()
 	feed := &fakeInbox{}
 	b := config.DefaultBootstrap()
-	reader := []iam.Grant{iam.GrantTracker}
+	reader := []iam.Grant{iam.GrantWorklet}
 	authorize(&b,
 		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: reader},
 		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: reader},

@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // place_work_item: a board drag, as an operator reaches it. Never a move to
@@ -44,19 +46,22 @@ import (
 // stale by nobody but itself. The tracker answers the lane step of a retry
 // from its ledger, and decides a drop into the lane the card is already in to
 // write nothing on the task — so sending it is always safe, and the gate is on
-// the OPERATION rather than on the state it produced ([tracker.Place]).
+// the OPERATION rather than on the state it produced ([worklet.Place]).
 
 // WorkPlacer is the board-drag write side, declared by the consumer.
 type WorkPlacer interface {
-	PlaceTask(ctx context.Context, opID string, place tracker.Place,
-		notify *tracker.Notify) (tracker.PlaceResult, error)
+	PlaceTask(ctx context.Context, opID string, place worklet.Place,
+		notify *worklet.Notify) (worklet.PlaceResult, error)
 }
 
-type placeWorkItem struct{ deps WorkDeps }
+type placeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*placeWorkItem)(nil)
 
-func (t *placeWorkItem) Name() string { return tracker.PlaceWorkItemTool }
+func (t *placeWorkItem) Name() string { return worklet.PlaceWorkItemTool }
 
 func (t *placeWorkItem) Description() string {
 	return "Place a work item on its project's board: drop it `before` or " +
@@ -66,7 +71,7 @@ func (t *placeWorkItem) Description() string {
 		"one beside it as the board stands when the drop lands. `if_match` " +
 		"is the item's `version` as you read it, and a drop of an item " +
 		"somebody changed since is refused. To move an item to another " +
-		"project, use move_work_item."
+		"project, use " + worklet.MoveWorkItemTool + "."
 }
 
 func (t *placeWorkItem) Parameters() map[string]any {
@@ -89,8 +94,8 @@ func (t *placeWorkItem) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type": "string",
-				"description": "The lane it was dropped into — one of: " +
-					statusList() + ". Send the lane it was dropped into " +
+				"description": "The lane it was dropped into — one of " +
+					words.Or(worklet.Statuses) + ". Send the lane it was dropped into " +
 					"even when it is the item's own: that writes nothing on " +
 					"the item. Omitted keeps its own. Given with neither " +
 					"neighbour, it is a drop into an empty lane: the status " +
@@ -98,7 +103,7 @@ func (t *placeWorkItem) Parameters() map[string]any {
 			},
 			"if_match": map[string]any{
 				"type": "integer",
-				"description": "The item's `version` from get_work_item or the " +
+				"description": "The item's `version` from " + GetWorkItemTool + " or the " +
 					"board. The drop is refused if anybody changed the item " +
 					"since. A placement itself never changes it, so dragging " +
 					"the same card twice does not need a re-read.",
@@ -115,7 +120,7 @@ func (t *placeWorkItem) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	const name = tracker.PlaceWorkItemTool
+	const name = worklet.PlaceWorkItemTool
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
@@ -130,11 +135,11 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
-		return failed("place_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(worklet.PlaceWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	}
 	ifMatch, given := argIntValue(args["if_match"])
 	if !given || ifMatch <= 0 {
-		return failed("place_work_item needs `if_match`: the item's `version` " +
+		return failed(worklet.PlaceWorkItemTool + " needs `if_match`: the item's `version` " +
 			"as you read it, so a drop of a card somebody changed since is " +
 			"refused rather than placed."), nil
 	}
@@ -145,9 +150,9 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"was dropped beside."), nil
 	}
 
-	current, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	current, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
 			clip(ref))), nil
 	case err != nil:
@@ -155,12 +160,12 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	task := current.Task
 
-	place := tracker.Place{Task: task.ID, Project: task.Project, IfMatch: uint64(ifMatch)}
+	place := worklet.Place{Task: task.ID, Project: task.Project, IfMatch: uint64(ifMatch)}
 	if raw := strings.TrimSpace(argString(args, "status")); raw != "" {
-		status := tracker.Status(raw)
+		status := worklet.Status(raw)
 		if !status.Valid() {
 			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
-				clip(raw), statusList())), nil
+				clip(raw), words.And(worklet.Statuses))), nil
 		}
 		// AS SENT — see the file head. The tracker decides a drop into
 		// the lane the card is in to write nothing on the task.
@@ -187,17 +192,17 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		*side.into = id
 	}
 	if place.Before == "" && place.After == "" && place.Status == nil {
-		return failed("place_work_item needs `before`, `after` or a `status` " +
+		return failed(worklet.PlaceWorkItemTool + " needs `before`, `after` or a `status` " +
 			"— as sent it moves nothing."), nil
 	}
 
 	// A WAKE ONLY FOR A LANE THE CARD LEAVES: a drop into its own lane
 	// publishes no status record, so there is nobody to tell.
-	var notify *tracker.Notify
+	var notify *worklet.Notify
 	if place.Status != nil && *place.Status != task.Status {
-		patch := tracker.TaskPatch{Status: place.Status}
-		notify = tracker.Wake{
-			Kind: tracker.ChangeStatus, Before: task, After: patched(task, patch),
+		patch := worklet.TaskPatch{Status: place.Status}
+		notify = worklet.Wake{
+			Kind: worklet.ChangeStatus, Before: task, After: patched(task, patch),
 			Parent: t.deps.parentParty(ctx, task, patch),
 		}.Notify(t.deps.Leads)
 	}
@@ -218,7 +223,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			(got.Order.Outcome == statelog.OutcomeUnknown && got.Order.Unvouched)
 		return unknownWrite(actor, name, dropped(current, args),
 			opID, unvouched, unknownNext(unvouched, sameCall(actor, name),
-				fmt.Sprintf("Read %s with get_work_item — its status and the "+
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — its status and the "+
 					"board say where it is now", current.Address()),
 				"it places the card again, which changes nothing where it "+
 					"already sits")), nil
@@ -246,19 +251,23 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE RESIDUE IS REPORTED, never swallowed: the lane changed and the
 	// card did not take its place, so the honest answer names both rather
-	// than failing a call whose status write landed.
+	// than failing a call whose status write landed. A CAVEAT, never a
+	// field of the receipt: the sentence saying why is a model's, and the
+	// act route answers a person a caveat's own words (ADR-0060).
+	var caveats []caveat.Caveat
 	if got.Unplaced != nil {
-		answer["unplaced"] = writeFailure(ctx, actor, name, got.Unplaced).Output
+		caveats = append(caveats, caveat.LaneChangedNotPlaced(current.Named(),
+			writeFailure(ctx, actor, name, got.Unplaced).Output))
 	}
 	t.deps.settle(ctx, call.at)
-	return jsonResult(answer)
+	return caveated(answer, caveats)
 }
 
 // dropped says what a drag asked for, as the clause an unknown answer names:
 // "ENG-4 dropped before ENG-2 into in_progress" — the card named as prose names
-// a task ([tracker.TaskDetail.Named]), since a key another task claimed first
+// a task ([worklet.TaskDetail.Named]), since a key another task claimed first
 // would name that one.
-func dropped(card tracker.TaskDetail, args map[string]any) string {
+func dropped(card worklet.TaskDetail, args map[string]any) string {
 	what := card.Named() + " dropped"
 	if ref := strings.TrimSpace(argString(args, "before")); ref != "" {
 		what += " before " + clip(ref)

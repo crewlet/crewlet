@@ -11,8 +11,9 @@
  *    a free-text ask a Reply that sends words (`{answers, body}`), with the
  *    line saying what the answer sets off: the asker is woken with it, and
  *    posts it to the channel it promised where the ask carries an `inform`;
- *  - a CODING RUN parked on a question: whose, the question quoted, and how
- *    long its box is still held; answered by its turn (`answer_run`);
+ *  - a CODING RUN parked on a question: whose, the question's title quoted,
+ *    and how long its box is still held; answered by its turn (`answer_run`),
+ *    with one of its options where it asked to choose;
  *  - a SEAT the engine STOPPED for its token budget: which window is spent,
  *    the item it was on, and the two ways out — raise the ceiling, or hand
  *    the item to somebody else.
@@ -41,6 +42,7 @@ import { href } from "~/app/router.tsx";
 import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
+import { Recommendation } from "./Recommendation.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import type { DecisionSubject, SeatCondition } from "~/lib/decisions.ts";
@@ -51,6 +53,7 @@ import { relTime } from "~/lib/format.ts";
 import type { AgentRow, BudgetWindow, SandboxRun, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { RunQuestionLine } from "./RunQuestion.tsx";
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -229,12 +232,19 @@ export function DecisionList({
   decider,
   now,
   limit,
+  clampTitles = false,
 }: {
   subjects: readonly DecisionSubject[];
   decider: Decider;
   now: number;
   /** How many waiting decisions to draw; every one when absent. */
   limit?: number;
+  /**
+   * Hold each question to two lines, for a card that lists a few of them
+   * (Home); the Inbox and the task carry it whole, and a reader hears all of
+   * it either way.
+   */
+  clampTitles?: boolean;
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -266,6 +276,7 @@ export function DecisionList({
             now={now}
             openAsk={openAsk}
             onOpenAsk={setOpenAsk}
+            clampTitles={clampTitles}
             answeredOf={(ask) => answered.get(`ask:${ask.comment}`)?.answer}
             onAnswered={(ask, given) => {
               setOpenAsk(null);
@@ -278,8 +289,35 @@ export function DecisionList({
   );
 }
 
+type Who = { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
+
 /**
- * One decision: the seat it is about, what it is, and the buttons that make it.
+ * WHO A BLOCK IS ABOUT, on a band over its rows: the seat's face at the small
+ * step, its name, and what every row under it shares. One head for an asker's
+ * questions and for a parked run or a stopped seat, so every block in a list
+ * reads the same way.
+ */
+function DecisionHead({
+  who,
+  status,
+  meta,
+}: {
+  who: Who;
+  status: "needs" | "stopped";
+  meta: ReactNode[];
+}) {
+  return (
+    <div className="decision-group-head">
+      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} status={status} size="xs" />
+      <span className="decision-group-who">{who.name}</span>
+      {meta.length > 0 && <span className="decision-sub">{meta}</span>}
+    </div>
+  );
+}
+
+/**
+ * One decision that is not an ask: the seat it is about on the head, then
+ * what it is and the buttons that make it, on one row.
  *
  * THE ROW'S STATE TWICE, in two forms: the glyph on the seat's badge, and the
  * same state as the first words of the line under the title. An ask and a
@@ -294,38 +332,40 @@ function Row({
   title,
   sub,
   line,
+  meta,
   actions,
 }: {
-  who: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
+  who: Who;
   status: "needs" | "stopped";
   title: ReactNode;
   sub: ReactNode[];
   line?: ReactNode;
+  /** What the head says after the name: how long ago. */
+  meta: ReactNode[];
   actions: ReactNode;
 }) {
   return (
-    <li className="decision-row">
-      <SeatAvatar name={who.name} kind={who.kind} avatar={who.avatar} status={status} size="md" />
-      <div className="decision-body">
-        <span className="decision-title">{title}</span>
-        <span className="decision-sub">
-          <span className="decision-state" data-state={status}>
-            {stateWord(status)}
+    <li className="decision-group">
+      <DecisionHead who={who} status={status} meta={meta} />
+      <div className="decision-item">
+        <div className="decision-text">
+          <span className="decision-title">{title}</span>
+          <span className="decision-sub">
+            <span className="decision-state" data-state={status}>
+              {stateWord(status)}
+            </span>
+            {sub.length > 0 && " · "}
+            {sub}
           </span>
-          {sub.length > 0 && " · "}
-          {sub}
-        </span>
-        {line && <span className="decision-line">{line}</span>}
+          {line && <span className="decision-line">{line}</span>}
+        </div>
+        <div className="decision-actions">{actions}</div>
       </div>
-      <div className="decision-actions">{actions}</div>
     </li>
   );
 }
 
-function seatOf(
-  index: OrgIndex,
-  handle: string,
-): { name: string; kind: "agent" | "human"; avatar: AgentAvatar | null } {
+function seatOf(index: OrgIndex, handle: string): Who & { avatar: AgentAvatar | null } {
   const seat = index.byHandle.get(handle);
   return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent", avatar: seat?.avatar ?? null };
 }
@@ -364,6 +404,7 @@ function AskGroup({
   now,
   openAsk,
   onOpenAsk,
+  clampTitles,
   answeredOf,
   onAnswered,
 }: {
@@ -374,6 +415,7 @@ function AskGroup({
   now: number;
   openAsk: string | null;
   onOpenAsk: (comment: string | null) => void;
+  clampTitles: boolean;
   answeredOf: (ask: WorkAskRow) => AskAnswer | undefined;
   onAnswered: (ask: WorkAskRow, answer: AskAnswer) => void;
 }) {
@@ -407,42 +449,50 @@ function AskGroup({
   ]);
   return (
     <li className="decision-group">
-      <div className="decision-group-head">
-        <SeatAvatar
-          name={asker.name}
-          kind={asker.kind}
-          avatar={asker.avatar}
-          status="needs"
-          size="md"
-        />
-        <span className="decision-group-who">{asker.name}</span>
-        <span className="decision-sub">{head}</span>
-      </div>
+      <DecisionHead who={asker} status="needs" meta={head} />
       <ul className="decision-questions">
         {asks.map((ask) => {
           const decision = ask.decision;
           const question = decision?.question || firstLine(ask.body) || ask.title;
           const given = answeredOf(ask);
+          const open = openAsk === ask.comment;
+          // ONE LINE UNDER THE QUESTION: its key, and what it recommends
+          // while the answer is at rest. Open, the options say the
+          // recommendation on the option itself; answered, the answer does.
           const own = joined([
             sharedItem ? "" : <Key key="k" item={ask} />,
             sharedRole ? "" : roleOf(ask),
             decision?.inform ? `answer posted to #${decision.inform.channel}` : "",
+            given || open ? (
+              ""
+            ) : (
+              <Recommendation
+                key="r"
+                options={decision?.options ?? []}
+                recommended={decision?.recommended}
+              />
+            ),
           ]);
           return (
-            <li key={ask.comment} className="decision-question">
-              <span className="decision-title">{question}</span>
-              {own.length > 0 && <span className="decision-sub">{own}</span>}
+            <li key={ask.comment} className="decision-item">
+              <div className="decision-text">
+                <span className={clampTitles ? "decision-title clamp" : "decision-title"}>
+                  {question}
+                </span>
+                {own.length > 0 && <span className="decision-sub">{own}</span>}
+              </div>
               {given ? (
                 <AnsweredLine answer={given} />
               ) : (
                 <AnswerAsk
+                  layout="row"
                   item={itemAddress(ask)}
                   label={ask.key}
                   comment={ask.comment}
                   asker={asker.name}
                   options={decision?.options ?? []}
                   recommended={decision?.recommended}
-                  open={openAsk === ask.comment}
+                  open={open}
                   onOpenChange={(open) => onOpenAsk(open ? ask.comment : null)}
                   onAnswered={(answer) => onAnswered(ask, answer)}
                 />
@@ -479,22 +529,31 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
+  const question = (run.question ?? "").trim();
   const sub = joined([
     item ? <Key key="k" item={item} /> : "",
-    run.question ? `“${run.question}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
+    // THE QUESTION, never its context: the pane and the answer dialog read
+    // that.
+    question ? (
+      <>
+        “<RunQuestionLine question={question} />”
+      </>
+    ) : questionWithheld(run) ? (
+      QUESTION_WITHHELD
+    ) : (
+      ""
+    ),
     audienceOf(run, index),
-    relTime(since, now),
   ]);
   return (
     <Row
       who={who}
       status="needs"
-      title={`${who.name}’s coding run is parked on a question`}
+      title="Coding run parked on a question"
       sub={sub}
+      meta={joined([relTime(since, now)])}
       line={holdLine(run, now)}
-      actions={
-        <AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question ?? ""} />
-      }
+      actions={<AnswerRunButton run={run} seat={who.name} />}
     />
   );
 }
@@ -537,17 +596,14 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
   const who = seatOf(index, handle);
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
-  const sub = joined([
-    item ? <Key key="k" item={item} /> : "",
-    item ? "stopped mid-turn" : "",
-    seat.at ? relTime(seat.at, now) : "",
-  ]);
+  const sub = joined([item ? <Key key="k" item={item} /> : "", item ? "stopped mid-turn" : ""]);
   return (
     <Row
       who={who}
       status="stopped"
-      title={`${who.name} stopped: ${period ? `${period} ` : ""}token budget exhausted`}
+      title={`Stopped: ${period ? `${period} ` : ""}token budget exhausted`}
       sub={sub}
+      meta={joined([seat.at ? relTime(seat.at, now) : ""])}
       actions={
         <>
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
@@ -565,10 +621,10 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
  * version this reader saw, like every assignment (`AssignButton`).
  */
 export function ReassignItem({ item }: { item: string }) {
-  // A HAND-OFF IS A TRACKER WRITE, so the version it is conditional on is
-  // read only for a reader holding Tracker; without it there is no button.
-  const { tracker } = useViewer();
-  const read = useQuery("work_item", { id: item }, { enabled: tracker });
+  // A HAND-OFF IS A WORKLET WRITE, so the version it is conditional on is
+  // read only for a reader holding Worklet; without it there is no button.
+  const { worklet } = useViewer();
+  const read = useQuery("work_item", { id: item }, { enabled: worklet });
   const task = read.data?.task;
   if (!task) return null;
   return (

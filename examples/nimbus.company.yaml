@@ -61,12 +61,12 @@ token_budget:
 
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is
-# what running the engine's own tracker and wiki buys here: the one address
+# what running Worklet and Doclet buys here: the one address
 # its skills need is where people reach this deployment's dashboard, and the
 # engine injects that itself as ${crewlet_base_url} from ``api.external_url``
 # in the OPERATOR's own Tier A file.  The bundled platform-mentions skill
-# builds every shareable link on it — ${crewlet_base_url}/#/work/ENG-42 and
-# ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing for
+# builds every shareable link on it (${crewlet_base_url}/#/worklet/ENG-42 and
+# ${crewlet_base_url}/#/doclet/pages/{page-id}), so there is nothing for
 # an operator to keep in step.
 #
 # The name is RESERVED: a company that declares ``crewlet_base_url`` itself
@@ -89,21 +89,40 @@ providers:
     #     agent: claude-code
     #     model: sonnet
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
-    # (and set providers.sandbox.default_coding_agent: claude-code below,
-    # since a seat's code work runs on its entry's own CLI).  OpenAI's?
-    # `agent: codex`, `model: gpt-5`, the same `auth`, reading CODEX_API_KEY.
+    # Every seat's executor is its CLI's own run, which only claude-code and
+    # opencode have.  OpenAI's models (`agent: codex`, `model: gpt-5`, the
+    # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
+    # and side passes, through llm_review / llm_subagent / llm_auxiliary.
     #
     # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
     # package) on the machine running `crewlet run`.  Check the whole entry
-    # end to end before the first turn with
+    # end to end before the first turn with the command below, once the
+    # variables examples/nimbus.config.yaml's header exports are set (the
+    # doctor loads that file):
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
+    # With the engine stopped the doctor reaches the fleet's secret store
+    # itself, through this node's own broker.  Once the engine runs, it
+    # reads the store through it: run the doctor with CREWLET_API_TOKEN set
+    # to $CREWLET_API_TOKEN_FOUNDER.
     # See docs/concepts/llm-backends.md.
     default:
       agent: opencode
       model: "${LLM_MODEL}"
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+    # Ask Crewlet's own entry, for the assistant block below.
+    # Its own slots keep a person in the drawer from queueing behind a
+    # seat's long call, its timeout is sized for one interactive round, and
+    # it turns the CLI's web tools off, which Ask Crewlet requires (seats
+    # keep theirs).  Prove the denial with `crewlet llm doctor assistant`.
+    # assistant:
+    #   agent: claude-code
+    #   model: sonnet
+    #   auth: { mode: api-key }
+    #   timeout_seconds: 90
+    #   max_concurrent: 4
+    #   overrides: { web_tools: denied }
   embeddings:
     type: openai
     # The model decides the width — 3072 here — so `dimensions` is left
@@ -111,52 +130,48 @@ providers:
     # field every config has to carry.
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
-  # Code-runtime sandbox — lets a sandbox-enabled role run its Execute
-  # phase as a coding agent (Claude Code / OpenCode) in a sandbox box that
-  # implements the work and opens a merge request under the agent's OWN
-  # GitLab identity (the service-account PAT each seat declares as
-  # GITLAB_TOKEN in role.sandbox.env below — same PAT as its
-  # mcp_env.gitlab GITLAB_TOKEN).  Here every box is a `direct` box on the
-  # engine host, which keeps each run's state apart but does not isolate
-  # the host: see the catalogue below.  The per-role gate is
-  # role.sandbox (enabled on the three Engineering seats below); this
-  # block is the engine-wide provider.  See
-  # docs/concepts/code-sandbox.md and docs/integrations/gitlab.md.
-  #
-  # default_coding_agent: opencode is deliberate.  A seat's code work runs
-  # on its providers.llm entry, and that entry's model is written in its
-  # own CLI's grammar and signed in the way that CLI reads: so the coding
-  # agent must BE that CLI.  Nimbus's only entry is the OpenCode one above,
-  # so the box drives OpenCode with that SAME model and the same
-  # OPENROUTER_API_KEY, and needs NO extra secret.  Choosing claude-code
-  # here would need a claude-code entry pointed at by each engineer's
-  # role.llm_sandbox (otherwise the launch is refused with a
-  # SandboxModelError naming the mismatch).
+  # Code sandbox — where every agent seat's executor runs.  A seat's
+  # executor is its coding CLI's own run (OpenCode, the default entry's
+  # CLI, with that SAME model and OPENROUTER_API_KEY), in a box from this
+  # catalogue; an engineering seat's run implements the work and opens a
+  # merge request under the agent's OWN GitLab identity (the token the
+  # engine mints and seals for the seat as GITLAB_TOKEN_<HANDLE>, which the
+  # seat names as GITLAB_TOKEN in role.sandbox.env below and which the
+  # engine binds to its glab tool server).
+  # Here every box is a `direct` box on the engine host, which keeps each
+  # run's state apart but does not isolate the host: see the catalogue
+  # below.  See docs/concepts/code-sandbox.md and
+  # docs/integrations/gitlab.md.
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
-    # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,
-    # or both — the seat that should use the login on this machine and the
-    # seat whose generated code must never touch it are different seats, and
-    # a company-wide backend could only ever answer for both.
+    # providers.llm entry places its runs in one with its `run_in`.
+    # Configure `local:`, `e2b:`, or both — the run that should use the
+    # login on this machine and the run whose generated code must never
+    # touch it are different runs, and a company-wide backend could only
+    # ever answer for both.
     #
     # This company configures the ENGINE HOST only: each coding job runs as a
     # process tree on the machine running `crewlet run` — no remote account,
-    # no API key, nothing to provision, which is what makes it right for a
-    # company running on your own machine against your own checkouts.
+    # no API key, nothing to provision — as a first run on your own machine
+    # while its seats take work from you alone.  Every run is the coding
+    # CLI's own, fully permissioned, as the engine's user, so before a seat
+    # takes work from anyone else (a chat other people are in, a shared
+    # tracker or code host), or on a host others share, move the runs into
+    # `container` (below) or `e2b`.
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
-    # self-hosted cluster) and point the seats that need it at `run_in: e2b`.
+    # self-hosted cluster) and give the entry those seats run on
+    # `run_in: e2b`.
     # A `template` there must carry the coding agent (opencode here) as well
     # as the toolchains those seats' setup steps check for (Go, Node with
     # corepack, uv): naming one replaces E2B's prebuilt per-agent template
     # for every e2b box in the company, and a step only checks for its tool,
     # so nothing installs either into the template.
-    # Don't want code work at all? Remove this block and the engineers fall
-    # back to the native executor. (`fake: true` is in-process stubs for a
-    # demonstration — it runs no real coding agent and no real MCP.)
+    # (`fake: true` is in-process stubs for a demonstration — it runs no
+    # real coding agent.)
     #
-    # PREREQUISITE for the local backend: the coding agent named below must
-    # be installed on that machine, since `direct` runs it as a child
+    # PREREQUISITE for the local backend: the coding agent the entries drive
+    # must be installed on that machine, since `direct` runs it as a child
     # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
     # 1.x install is refused by name — and `claude-code` is the other
     # supported one.  So must each engineering seat's toolchain (Go; Node
@@ -165,7 +180,7 @@ providers:
     # their tools and name what is missing, rather than install anything
     # on the host.
     local:
-      # The local backend serves both local cells, chosen per seat:
+      # The local backend serves both local cells, chosen per entry:
       #
       #   run_in: direct     state isolation only — each box gets its own
       #                      HOME, XDG directories and an allowlisted
@@ -173,8 +188,10 @@ providers:
       #                      and writes outside the box are refused — but
       #                      the agent runs as the engine's user with the
       #                      engine's filesystem access. The right trade for
-      #                      your own machine, the wrong one for a shared
-      #                      host.
+      #                      a first run on your own machine while its
+      #                      seats take work from you alone, the wrong one
+      #                      once a seat takes work from anyone else, or
+      #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
       #                      the coding-agent CLI, and is where a local box
@@ -188,35 +205,43 @@ providers:
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
                                                  #   and orphans from a crashed engine are
                                                  #   reaped on the next create
-    # WHERE A SEAT THAT NAMES NONE RUNS. Required whenever the catalogue
+    # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required whenever the catalogue
     # offers more than one cell — and `local:` alone is two, because it
     # serves `direct` and `container`. There is deliberately no implicit
     # answer: `direct` runs the coding agent as the engine's user, which is
     # a trade to make deliberately and never one to inherit by accident.
     default_run_in: direct                       # direct | container | e2b
-    default_coding_agent: opencode               # the CLI the default entry drives, so a box reuses its model and key
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
-    # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
+    # ENGINE-WIDE setup steps — applied to every agent seat's box
     # before each role's own role.sandbox.setup extras.  Put anything shared
     # by ALL seats here exactly once; keep stack-specific provisioning
     # (Go/Node/Python below) on the owning role.  The engine ships NO steps
     # of its own — provisioning is entirely this config.
     setup:
-      # git-auth: make the seat's own GitLab PAT (declared per seat as
-      # GITLAB_TOKEN in role.sandbox.env below, so MRs land under the
-      # agent's identity) work for HEADLESS git.  Without this a bare
-      # `git clone https://gitlab.com/...` dies with "could not read
-      # Username" — git has no way to supply the token on its own.  The
-      # helper is SCOPED to gitlab.com at both layers (the credential
-      # config key AND a host check in the script) so the PAT can never be
-      # offered to a foreign host, e.g. a malicious submodule URL; without
-      # a token it stays silent so public clones fall through to anonymous.
-      # For PAT basic-auth GitLab ignores the username, so `oauth2` is just
-      # a conventional placeholder.  The `brief` below is what tells the
-      # coding agent about all of this.
+      # git-auth: make the seat's own GitLab PAT (declared as
+      # GITLAB_TOKEN in role.sandbox.env by the three engineering seats
+      # below, so MRs land under the agent's identity) work for HEADLESS
+      # git.  Without this a bare `git clone https://gitlab.com/...` dies
+      # with "could not read Username" — git has no way to supply the
+      # token on its own.  The helper is SCOPED to gitlab.com at both
+      # layers (the credential config key AND a host check in the script)
+      # so the PAT can never be offered to a foreign host, e.g. a malicious
+      # submodule URL; without a token it stays silent so public clones
+      # fall through to anonymous.  For PAT basic-auth GitLab ignores the
+      # username, so `oauth2` is just a conventional placeholder.  The
+      # `brief` below is what tells the coding agent about all of this.
+      #
+      # An engine-wide step reaches EVERY agent seat's box, the CEO's,
+      # CTO's, PM's and DevRel's too, and those seats declare no
+      # GITLAB_TOKEN: their runs read GitLab through their tools and hand
+      # code to the seat that owns the project.  The step is still shared
+      # rather than copied onto three roles, because it does nothing
+      # harmful without a token, and its brief says so — a brief that
+      # promised every box a PAT would send those seats' runs pushing
+      # with nothing to push as.
       - name: git-auth
-        # Expects $GITLAB_TOKEN in the run env — each seat declares it in
+        # Reads $GITLAB_TOKEN from the run env when the seat declares it in
         # role.sandbox.env below, pointing at its OWN PAT (so MRs land
         # under the agent's identity). Setup commands also see the run env,
         # which is how the identity lines below read the engine-provided
@@ -276,8 +301,8 @@ providers:
           # answer.
           GIT_TERMINAL_PROMPT: "0"
         brief: >-
-          Use $GITLAB_TOKEN (already in your environment — this seat's own
-          GitLab PAT) for all GitLab work: git is configured to
+          When $GITLAB_TOKEN is in your environment it is this seat's own
+          GitLab PAT, for all GitLab work: git is configured to
           authenticate to gitlab.com with it automatically, so just clone,
           fetch, and push over plain HTTPS, e.g.
           `git clone https://gitlab.com/<group>/<project>.git`. SSH-style
@@ -286,8 +311,11 @@ providers:
           GitLab push options — no CLI needed:
           `git push -o merge_request.create -o merge_request.target=main
           -o merge_request.title="<title>" origin HEAD:<your-branch>`
-          creates the MR under your own identity. Your git commit identity
-          is preconfigured.
+          creates the MR under your own identity. Without $GITLAB_TOKEN
+          this seat has no GitLab identity: public projects still clone
+          anonymously, but nothing you push is accepted, so hand a code
+          change to the seat that owns the project instead. Your git
+          commit identity is preconfigured.
       - name: nimbus-conventions
         brief: >-
           All Nimbus projects live under gitlab.com/nimbus-hq. Deliver via a
@@ -296,16 +324,31 @@ providers:
           projects your brief names: each project has exactly one owning
           seat.
 
+# Ask Crewlet: a drawer in the dashboard that answers questions
+# and prepares changes for approval, acting only as the signed-in person.
+# Off unless enabled.  Every model in its chain must be an entry whose
+# CLI's local and web tools are denied (the `assistant` entry above);
+# anything else is refused.  The four bounds below are their defaults, and
+# token_budget caps each person on top of the company's own budget.  See
+# docs/getting-started/configuration.md#ask-crewlet.
+# assistant:
+#   enabled: true
+#   llm: [assistant]
+#   max_steps: 30
+#   turn_timeout_seconds: 900
+#   proposal_ttl_seconds: 900
+#   retention_days: 30
+#   token_budget: { day: 200000 }
+
 # Turn engine — executor/reviewer settings.  Includes the round-cap
-# extension judge: when the executor exhausts its base round cap without
-# finishing, a cheap LLM judge inspects the tool log and decides whether
-# to grant more rounds (the agent is making progress) or fall through to
-# the existing rescue path (the agent is thrashing).  Extensions chain up
-# to the per-phase ceilings.  See
+# extension judge for the first-turn onboarding pass: when the pass
+# exhausts its base round cap without finishing, a cheap LLM judge
+# inspects the tool log and decides whether to grant more rounds (the
+# agent is making progress) or fall through to the existing rescue path
+# (the agent is thrashing).  See
 # docs/concepts/turn-engine.md#round-cap-extension-judge.
 turn_engine:
   extension_enabled: true                 # round-cap extension judge
-  execute_max_tool_rounds_ceiling: 48     # hard ceiling for executor rounds with extensions
   extension_round_step: 8                 # max rounds the judge may grant per call
   # llm_judge per role is not set — the judge falls back to the role's
   # main ``llm`` (here: the org-wide ``default`` provider).
@@ -435,19 +478,19 @@ integrations:
   # check_interval_seconds: 600
 
   # NO TRACKER OR WIKI INTEGRATION, and that is the point of this example:
-  # Nimbus runs the engine's OWN work tracker and knowledge base, so there
-  # is no third-party account to provision, no per-seat vendor token to
-  # paste, and no webhook to register for either of them.  A company that
-  # wants Jira or Confluence instead adds ``integrations.jira`` /
-  # ``integrations.confluence`` here and names that vendor in the
-  # ``tracker`` / ``knowledge`` blocks below — the two axes are
-  # independent, so one may be native while the other is not.  Naming a
-  # vendor AND ``native`` is refused: work would be filed in two places
-  # with nothing keeping them in step.
+  # Nimbus runs Worklet and Doclet, so there is no third-party account to
+  # provision, no per-seat vendor token to paste, and no webhook to
+  # register for either of them.  A company that wants Jira or Confluence
+  # instead adds ``integrations.jira`` / ``integrations.confluence`` here
+  # and names that vendor in the ``tracker`` / ``knowledge`` blocks below.
+  # The two axes are independent, so one may be Worklet or Doclet while the
+  # other is a vendor.  Naming a vendor AND ``worklet`` or ``doclet`` is
+  # refused: work would be filed in two places with nothing keeping them
+  # in step.
   # See docs/integrations/jira.md and docs/integrations/confluence.md.
 
-  # Chat.  Nimbus runs a self-hosted code host (GitLab) and the engine's
-  # own tracker and wiki, and its chat is Mattermost, running beside GitLab
+  # Chat.  Nimbus runs a self-hosted code host (GitLab), Worklet and
+  # Doclet, and its chat is Mattermost, running beside GitLab
   # in this repo's docker-compose.  Slack is equally supported and the
   # config shape is nearly identical; see docs/integrations/slack.md to
   # run this org on Slack instead.
@@ -458,14 +501,19 @@ integrations:
   # Mattermost has no usable inbound webhook, so nothing has to reach the
   # engine.  This org runs behind NAT with no tunnel and no public URL.
   #
-  # Per-agent bot tokens live on ``role.integrations.mattermost`` below;
-  # the Mattermost MCP *tool* server is the ``mattermost`` entry under
-  # ``mcp_servers``.  The bot accounts and every ${MATTERMOST_TOKEN_*}
-  # secret referenced below are created automatically, with no OAuth click
-  # anywhere:
+  # Each agent's bot is turned on, and given its roles and channels, by
+  # ``role.integrations.mattermost`` below; the engine creates the bot,
+  # seals its token as MATTERMOST_BOT_TOKEN_<HANDLE> and binds it to the
+  # agent's ``mattermost`` tool server.  The server, admin and team come
+  # from the bootstrap, with no OAuth click anywhere:
   #
   #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
-  #   crewlet mattermost provision examples/nimbus.company.yaml
+  #   set -a; . ./.env; set +a                     # the URL + admin token it wrote
+  #
+  # then run the engine with the admin token sealed: its reconcile loop
+  # creates each agent's bot as its seat is turned on, and the
+  # integration's Agents tab shows each one.  `crewlet mattermost doctor`
+  # checks the server and the bots against this file.
   #
   # See docs/integrations/mattermost.md.
   #
@@ -489,7 +537,8 @@ integrations:
     url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
     team: nimbus
     typing_status: addressed
-    # Read ONLY by ``crewlet mattermost provision``; the engine ignores it.
+    # The engine provisions each agent's bot from this block; a seat's
+    # roles and channels are on its own ``integrations.mattermost``.
     provisioning:
       username_prefix: ""          # handles are already agent-*, so a prefix would double it
       channels: [town-square, engineering, product]
@@ -520,55 +569,46 @@ integrations:
     # webhook_name: crewlet                          # which hooks on the instance are this deployment's; two deployments need two names
     provisioning:
       group: nimbus-hq                               # top-level group the agent service accounts join
-      # Maintainer, not Developer: GitLab's default protected branch (main)
-      # only lets MAINTAINERS merge — a Developer can push a branch and open
-      # an MR but cannot merge it, so the review→merge loop would stall on a
-      # human.  Maintainer is group-wide here (uniform), so each agent can
-      # technically merge any nimbus-hq project; the "own your repos" policy
-      # above is the behavioural guardrail.  For HARD per-repo scoping
-      # (Maintainer only on owned projects), see docs/integrations/gitlab.md.
-      access_level: maintainer
       projects:                                      # existing Nimbus projects (nimbusflow is created later)
         - nimbus-hq/nimbuscore
         - nimbus-hq/nimbusk0s
         - nimbus-hq/console
         - nimbus-hq/website
       group_webhook: auto                            # one group hook if the plan allows, else per-project
-      token_scopes: [api]
 
 # Which tracker and which knowledge base this company runs.  Nimbus runs
-# the engine's OWN on both axes — its work items and its pages live in the
-# fleet's own store, replicated to every node, with no third-party account
-# behind either.  ONE OF EACH: naming ``native`` beside an
+# Worklet and Doclet: its work items and its pages live in the fleet's own
+# store, replicated to every data node, with no third-party account behind
+# either.  ONE OF EACH: naming ``worklet`` or ``doclet`` beside an
 # ``integrations.jira`` or ``integrations.confluence`` block is refused,
 # because work would be filed in two places with nothing keeping them in
-# step.  The two axes are independent — a company may run a native tracker
-# against a Confluence wiki, or the reverse.
+# step.  The two axes are independent: a company may run Worklet against a
+# Confluence wiki, or Jira against Doclet.
 #
 # An unset ``backend`` DERIVES the same answer from the absence of the
 # vendor block, so both fields could be dropped; they are written out here
 # because this is the reference example and a reader should see the choice
 # rather than infer it.
 tracker:
-  backend: native
+  backend: worklet
 
-  # The clock the tracker's dates mean is the company's own ``timezone``
-  # at the top of this file, and how long a person's inbox keeps the
-  # tracker's notices is the company's too: ``inbox``, below.
+  # The clock Worklet's dates mean is the company's own ``timezone`` at
+  # the top of this file, and how long a person's inbox keeps Worklet's
+  # notices is the company's too: ``inbox``, below.
 
 # How long a person's inbox keeps a notice.  A person's inbox is every
-# native domain's notices — the tracker's — under one set of rules, so the
-# horizon that ages it is the company's rather than any one domain's, and
-# it is left at its default here: ``inbox: {retention_days: 365}``, a year
-# (30..3650).  It is the one horizon that deletes anything, and what it
-# deletes is a DERIVED inbox row rather than the history it points at,
-# which answers for ever.
+# native domain's notices under one set of rules, so the horizon that
+# ages it is the company's rather than any one domain's, and it is left at
+# its default here: ``inbox: {retention_days: 365}``, a year (30..3650).
+# It is the one horizon that deletes anything, and what it deletes is a
+# DERIVED inbox row rather than the history it points at, which answers
+# for ever.
 
 knowledge:
-  backend: native
+  backend: doclet
 
-  # Read scope deliberately omitted (``scope`` unset), and on the native
-  # backend that is the ordinary case rather than a decision: the pages
+  # Read scope deliberately omitted (``scope`` unset), and on Doclet that
+  # is the ordinary case rather than a decision: the pages
   # are the company's own, every seat reads them through the engine, and
   # there is no third-party permission model underneath to mirror.  Set
   # ``scope: [...]`` to narrow the turn-start search to a curated set of
@@ -628,36 +668,36 @@ code:
 
 # All tool MCP servers live here.  Mattermost and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
-# with credentials from ``role.mcp_env`` env vars (the gitlab server is
-# `glab mcp serve`, keyed on GITLAB_TOKEN).  Tavily is a shared web-search
+# with the agent's own sealed token, which the engine binds under the key
+# each server reads (the gitlab server is `glab mcp serve`, which reads
+# GITLAB_TOKEN).  Tavily is a shared web-search
 # backend the PM and DevRel call (their "use web search" guideline is
 # unenforceable without it; swap for Brave/Exa if preferred).
 #
-# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: the
-# engine's own tracker and knowledge base are BUILTIN tools, granted to
-# every seat without a server to run, a process to supervise or a token to
-# mint.  A company on Jira and Confluence adds the community
+# THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: Worklet
+# and Doclet are BUILTIN tools, granted to every seat without a server to
+# run, a process to supervise or a token to mint.  A company on Jira and Confluence adds the community
 # ``mcp-atlassian`` server here and a per-seat credential in each role's
 # ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
-  - name: mattermost                         # per-agent token from role.mcp_env.mattermost
+  - name: mattermost                         # the engine binds each agent's own bot token
     # How an agent SENDS. The websocket fleet is inbound-only, so without
     # this an agent receives a message, reasons about it, and then has no
     # tool to answer with.  Pinned so a rename cannot disarm a skill: the
     # enforced platform-mentions skill triggers on `mattermost_post_message`
     # by name, and an unpinned rename would silently disarm it.
-    # MATTERMOST_TOKEN comes from each role's ``mcp_env.mattermost`` below.
+    # MATTERMOST_TOKEN is each agent's own bot token, bound by the engine.
     shared: false
     command: uvx
     args: ["mcp-server-mattermost==0.6.1"]
     tool_prefix: "mattermost_"
     env:
       MATTERMOST_URL: "${MATTERMOST_URL}"
-  - name: gitlab                             # official glab CLI MCP server; per-agent token via role.mcp_env.gitlab
+  - name: gitlab                             # official glab CLI MCP server; the engine binds each agent's own token
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
-    # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
-    # mcp_env.gitlab below IS the per-agent identity, and there is no
-    # separate server to run/host.  Requires the `glab` CLI on the PATH of
+    # process PER ROLE with that role's own sealed GitLab token as
+    # GITLAB_TOKEN, so each agent acts as itself and there is no separate
+    # server to run or host.  Requires the `glab` CLI on the PATH of
     # every engine host that runs seats.  The served surface is the full
     # glab command tree (MR approve/diff/notes, issue CRUD, CI, glab_api
     # for anything else).  Alternative: @zereight/mcp-gitlab as a shared
@@ -770,9 +810,10 @@ units:
         # no better recipient (unassigned items, page changes nobody was
         # mentioned in) routes to the unit lead (Agent CEO), and the
         # container is the team's write / skill-promotion home.  The keys
-        # are VENDOR-NEUTRAL: they name a native project and space, or a
-        # Jira project and Confluence space, depending on which backend the
-        # company runs — the org chart does not change when it switches.
+        # are VENDOR-NEUTRAL: they name a Worklet project and a Doclet space,
+        # or a Jira project and a Confluence space, depending on which
+        # backends the company runs; the org chart does not change when it
+        # switches.
         # NEITHER is a tool credential (those are per-agent under role
         # ``mcp_env`` below) and neither scopes knowledge reads.
         project: "LEAD"
@@ -813,12 +854,11 @@ units:
               - Regularly check in on progress by reviewing the boards and team updates rather than requesting ad-hoc status reports.
               - Store strategic insights, competitive intelligence, and key decisions in your personal knowledge base for future reference.
               - When documenting strategic decisions or company-wide announcements, publish them as pages in the LEAD space so all team members can reference them — the knowledge base is the company's own, so every agent's ``## Relevant knowledge`` search reaches them.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CEO}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work: a weekday-morning backlog review.
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
@@ -868,12 +908,11 @@ units:
               - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
               - Regularly review the board to ensure stories are progressing and no work is falling through the cracks.
               - When you need background on a past architecture decision, search the team's pages first before asking the team.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CTO}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
   - name: Product
     id: product
@@ -922,12 +961,11 @@ units:
               - You should then pick up your tasks one by one, update each one's status, and always update your knowledge_base accordingly after finishing the task.
               - For the responsibilities that require up-to-date analysis/comparison/data-gathering/benchmarking, you should use web search tools and deep search tools to get the latest information.
               - When completing market research or competitive analysis, publish the findings as a page and link it from the work item.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_PM}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
       - name: Developer Relations
         id: developer-relations
@@ -977,14 +1015,16 @@ units:
               - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each week.
               - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_DEVREL}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_DEVREL}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
+              gitlab:
+                enabled: true
+                access_level: 40                # Maintainer: merges to protected main
 
   - name: Engineering
     id: engineering
@@ -1079,26 +1119,20 @@ units:
               - Search the team's pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
               - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it with a comment rather than implementing outside your projects.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: during Execute the agent calls the
-            # run_sandbox tool, which launches a coding agent that
-            # implements the work item in nimbuscore / nimbusk0s and
+            # Executor box: this seat's executor is OpenCode's own run,
+            # which implements the work item in nimbuscore / nimbusk0s and
             # opens an MR as Agent SWE's own GitLab identity (the
-            # ${GITLAB_TOKEN_SWE} PAT above).  The merge-request
+            # ${GITLAB_TOKEN_AGENT_SWE} token the engine seals for it).  The merge-request
             # review-requested webhook then wakes this seat to review the
-            # MR + move the work item.  coding_agent inherits the provider
-            # default (opencode).
+            # MR + move the work item.
             sandbox:
-              enabled: true
-              # `run_in:` picks this seat's cell from providers.sandbox
-              # above — direct | container | e2b. Omitted here, so it
-              # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose work must not touch this host names `container` or
-              # `e2b` here, and the catalogue then has to serve it:
+              # The box runs where the default entry places it:
+              # providers.sandbox.default_run_in (direct). A seat whose
+              # work must not touch this host runs on an entry naming
+              # `run_in: container` or `e2b`, and the catalogue then has to
+              # serve it:
               # `container` needs providers.sandbox.local.image, an image
               # carrying the coding agent AND this seat's toolchain (the go
               # step below checks for Go inside it), and `e2b` needs an
@@ -1106,26 +1140,23 @@ units:
               # same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
               # for the coding agent rather than for this seat's repos.
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               # This seat's own PAT, injected into the box run env — the
               # engine-wide git-auth step (and the coding agent, per that
               # step's brief) uses it. Explicit per seat, so MRs land under
               # THIS agent's GitLab identity; the engine itself knows
               # nothing about GitLab.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
-              # Per-role provisioning (crewlet.sandbox.setup): each step
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_SWE}"
+              # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
               # and a `brief` paragraph telling the coding agent what the
@@ -1165,7 +1196,9 @@ units:
                     before pushing.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_SWE}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent Frontend SWE
             handle: agent-frontend-swe
@@ -1201,32 +1234,24 @@ units:
               - For every new page, include empty / loading / error states from the first commit — never ship a happy-path-only UI.
               - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM on the work item rather than guessing.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: Execute's run_sandbox tool launches a
-            # coding agent that implements the UI story in console / website
-            # and opens an MR as Agent Frontend SWE's own GitLab identity
-            # (${GITLAB_TOKEN_FE}).  coding_agent inherits the provider
-            # default (opencode).
+            # Executor box: this seat's executor is OpenCode's own run,
+            # which implements the UI story in console / website and opens
+            # an MR as Agent Frontend SWE's own GitLab identity
+            # (${GITLAB_TOKEN_AGENT_FRONTEND_SWE}).
             sandbox:
-              enabled: true
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_FRONTEND_SWE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
@@ -1256,7 +1281,9 @@ units:
                     empty/loading/error states.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_FE}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
@@ -1295,31 +1322,23 @@ units:
               - For perf-sensitive code, capture a baseline benchmark in the MR description before optimising; otherwise you are guessing.
               - When you discover a missing primitive in the Nimbus platform (a cluster capability, a console page, a webhook), file a story for the owning role rather than working around it.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: Execute's run_sandbox tool launches a
-            # coding agent that implements the framework story in the Phase-2
-            # repo and opens an MR as Agent AI Systems Engineer's own GitLab
-            # identity (${GITLAB_TOKEN_AI}).  coding_agent inherits the
-            # provider default (opencode) — the CLI the default entry drives,
-            # so a Python framework change needs no extra coding-agent secret.
+            # Executor box: this seat's executor is OpenCode's own run —
+            # the CLI the default entry drives, so a Python framework change
+            # needs no extra coding-agent secret — which implements the
+            # framework story in the Phase-2 repo and opens an MR as Agent
+            # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
             sandbox:
-              enabled: true
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
@@ -1341,7 +1360,9 @@ units:
                     examples/ script with every public-surface change.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_AI}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.

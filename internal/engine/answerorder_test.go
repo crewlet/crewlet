@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // THE R1/R2 RACE, end to end through a seat's inbox, on BOTH backends.
@@ -83,9 +84,9 @@ func TestTheFirstReplyAnswersTheQuestionOnEveryBackend(t *testing.T) {
 	}
 }
 
-// answerResumer resumes the parked run as a coding agent would: it fails the
-// first time, and on the next it calls run_sandbox again and the new job parks
-// on a second question.
+// answerResumer resumes the parked run as a turn would: it fails the first
+// time, and on the next it relaunches its executor and the new job parks on a
+// second question.
 type answerResumer struct {
 	store *sandbox.CoordStore
 
@@ -99,7 +100,13 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 	r.calls++
 	first := r.calls == 1
 	if !first {
-		r.answers = append(r.answers, req.Answer)
+		// A person's answer carries the run on: it rides the request's
+		// Asked, never its Answer, which is a collected run's own report.
+		var answer string
+		if req.Asked != nil {
+			answer = req.Asked.Answer
+		}
+		r.answers = append(r.answers, answer)
 	}
 	r.mu.Unlock()
 	if first {
@@ -113,9 +120,11 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		return err
 	}
-	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{
-		Question: "which test suite?", Audience: "requester", AskedAt: time.Now().UTC(),
-	})
+	if err := sandboxtest.RecordAsk(ctx, r.store, req.Run.TurnID,
+		sandbox.Ask{Question: "which test suite?", To: sandbox.AskToRequester}); err != nil {
+		return err
+	}
+	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{AskedAt: time.Now().UTC()})
 }
 
 func (r *answerResumer) resumedWith() []string {
@@ -162,12 +171,16 @@ func fixtureInboxGroup(handle string) string {
 type handCranked struct {
 	mu  sync.Mutex
 	due []func()
+	// at is each due timer's delay, beside it in due, for a case that fires
+	// only what was asked for at once ([handCranked.fireNow]).
+	at []time.Duration
 }
 
-func (h *handCranked) after(_ time.Duration, f func()) func() bool {
+func (h *handCranked) after(delay time.Duration, f func()) func() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	fired := false
+	h.at = append(h.at, delay)
 	h.due = append(h.due, func() {
 		if !fired {
 			fired = true
@@ -188,12 +201,34 @@ func (h *handCranked) after(_ time.Duration, f func()) func() bool {
 func (h *handCranked) fire() int {
 	h.mu.Lock()
 	due := h.due
-	h.due = nil
+	h.due, h.at = nil, nil
 	h.mu.Unlock()
 	for _, f := range due {
 		f()
 	}
 	return len(due)
+}
+
+// fireNow fires only the timers armed with no delay, the ones a signal armed,
+// and leaves every timer waiting on the clock, a backstop's included.
+func (h *handCranked) fireNow() int {
+	h.mu.Lock()
+	var now []func()
+	var due []func()
+	var at []time.Duration
+	for i, f := range h.due {
+		if h.at[i] == 0 {
+			now = append(now, f)
+			continue
+		}
+		due, at = append(due, f), append(at, h.at[i])
+	}
+	h.due, h.at = due, at
+	h.mu.Unlock()
+	for _, f := range now {
+		f()
+	}
+	return len(now)
 }
 
 func (h *handCranked) pending() int {
@@ -212,7 +247,7 @@ type turns struct {
 func (s *turns) run(_ context.Context, req engine.Request) (turn.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.asks = append(s.asks, engine.DescribeTrigger(req.Events))
+	s.asks = append(s.asks, engine.DescribeTrigger(req.Events, ""))
 	return turn.Result{Decision: phase.Done}, nil
 }
 
@@ -268,9 +303,9 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	resumer := &answerResumer{store: store}
 	clock := &handCranked{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Pushes:   noPushes{},
+		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
-		Resume: resumer, Hold: inboxHold{q: q}, After: clock.after,
+		Resume: resumer, Hold: inboxHold{q: q}, After: clock.after, Pushes: noPushes{},
 		// THE SEAT HELD UNDER THE LEASE IT IS RECOVERED WITH BELOW, as a
 		// seat host's acquisition holds it.
 		Lease: func(string) (sandbox.Fence, bool) {
@@ -294,9 +329,8 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester", AskedAt: time.Now().UTC(),
-	}); err != nil {
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1); err != nil {
@@ -354,9 +388,12 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("Publish R2: %v", err)
 	}
 	settle()
-	if got := get(); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
-		!strings.Contains(got.Answer.Text, "release branch") {
+	got := get()
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil {
 		t.Fatalf("run = %q with answer %+v, want R1 still the recorded answer", got.Status, got.Answer)
+	}
+	if words, err := fleetAnswers().Open(got); err != nil || !strings.Contains(words.Text, "release branch") {
+		t.Fatalf("the recorded answer opens to %+v, %v, want R1", words, err)
 	}
 	if ran := ordinary.ran(); len(ran) != 0 {
 		t.Fatalf("R2 was worked as a turn (%q) while R1's resume was still owed: the seat's "+

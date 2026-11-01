@@ -16,14 +16,65 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// A CODING RUN'S REPOSITORIES ON THE COMPANY'S OWN CODE HOST, resolved at its
-// launch into the run's grants (ADR-0063): each repository a run_sandbox call
-// names becomes a [sandbox.RunRepo] on the run's row — its id beside its
-// current name, the commit the run starts from, the branch it works on, what
-// it may do and its cone — and the position the launch read them at becomes
-// the run's first code floor.
+// RepoRequest is one repository a code_checkout call names, as the model
+// wrote it: resolved by the engine ([CodeDeps.ResolveRunRepos]) into the
+// run's grant on it, never trusted.
+type RepoRequest struct {
+	// Repo is the repository's name, as code_list_repos answers it.
+	Repo string
+	// Base is a branch, a tag or a commit id to start from; "" is the run's
+	// branch where it exists, else the default branch.
+	Base string
+	// Branch is the branch the run works on; "" is the seat's own branch for
+	// the turn's work item (code.SeatBranch).
+	Branch string
+	// Access is "read", "write" or "" — the most the seat's grant allows on
+	// the branch.
+	Access string
+	// Paths are the directories checked out (a sparse cone); empty is the
+	// whole tree.
+	Paths []string
+	// Change is a change of the repository the run works on — its number
+	// (42) or its reference (web!42) — resolved to its source branch, from
+	// its head; "" for none. Never beside Branch or Base, which it decides.
+	Change string
+	// OpenChange asks the engine to open a change from the run's branch once
+	// the run finishes ([OpenChangeRequest]); nil for none. Never beside
+	// Change, whose branch heads one already.
+	OpenChange *OpenChangeRequest
+}
+
+// OpenChangeRequest is a code_checkout call's ask to open a change from the
+// branch the run works on, at its collection: the branch it proposes into —
+// "" for the repository's default branch — its title — "" for the subject of
+// the commit the run delivers — and whether it opens as a draft.
+type OpenChangeRequest struct {
+	Target string
+	Title  string
+	Draft  bool
+}
+
+// RefusedCheckout is a checkout refused with a result already composed and
+// classed — a repository the call named that the seat may not be given, in
+// the code host's own words — which the tool answers as it is rather than as
+// a checkout the engine could not do.
+type RefusedCheckout struct{ Result tools.Result }
+
+func (r *RefusedCheckout) Error() string { return r.Result.Output }
+
+// Unwrap is the refusal's class and cause, so a caller branching on either
+// reads the result's own.
+func (r *RefusedCheckout) Unwrap() error { return r.Result.Cause }
+
+// A CODING RUN'S REPOSITORIES ON THE COMPANY'S OWN CODE HOST, resolved as its
+// box checks each out into the run's grants (ADR-0086): each repository a
+// code_checkout call names becomes a [sandbox.RunRepo] on the run's row — its
+// id beside its current name, the commit the run starts from, the branch it
+// works on, what it may do and its cone — and the position the resolution
+// read it at raises the run's code floor.
 //
 // THROUGH THE CODE TOOLS' OWN SEAMS, never a second copy of them: the
 // repository by the one resolution of a `repo` argument ([CodeDeps.repo],
@@ -44,19 +95,19 @@ import (
 // could not make, and a push outside the seat's own work the colleague could
 // not make, are refused, while its own work — the branches under its own
 // namespace, and every branch of a repository it owns — stays its own,
-// which anybody who can message it steers. The launch prechecks the
+// which anybody who can message it steers. The checkout prechecks the
 // same rule ([runAccess]), so `access: write` on a branch the colleague could
-// not push is refused before a box costs anything, and an access left out is
+// not push is refused at the checkout rather than at the box's first push, and an access left out is
 // write only where the box could push. A person bounds nothing, holding
 // maintain on every repository, and a stranger's turn reads nothing at all.
 
-// RunRepos is what the repositories one run_sandbox call names resolve to.
+// RunRepos is what the repositories a checkout names resolve to.
 type RunRepos struct {
 	// Repos are the run's grants, in the order the call named them.
 	Repos []sandbox.RunRepo
 	// Floor is the run's first code floor: the furthest position any read
 	// of the resolution answered at, and this node's own writes to each
-	// repository — a code_commit_files just before the launch must be in
+	// repository — a code_commit_files just before the checkout must be in
 	// the clone.
 	Floor statelog.Position
 	// Ceiling is the handle of the colleague seat whose ask woke the turn,
@@ -68,16 +119,16 @@ type RunRepos struct {
 }
 
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
-// ([code.GrantOf] over the engine's roster): the launch's PRECHECK of the
+// ([code.GrantOf] over the engine's roster): the checkout's PRECHECK of the
 // access it gives a run, never its authority — every box push is judged
 // again at the code host's admission and at its decide.
 type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 
-// ResolveRunRepos resolves the repositories a run_sandbox call names, for
-// turn's seat, into the run's grants and its first code floor — refusing, as
-// a [*RefusedLaunch] whose result the tool answers as it is, any repository
-// the seat may not be given, naming it and why. Called by the launcher AFTER
-// its own refusals and before anything durable of the launch exists, since a
+// ResolveRunRepos resolves the repositories a code_checkout call names, for
+// turn's seat, into the run's grants and the code floor they were read at —
+// refusing, as a [*RefusedCheckout] whose result the tool answers as it is,
+// any repository the seat may not be given, naming it and why. Called by the
+// engine's checkout before the grant is written to the run's row, since a
 // resolution takes the turn's holds and reads at the seat's level.
 //
 // For each request, in order:
@@ -95,7 +146,7 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //     is named — the default branch, and that branch the change proposes
 //     into, which must exist; the turn's hold taken on every seat's branch
 //     among them ([HoldRef]) and on the run's own branch where it does not
-//     exist yet, before anything durable of the launch exists — and a
+//     exist yet, before the grant is written — and a
 //     change's branch, a live change's source, must;
 //  4. the access: `write` asked must pass, for the branch, the ref rule the
 //     box will be judged by — the seat's grant held to a run given write and,
@@ -113,7 +164,7 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs []RepoRequest,
 	grant GrantFunc) (RunRepos, error) {
 
-	const tool = RunSandboxTool
+	const tool = CodeCheckoutTool
 	if len(reqs) == 0 {
 		return RunRepos{}, nil
 	}
@@ -122,21 +173,21 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 	}
 	c, refusal := d.callerOn(ctx, turn, tool, authz.ActionCodeRead)
 	if refusal != nil {
-		return RunRepos{}, &RefusedLaunch{Result: *refusal}
+		return RunRepos{}, &RefusedCheckout{Result: *refusal}
 	}
 	if c.asker.Kind != code.PrincipalAgent {
-		return RunRepos{}, &RefusedLaunch{Result: refused(tools.RefusalForbidden,
-			"run_sandbox gives repositories to a seat's coding run, and this call is no seat's.")}
+		return RunRepos{}, &RefusedCheckout{Result: refused(tools.RefusalForbidden,
+			CodeCheckoutTool+" gives repositories to a seat's coding run, and this call is no seat's.")}
 	}
 	out := RunRepos{Ceiling: c.ceiling}
 	byID := map[string]string{}
 	for _, req := range reqs {
 		r, floor, refusal := d.runRepo(ctx, turn, c, req, grant)
 		if refusal != nil {
-			return RunRepos{}, &RefusedLaunch{Result: *refusal}
+			return RunRepos{}, &RefusedCheckout{Result: *refusal}
 		}
 		if first, named := byID[r.RepoID]; named {
-			return RunRepos{}, &RefusedLaunch{Result: failed(fmt.Sprintf("run_sandbox: %s and %s name one "+
+			return RunRepos{}, &RefusedCheckout{Result: failed(fmt.Sprintf(CodeCheckoutTool+": %s and %s name one "+
 				"repository, %s; one run works on one branch of a repository, so name it once.", clip(first),
 				clip(req.Repo), r.Repo))}
 		}
@@ -152,7 +203,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
 	grant GrantFunc) (sandbox.RunRepo, statelog.Position, *tools.Result) {
 
-	const tool = RunSandboxTool
+	const tool = CodeCheckoutTool
 	if !code.ValidName(req.Repo) {
 		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, digits and "+
 			"hyphens, as %s lists it.", tool, clip(req.Repo), CodeListReposTool))
@@ -192,7 +243,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return sandbox.RunRepo{}, statelog.Position{}, refusal
 	}
 
-	// ONE READ for every ref the launch needs of the repository: the run's
+	// ONE READ for every ref the checkout needs of the repository: the run's
 	// branch, a base named as a ref, the default branch where no base is
 	// named, and the branch a change it asks to open proposes into — one
 	// barrier, all of them at one checkpoint.
@@ -224,7 +275,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	switch current.Status {
 	case code.RepoStatusDeleted, code.RepoStatusPurging:
 		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRepoNotFound, current.Name),
-			fmt.Sprintf("%s: %s; nothing was launched.", tool, code.RepoGone{ID: current.ID, Name: current.Name,
+			fmt.Sprintf("%s: %s; nothing was checked out.", tool, code.RepoGone{ID: current.ID, Name: current.Name,
 				Status: current.Status, DeletedAt: current.DeletedAt, ManagedBy: current.ManagedBy}.Detail()))
 		return sandbox.RunRepo{}, statelog.Position{}, &r
 	}
@@ -235,8 +286,8 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		// the same record — so the branch was deleted between the two reads,
 		// and the change with it.
 		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRefNotFound, head.Missing),
-			fmt.Sprintf("%s: %s's branch %s was deleted as the run was launched, which closes the change; "+
-				"nothing was launched — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
+			fmt.Sprintf("%s: %s's branch %s was deleted as it was checked out, which closes the change; "+
+				"nothing was checked out — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
 		return sandbox.RunRepo{}, statelog.Position{}, &r
 	case targetAt >= 0 && answer.Refs[targetAt].Missing != "":
 		r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s — name an existing branch as "+
@@ -247,8 +298,9 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		// THE RUN'S OWN BRANCH, NOT THERE YET: held with no read, as a branch
 		// a write creates is — no deletion can have listed it, and the box's
 		// first push sets it. Every ref the read answered is held already
-		// (CodeDeps.refsOf), so every ref a launch resolves is on the turn's
-		// set before BeginLaunch writes that set on the run's row, and a
+		// (CodeDeps.refsOf), so every ref a checkout resolves is on the
+		// turn's set — which the running job's row carries from its launch
+		// on (PendingStore.AddCodeHolds) — before the grant is written, and a
 		// relaunch, which replaces the row's grants, keeps them held.
 		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, names[0], nil, statelog.Position{},
 			d.Now); err != nil {
@@ -355,7 +407,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.RepoRef,
 	g code.Grant) (sandbox.RepoAccess, *tools.Result) {
 
-	const tool = RunSandboxTool
+	const tool = CodeCheckoutTool
 	if req.Access == string(sandbox.RepoRead) {
 		return sandbox.RepoRead, nil
 	}
@@ -395,7 +447,7 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
 	repo code.RepoRef) (*code.ChangeDetail, statelog.Position, *tools.Result) {
 
-	const tool = RunSandboxTool
+	const tool = CodeCheckoutTool
 	if req.Change == "" {
 		return nil, statelog.Position{}, nil
 	}
@@ -409,14 +461,16 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 		}
 		s = n
 	}
-	number, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || number < 1 {
+	// BY THE ONE INTEGER RULE (argval.Whole), the rule `change` is read by
+	// on every code tool, so a change one tool takes is one this takes.
+	number, ok := argval.Whole(s)
+	if !ok || number < 1 {
 		r := failed(fmt.Sprintf("%s: repository %q's `change` %q is no change: name it by its number (42) or "+
 			"its reference (%s), as %s lists it.", tool, clip(req.Repo), clip(req.Change),
 			code.ChangeRef(repo.Name, 42), CodeListChangesTool))
 		return nil, statelog.Position{}, &r
 	}
-	written, refusal := d.changeOf(ctx, turn, tool, c, repo, number)
+	written, refusal := d.changeOf(ctx, turn, tool, c, repo, int64(number))
 	if refusal != nil {
 		return nil, statelog.Position{}, refusal
 	}
@@ -442,7 +496,7 @@ func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCalle
 // rule here too ([code.TitleProblem]), so an ask the collection's open would
 // refuse costs no box.
 func openTarget(req RepoRequest, repo code.RepoRef, branch string) (string, *tools.Result) {
-	const tool = RunSandboxTool
+	const tool = CodeCheckoutTool
 	ask := req.OpenChange
 	if ask == nil {
 		return "", nil

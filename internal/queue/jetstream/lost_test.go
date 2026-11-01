@@ -33,14 +33,29 @@ const lostWithin = 30 * time.Second
 // mistakenly installed handler has long since spent.
 const quietFor = 250 * time.Millisecond
 
-// oversized is an event larger than limit bytes on the wire and well inside
-// the contract, so the client — which still reads the contract's figure after
-// a live reload — sends it, and only the server can refuse it.
-func oversized(t *testing.T, limit int) []byte {
+// reloadedLimit is the max_payload a case lowers the server to by a live
+// reload before sending a message past it.
+//
+// SMALL ENOUGH THAT THE CLIENT HANDS THE WHOLE MESSAGE TO THE SOCKET IN ONE
+// WRITE, which is what makes the close for good the outcome rather than one of
+// two. The server refuses a message on its header and closes the connection
+// without reading the body; a message larger than the socket takes at once is
+// still being written then, and since nats.go 1.55.0 a write that fails part
+// way closes the socket on the client's side and drops the server's refusal
+// unread, so the client reconnects instead. At a quarter of the contract,
+// about one close in ten under -race was such a reconnect, and the case staged
+// nothing. A few KiB is far below any socket buffer and above anything the
+// cases' own connections send unprompted.
+const reloadedLimit = 4 << 10
+
+// oversized is an event larger than reloadedLimit bytes on the wire and well
+// inside the contract, so the client (which still reads the contract's figure
+// after a live reload) sends it, and only the server can refuse it.
+func oversized(t *testing.T) []byte {
 	t.Helper()
 	e := ev(1)
 	e.Extra = map[string]json.RawMessage{
-		"blob": json.RawMessage(`"` + strings.Repeat("x", limit+1024) + `"`),
+		"blob": json.RawMessage(`"` + strings.Repeat("x", reloadedLimit+1024) + `"`),
 	}
 	body, err := json.Marshal(e)
 	if err != nil {
@@ -49,17 +64,17 @@ func oversized(t *testing.T, limit int) []byte {
 	return body
 }
 
-// sendPast sends nc a message past limit, which the server has lowered under
-// it by a live reload.
+// sendPast sends nc a message past reloadedLimit, which the server has lowered
+// under it by a live reload.
 //
-// A WRITE ERROR IS EXPECTED, not a failure of the case: the server refuses the
-// message on its header and closes the connection while the client is still
-// writing the body, so the write can meet a reset. What the case cannot go on
-// from is the client refusing the message ITSELF — it would have learned the
-// reloaded limit, and nothing would reach the server to refuse.
-func sendPast(t *testing.T, nc *nats.Conn, limit int) {
+// The Flush after it can fail, and that is not a failure of the case: the
+// server closes the connection over the message, so the PING behind it may
+// meet a reset. What the case cannot go on from is the client refusing the
+// message ITSELF, since it would have learned the reloaded limit and nothing
+// would reach the server to refuse.
+func sendPast(t *testing.T, nc *nats.Conn) {
 	t.Helper()
-	if err := nc.Publish("crewlet.lost.oversized", oversized(t, limit)); errors.Is(err, nats.ErrMaxPayload) {
+	if err := nc.Publish("crewlet.lost.oversized", oversized(t)); errors.Is(err, nats.ErrMaxPayload) {
 		t.Fatalf("the client refused the message itself (%v): it has learned "+
 			"the reloaded limit, and the case stages nothing", err)
 	}
@@ -101,7 +116,6 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 
 	t.Run("a live reload of a lower max_payload and a message past it", func(t *testing.T) {
 		t.Parallel()
-		const limit = queue.MaxPayloadBytes / 4
 		const token = "the-one-this-node-holds"
 		srv := externaltest.Start(t, queue.MaxPayloadBytes, func(o *server.Options) {
 			o.Authorization = token
@@ -116,8 +130,8 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 		}
 		t.Cleanup(second.Close)
 
-		srv.Reload(limit)
-		sendPast(t, q.nc, limit)
+		srv.Reload(reloadedLimit)
+		sendPast(t, q.nc)
 
 		cause := lost(t, q)
 		for _, want := range []string{"Maximum Payload Violation",
@@ -205,7 +219,6 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 // asking which connection it was, and the second half does.
 func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	t.Parallel()
-	const limit = queue.MaxPayloadBytes / 4
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	second, err := q.DialWatched()
@@ -214,8 +227,8 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	}
 	t.Cleanup(second.Close)
 
-	srv.Reload(limit)
-	sendPast(t, second, limit)
+	srv.Reload(reloadedLimit)
+	sendPast(t, second)
 	first := lost(t, q)
 	select {
 	case <-q.AcksLost():
@@ -229,7 +242,7 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 			"staged nothing it can tell apart")
 	}
 
-	sendPast(t, q.nc, limit)
+	sendPast(t, q.nc)
 	select {
 	case <-q.AcksLost():
 	case <-time.After(lostWithin):
@@ -241,6 +254,73 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	if got := q.LostCause(); got == nil || got.Error() != first.Error() {
 		t.Errorf("the queue's own close rewrote the cause:\nfirst: %v\nnow:   %v",
 			first, got)
+	}
+}
+
+// A READER THAT HAS SEEN THE LOSS SEES WHETHER IT LOST THE ACKS.
+//
+// `crewlet run` wakes on Lost and then asks AcksLost without waiting, to say
+// before the drain whether the turns still running finish or are cancelled. So
+// the queue's own connection closing has to close AcksLost no later than Lost:
+// recorded the other way round, a reader woken in between promised an operator
+// that turns finish while the drain was cancelling them.
+//
+// THE WINDOW IS HELD OPEN rather than raced for. Left to the scheduler, a
+// reader parked on Lost landed between the two closes in under one round in
+// twenty under -race and about one in twenty thousand without it, which is a
+// case that passes over the very defect it names. So the case enters the acks
+// close itself, through the same sync.Once record goes through, and holds it:
+// record is then stopped exactly where the acks are about to close, and Lost
+// must not be closed while it waits. Released, both are closed.
+//
+// Mutation: close done before acks in record and this goes red on every run.
+func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
+	t.Parallel()
+	cause := lostConnection(lostServer(false, "nats://nats-1.internal:4222"),
+		nats.ErrAuthorization, false)
+	l := newConnectionLoss()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	go l.acksOnce.Do(func() {
+		close(entered)
+		<-release
+		close(l.acks)
+	})
+	<-entered
+	recorded := make(chan struct{})
+	go func() {
+		defer close(recorded)
+		l.record(cause, true)
+	}()
+
+	select {
+	case <-l.done:
+		// The acks close is held, so it cannot have happened yet.
+		t.Fatal("a reader woken by Lost found the queue's own connection " +
+			"lost and its acks still standing, so the drain line would " +
+			"promise the running turns finish while the drain cancels them")
+	case <-time.After(quietFor):
+	}
+
+	close(release)
+	select {
+	case <-recorded:
+	case <-time.After(lostWithin):
+		t.Fatalf("record did not return within %s of the acks closing", lostWithin)
+	}
+	if !closedYet(l.done) || !closedYet(l.acks) {
+		t.Fatalf("record returned with Lost closed %v and AcksLost closed %v, "+
+			"want both", closedYet(l.done), closedYet(l.acks))
+	}
+}
+
+// closedYet reports whether ch is closed, without waiting for it.
+func closedYet(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -305,7 +385,6 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 // on a connection that is still open and the first half does.
 func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	t.Parallel()
-	const limit = queue.MaxPayloadBytes / 4
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{})
 	if err != nil {
@@ -334,8 +413,8 @@ func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	}
 
 	// CLOSED BY THE CLIENT, its handler not yet run.
-	srv.Reload(limit)
-	sendPast(t, nc, limit)
+	srv.Reload(reloadedLimit)
+	sendPast(t, nc)
 	deadline := time.Now().Add(lostWithin)
 	for !nc.IsClosed() {
 		if time.Now().After(deadline) {
@@ -476,7 +555,6 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 
 	t.Run("a donor's own connection closed for good under it", func(t *testing.T) {
 		t.Parallel()
-		const limit = queue.MaxPayloadBytes / 4
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
 		q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 		owned, err := q.DialOwned()
@@ -485,8 +563,8 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 		}
 		t.Cleanup(owned.Close)
 
-		srv.Reload(limit)
-		sendPast(t, owned, limit)
+		srv.Reload(reloadedLimit)
+		sendPast(t, owned)
 		deadline := time.Now().Add(lostWithin)
 		for !owned.IsClosed() {
 			if time.Now().After(deadline) {

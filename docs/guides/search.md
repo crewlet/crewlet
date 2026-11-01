@@ -3,10 +3,26 @@
 How the knowledge search is answered, what it costs, and what a fleet can do
 about it when the corpus outgrows one node's CPU.
 
-Search is answered from **this node's own tables**. Every node holds the whole
-corpus — see [Scaling](../concepts/scaling.md) — so there is no lookup that has
-to leave the machine and no answer that depends on a peer being up. What a
-fleet can divide is the **work**, not the data.
+> **This page is about the KNOWLEDGE corpus** — pages and work items, behind
+> the `knowledge.Searcher` seam and the `search_knowledge` tool. The company's
+> **chat** is searched too, and none of what follows applies to it: it has an
+> index of its own, it has **no semantic half at all**, and no query fuses the
+> two. That is a decision with an arithmetic behind it rather than a gap — see
+> [Chatlet § Search](../concepts/chatlet.md#search) and
+> [ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
+> Chat search is also the only search on this page with a **viewer**: a private
+> room's contents are not a fact about the company the way a page is, so every
+> chat search is answered for its asker — the node that ranks it resolves the
+> rooms that person may read and ranks over those alone, the index refuses a
+> query that names no rooms rather than read it as every room, and an answer
+> says how many rooms it searched.
+
+Search is answered from **a data node's own tables**. Every data node holds the
+whole corpus — see [Scaling](../concepts/scaling.md) — so a data node answers
+with no lookup that has to leave the machine and no answer that depends on a
+peer being up; a node without the `data` role holds none of it and asks a data
+node instead ([When the estate does not answer](#when-the-estate-does-not-answer)).
+What a fleet can divide is the **work**, not the data.
 
 ---
 
@@ -68,18 +84,21 @@ twice the one-second budget of the scan itself — so a slow provider costs a
 search its meaning half rather than holding the person who asked.
 
 **A query is at most 400 bytes**, on every surface that takes one: a seat's
-`search_knowledge`, `search_work_items` and `answer_knowledge`, the operator's
-tools, the API's `knowledge` and `work_search` (`bad_params`, naming the size
-and the limit) and the dashboard, which sends nothing past it and says why. A
-longer one is **refused, never cut** — a query is a question, and a search on
-its first part answers another one; past four hundred bytes it is a pasted
-thread, which no ranker turns into a better search. This is the opposite of
-what the corpus does with a long page, and deliberately: a source is embedded
-as its opening because one vector stands for one source, while a query's
-vector is always computed from the **whole** query. Every model this build
-knows takes at least 2 032 bytes an input; on a model stated with a narrower
-window (`max_input_tokens`), a query longer than one input is embedded in
-pieces at the model's bound, in one request, and the pieces' vectors pooled.
+`search_knowledge`, `search_work_items`, `search_messages` and
+`answer_knowledge`, the operator's tools, the API's `knowledge`, `work_search`
+and `GET /chatlet/search` (`bad_params`, naming the size and the limit) and the
+dashboard, which sends nothing past it and says why. Chat's search shares the
+bound and nothing else on this page — a pasted passage ranks on every
+incidental word in it there too. A longer one is **refused, never cut** — a
+query is a question, and a search on its first part answers another one; past
+four hundred bytes it is a pasted thread, which no ranker turns into a better
+search. This is the opposite of what the corpus does with a long page, and
+deliberately: a source is embedded as its opening because one vector stands for
+one source, while a query's vector is always computed from the **whole** query.
+Every model this build knows takes at least 2 032 bytes an input; on a model
+stated with a narrower window (`max_input_tokens`), a query longer than one
+input is embedded in pieces at the model's bound, in one request, and the
+pieces' vectors pooled.
 
 **A mode asked for is not always a mode served, and every answer says which.**
 It carries `served_mode` (the ranking the hits actually came from), `modes`
@@ -103,7 +122,7 @@ words are half of what was asked for.
 phrase is the seam's PROBE: it runs nothing and reads nothing, and answers
 `modes` and — for the mode asked — the `degraded` the CONFIGURATION decides
 (`no_embeddings`, `unsupported`; never a transient `embedding_failed`, which is
-a property of one search). The dashboard's Knowledge search asks it for
+a property of one search). The dashboard's Doclet search asks it for
 `semantic` and disables a mode the answer does not list, with the reason as
 that mode's second line in the menu beside the field, rather than letting a
 reader pick Meaning and find out from a degraded answer. The same answer sets the dashboard's DEFAULT:
@@ -157,15 +176,15 @@ and `search_slow` fires. A fleet divides the scan, below.
 
 ## When a fleet divides the scan
 
-Above **10 000 documents**, a company running more than one node divides the
-buckets between them. Each node scans its own contiguous range, returns its
-best candidates *with their scores*, and the node that asked merges them.
+Above **10 000 documents**, a company running more than one data node divides
+the buckets between them. Each scans its own contiguous range, returns its best
+candidates *with their scores*, and the asking data node merges them.
 
 The division is computed, not configured, and every node computes the same one:
-sort the live node ids, give each a contiguous range, hand the remainder to the
-first few. 64 buckets over three nodes is 22, 21, 21.
+sort the live data nodes' ids, give each a contiguous range, hand the remainder
+to the first few. 64 buckets over three data nodes is 22, 21, 21.
 
-Below that floor a search is answered by the asking node alone. The floor is
+Below that floor a search is answered by the asking data node alone. The floor is
 not a preference — a broker round trip is about a millisecond, and a semantic
 scan of 10 000 documents measures 49 ms at p95 on an idle node and 125 ms with
 eight searches in flight. Under it the scan's fixed cost dominates (its
@@ -183,7 +202,7 @@ exactly 1.000 at every width.
 
 ```mermaid
 sequenceDiagram
-    participant S as Seat (asking node)
+    participant S as Seat's data node (asking)
     participant A as node-a
     participant B as node-b
     S->>S: scan buckets 0-21
@@ -225,21 +244,21 @@ identical order a search fanned out no ways does.
 **The scores are comparable, for a different reason per method.** Semantic
 similarity is comparable by construction — one model, one metric, one vector
 space. BM25 would not be comparable if each node computed its statistics from
-its own slice, and it does not: every node holds the whole corpus, so document
-frequency and the document count come from that node's complete tables whatever
-buckets it scanned. **The scan is bucket-limited; the statistics are global.**
+its own slice, and it does not: every data node holds the whole corpus, so
+document frequency and the document count come from that node's complete tables
+whatever buckets it scanned. **The scan is bucket-limited; the statistics are global.**
 
 ---
 
 ## When part of the corpus is not scanned
 
 A node that is restarting, overloaded or gone does not answer its assignment.
-The asking node holds the whole corpus and could have answered alone — which is
+The asking data node holds the whole corpus and could have answered alone — which is
 exactly why a short answer must say so, because a search that returns one fewer
 result looks identical to a corpus with one fewer document.
 
 There is a second way not to cover an assignment, and it is the quieter one.
-Every node holds the whole corpus, but the **lexical index over it is each
+Every data node holds the whole corpus, but the **lexical index over it is each
 node's own** — built by that node's own walk, in its own database, on its own
 schedule. A node that joined a few minutes ago therefore holds every document
 and can find none of them. Such a node answers its range and says so, and the
@@ -254,7 +273,7 @@ And a third: a node whose **copy is out of service** for what the search reads
 knowledge search — is wrong rather than behind (its applier stopped, its rows
 below the log), and its index is over rows that stopped being the fleet's. It
 answers its range saying so, and is counted missing the same way
-([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 One whose copy of the **vectors** is out of service still covers its range with
 the keyword half and answers without the vector scan, which is reported as
 `semantic_partial` rather than as a missing range.
@@ -307,14 +326,14 @@ meaning with — an alarm red for the life of a deployment is one nobody reads.
 The answer itself still says `no_embeddings`, because the person reading it is
 the one who can configure a provider.
 
-**The asking node never needs the broker for what it can scan itself.** It
+**The asking data node never needs the broker for what it can scan itself.** It
 scans its own range itself, never through the broker. And when it has given
 itself no range — its own last search said it could not cover that kind, so
 its peers took its share — it still holds the whole corpus, so whatever range
 the peers then leave uncovered (the broker could not be asked, a peer stayed
 silent, a peer answered covering nothing) it scans in their place before it
 answers. A search that returned nothing because the broker hiccupped would be a
-fleet-wide outage of a read every node can serve alone. Standing in for its
+fleet-wide outage of a read every data node can serve alone. Standing in for its
 peers while its own vectors copy is out of service, it answers those ranges by
 the keyword half, reported as `semantic_partial`; the peers that did not answer
 are named in the coverage, which stays complete. A range goes missing only
@@ -339,15 +358,15 @@ with a range of the corpus unscanned.
 ## The index also derives a page's backlinks
 
 The lexical index reads every page body and task description to tokenise it,
-and the same read extracts the page ids that body links to — `/pages/<id>` or
-the dashboard's `#/knowledge/pages/<id>`, outside code — into this node's
+and the same read extracts the page ids that body links to (`/doclet/pages/<id>` or
+the dashboard's `#/doclet/pages/<id>`, outside code) into this node's
 `page_links` table. That is where a page's **Linked from** comes from (the
 `page` answer's `linked_from`), so it has the index's staleness: a body saved a
 moment ago lists its links once the next lap reads it. The links are read from
 the pages' and the tasks' rows both, so they are answered by a data node whose
 copies of **both** the knowledge base and the tracker are in service — the
 node asked, when its own copy of either is out of service, is another one
-([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)) —
+([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-domains-fault-takes-only-its-own-copy-out-of-service.md)) —
 and `linked_from_status: unavailable` when no data node's are.
 
 It has the index's first lap too. Until a node has finished its first lap over
@@ -370,8 +389,8 @@ until that lap finishes the node reports `building`.
    search worse and cheaper at the same time, which does not look like a
    slowdown.
 2. **Check the corpus against the fleet.** `search_slow` fires against the
-   interactive p95 target. Adding a node divides the buckets again with no
-   configuration and no rebuild.
+   interactive p95 target. Adding a data node divides the buckets again with
+   no configuration and no rebuild; a node without `data` takes no range.
 3. **Check `recall_below_floor`.** A corpus whose vectors are behind is
    answering semantically from a fraction of itself.
 4. **Check the first stage.** `crewlet search eval` says whether searches are

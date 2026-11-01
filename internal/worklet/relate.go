@@ -1,0 +1,475 @@
+package worklet
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// The two halves of a dependency, and why each is a gesture rather than a set.
+//
+// A dependency is the one relation this design MIRRORS: `waiting_on` is
+// authored on the dependent, and the blocker carries the dependent's id in
+// [Task.Dependents] so a close can name who it unblocks without a reverse scan
+// over every task in the company.
+//
+// Both halves are collections a record carries WHOLE, and both are bounded —
+// [MaxWaitingOn], [MaxOtherRelations], [MaxDependents]. That combination is
+// what makes a caller-formed set wrong twice over: it discards every edge that
+// arrived between the caller's read and its write, and it has nothing to count
+// the cap against, because the set a cap governs is the one the write lands
+// on. So both travel as an INTENT and are settled here, inside the writer's
+// decide snapshot, exactly as [settleWatch] settles the watchers.
+
+// settleRelations resolves a relation gesture into the whole collection.
+//
+// INSIDE THE DECIDE SNAPSHOT, for the reason [settleWatch]'s doc gives: the
+// set a gesture is resolved against has to be the set the record lands on.
+// It returns a COPY rather than writing through the patch it was given,
+// because Decide runs again on a retry and a resolution folded into the
+// captured patch would compound across attempts.
+func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.Relate == nil {
+		// A WHOLE SET STILL HAS TO FIT. Nothing in this tree states
+		// one any more — every caller says what it wants as a gesture —
+		// but the field is on the RECORD, so it is what a future writer
+		// reaches for first, and a cap enforced on the gesture alone is
+		// a cap that writer walks straight past.
+		if patch.Relations != nil {
+			if err := checkRelations(current.ID, *patch.Relations); err != nil {
+				return patch, err
+			}
+		}
+		return patch, nil
+	}
+	if patch.Relations != nil {
+		// BOTH SPELLINGS AT ONCE IS A PROGRAMMING ERROR, refused rather
+		// than resolved in some order: one of them is a delta and the
+		// other is the whole set, and whichever won would silently
+		// discard the other.
+		return patch, invalid("this patch on task %s carries both a "+
+			"relation gesture and a whole relation set — a caller states one "+
+			"or the other", current.ID)
+	}
+	// THE WRITER STAMPS THE EDGES IT AUTHORS, so no caller has to hold a
+	// clock or repeat the actor it is already acting as. An edge arriving
+	// with either already set keeps it: the dependency sequence stamps its
+	// own from one instant shared across every edge of the call, and a
+	// second stamp here would give the last one a different second.
+	//
+	// ON A COPY, because this runs inside a decide the framework may run
+	// again — and a stamp written back onto the caller's own intent would
+	// make the second round's record carry the first round's instant, for
+	// every path that reuses an intent value.
+	stamped := *patch.Relate
+	stamped.Add = slices.Clone(stamped.Add)
+	for i, add := range stamped.Add {
+		if add.CreatedBy == "" {
+			stamped.Add[i].CreatedBy = w.Actor
+		}
+		if add.CreatedAt.IsZero() {
+			stamped.Add[i].CreatedAt = w.Now()
+		}
+	}
+	next, err := stamped.resolve(current)
+	if err != nil {
+		return patch, err
+	}
+	if err := checkRelations(current.ID, next); err != nil {
+		return patch, err
+	}
+	patch.Relate = nil
+	patch.Relations = &next
+	return patch, nil
+}
+
+// resolve is the gesture against one consistent read of the set.
+func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
+	if r.Set != nil {
+		if len(r.Add) > 0 || len(r.Remove) > 0 || len(r.Final) > 0 {
+			return nil, invalid("a relation gesture on task %s "+
+				"states both a whole set and a delta of %d added and %d "+
+				"removed — a caller states one or the other",
+				current.ID, len(r.Add), len(r.Remove))
+		}
+		return dedupeRelations(r.Set), nil
+	}
+	next := slices.Clone(current.Relations)
+	for _, drop := range r.Remove {
+		next = slices.DeleteFunc(next, func(have Relation) bool {
+			// ON (Kind, Other) ALONE. A note is something somebody
+			// typed on an edge rather than part of the edge's
+			// identity, so removing one does not require quoting it
+			// back — and a caller that had to would be removing the
+			// edge it last read rather than the edge that is there.
+			return have.Kind == drop.Kind && have.Other == drop.Other
+		})
+	}
+	for _, mark := range r.Final {
+		at := slices.IndexFunc(next, func(have Relation) bool {
+			return have.Kind == mark.Kind && have.Other == mark.Other
+		})
+		if at < 0 {
+			// THE EDGE WENT AWAY, which is the repair succeeding by
+			// another route: somebody removed the dependency the duty
+			// was about to give up on. Marking a relation that is not
+			// there would ADD one.
+			continue
+		}
+		next[at].OneSidedFinal = true
+	}
+	for _, add := range r.Add {
+		if slices.ContainsFunc(next, func(have Relation) bool {
+			return have.Kind == add.Kind && have.Other == add.Other
+		}) {
+			// AN EDGE THAT IS ALREADY THERE IS NOT AN ERROR. A
+			// retried turn re-states its own edges, and an edge's
+			// durable identity is (Kind, Other) — so the second
+			// statement is the same edge rather than a second one,
+			// and refusing it would fail the retry the engine's own
+			// redelivery guarantees make ordinary.
+			continue
+		}
+		next = append(next, add)
+	}
+	return next, nil
+}
+
+// dedupeRelations keeps the FIRST of each (Kind, Other), order preserved.
+//
+// Deterministically, because every data node stores what this record says:
+// two spellings of one edge inside a `set` would otherwise be two rows on the
+// node that applied the record and one on the node that re-derived the
+// document.
+func dedupeRelations(in []Relation) []Relation {
+	type edge struct {
+		kind  RelationKind
+		other string
+	}
+	seen := make(map[edge]bool, len(in))
+	out := make([]Relation, 0, len(in))
+	for _, r := range in {
+		e := edge{r.Kind, r.Other}
+		if seen[e] {
+			continue
+		}
+		seen[e] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+// checkRelations is the two caps, counted by kind, plus what an edge must be.
+//
+// TWO NUMBERS RATHER THAN ONE, which is the design's own shape: a dependency
+// edge costs a mirrored commit on the blocker and a row in the dependency
+// table that every close scans, while a `linked` edge is inert and costs
+// bytes. So `waiting_on` is bounded at [MaxWaitingOn] and everything else
+// together at [MaxOtherRelations].
+func checkRelations(taskID string, relations []Relation) error {
+	waiting, other := 0, 0
+	for _, r := range relations {
+		switch {
+		case !r.Kind.Valid():
+			return invalid("task %s carries a relation of kind %q, "+
+				"and the kinds are: %s", taskID, r.Kind, relationKindList())
+		case r.Other == "":
+			return invalid("task %s carries a %s relation naming no "+
+				"other task", taskID, r.Kind)
+		case r.Other == taskID:
+			// A SELF-EDGE IS REFUSED RATHER THAN DROPPED. As a
+			// `waiting_on` it is a task that blocks itself, which
+			// the dependency table would read as permanently
+			// blocked and no close could ever clear.
+			return invalid("task %s carries a %s relation to itself",
+				taskID, r.Kind)
+		case len(r.Note) > MaxRelationNote:
+			return invalid("the note on task %s's %s relation to %s "+
+				"is %d bytes and the maximum is %d",
+				taskID, r.Kind, r.Other, len(r.Note), MaxRelationNote)
+		}
+		if r.Kind == RelationWaitingOn {
+			waiting++
+			continue
+		}
+		other++
+	}
+	if waiting > MaxWaitingOn {
+		return invalid("task %s would wait on %d tasks and the "+
+			"maximum is %d — a task with more blockers than that is a "+
+			"milestone, and the milestone is the thing to track",
+			taskID, waiting, MaxWaitingOn)
+	}
+	if other > MaxOtherRelations {
+		return invalid("task %s would carry %d links, duplicates "+
+			"and page references together and the maximum is %d — a set "+
+			"larger than that is a field rather than a relation",
+			taskID, other, MaxOtherRelations)
+	}
+	return nil
+}
+
+// settleDependents resolves the BLOCKER's half against one consistent read.
+func settleDependents(current Task, patch TaskPatch) (TaskPatch, error) {
+	if patch.Depend == nil {
+		if patch.Dependents != nil {
+			if err := checkDependents(current.ID, *patch.Dependents); err != nil {
+				return patch, err
+			}
+		}
+		return patch, nil
+	}
+	if patch.Dependents != nil {
+		return patch, invalid("this patch on task %s carries both a "+
+			"dependent gesture and a whole dependent set — a caller states one "+
+			"or the other", current.ID)
+	}
+	next := slices.Clone(current.Dependents)
+	for _, drop := range patch.Depend.Remove {
+		next = slices.DeleteFunc(next, func(have string) bool { return have == drop })
+	}
+	for _, add := range patch.Depend.Add {
+		switch {
+		case add == "":
+			return patch, invalid("a dependent gesture on task %s "+
+				"names no task", current.ID)
+		case add == current.ID:
+			return patch, invalid("task %s cannot wait on itself",
+				current.ID)
+		case slices.Contains(next, add):
+			continue
+		}
+		next = append(next, add)
+	}
+	if err := checkDependents(current.ID, next); err != nil {
+		return patch, err
+	}
+	patch.Depend = nil
+	patch.Dependents = &next
+	return patch, nil
+}
+
+// checkDependents is [MaxDependents], enforced where the set grows by one.
+//
+// THE CAP IS A SCOPE BOUND BEFORE IT IS A FAN-OUT BOUND. A group change on a
+// blocker rewrites two columns on every dependent, and the record has to
+// ENUMERATE those objects in its declared scope — so a blocker past this many
+// dependents is one whose own close could not state what it touches.
+func checkDependents(taskID string, dependents []string) error {
+	if len(dependents) <= MaxDependents {
+		return nil
+	}
+	return invalid("%d tasks would wait on task %s and the maximum "+
+		"is %d — every one of them is an object a close of this task has to "+
+		"name in its own scope", len(dependents), taskID, MaxDependents)
+}
+
+// relationKindList is the kinds, for a refusal a person reads.
+func relationKindList() string {
+	out := make([]string, 0, len(RelationKinds))
+	for _, k := range RelationKinds {
+		out = append(out, string(k))
+	}
+	return strings.Join(out, ", ")
+}
+
+// scopeForDependents widens a task write's scope to the dependents its apply
+// will write.
+//
+// # Why this read is BEFORE the request rather than inside its decide
+//
+// The publisher probes the deferral index with the REQUEST's scope and the
+// applier files a deferral under the ENVELOPE's — see [envelopeOf] — so the
+// two have to be one set, and the request's is fixed before the decide runs.
+// A scope widened only inside the decide would be a record filed under objects
+// its own writer never probed.
+//
+// Reading it early makes it possible for a dependent to arrive in between, so
+// the decide re-checks the claim with [ScopeSet.covers] and refuses a write
+// whose scope came up short. That is the honest pairing: an early read is safe
+// exactly when something later proves it was still right.
+//
+// # Every patch, not only a status one
+//
+// The apply rewrites `blocker_open` and `cleared_at` on every row naming this
+// task as a blocker on EVERY task apply — `maintainDeps` runs out of
+// `explodeTask`, which nothing gates on what the patch changed. Widening only
+// a status write left every other patch to a task somebody waits on claiming a
+// scope short of what its own apply writes, which [ScopeSet.covers] then
+// refused inside the decide — permanently, since the re-run it asked for took
+// the same gate and came up short again.
+//
+// It returns the scope unchanged when the task has no dependents, which is the
+// overwhelming majority of tasks: the read below is one indexed lookup and the
+// widening is nothing at all.
+func (w *Writer) scopeForDependents(ctx context.Context, id string,
+	scope ScopeSet) (ScopeSet, error) {
+
+	if w.db.IsZero() {
+		// A WRITER WITH NO REPLICATED ESTATE CANNOT ENUMERATE, and the
+		// honest move is to leave the scope alone rather than refuse
+		// every status write it makes. Such a writer cannot have
+		// AUTHORED a dependency either — [Writer.Depend] reads its
+		// counterparties through this same estate and refuses without
+		// one — so the ordinary case here is a task with no dependents
+		// and a scope that is already right.
+		//
+		// The case it cannot rule out is a dependent another node wrote,
+		// and that one is caught where it matters: [ScopeSet.covers]
+		// runs inside the decide, against the rows this write actually
+		// lands on, and refuses naming the object the claim is short by.
+		return scope, nil
+	}
+	var (
+		dependents []string
+		filed      map[string]string
+	)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		current, held, err := readTask(ctx, tx, id)
+		if err != nil || !held {
+			// NOT HELD IS NOT AN ERROR HERE. The decide is what
+			// refuses a task this node does not have, with the
+			// message that says so; this read only widens a scope,
+			// and widening nothing leaves that refusal to the one
+			// place that states it properly.
+			return err
+		}
+		dependents = current.Dependents
+		filed, err = dependentsFiled(ctx, tx, dependents)
+		return err
+	}); err != nil {
+		return scope, fmt.Errorf("worklet: read task %s's dependents to scope "+
+			"its write: %w", id, err)
+	}
+	return scope.withObjects(id, dependents, filed), nil
+}
+
+// tasksFiledStatement is [dependentsFiled]' read of where n tasks are filed,
+// named for the plan test.
+func tasksFiledStatement(n int) string {
+	return `SELECT id, project_key FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
+}
+
+// dependentsFiled is where each of these tasks is filed — its project — for
+// the ones this node holds.
+//
+// READ FROM THE DEPENDENTS' OWN ROWS, because a dependent's project is not on
+// the blocker's row and cross-project dependencies are allowed: a scope that
+// named a dependent under the BLOCKER's project named a path no record about
+// the dependent is filed under, so a record this node could not decode about
+// that dependent never blocked the write rewriting its row.
+func dependentsFiled(ctx context.Context, tx *sql.Tx, ids []string) (map[string]string, error) {
+	filed := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return filed, nil
+	}
+	rows, err := tx.QueryContext(ctx, tasksFiledStatement(len(ids)), anyOf(ids)...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read where %d dependent(s) are filed: %w",
+			len(ids), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, project string
+		if err := rows.Scan(&id, &project); err != nil {
+			return nil, fmt.Errorf("worklet: read where a dependent is filed: %w", err)
+		}
+		filed[id] = project
+	}
+	return filed, rows.Err()
+}
+
+// withObjects turns a sentinel scope into the enumeration that also names
+// these ids, keeping whatever the scope already stated.
+//
+// THE SUBJECT IS ALWAYS AMONG THEM. A scope built from terms carries no
+// sentinel, so dropping the subject's own term would claim the dependents and
+// not the task being written.
+//
+// EACH DEPENDENT UNDER THE PROJECT IT IS FILED IN, from filed. One this node
+// does not hold has no path this build can form, so it is claimed by the
+// DOMAIN: the one term that certainly contains it. That over-claims — a
+// deferral anywhere in the tracker then blocks this write — which is the safe
+// direction, and it is reached only by an edge whose other end this node has
+// never applied.
+func (s ScopeSet) withObjects(subject string, ids []string, filed map[string]string) ScopeSet {
+	if len(ids) == 0 {
+		return s
+	}
+	terms := make([]ScopeTerm, 0, len(s.Terms)+len(ids)+1)
+	if s.Subject {
+		terms = append(terms, ScopeTerm{
+			Kind: TermObject, Container: s.Container, ID: subject,
+		})
+	}
+	terms = append(terms, s.Terms...)
+	for _, id := range ids {
+		if s.namesFiled(terms, id, filed) {
+			continue
+		}
+		project, held := filed[id]
+		if !held {
+			terms = append(terms, ScopeTerm{Kind: TermDomain})
+			continue
+		}
+		terms = append(terms, ScopeTerm{
+			Kind: TermObject, Container: project, ID: id,
+		})
+	}
+	return ScopeSet{Terms: terms}
+}
+
+// namesFiled reports whether terms already claim id where filed says it is:
+// its object term under its own project, its project's container, or the
+// domain.
+//
+// THE CONTAINER COUNTS, because an enumeration past [MaxScopeTerms] folds its
+// largest project into one ([ScopeSet.capped]): a check that read only object
+// terms would refuse the very scope the cap made of a blocker's sixty-four
+// dependents.
+func (ScopeSet) namesFiled(terms []ScopeTerm, id string, filed map[string]string) bool {
+	project, held := filed[id]
+	return slices.ContainsFunc(terms, func(t ScopeTerm) bool {
+		switch t.Kind {
+		case TermDomain:
+			return true
+		case TermContainer:
+			return held && t.named() == project
+		case TermObject:
+			return held && t.ID == id && t.Container == project
+		}
+		return false
+	})
+}
+
+// covers reports whether this scope already names every one of these objects
+// where filed says each one is.
+//
+// WHERE, not only WHICH: a dependent that moved project between the read that
+// built this scope and the snapshot deciding it is named at a path its records
+// are no longer filed under, and a check on the id alone would pass it.
+func (s ScopeSet) covers(ids []string, filed map[string]string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		if s.namesFiled(s.Terms, id, filed) {
+			continue
+		}
+		// NAMED, AND NOT SILENTLY WIDENED. The request's scope is what
+		// the publisher probed the deferral index with, and this record
+		// is about to be filed under a different one — so a write that
+		// went ahead would be a record whose own writer never looked
+		// where it is filed.
+		return fmt.Errorf("worklet: task %s waits on this one and this write's "+
+			"scope does not name it, so the record would not cover an object "+
+			"its own apply writes — re-run it, and the second attempt "+
+			"enumerates the dependents that are there now: %w",
+			id, statelog.ErrConflict)
+	}
+	return nil
+}

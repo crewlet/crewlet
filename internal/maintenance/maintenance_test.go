@@ -1,8 +1,11 @@
 package maintenance_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -11,10 +14,50 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
 var base = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+// logs is where this package's own log lines go while the suite runs.
+//
+// A TESTMAIN OWNS THE PROCESS'S LOGGING, which is what [logging.Configure]
+// says about itself, and this package needs the lines rather than merely
+// wanting them quiet: a horizon the worker has to raise is answered with a
+// WARNING and, on the tick itself, with nothing else — the value it raises to
+// is the one the caller already asked for — so the line IS the behaviour.
+var logs = &syncBuffer{}
+
+// syncBuffer is a writer a logger and a test may both touch.
+//
+// Go resumes a parallel test only once every sequential one has finished, so
+// a reader here never overlaps a case that logs — but the detector reads the
+// handler's own goroutine, and a buffer with no lock is a race whether or not
+// anything ever interleaves.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// since returns what has been logged since a mark, and a mark for next time.
+func (b *syncBuffer) since(mark int) (string, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	all := b.buf.String()
+	return all[mark:], len(all)
+}
+
+func TestMain(m *testing.M) {
+	logging.Configure(slog.LevelWarn, logging.FormatText, logs)
+	os.Exit(m.Run())
+}
 
 // recorder is a job that remembers the cutoff it was handed.
 type recorder struct {
@@ -116,6 +159,66 @@ func TestAHorizonBelowTheTickIsRaisedToIt(t *testing.T) {
 	}
 	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour)) {
 		t.Fatalf("cutoff %s, want the raised horizon %s", got, base.Add(-time.Hour))
+	}
+}
+
+// A horizon sitting exactly ON the tick is the boundary [maintenance.Interval]
+// names, and it is reported rather than accepted in silence.
+//
+// Raising it changes no number — the value already IS the tick — so the
+// warning is the whole of the behaviour, and that is the point: a retention
+// equal to the sweep's own cadence is one the SWEEP decides rather than the
+// caller, and the caller is the only one who will ever size a table from it.
+// The condition was strictly below, so this case passed without a word.
+//
+// NOT PARALLEL, because it reads a process-wide log sink.
+func TestAHorizonExactlyAtTheTickIsReported(t *testing.T) {
+	_, mark := logs.since(0)
+	var r recorder
+	w := newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "on_the_floor", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour), Run: r.run},
+		},
+	})
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour)) {
+		t.Fatalf("cutoff %s, want the tick %s", got, base.Add(-time.Hour))
+	}
+	written, _ := logs.since(mark)
+	if !strings.Contains(written, "maintenance_horizon_raised_to_the_tick") ||
+		!strings.Contains(written, "on_the_floor") {
+		t.Fatalf("a horizon equal to the tick logged %q, want the raise warning "+
+			"naming the job — at the floor the value is the sweep's answer "+
+			"rather than the caller's, and nothing else ever says so", written)
+	}
+}
+
+// And a horizon above the tick, by as little as a second, says nothing — so
+// the warning above is a verdict rather than a line every worker prints.
+//
+// NOT PARALLEL, for [TestAHorizonExactlyAtTheTickIsReported]'s reason.
+func TestAHorizonAboveTheTickIsNotReported(t *testing.T) {
+	_, mark := logs.since(0)
+	var r recorder
+	w := newWorker(t, maintenance.Options{
+		Now:      fixed(base),
+		Interval: time.Hour,
+		Jobs: []maintenance.Job{
+			{Name: "roomy", Scope: maintenance.Fleet, Horizon: maintenance.Fixed(time.Hour + time.Second), Run: r.run},
+		},
+	})
+	if _, err := w.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := r.lastCutoff(t); !got.Equal(base.Add(-time.Hour - time.Second)) {
+		t.Fatalf("cutoff %s, want the job's own horizon %s", got, base.Add(-time.Hour-time.Second))
+	}
+	if written, _ := logs.since(mark); strings.Contains(written, "roomy") {
+		t.Fatalf("a horizon above the tick logged %q, want silence", written)
 	}
 }
 
@@ -688,17 +791,19 @@ func (f *fakeChannels) Purge(_ context.Context, _ time.Time) (int64, error) {
 	return f.purged, nil
 }
 
-// TestTheIdleChannelJobDrivesTheServiceThatAnnounces holds the one thing that
+// TestTheIdleChannelJobDrivesTheSweeperThatAnnounces holds the one thing that
 // changed about this job's shape.
 //
-// It used to call a2a.Store.CloseIdle directly and DISCARD the channels it
-// returned — which is the only reason that method returns them rather than a
-// count, so a swept close published no event at all. An operator's single
-// signal that an ask went unanswered was silence: the requester's turn ended
-// when it asked, so a channel reaching this sweep means some turn never
-// finished. The job drives the SERVICE now, which owns what a close means on
-// the wire, and this is what stops it quietly going back to the store.
-func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
+// It used to close idle channels through the channel store directly and
+// DISCARD the channels that close returned — which was the only reason it
+// returned them rather than a count, so a swept close published no event at
+// all. An operator's single signal that an ask went unanswered was silence: the
+// requester's turn ended when it asked, so a channel reaching this sweep means
+// some turn never finished. The job drives internal/a2a's sweeper now, which
+// owns what a close means on the wire and asks, before each one, whether the
+// channel's answer is still owed — and this is what stops it quietly going back
+// to the store.
+func TestTheIdleChannelJobDrivesTheSweeperThatAnnounces(t *testing.T) {
 	t.Parallel()
 	ch := &fakeChannels{closed: 3, purged: 5}
 	jobs := maintenance.ChannelJobs(ch)
@@ -715,9 +820,9 @@ func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
 	cutoff := base.Add(-maintenance.ChannelIdleTimeout)
 	n, err := idle.Run(context.Background(), base, cutoff)
 	if err != nil || n != 3 {
-		t.Fatalf("Run = (%d, %v), want the service's own count", n, err)
+		t.Fatalf("Run = (%d, %v), want the sweeper's own count", n, err)
 	}
-	// THE CUTOFF AND NOT THE TICK'S `now`: the service reads its own clock
+	// THE CUTOFF AND NOT THE TICK'S `now`: the sweeper reads its own clock
 	// for the close instant, so a channel's closed_at and the duration on
 	// the event it publishes come from one reading rather than two.
 	if len(ch.cutoffs) != 1 || !ch.cutoffs[0].Equal(cutoff) {
@@ -784,52 +889,6 @@ func TestTheMarkerSweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
 	}
 	if want := base.Add(-coord.MarkerRetention); len(m.cutoffs) != 1 || !m.cutoffs[0].Equal(want) {
 		t.Errorf("the sweep saw cutoffs %v, want %v", m.cutoffs, want)
-	}
-}
-
-// fakeRunParts is the coordination store's sweep of a run's orphaned parts,
-// recording each cutoff it was asked to sweep before.
-type fakeRunParts struct {
-	cutoffs []time.Time
-	swept   int64
-}
-
-func (p *fakeRunParts) SweepSandboxRunParts(_ context.Context, cutoff time.Time) (int64, error) {
-	p.cutoffs = append(p.cutoffs, cutoff)
-	return p.swept, nil
-}
-
-// A RUN'S PARTS WHOSE RECORD IS GONE ARE SWEPT ONCE PER FLEET, AT THE MARKERS'
-// HORIZON.
-//
-// Fleet-scoped for the markers' reason: the bucket is one copy the company
-// shares. And the horizon is coord.MarkerRetention, the markers' own: a part
-// that old whose run's record is gone is being written by nothing that read
-// the record before its removal, since nothing that did outlives its claim.
-func TestTheRunPartSweepRunsUnderTheDutyAtTheMarkersHorizon(t *testing.T) {
-	t.Parallel()
-	if jobs := maintenance.SandboxRunPartJobs(nil); len(jobs) != 0 {
-		t.Fatalf("a nil part sweep produced %d jobs", len(jobs))
-	}
-	p := &fakeRunParts{swept: 2}
-	jobs := maintenance.SandboxRunPartJobs(p)
-	if len(jobs) != 1 {
-		t.Fatalf("jobs = %d, want the one part sweep", len(jobs))
-	}
-	job := jobs[0]
-	if job.Name != "sandbox_run_parts" || job.Scope != maintenance.Fleet {
-		t.Fatalf("job = %q scope %v, want sandbox_run_parts under the duty", job.Name, job.Scope)
-	}
-	if got := job.Horizon(); got != coord.MarkerRetention {
-		t.Errorf("horizon = %v, want coord.MarkerRetention", got)
-	}
-	w := newWorker(t, maintenance.Options{Jobs: jobs, Now: func() time.Time { return base }})
-	swept, err := w.Tick(context.Background())
-	if err != nil || swept["sandbox_run_parts"] != 2 {
-		t.Fatalf("a tick = (%v, %v), want the store's count", swept, err)
-	}
-	if want := base.Add(-coord.MarkerRetention); len(p.cutoffs) != 1 || !p.cutoffs[0].Equal(want) {
-		t.Errorf("the sweep saw cutoffs %v, want %v", p.cutoffs, want)
 	}
 }
 

@@ -34,7 +34,7 @@ func twoKeyBootstrap(t *testing.T) config.Bootstrap {
 // THE BROKER IS KEYED FROM TIER A, on every topology.
 //
 // What a node's embedded broker presents and accepts on its fleet listeners is
-// derived from its own secrets.keys by the keyring's rule (ADR-0064) — every
+// derived from its own secrets.keys by the keyring's rule (ADR-0087) — every
 // key accepted, the active one presented — so the broker moves with the
 // keyring's rotation like everything else signed under it. A member, a leaf
 // and a solo member alike: which listeners a broker opens is the jetstream

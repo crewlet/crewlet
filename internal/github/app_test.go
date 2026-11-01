@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,7 +90,7 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 		Seat: "sre-lead", Name: "Acme sre-lead",
 		DeliveryURL: "https://engine.example.com/webhooks/github/sre-lead",
 		RedirectURL: "https://engine.example.com/webhooks/github/app-callback",
-		Tier:        github.TierReview,
+		Permissions: tierPerms("review", false),
 	})
 	if len(m.DefaultEvents) == 0 {
 		t.Fatal("the manifest subscribes to nothing")
@@ -111,25 +113,68 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 	if m.Public {
 		t.Error("a per-operator app was created public")
 	}
+	if _, asks := m.DefaultPerms[github.PermissionWorkflows]; asks {
+		t.Error("an app for a seat that did not opt in asks for workflows")
+	}
 }
 
-// AN APP WITH NOWHERE TO DELIVER IS CREATED SWITCHED OFF, not pointed at a
-// placeholder: an inactive hook is a state the operator can see, and a wrong
-// URL is one that looks healthy at GitHub and arrives nowhere.
-func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
+// AN APP IS REGISTERED AT EXACTLY ITS SEAT'S PERMISSIONS (D5), Metadata
+// added, because creation is the one moment its manifest is read: a
+// permission left out is gained only through its owner and the organization.
+func TestAnAppIsRegisteredAtItsSeatsPermissions(t *testing.T) {
 	t.Parallel()
-	off := github.BuildManifest(github.ManifestOptions{Seat: "s", Tier: github.TierReadOnly})
-	if active, _ := off.HookAttributes["active"].(bool); active {
-		t.Error("an app with no delivery address was created active")
+	manifest := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Permissions: github.Permissions{
+			github.PermissionContents: github.LevelWrite, github.PermissionWorkflows: github.LevelWrite,
+		},
+	})
+	want := map[string]string{"metadata": "read", "contents": "write", "workflows": "write"}
+	if !maps.Equal(manifest.DefaultPerms, want) {
+		t.Errorf("registered %v, want %v", manifest.DefaultPerms, want)
 	}
-	if _, has := off.HookAttributes["url"]; has {
-		t.Error("an app with no delivery address was given one anyway")
+	// NOTHING THE SEAT DOES NOT HOLD, and everything a tier carried.
+	review := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Permissions: tierPerms("review", true),
+	})
+	if got, asks := review.DefaultPerms[github.PermissionWorkflows]; asks {
+		t.Errorf("a review app asks for workflows=%q", got)
+	}
+	if review.DefaultPerms["deployments"] != "read" {
+		t.Errorf("a migrated review seat's app does not keep Deployments read: %v", review.DefaultPerms)
+	}
+}
+
+// AN APP GITHUB CANNOT DELIVER TO IS CREATED WITH NO WEBHOOK AND NO EVENTS.
+// GitHub validates the hook whether or not it is active: it refuses one with
+// no url, one at an address it cannot reach, and events with no hook. So the
+// only manifest it accepts from a local engine carries neither.
+func TestAnAppGitHubCannotReachIsCreatedWithNoWebhook(t *testing.T) {
+	t.Parallel()
+	off := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Permissions: tierPerms("read_only", false),
+		DeliveryURL: "http://localhost:8200/webhooks/github/s", DeliveryOff: true,
+	})
+	if off.HookAttributes != nil {
+		t.Errorf("hook = %v, want none: GitHub refuses an unreachable hook, active or not", off.HookAttributes)
+	}
+	if len(off.DefaultEvents) != 0 {
+		t.Errorf("events = %v, want none: GitHub refuses events with no hook", off.DefaultEvents)
+	}
+	if body, _ := json.Marshal(off); strings.Contains(string(body), "hook_attributes") ||
+		strings.Contains(string(body), "default_events") {
+		t.Errorf("the manifest sent to GitHub still names a hook or events: %s", body)
 	}
 	on := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Tier: github.TierReadOnly, DeliveryURL: "https://e.example.com/w",
+		Seat: "s", Permissions: tierPerms("read_only", false), DeliveryURL: "https://e.example.com/w",
 	})
 	if active, _ := on.HookAttributes["active"].(bool); !active {
-		t.Error("an app with an address was created inactive")
+		t.Error("an app with a deliverable address was created inactive")
+	}
+	if on.HookAttributes["url"] != "https://e.example.com/w" {
+		t.Errorf("hook url = %v, want the delivery address", on.HookAttributes["url"])
+	}
+	if len(on.DefaultEvents) == 0 {
+		t.Error("an app with a deliverable address subscribes to nothing")
 	}
 }
 
@@ -235,7 +280,7 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := client.MintToken(context.Background(), 11, github.TierReadOnly, []string{"acme/platform"})
+	token, err := client.MintToken(context.Background(), 11, tierPerms("read_only", false), []string{"acme/platform"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +299,65 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	}
 	if token.Token != "ghs_x" {
 		t.Errorf("token = %q", token.Token)
+	}
+}
+
+// A RATE LIMIT IS TOLD APART FROM A REFUSAL, by both of GitHub's clients.
+// GitHub answers its limit 429, or 403 with `x-ratelimit-remaining: 0` (its
+// primary limit) or a `retry-after` (a secondary one), and a 403 with neither
+// is a credential that may not do this: a wait clears the first, and a person
+// the second, which is what a caller deciding a seat's next step reads. The
+// headers tell them apart, never the message. Mutation: drop the 429's
+// reading or either header's, and its row goes red on both clients.
+func TestARateLimitIsToldApartFromARefusal(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testKey(t)
+	for name, c := range map[string]struct {
+		status  int
+		headers map[string]string
+		limited bool
+	}{
+		"a 429": {status: http.StatusTooManyRequests, limited: true},
+		"a 403 at the primary limit": {status: http.StatusForbidden,
+			headers: map[string]string{"X-RateLimit-Remaining": "0"}, limited: true},
+		"a 403 at a secondary limit": {status: http.StatusForbidden,
+			headers: map[string]string{"Retry-After": "60"}, limited: true},
+		"a 403 refusing the credential": {status: http.StatusForbidden,
+			headers: map[string]string{"X-RateLimit-Remaining": "4999"}},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			for key, value := range c.headers {
+				w.Header().Set(key, value)
+			}
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(`{"message":"refused"}`))
+		}))
+		t.Cleanup(srv.Close)
+		app, err := github.NewAppClient(7, keyPEM, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, minted := app.MintToken(context.Background(), 11,
+			tierPerms("read_only", false), nil)
+		client, err := github.NewClient(github.ClientOptions{
+			APIBase: srv.URL, WebBase: srv.URL, Token: "secret",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, read := client.RepoOf(context.Background(), "acme", "api")
+		forbidden := c.status == http.StatusForbidden && !c.limited
+		for via, answer := range map[string]error{"the app's client": minted, "a token's client": read} {
+			var refused *github.APIError
+			if !errors.As(answer, &refused) {
+				t.Errorf("%s, %s: %v, want an *APIError", name, via, answer)
+				continue
+			}
+			if refused.RateLimited != c.limited || refused.Forbidden() != forbidden {
+				t.Errorf("%s, %s: rate limited %v and forbidden %v, want %v and %v", name,
+					via, refused.RateLimited, refused.Forbidden(), c.limited, forbidden)
+			}
+		}
 	}
 }
 

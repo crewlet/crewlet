@@ -22,7 +22,7 @@ import (
 // # Why a gesture at all
 //
 // Every connection to an embedded broker presents a key derived from
-// secrets.keys (ADR-0064), and the docs prescribe broker gestures no engine
+// secrets.keys (ADR-0087), and the docs prescribe broker gestures no engine
 // verb performs: above all the resize every stream and bucket needs before a
 // raised `stream.replicas` lets a node start, which only `nats stream update`
 // does. So a clustered member's client listener — open on loopback because
@@ -43,7 +43,7 @@ import (
 // credential. The address is the running node's own — its client listener's
 // port is the OS's, chosen at each start — read from GET /fleet/broker, which
 // takes `admin` as `list` does. A listener on loopback is reachable from its
-// own host alone, so an answer from any other node (a -url naming a balancer,
+// own host alone, so an answer from any other node (an -api naming a balancer,
 // or a peer) is refused rather than printed. A member that serves no API
 // (api.port 0) is asked nothing: its broker_keys line names the listener.
 //
@@ -127,7 +127,7 @@ func fleetBrokerCredential(environ config.Source, args []string, stdout, stderr 
 
 // noClientListener is the refusal for a node whose broker opens no client
 // listener.
-const noClientListener = "this node's broker has no client listener — a solo member and a " +
+const noClientListener = "this node's broker has no client listener: a solo member and a " +
 	"leaf listen on none, and a member with only a leaf listener runs no cluster; run this " +
 	"on a clustered member's host"
 
@@ -154,7 +154,7 @@ func ownClientListener(environ config.Source, boot *config.Bootstrap, override s
 		// would point the tool at a port on this host that is not its broker.
 		return "", fmt.Errorf("the node that answered is %q and this host's node is %q "+
 			"(node.id, else CREWLET_NODE_ID in this shell): a client listener is on its "+
-			"own node's loopback — run this against this host's own API (drop -url), in "+
+			"own node's loopback. Run this against this host's own API (drop -api), in "+
 			"the environment the node runs with", view.Node, self)
 	case view.External:
 		return "", errors.New("this fleet's broker is an external NATS cluster: reach it " +

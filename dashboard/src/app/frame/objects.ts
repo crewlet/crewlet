@@ -95,8 +95,8 @@ export interface KindSpec {
  * never resolves.
  */
 export const KINDS: Record<ObjectKind, KindSpec> = {
-  item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
-  project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
+  item: { label: "Item", pathOf: (id) => ["worklet", id], mono: true },
+  project: { label: "Project", pathOf: (id) => ["worklet", id], mono: true },
   seat: { label: "Seat", pathOf: (id) => ["company", "org", "seats", id], mono: true },
   unit: { label: "Unit", pathOf: (id) => ["company", "org", "teams", id] },
   page: {
@@ -105,9 +105,9 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
     // heading. The engine's `page` read takes either, so an id is always
     // enough to open one.
     label: "Page",
-    pathOf: (id) => ["knowledge", "pages", id],
+    pathOf: (id) => ["doclet", "pages", id],
   },
-  container: { label: "Container", pathOf: (id) => ["knowledge", id], mono: true },
+  container: { label: "Container", pathOf: (id) => ["doclet", id], mono: true },
   turn: { label: "Turn", pathOf: (id) => ["live", "turns", id], mono: true },
   run: { label: "Coding run", pathOf: (id) => ["live", "runs", id], mono: true },
   event: { label: "Event", pathOf: (id) => ["live", "events", id], mono: true },

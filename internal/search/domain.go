@@ -217,7 +217,7 @@ func (Domain) OpsTable() string { return "" }
 // company's seats for that is the outage the coverage number exists to avoid —
 // and it would be withheld for the one subsystem every design note calls best
 // effort. Its copy is still judged, and a wrong one — not one that is behind —
-// goes out of service on its own, its seats untouched — ADR-0049.
+// goes out of service on its own, its seats untouched — ADR-0072.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to
@@ -267,7 +267,8 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // by the broker and dropped by every applier, so a writer that does not know
 // it is out collects acknowledgements for records nobody applies. Neither half
 // of that is true here: this domain installs no apply gate, so a record from
-// any node applies everywhere, and nothing is waiting on the acknowledgement.
+// any node is applied on every data node, and nothing is waiting on the
+// acknowledgement.
 //
 // What actually stops an evicted node writing vectors is stronger than a
 // fence: the duty is a FLEET SINGLETON and an evicted node does not hold the

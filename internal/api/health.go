@@ -73,6 +73,27 @@ const (
 	IdentityUnknown   = "unknown"
 )
 
+// ConfigAttempt is a node's last concluded apply attempt: the epoch, the
+// revision it tried at that epoch and how that went — `ok`, `error` or
+// `degraded`, the apply record's own words (`coord.NodeApply`).
+//
+// THE APPLIED EPOCH CANNOT SAY IT. A failed attempt leaves `applied_epoch`
+// where it was, so a node still applying a revision and one that refused it
+// read the same, and every reader of the push who may not read the fleet — a
+// unit lead following their own save — was told the engine was applying a
+// revision this node had refused, for as long as the tab stayed open. The
+// REVISION rides beside the epoch because an epoch number names two
+// revisions once a rebuilt coordination store has restarted the count.
+//
+// NEVER THE ERROR TEXT: this body is public on /health, and a refusal can quote
+// the config value it was given. Why the node refused is the fleet view's
+// `config_error`, an admin's.
+type ConfigAttempt struct {
+	Epoch      int64  `json:"epoch"`
+	RevisionID string `json:"revision_id"`
+	Status     string `json:"status"`
+}
+
 // Health is what the /health endpoint and the dashboard's health push both
 // carry — WHOLE, on both.
 //
@@ -156,6 +177,10 @@ type Health struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
+	// ConfigAttempt is this node's last concluded apply attempt — ABSENT
+	// before this process has concluded one, which is that answer.
+	ConfigAttempt *ConfigAttempt `json:"config_attempt,omitempty"`
+
 	// IdentityDutySeconds maps each identity duty this node armed to the
 	// interval it runs at, in seconds — `{}` on a node that armed none.
 	// Always an object, for Seats' reason: the engine always knows what
@@ -179,7 +204,7 @@ type Health struct {
 	// It is the number an alert reads: see [RuntimeState.Unproven]. It was
 	// computed by the seat host and documented as this field while nothing
 	// served it, so the only evidence of a seat out of service for a week
-	// was a log line re-raised every twenty heartbeats.
+	// was a log line re-raised every five minutes.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
 
 	// Identity is whether this company has its first person —
@@ -330,18 +355,19 @@ func (a *App) health(ctx context.Context) Health {
 	configured := a.Configured()
 	state, fleet := readNode(ctx, a.runtime)
 	body := Health{
-		Status:       healthStatus(state, configured),
-		Node:         a.nodeID,
-		Configured:   configured,
-		Version:      version.String(),
-		StartedAt:    state.StartedAt,
-		Queue:        a.queueBackend,
-		Clients:      a.stream.Hub().Clients(),
-		InFlight:     state.InFlight,
-		ShuttingDown: state.ShuttingDown,
-		Posture:      state.Posture,
-		AppliedEpoch: state.AppliedEpoch,
-		Seats:        heldSeats(state),
+		Status:        healthStatus(state, configured),
+		Node:          a.nodeID,
+		Configured:    configured,
+		Version:       version.String(),
+		StartedAt:     state.StartedAt,
+		Queue:         a.queueBackend,
+		Clients:       a.stream.Hub().Clients(),
+		InFlight:      state.InFlight,
+		ShuttingDown:  state.ShuttingDown,
+		Posture:       state.Posture,
+		AppliedEpoch:  state.AppliedEpoch,
+		ConfigAttempt: state.ConfigAttempt,
+		Seats:         heldSeats(state),
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),

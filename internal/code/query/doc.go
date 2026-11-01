@@ -190,7 +190,7 @@
 // # Who may read
 //
 // The grant is judged on the ANSWERING node, from its own epoch's chart and
-// the repository's row as its copy holds it (code.GrantOf, ADR-0058): a
+// the repository's row as its copy holds it (code.GrantOf, ADR-0081): a
 // person maintains and a token bound to nobody reads every repository, with no
 // chart consulted; a seat reads where its tier and its relation let it, so a
 // `visibility: unit` repository refuses a seat outside the owning unit

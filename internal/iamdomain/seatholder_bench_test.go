@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -85,12 +84,8 @@ func benchDirectory(b *testing.B, people, removed int) *iamdomain.Reader {
 		b.Fatalf("seed the directory: %v", err)
 	}
 	waiter := &rigWaiter{at: statelog.Position{Stream: iamdomain.Domain{}.Stream().Name}}
-	log, err := statelogtest.LocalReaderOver(iamdomain.Domain{}, db, waiter)
-	if err != nil {
-		b.Fatalf("build the read authority: %v", err)
-	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: db.Reader(), Log: log, Reached: waiter.Reached,
+		DB: db.Reader(), Reached: waiter.Reached,
 	})
 	if err != nil {
 		b.Fatalf("build the reader: %v", err)

@@ -49,13 +49,13 @@ func (q SpendQuery) check() error {
 	return nil
 }
 
-// Spend reads every node's spend for the company days q.From..q.To,
+// Spend reads every data node's spend for the company days q.From..q.To,
 // inclusive, in (day, node, seat, cell) order.
 //
-// EVERY NODE'S ROWS, which is the whole point of the domain: the answer is the
-// same on whichever node is asked, and it still includes a node that has left
-// the fleet. The labels are the company's own (`2026-09-23`), which sort as
-// strings — so the range is a seek on the leading column of every key.
+// EVERY DATA NODE'S ROWS, which is the whole point of the domain: the answer is
+// the same on whichever node is asked, and it still includes a node that has
+// left the fleet. The labels are the company's own (`2026-09-23`), which sort
+// as strings — so the range is a seek on the leading column of every key.
 func Spend(ctx context.Context, estate Estate, q SpendQuery) ([]SpendRow, error) {
 	page, err := SpendPage(ctx, estate, q, nil, 0)
 	return page.Rows, err
@@ -69,7 +69,7 @@ type TurnsRow struct {
 	Turns, Failed      int64
 }
 
-// SeatTurns reads every node's turn counts for the company days
+// SeatTurns reads every data node's turn counts for the company days
 // q.From..q.To, inclusive, in (day, node, seat) order — the half of a spend
 // answer that says how many turns the tokens were spent over.
 //
@@ -96,7 +96,7 @@ type PersonQuery struct {
 	Person   string
 }
 
-// PersonSpend reads every node's spend for people over the company days
+// PersonSpend reads every data node's spend for people over the company days
 // q.From..q.To, inclusive, in (day, node, person, cell) order — the half of a
 // named spend window no seat's row carries, since a person has no agent id.
 func PersonSpend(ctx context.Context, estate Estate, q PersonQuery) ([]PersonRow, error) {
@@ -131,7 +131,7 @@ type SeatDay struct {
 	Code CodeDay
 }
 
-// SeatDays reads every node's head row for the company days q.From..q.To,
+// SeatDays reads every data node's head row for the company days q.From..q.To,
 // inclusive, in (day, node, seat) order, each with its day's token total.
 //
 // TWO STATEMENTS IN ONE TRANSACTION rather than a join, per page
@@ -183,7 +183,8 @@ func (r ScheduleRun) Key() string {
 	return strings.Join([]string{r.Node, r.ScopeType, r.ScopeID, r.Name, r.Target}, "\x1f")
 }
 
-// ScheduleRunsQuery is one page of every node's schedule fires, newest first.
+// ScheduleRunsQuery is one page of every data node's schedule fires, newest
+// first.
 type ScheduleRunsQuery struct {
 	// BeforeAt and BeforeKey resume strictly after the last row a reader
 	// was handed — see [ScheduleRun.Key]. A zero BeforeAt is the newest page.
@@ -202,13 +203,14 @@ type ScheduleRunsQuery struct {
 	Limit int
 }
 
-// ScheduleRuns reads one page of the schedule fires every node recorded,
+// ScheduleRuns reads one page of the schedule fires every data node recorded,
 // newest first, through `usage_schedule_runs_fired_idx` (replicated 0029).
 //
-// EVERY NODE'S FIRES, which is the domain's point: a schedule fires on
-// whichever node holds its duty, and the company's account of its schedules
-// is the union — including a node that has since left. The horizon is the
-// applier's (181 days); nothing older is here to page to.
+// EVERY DATA NODE'S FIRES, which is the domain's point: a schedule fires on
+// whichever node holds its duty (a duty takes `workers`, which takes `data`),
+// and the company's account of its schedules is the union — including a node
+// that has since left. The horizon is the applier's (181 days); nothing older
+// is here to page to.
 func ScheduleRuns(ctx context.Context, estate Estate, q ScheduleRunsQuery) (
 	[]ScheduleRun, bool, error) {
 

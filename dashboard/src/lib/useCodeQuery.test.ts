@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { codeRest, codeSearch, useCodeQuery } from "./useCodeQuery.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
+import { engineJson } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   cleanup();
@@ -35,11 +36,10 @@ function stub(respond: (url: URL, init: RequestInit, n: number) => Response) {
   return sent;
 }
 
+// EVERY ANSWER HERE IS THE ENGINE'S, marked as it marks them: a refusal
+// without the mark reads as a proxy's (`protocol/engineAnswer.ts`).
 const json = (payload: unknown, status = 200, headers: Record<string, string> = {}) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json", ...headers },
-  });
+  engineJson(payload, status, headers);
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 9 };
 
@@ -93,7 +93,7 @@ describe("a code question is asked over REST", () => {
       read_level: "session",
       min_position: ["CREWLET_CODE_LOG@1:2", "CREWLET_TRACKER_LOG@1:3"],
     });
-    const url = new URL(`/query/code_pushes${search}`, "http://engine");
+    const url = new URL(`/query/code_pushes?${search}`, "http://engine");
     expect(url.searchParams.get("name")).toBe("web");
     expect(url.searchParams.getAll("min_position")).toEqual([
       "CREWLET_CODE_LOG@1:2",
@@ -140,7 +140,7 @@ describe("a write to the code log is read back at its floor", () => {
   test("a freshness the caller named is kept, and no floor is added to it", () => {
     session.written("code", freshPosition(), []);
     const url = new URL(
-      `/query/code_repos${codeSearch("code_repos", { read_level: "linearizable" })}`,
+      `/query/code_repos?${codeSearch("code_repos", { read_level: "linearizable" })}`,
       "http://engine",
     );
     expect(url.searchParams.get("read_level")).toBe("linearizable");

@@ -137,7 +137,7 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
                     at <span className="mono">{shortOID(change.merge_oid)}</span>
                   </>
                 )}
-                {change.override_reason && ` — overriding its gate: ${change.override_reason}`}
+                {change.override_reason && `, overriding its gate: ${change.override_reason}`}
               </>
             ),
           },

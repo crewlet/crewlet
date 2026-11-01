@@ -294,7 +294,11 @@ A version's own bounds apply too: 511 files, and each file's size by its type.
 | A Google Fonts `href` in `faces`, a design system | A font file of the version in `src`; the company's look comes from its own decks |
 
 A refusal lists every finding at once (up to 50), each as
-`file:line: rule: message`, under the code `slide_format`.
+`file:line: rule: message`, under the code `slide_format`; an agent's tool
+answer shows the first 20 and counts the rest. A structural fault in
+`deck.json` (an unknown key, a value of the wrong type) is named with the keys
+or the shape the index reads there, every one in the same refusal, and
+`get_artifact_format` with `kind: "slides"` lists every key of `deck.json`.
 
 ## Themes and layouts
 

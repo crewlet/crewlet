@@ -16,13 +16,18 @@ Three surfaces, and they are deliberately separate:
   `role.mcp_env.github`. This is how an agent reads, reviews and tracks.
 - **Identity.** One GitHub App per agent, in `role.integrations.github`. An app
   carries exactly one bot identity, so each agent has its own, created and
-  installed from the dashboard and bounded by the seat's access tier,
-  `role.code.access`. See [One GitHub App per agent](#one-github-app-per-agent).
+  installed from the dashboard and bounded by the GitHub App permissions set on
+  the integration's Agents tab. The agent acts
+  as that app everywhere through one token the engine issues it,
+  `${GITHUB_APP_TOKEN_<HANDLE>}`. See
+  [One GitHub App per agent](#one-github-app-per-agent) and
+  [Acting as the app](#acting-as-the-app-the-seats-token).
 
-GitHub tools are for **reading, reviewing and tracking** code — diffs,
-comments, reviews, run status. **Authoring** code changes goes through the
-[code sandbox](../concepts/code-sandbox.md), which opens a pull request under
-the agent's own identity.
+GitHub tools are for **reading, reviewing and tracking** code: diffs,
+comments, reviews, run status. **Authoring** code changes is the seat's
+executor run's, with its own shell and git in its
+[box](../concepts/code-sandbox.md), which clones, pushes and opens a pull
+request as the agent's own app.
 
 ---
 
@@ -184,6 +189,19 @@ list of things to fix. The three outcomes a seat can have are therefore
 expected) and **refused** (a token this run could not turn into an account,
 and the only one that becomes a finding).
 
+**A seat's own app token is never looked up.** A seat that acts as its app
+names `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}` for its GitHub tool server
+([Acting as the app](#acting-as-the-app-the-seats-token)). That value is the
+app acting, not an account to learn: GitHub answers `GET /user` for no
+installation token, and the app's account is its slug. So the scan passes that
+key over, the seat counts as unclaimed exactly like one that names nothing,
+and its identity is its app's (see
+[How a seat's app is recognised](#how-a-seats-app-is-recognised)). Until the
+app exists, a company whose only identities are such seats logs
+`github_seat_identities_waiting` naming them, at info, rather than
+`github_has_no_seat_identities`. A scheme with nothing after it (`Bearer ${TOKEN}`
+with `TOKEN` unset) is no credential either, and is never sent.
+
 That distinction was missing, and its absence was loud: every agent seat in a
 company on the app design was reported as a failed identity, permanently
 degraded, with the integration card saying each of them could receive no
@@ -257,6 +275,52 @@ sequenceDiagram
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
 ```
 
+### When a creation doesn't finish
+
+The page GitHub returns you to says what went wrong and what to do, and the
+step that stopped decides which. Crewlet's log has the detail, as
+`github_app_create_failed`.
+
+| What stopped | What the page tells you to do |
+|---|---|
+| The link expired or isn't one Crewlet made, or Crewlet couldn't check it | Start again from Company › Integrations |
+| The link was already used, and the agent has its app | Nothing: the creation is done, and the install button is still there |
+| The link was already used, and the agent has no app yet | Give the app a minute to show in Company › Integrations. If it doesn't, delete it on GitHub if it's there, then start again |
+| No company is set up | Set the company up, then start again |
+| The company's settings couldn't be read just now | Wait a moment, then start again |
+| The company's settings can't be read at all | Ask an admin to check Crewlet's logs, then start again |
+| The agent is no longer one of the company's | Add it back, then start again |
+| The company's settings are managed outside Crewlet | Ask whoever manages them to add the app |
+| GitHub's code was already used or expired | If the app shows up on GitHub, delete it there, then start again |
+| GitHub didn't finish creating the app | If it shows up on GitHub anyway, delete it there, then start again |
+| GitHub created the app but its key couldn't be saved | Delete the app on GitHub, then start again: GitHub never sends the key twice |
+| The key was saved but the app's webhook secret couldn't be | Delete the app on GitHub, then start again: GitHub never sends the secret twice either |
+| The key was saved but the app couldn't be added to the agent | Delete the app on GitHub, then start again |
+| The key was saved, but whether the app was added to the agent isn't known yet | Refresh the page in a minute to find out, or check the agent in Company › Integrations: delete the app on GitHub and start again only if it still shows Create app on GitHub |
+
+A link is spent the moment it's used, so refreshing the page, or coming Back to
+it from GitHub's install page, runs nothing: the page then looks at the agent
+the link names, which is the two "already used" rows. Once GitHub has created
+the app, the page's heading says so ("App created, but not finished") rather
+than "App not created", and the log line names the app (its id, slug and
+address, never its key) so whoever is asked can find the one to delete. Its
+status says whose the stop was: see
+[`GET /webhooks/github-app`](../reference/api-endpoints.md#get-webhooksgithub-app).
+
+Adding the app to the agent is a change to the company's settings, and the
+coordination store can take that change and lose its answer, so the change may
+be in place although Crewlet wasn't told. The page reads the agent back once
+before it says anything: an agent that has the app gets the ordinary "App
+created" page, and otherwise the page is headed "App created, confirming it
+was added to" and says the outcome isn't known yet, never that the app wasn't
+added. A refresh a minute later answers it from the agent's record, as one of
+the "already used" rows.
+
+A cancellation at GitHub, or any other refusal it sends back, is said in the
+page's own words. GitHub's description is logged as `github_app_create_refused`
+and never printed, because anyone can send a browser to this page with any text
+in its address.
+
 ### The card catches up immediately, not on a cadence
 
 An agent's App is **private**, so GitHub sends this engine nothing when you install it — there is no webhook for it to arrive on, and the reconcile loop is what finds the installation, by listing the App's own installations with the App's own key.
@@ -272,18 +336,20 @@ Together the page is normally correct by the time you switch back to it. If it i
 
 ### What has to be in place first
 
-- **The webhook address** — `api.public.external_url` when the deployment has
+- **The webhook address**: `api.public.external_url` when the deployment has
   a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
   (`api.public`), and `api.external_url` otherwise. Three addresses are baked
   into an app at creation: where its deliveries go, where the browser returns
   after the creation, and where it returns after the install. Only a person at
-  GitHub can change them afterwards, so the engine refuses to begin without a
-  public base (`409 no_external_url`, naming the key in `config_path`) rather
-  than create an app that would have to be created again. The reconcile loop
-  reports the same gap for the org- and repository-level hooks: with no public
-  base there is no address for GitHub to deliver to, so the integration is
+  GitHub can change them afterwards, so the engine refuses to begin with no
+  address at all (`409 no_external_url`, naming the key in `config_path`)
+  rather than create an app that would have to be created again. The reconcile
+  loop reports the same gap for the org- and repository-level hooks: with no
+  address there is nowhere for GitHub to deliver to, so the integration is
   reported **degraded** naming that key rather than **ready** with nothing
-  registered anywhere.
+  registered anywhere. An address that is set and that GitHub cannot reach is
+  a different case, and a working one: see [Running locally, with no public
+  address](#running-locally-with-no-public-address).
 - **`integrations.github.provisioning.org`.** It names the account the app is
   registered under, and the account matters: an app registered under a person's
   own account cannot be installed on the organization that owns the
@@ -299,11 +365,11 @@ Together the page is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes.url` | `<webhook address>/webhooks/github/<handle>` |
+| `hook_attributes` | `{"url": "<webhook address>/webhooks/github/<handle>", "active": true}`. Left out, with `default_events`, where GitHub cannot reach the webhook address: GitHub validates a hook whether or not it is active, and refuses one with no url, one it cannot reach, and events with no hook |
 | `redirect_url` | `<webhook address>/webhooks/github-app` |
 | `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
-| `default_permissions` | The seat's tier (`role.code.access`), below |
+| `default_permissions` | The seat's [permissions](#access-in-githubs-own-terms), plus `metadata: read`, and nothing wider |
 
 `<webhook address>` is the one above: the public listener's
 `api.public.external_url` where `api.public` is set — the return and the
@@ -319,55 +385,77 @@ organization or repository hook the
 [provisioning pass](#provisioning--crewlet-github-provision) registers rather
 than through the seat's own app.
 
-### The three access tiers
+### Access in GitHub's own terms
 
-A seat's tier is its `role.code.access` — a field of the seat, not of this
-block — and here it decides two things: the permissions the app is created
-with, and the permissions every token minted for that app carries. It is one
-setting for every code host the engine drives: the engine's own
-[code host](../concepts/code-host.md) caps what the chart grants the same seat
-by the same tier, so a seat moved from GitHub to the native host keeps what it
-may do. It is an agent seat's setting; a human seat carrying it is refused,
-because a person acts on GitHub as their own `contact.github_login`.
+GitHub has no roles for an app. It has permissions, each at **No access**,
+**Read-only** or **Read and write**, so that is what a seat stores and what the
+Agents tab offers, under GitHub's names. A seat's `code.access`
+(`role.code.access`) is not one of them and reaches nothing here: it caps what
+the seat may do on the engine's own [code host](../concepts/code-host.md#who-may-read-and-push)
+alone, and what the seat may do on GitHub is this list:
 
-```yaml
-roles:
-  - name: Senior Engineer
-    code:
-      access: review              # read_only (default) | review | full_access
-```
-
-| Tier | What it grants | GitHub permissions |
+| Permission (key) | Levels offered | What it is for |
 |---|---|---|
-| `read_only` (the default) | Reads code and issues, changes nothing. | `metadata:read`, `contents:read`, `issues:read`, `pull_requests:read`, `checks:read`, `actions:read`, `deployments:read` |
-| `review` | Reads the code and writes **about** it: issues, comments, reviews. | `metadata:read`, `contents:read`, `issues:write`, `pull_requests:write`, `checks:read`, `actions:read`, `deployments:read` |
-| `full_access` | Branches, commits, pull requests, issues and checks. No administration. | `metadata:read`, `contents:write`, `issues:write`, `pull_requests:write`, `checks:write`, `actions:read`, `deployments:read` |
+| Contents (`contents`) | Read-only, Read and write | Reading code; Read and write pushes branches and commits |
+| Issues (`issues`) | Read-only, Read and write | Reading and writing issues and their comments |
+| Pull requests (`pull_requests`) | Read-only, Read and write | Reading, opening and reviewing pull requests |
+| Checks (`checks`) | Read-only, Read and write | Reading check runs; Read and write reports them |
+| Actions (`actions`) | Read-only, Read and write | Reading workflow runs and job logs; Read and write re-runs, cancels and dispatches them |
+| Deployments (`deployments`) | Read-only, Read and write | Reading deployments and their statuses; Read and write creates them |
+| Workflows (`workflows`) | Read and write | Pushing a change to a file under `.github/workflows` |
 
-- **Empty means `read_only`.** A seat nobody has thought about yet should have
-  to ask for more rather than already hold it.
-- **`review` keeps `contents` at read on purpose**, so a reviewer cannot change
-  what it is reviewing.
-- **`metadata: read` is on every tier**, because GitHub requires it for almost
-  every read: without it a token cannot resolve a repository at all.
-- **Each tier is an allow list.** GitHub's token endpoint takes the permissions
-  to grant, so anything absent from a tier is simply not on the token. There is
-  no catalogue to subtract from and therefore nothing to forget.
-- **A typo is refused, not guessed at.** `access: reviw` fails config
-  validation naming the field, and a reader that takes the value anyway falls
-  back to `read_only` rather than to something wider. Each tier has exactly
-  one spelling, the one in the table: `full-access`, `Review` and ` review `
-  are refused like any other value, because the published schema lists the
-  three as the field's enum, and an editor underlines exactly what the engine
-  refuses.
-- **The app is begun at the tier whether or not the seat has a GitHub block
-  yet.** The tier is the seat's, so the manifest of a seat whose
-  `code.access` says `full_access` asks GitHub for `full_access` from its
-  first creation.
+- **A permission left out is No access.** `metadata: read` is added to every
+  app and every token, because GitHub requires it to resolve a repository.
+- **The app is registered at exactly these.** The manifest a person
+  submits asks for the seat's permissions and nothing wider, so a leaked app key
+  reaches only what the seat may do.
+- **Narrowing applies on the next token.** Every token is minted with the seat's
+  permissions and repositories, so lowering a level or removing a repository
+  needs nothing at GitHub.
+- **A raise past the registration waits for two people.** The app's owner adds
+  the permission on the app's permissions page, and GitHub then asks an
+  organization owner to accept it on the installation. The Agents tab shows the
+  step that is waiting with its link; **Done, check again** reads GitHub again.
+  Until the installation holds a permission the seat asks for, GitHub refuses
+  every token the seat requests.
+- **Read and write on Contents or Workflows is an administration grant.**
+  Raising a seat to either needs a fresh step-up from the person saving it.
+- **Workflows needs Contents (Read and write).** A workflow change is a push,
+  and GitHub refuses a push from a token that cannot write contents, so the
+  document refuses the pair half set. The same grant lets the agent's branch
+  run a workflow it rewrote with the secrets the repository hands its runs, so
+  pair it with branch protection on the default and release branches and keep
+  deployment credentials in environment-scoped secrets.
+- **Seats migrated from tiers** keep exactly what their tier granted,
+  permission by permission: `read_only` holds Contents, Issues, Pull requests,
+  Checks, Actions and Deployments at Read-only; `review` raises Issues and Pull
+  requests to Read and write; `full_access` raises Contents and Checks too, plus
+  Workflows where the seat had opted in.
 
-### What no tier grants
+### On, off and remove
 
-None of the three asks for any of these, so no token this engine mints carries
-one. Each is a way out of the tier rather than a step up within it:
+`enabled` is stored on the seat's block, and a seat is off until it is turned
+on.
+
+| Action | What happens at GitHub |
+|---|---|
+| Turn on, first time | A person creates the app from the prepared manifest and installs it. The engine seals the app's key and webhook secret when GitHub returns them. |
+| Turn off | The engine suspends the seat's installation as the app. The app, its key and the installation are kept, and every token is refused from that moment. |
+| Turn back on | The engine lifts the suspension it placed, at the seat's current permissions and repositories: anything the installation must still grant or cover waits for a person, as a raise does. A suspension an organization owner placed at GitHub is lifted there: the Agents tab links to the installation's settings page and checks again once it is lifted. |
+| Remove (only when off) | The engine uninstalls the app. A person deletes the app registration from its settings (GitHub has no API for it), and once GitHub reports it deleted the engine clears the sealed key and webhook secret. |
+| Rotate | Not offered: tokens last an hour and are never stored. |
+
+An installation suspended or uninstalled by somebody at GitHub is never turned
+back on automatically, in case it was incident response: the Agents tab
+offers **Turn back on** or **Keep off**. Each pass reads the app's registration
+and installation back, so a permission an owner removed at GitHub shows as a
+waiting step rather than silently failing tokens.
+
+### What no seat is granted
+
+None of these is offered, so no app is registered with one and no token this
+engine mints carries one. Each is a way out of a seat's limits rather than a
+step up within them:
 administration (deleting a repository, dropping branch protection), secrets and
 variables (every credential the repository holds), and membership and
 organization settings (how an agent would widen its own access).
@@ -380,9 +468,9 @@ organization settings (how an agent would widen its own access).
 **What an app holds is a different question from what a token carries.** A
 manifest can be edited in the browser before it is submitted, and an
 installation can be widened by a person afterwards; neither is the engine's to
-decide. What is the engine's is the mint: a token is issued with the tier's own
-permission list and nothing else, so a `read_only` seat still cannot write on
-an installation that could. Where the seat names `repos`, the token is narrowed
+decide. What is the engine's is the mint: a token is issued with the seat's own
+permissions and nothing else, so a Read-only seat still cannot write on an
+installation that could. Where the seat names `repos`, the token is narrowed
 to those as well, and an empty list means every repository the installation
 covers, which is what the operator chose when they installed it.
 
@@ -398,17 +486,22 @@ roles:
       access: review              # the app's permission set: read_only (default) | review | full_access
     integrations:
       github:
+        enabled: true             # off until turned on; off suspends the installation
+        permissions:              # GitHub App permissions; a key left out is No access
+          contents: read
+          issues: write
+          pull_requests: write
         repos: [acme/api]         # empty means every repository the installation covers
         # Written by the engine, never typed in:
         app_id: 1234567
         app_slug: acme-senior-engineer
         installation_id: 87654321
-        private_key: "${SENIOR_ENGINEER_GITHUB_APP_KEY}"
-        webhook_secret: "${SENIOR_ENGINEER_GITHUB_APP_WEBHOOK_SECRET}"
+        private_key: "${GITHUB_APP_KEY_SENIOR_ENGINEER}"
+        webhook_secret: "${GITHUB_APP_WEBHOOK_SECRET_SENIOR_ENGINEER}"
 ```
 
-`repos` is the one field of this block a person writes, beside the seat's own
-`code.access`. `app_id`, `app_slug`,
+`enabled`, `permissions` and `repos` are the fields a person writes, from the
+integration's Agents tab. `app_id`, `app_slug`,
 `private_key` and `webhook_secret` are written when the app is created, and the slug is what the
 bot login derives from, so it is what an `@mention` of this agent resolves
 through. `installation_id` is written as `0` at that moment, because creating
@@ -421,12 +514,16 @@ the [secret store](../concepts/secret-store.md):
 
 | Sealed name | What it is |
 |---|---|
-| `<HANDLE>_GITHUB_APP_KEY` | The app's PEM private key |
-| `<HANDLE>_GITHUB_APP_WEBHOOK_SECRET` | The webhook secret GitHub generated for the app, when it returned one |
+| `GITHUB_APP_KEY_<HANDLE>` | The app's PEM private key |
+| `GITHUB_APP_WEBHOOK_SECRET_<HANDLE>` | The webhook secret GitHub generated for the app, when it returned one |
 
 `<HANDLE>` is the seat's handle upper-cased, with every character outside
 `A-Z`, `0-9` and `_` replaced by an underscore, so `senior-engineer` becomes
-`SENIOR_ENGINEER`. The names are per seat because the credentials are: one
+`SENIOR_ENGINEER`. The vendor leads the name so that a handle beginning with a
+digit (`7th-engineer`) still makes a name a `${VAR}` can reference. A third
+name follows the same rule and is never sealed:
+`GITHUB_APP_TOKEN_<HANDLE>`, the token the agent acts with ([Acting as the
+app](#acting-as-the-app-the-seats-token)). The names are per seat because the credentials are: one
 shared name would have the second agent's key overwrite the first's, and both
 seats would then authenticate as whichever app was created last.
 
@@ -458,7 +555,7 @@ the ordinary GitHub route addressed to one seat (see
 
 GitHub signs an app's deliveries with **that app's own** webhook secret, which
 it generates at conversion time and returns once. The engine seals it as
-`<HANDLE>_GITHUB_APP_WEBHOOK_SECRET` and writes the `${VAR}` onto the seat, and
+`GITHUB_APP_WEBHOOK_SECRET_<HANDLE>` and writes the `${VAR}` onto the seat, and
 the route verifies that seat's deliveries against it. Nothing has to be set at
 GitHub by hand, and no two apps share a secret.
 
@@ -466,6 +563,151 @@ A seat with no secret of its own falls back to
 `integrations.github.webhook_secret`, which is what a single organization app
 pointed at a seat signs with. A seat with neither is a route with nothing to
 verify against, and it answers `503` rather than accepting the delivery.
+
+### Acting as the app: the seat's token
+
+An app is an identity, and what GitHub accepts from it is an **installation
+token**: minted from the app's private key against its installation, valid for
+one hour. A `git push`, a `gh pr create`, a review and every call the GitHub MCP
+server makes all carry one. So the engine issues each agent's app a token, and
+the configuration names it wherever the seat's credentials are read:
+
+```yaml
+providers:
+  sandbox:
+    setup:
+      - name: git-auth            # the recipe in the code sandbox guide
+        # ...
+
+mcp_servers:
+  - name: github
+    transport: http
+    shared: false
+    url: "https://api.githubcopilot.com/mcp/"
+
+roles:
+  - name: Senior Engineer
+    handle: senior-engineer
+    mcp_env:
+      github: { Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}" }
+    sandbox:
+      env:
+        GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
+      setup:
+        - name: github-token      # the file the completion poll keeps current
+          files:
+            .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
+    integrations:
+      github:
+        enabled: true
+        permissions: { contents: write, issues: write, pull_requests: write, checks: write, actions: read }
+        repos: [acme/api]
+```
+
+`${GITHUB_APP_TOKEN_<HANDLE>}` is answered in three places, and only there: the
+seat's own tool servers (`role.mcp_env`), its coding box's environment and setup
+files (`role.sandbox.env`, `providers.sandbox.setup` and `role.sandbox.setup`),
+and the servers rendered into that box (`role.sandbox.mcp`). Every
+provider-wide setup step reaches every agent seat's box, so a seat's
+`${GITHUB_APP_TOKEN_<HANDLE>}` belongs on that seat's own `sandbox.setup` or
+`sandbox.env`: named in a provider-wide step, it resolves for that seat alone,
+and every other seat's run starts without it and logs `sandbox_env_unresolved`
+at warning, on every launch.
+
+- **Each seat reads only its own.** The token is laid in front of the
+  company's secret store for that seat's reads alone. A seat that names
+  another seat's variable names something nothing answers, and is told the
+  variable is not set; a shared server never sees any of them. An app's
+  identity stays with the agent it was created for, by construction
+  ([ADR-0058](https://github.com/crewlet/crewlet/blob/main/adr/0058-a-seats-github-app-token-is-issued-at-use-and-read-only-by-that-seat.md)).
+- **Scoped at mint time.** The token carries the seat's permissions (and
+  `metadata: read`) and nothing else, narrowed to the seat's `repos` where it
+  names any. A seat at Contents Read-only cannot push, whatever the
+  installation allows. A seat that is off is issued no token.
+- **Never sealed, never logged.** The token lives in the engine's memory, one
+  per installation and scope, and is minted again by any node that holds the
+  app's key. It is not written to the secret store, to a revision, to a log
+  line or to an error. In a box it is in the run's environment and in the files
+  that name it, which is where the agent acts with it.
+- **Issued only while GitHub is enabled.** Switching `integrations.github` off
+  stops every token at the next read: the seat's tool servers stop for want of
+  their credential, the next coding run starts without one (said as
+  `sandbox_env_unresolved`), and a running job's token file is no longer
+  renewed.
+
+#### How long a token lasts where it is used
+
+GitHub issues a token for one hour and offers no way to ask for longer, so the
+engine renews it wherever something holds one:
+
+| Where | What it is handed | How it stays good |
+|---|---|---|
+| The seat's tool servers on the engine host | a token with at least 10 minutes left | the seat's servers are passed again when it reaches 10 minutes, and each one carrying it is restarted with a fresh token, as a rotated secret restarts it |
+| A coding run's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a run longer than 50 minutes reads the token from a file |
+| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the job runs; and a job that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a job that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
+| A tool server rendered into the box | the run's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
+
+The [git-auth recipe](../concepts/code-sandbox.md#the-git-auth-recipe) reads the
+file at every git and `gh` call, which is what lets a coding job run for hours
+as the agent's own app.
+
+#### When there is no token to give
+
+| The seat's app | What a value naming the token does |
+|---|---|
+| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run starts without it, said as `sandbox_env_unresolved`: its environment lacks the token, and a setup file whose whole body is the token is not written. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again; a running job's token file is written by the first poll after the app can issue a token, and the wait before that is said once for the job (`sandbox_token_waiting`) |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) | **Fails, with GitHub's reason**, and keeps failing until somebody fixes the agent's app — its key, its installation or the permissions it asks for — which is what the failure says, rather than that the token is asked for again. GitHub is still asked on the restart schedule — 15 seconds, doubling to 5 minutes — so the first ask after the fix issues it. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running job's token file is written by the first poll after GitHub issues a token, and a coding run's environment carries one from the seat's next launch after that. A running job says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a job that holds a token keeps it until it expires, and a job launched without one is told so, and that the first poll after GitHub issues a token writes it |
+| Installed, and GitHub can't be reached or answers that it can't issue one just now (408, its rate limit, a 5xx) | **Fails, with GitHub's reason**, and says the token is asked for again, which it is: on the same restart schedule, its answer held for each wait as a refusal's is, so the first ask after GitHub answers issues it, and a running job says the failure as it says a refusal |
+| `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
+
+### Running locally, with no public address
+
+An engine a person reaches at `http://localhost:8200` has an address, and
+GitHub cannot deliver to it. Its agents can still do everything they do on
+GitHub, because pushing, opening pull requests and reviewing are all outbound,
+and the two acts that build an app need only the operator's browser, which
+reaches the engine perfectly well.
+
+- **The app is created with no webhook.** The begin route builds the manifest
+  without `hook_attributes` or `default_events` (`webhook_active: false` in its
+  answer), rather than refusing or letting a hook fail every delivery while
+  the app reads as healthy. GitHub leaves no other choice: it validates a
+  manifest's hook whether or not it is active, and refuses one with no url,
+  one it cannot reach ("isn't reachable over the public Internet"), and event
+  subscriptions with no hook ("Hook url cannot be blank"). Once the engine has
+  a public address, add the webhook and its events on the app at GitHub. The
+  browser returns to `api.external_url` as usual.
+- **No hook is registered** on the organization or a repository, for the same
+  reason.
+- **The card says so and stays ready.** One note on the webhook address's key,
+  **GitHub can't reach this engine**, says that no GitHub event arrives at the
+  address it names, that the agents still push, open pull requests and review
+  through their apps, and which setting makes events arrive.
+
+What counts as reachable depends on where GitHub runs. github.com reaches only
+the public internet: a loopback, private, link-local or unspecified address, a
+single-label name and the `localhost`, `.local`, `.internal`, `.lan` and
+`.home.arpa` names are not reachable. An Enterprise Server runs inside the
+company's network, so there only the server's own loopback, an unspecified
+address and `localhost` are refused.
+
+**Hearing back later.** Give the deployment a stable public address (an
+`api.public` listener behind a hostname that does not change; a quick tunnel's
+address changes on every run and would have to be written into every app
+again), then, for each agent's app, open its settings at GitHub, set the
+webhook URL to `<webhook address>/webhooks/github/<handle>`, tick **Active**,
+and check the events listed under [The manifest the engine
+builds](#the-manifest-the-engine-builds). GitHub offers no API that switches an
+app's webhook on, so this is a person's step, once per app.
+
+**The webhook secret for such an app is the organization's.** An app created
+with no webhook was given no signing secret by GitHub, so the engine sealed
+none for it and verifies its deliveries against `integrations.github.webhook_secret`.
+Set the app's webhook secret at GitHub to that same value; a secret of the
+app's own would fail every delivery's signature check. To give each agent a
+secret of its own instead, delete the app at GitHub and create it again from
+the seat's card once the engine has its public address: the manifest then
+carries the hook, GitHub generates the secret, and the engine seals it.
 
 ### The two routes
 
@@ -568,11 +810,11 @@ and ready.
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was
   requested.
-- **Permissions are frozen at creation.** Raising a seat's tier
-  (`role.code.access`) afterwards
-  means editing the app's permissions at GitHub, where every installation has
-  to approve the change before it takes effect. Choosing the tier before the
-  app is created is the cheap moment to get it right.
+- **Permissions are fixed at creation.** Raising a seat past what its app is
+  registered with means its owner editing the app's permissions at GitHub, and
+  an organization owner accepting the change on the installation, and GitHub
+  refuses the seat's tokens until both have. Setting a seat's permissions
+  before the app is created is the cheap moment to get them right.
 - **The creation code is single use and lives one hour.** A code that has been
   converted or has expired is reported as exactly that, and the flow starts
   again from the begin route. The engine's own state is shorter still, at 15
@@ -727,7 +969,7 @@ prompt renders differently.
 ### The one event addressed to its own actor
 
 A seat is never told about its own actions — with one exception on GitHub (the
-self-hosted host's failed pipeline is another, and the tracker's `unblocked`,
+self-hosted host's failed pipeline is another, and Worklet's `unblocked`,
 news that a task of yours became workable, reaches you even on a record you
 wrote). A **failed workflow
 run** names the person whose push triggered it, and when it goes red they are
@@ -758,8 +1000,8 @@ wrong behaviour anyway, and the call sits on the inbound consumer's hot path.
 
 **They are read through the agents' own apps.** An agent that acts as itself
 already holds a credential that can answer: its app is installed on the
-repositories it works in, and every tier grants `issues:read` and
-`pull_requests:read`. The first installed seat whose token mints is asked, and
+repositories it works in, and a seat holding Issues and Pull requests at
+Read-only or more can read a thread's participants. The first installed seat whose token mints is asked, and
 the next is tried when one refuses, which is what keeps the answer available
 while an operator is mid-rollout. Tokens are cached per installation for the
 hour GitHub issues them for, because this is the inbound hot path.
@@ -775,6 +1017,36 @@ never filed as an issue — which would ask the wrong collection for its
 participants and lose every reviewer.
 
 ---
+
+## Pull request previews in chat
+
+A link in a [Chatlet](../concepts/chatlet.md) message to a pull request on
+github.com is drawn with a preview: the repository and number, the title, the
+state (open, draft, merged or closed) and its size in lines added and
+removed. Nothing else is read for it: no description, no comments and nothing
+about its author.
+
+- **Only github.com, and only the company's own code.** A preview is read for
+  `https://github.com/{owner}/{repo}/pull/{number}` (or a tab of that page)
+  and only when `{owner}` is an owner the GitHub configuration names: the
+  provisioning `org`, or the owner of a repository a seat works in. A link to
+  any other pull request, to an Enterprise Server, or to anything else is
+  drawn as a plain link, and nothing is fetched for it. The address in the
+  message is never fetched itself: the engine reads the pull request from
+  GitHub's API by its owner, repository and number.
+- **Read with the company's credential.** The read goes through the agents'
+  own apps, the same walk that reads a thread's participants: the first app
+  installed on the repository answers. With none installed there, the link is
+  drawn plain.
+- **Who sees it.** A preview is answered only to a person who can read the
+  message, and they see the pull request's title and state whether or not
+  they have access to the repository on GitHub. Leave a repository out of the
+  GitHub configuration, or out of every agent's app, to keep its pull
+  requests' titles out of chat.
+- **Briefly cached, gently read.** A node keeps each preview for a minute
+  (failures too), at most 512 at once, and reads at most four from GitHub at
+  a time, so a busy room does not spend an installation's rate limit. A read
+  that fails or times out is a plain link.
 
 ## Provisioning — `crewlet github provision`
 
@@ -801,9 +1073,10 @@ So it does the two things GitHub genuinely allows:
 | Flag | Effect |
 |---|---|
 | `-public-url URL` | This deployment's public base. Without it no webhook is registered — a hook pointing at the wrong host is worse than no hook, because GitHub then reports a healthy integration delivering into the void |
-| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes. **Required for a real run** — a run with nowhere to put what it mints creates a live secret and prints none of it |
-| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds |
-| `-dry-run` | Read and report; register nothing, and do not open the secret store |
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes. **Required for a real run** — a run with nowhere to put what it mints creates a live secret and prints none of it. With `-env-file` or `-print` a run that would mint the secret — it resolves to nothing, or `-recreate-webhooks` asks for a fresh one — is refused before it reaches GitHub where the company's store holds its `${VAR}`: the engine reads the store's value over anything recorded there, so the hooks would sign with a key the engine does not hold ([a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)) |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds. A literal `webhook_secret` has no variable to mint into, so the run is refused: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is |
+| `-config PATH` / `-api URL` | Where the company's values are read — the org token the run reads GitHub with, the seats' credentials and the webhook secret: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself, through the node's own broker or the external one; with neither a file nor `-api`, from the environment alone. A `-secret-store` sink records the same way. On a member of a cluster whose engine is stopped the run is refused before it reads or registers anything, `-recreate-webhooks` included. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values) |
+| `-dry-run` | Read and report; register nothing. The sink is not opened, but the company's values are still read through the run's route as above, and refused where a real run would be |
 
 **A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional, and the connect form asks for it only when the coverage answer is every repository in the organization, both deliberately: routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
 
@@ -813,7 +1086,7 @@ The second is that **an agent's own app is a registrar too**. Even a company tha
 
 ### What a company hears about, said out loud
 
-A company whose events arrive through its agents' own apps gets one sentence on a **ready** card: *covering the repositories your agents' apps are installed on. Not covering the rest of `<org>` — supply `integrations.github.token` to add one organization-wide hook.*
+A company whose events arrive through its agents' own apps gets one note on a **ready** card, **Events from your agents' repositories only**: *GitHub sends events for the repositories your agents' apps are installed on, and none for the rest of `<org>`*, with the option beneath it, *to cover every repository, set `integrations.github.token` and Crewlet adds one organization-wide hook.*
 
 It is a `coverage_partial` finding, whose verdict is ready and whose actor is the **operator**: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
 
@@ -846,7 +1119,7 @@ probe cannot enumerate what exists — so the report says both.
 ## MCP tools
 
 Declare the GitHub MCP server once as a `shared: false` `http` server; each
-agent supplies its own token:
+agent acts through its own app's token:
 
 ```yaml
 mcp_servers:
@@ -857,16 +1130,18 @@ mcp_servers:
 
 roles:
   - name: Senior Engineer
+    handle: senior-engineer
     mcp_env:
       github:
-        Authorization: "Bearer ${GITHUB_TOKEN_SENIOR}"   # per-agent PAT
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"   # its own app
     goal: "Implement backend features"
   - name: Tech Lead
-    goal: "Coordinate the team"           # no github creds → no GitHub tools
+    goal: "Coordinate the team"           # no github creds, so no GitHub tools
 ```
 
-The `Authorization` header is the same credential the engine resolves the
-seat's login from — one secret, named once. See
+A seat may name a personal access token there instead, for an account it does
+not hold an app for; the engine then resolves the seat's login from it. Where a
+seat holds both, the app is its identity. See
 [Tools & MCP](../guides/tools-and-mcp.md#per-agent-identity).
 
 | Category | Tools |
@@ -880,27 +1155,35 @@ seat's login from — one secret, named once. See
 The remote server also exposes GitHub Copilot tools
 (`create_pull_request_with_copilot`, `assign_copilot_to_issue`,
 `request_copilot_review`). They stay reachable and an agent may call any of
-them; Crewlet's own code-authoring path is the
-[code sandbox](../concepts/code-sandbox.md), which is what `run_sandbox`
-drives. The Copilot tools are only on the remote server, not a self-hosted
-one.
+them; Crewlet's own code-authoring path is the seat's executor run in its
+box ([code sandbox](../concepts/code-sandbox.md)), with its own shell and git.
+The Copilot tools are only on the remote server, not a self-hosted one.
 
 ---
 
 ## How code authoring works
 
-A seat the founder has gated with `role.sandbox.enabled` authors code through
-the [code sandbox](../concepts/code-sandbox.md). Where its executor is not in
-[agent mode](../concepts/llm-backends.md#agent-mode),
-`run_sandbox` is on the executor's surface; it calls it, and a coding agent
-runs in an isolated box and opens a pull request **as the agent's own GitHub
-identity** — the token the role declares in `role.sandbox.env`, by convention
-the same one as its `mcp_env.github` header. The call is detached: the
-executor loop suspends and resumes with the result, so the agent reports the
-pull request in the same turn. An agent-mode executor is never offered
-`run_sandbox`: it does its code work in its own run, whose box reads the same
-`role.sandbox.env` (see
-[Where code work runs](../concepts/code-sandbox.md#where-code-work-runs)).
+Every agent seat authors code through the
+[code sandbox](../concepts/code-sandbox.md): its executor is its coding CLI's
+[own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box),
+which opens a pull request **as the agent's own GitHub App**:
+`role.sandbox.env` names `${GITHUB_APP_TOKEN_<HANDLE>}`, and the git-auth
+recipe reads the same token from a file the engine keeps current
+([Acting as the app](#acting-as-the-app-the-seats-token)). Commits are made
+as `$CREWLET_AGENT_HANDLE` with `$CREWLET_AGENT_EMAIL`; set the seat's `email`
+to the app's bot noreply address,
+`<bot user id>+<slug>[bot]@users.noreply.github.com`, to have GitHub attribute
+them to the app. The bot user id is not the app id: it is the `id` GitHub
+answers for `GET /users/<slug>[bot]` once the app exists. The run is detached:
+the turn suspends at launch and resumes with the run's report, so the agent
+reports the pull request in the same turn.
+
+An issue assigned to the agent says the same in its prompt
+(`issue.assigned`): any code change the issue needs is the agent's own to
+make, in its own checkout, and it opens the pull request under its own
+identity, since the executor reading the prompt is that run. An assigned
+pull request already exists, and its prompt says only how the assignment is
+declined here: reassign it.
 
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through
@@ -922,8 +1205,8 @@ rather than silently reviewing.
 
 Roles with GitHub credentials also see the bundled `mcp:github`
 [Tool Skill](../concepts/tool-skills.md) in their executor prompt, which frames
-the GitHub tools as read/review/track tools with authoring pointed at the
-sandbox.
+the GitHub tools as read/review/track tools, with authoring done in the
+run's own checkout with its shell and git.
 
 For team-shared conventions — "Engineering uses semantic commits" — edit the
 knowledge-base page instead. The knowledge base is the single source of truth
@@ -992,7 +1275,16 @@ units:
 - **An installation token cannot hold a seat's identity.** It authenticates
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.
-- **Code authoring is the sandbox's job.** A role without
-  `role.sandbox.enabled` and an engine-level `providers.sandbox` can still
-  read, review and track through the GitHub tools; it has no engine-supported
-  path to author a pull request.
+- **Code authoring is the executor run's job.** Every agent seat's executor
+  is its coding CLI's own run with a shell and git in its box; a pull request
+  is opened from there with the token its `role.sandbox.env` declares (the
+  seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, or a personal access token) and a
+  git-auth setup step. A seat that declares none can still read, review and
+  track through the GitHub tools, and pushes nothing.
+- **A tool server inside a box keeps the token it started with.** It is handed
+  one good for 50 minutes and is not restarted; past that GitHub refuses its
+  calls. git and `gh` read the file the engine keeps current, and the seat's
+  executor reaches its own renewed GitHub server through the tool bridge.
+- **An app created with no webhook has one added by a person.** GitHub has no
+  API for it; see [Running locally, with no public
+  address](#running-locally-with-no-public-address).

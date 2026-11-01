@@ -5,9 +5,10 @@
  * # Grouped by need, Crewlet's own service first
  *
  * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
- * Crewlet's own services opens its group (Crewlet Chat, Works, Knowledge),
- * so the built-in answer to a need sits beside the apps that answer it in its
- * place, with In use, Not in use or Soon on its line. ATLASSIAN IS LISTED BY
+ * Crewlet's own services opens its group (Chatlet, Worklet, Doclet), so
+ * the built-in answer to a need sits beside the apps that answer it in its
+ * place, with In use or Not in use on its line. Each names Crewlet beside
+ * it as its maker, the way Jira names Atlassian. ATLASSIAN IS LISTED BY
  * PRODUCT: it is one connection that serves two needs, so Jira sits under work
  * tracking and Confluence under docs, each with its own product's state, and
  * both open the one Atlassian page, since it is one key and one account per
@@ -17,7 +18,7 @@
  *
  * `#/company/integrations/{kind}` selects a line: an app's key, a surface
  * (`jira`, `confluence`, the `forge` relay and `atlassian` select Jira's
- * line, on the Atlassian page), or a service (`works`, `knowledge`, `chat`).
+ * line, on the Atlassian page), or a service (`worklet`, `doclet`, `chat`).
  * The bare address shows what the company has active.
  *
  * # Who reads it
@@ -57,6 +58,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { CATALOG, type Entry } from "./catalogue.tsx";
@@ -72,7 +74,7 @@ import { AppPane } from "./AppPane.tsx";
 import { DIRECTORY, entryOf, type Line } from "./categories.ts";
 import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
-import { ServiceMark, ServiceState, useDisconnect } from "./parts.tsx";
+import { ServiceDot, ServiceMark, useDisconnect } from "./parts.tsx";
 
 /** Which line a route segment selects: Atlassian and its relay select Jira's. */
 function selects(line: Line, kind: string | undefined): boolean {
@@ -110,7 +112,7 @@ function AdminPage({ kind }: { kind?: string | undefined }) {
       )}
       {model.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          {needsWords("Reading the integrations' setup state", model.needs)}
+          {authorityWords("Reading the integrations' setup state", model.refused)}
         </Callout>
       )}
       <QueryState error={model.error} refusal={model.refusal} loading={false}>
@@ -172,7 +174,8 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
               selected,
               mark: <ServiceMark service={s} size="md" />,
               label: s.name,
-              status: <ServiceState service={s} />,
+              ...(s.vendor ? { hint: s.vendor } : {}),
+              status: <ServiceDot service={s} />,
             };
           }
           const app = entryOf(line)!;

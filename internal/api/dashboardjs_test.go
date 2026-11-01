@@ -1082,34 +1082,120 @@ const (
 	// out of the entry into chunks of their own, each compressed apart (about
 	// 1.1 KiB), beside 0.2 KiB of new kit code and 0.3 KiB of polished kit
 	// rules in the one sheet. 323 KiB, still under two seconds on that link.
-	// The code host's own changes to the frame, merged beside it, took it to
-	// 323.0 KiB: the store_full refusal's sentence among the act errors, a
-	// wait said in hours, and Not Found's hint said as a sentence (about
-	// 0.4 KiB, all in the entry's graph because the frame answers every
-	// write and every unknown address). 324 KiB, still under two seconds on
-	// that link. It was 323.7 KiB (331,424 bytes) when the formatter cache's
-	// own fixes took it to 323.8 KiB (331,619), which 324 KiB still holds.
-	// 135 of the 195 bytes are its frozen shapes: every module's date and
-	// number shapes are frozen constants whose key the cache reads once, and
-	// the key's parts are levels of its maps, which halves what a kept
-	// formatter costs on every date and number a list draws. The other 60 are
-	// the fixes beside them: the zone answers the cache keeps add 61, the
-	// month a budget is named by takes 3 back, and Home's budget weekday and
-	// the folder order's one collator a byte each. All of it is in the
-	// entry's graph, because every screen formats through lib/formatters.ts.
-	// The Code workspace took it from 323.8 KiB (331,619 bytes) to 325.6 KiB:
-	// its row, its two routes, its trail, its service notice and its words
-	// in the frame, about 0.3 KiB of the entry; and about 1.4 KiB of the
-	// bundler regrouping what the first paint already loaded, with no module
-	// newly in it — the code screens reach the peek rail through the grid and
-	// nothing of the lazy-screen table beside it, so the two are compressed
-	// apart where they were one chunk. 326 KiB, still under two seconds on
-	// that link.
-	initialBudget = 326 << 10
+	// The Dashboard Assistant took it to 336.4 KiB: the kit's assistant
+	// pieces (the cards, the aside, the peek rail, the time range picker)
+	// ride the one sheet by the same rule; the Ask button's Orbit mark is
+	// about 8.8 KiB while it is imported from the icons package's main entry,
+	// which brings the vendor marks with it (the `@crewlethq/icons/product-mark`
+	// entry recovers it); and the frame's own half of the assistant (the
+	// button, the page context registry, the bus, the aside's arithmetic) is
+	// the rest. The drawer, its store, its reducer, its cards and its stream
+	// client are a chunk of their own, fetched when the panel first opens.
+	// 337 KiB, still under two seconds on that link. uilet 0.56.0 measured
+	// 336.0 KiB here: its icons package's main entry now tree-shakes to the
+	// one mark asked for, so the Orbit mark costs the same through it as
+	// through `@crewlethq/icons/product-mark`, which the frame imports anyway.
+	// The assistant's page actions took it to 337.8 KiB (measured with and
+	// without them on that release): the registry merging every mounted
+	// screen's actions, the undo a view change leaves, the contract's table
+	// of page actions, the question the palette queues for the panel, and the
+	// object kinds a peek is named by, which a page's selection reads. Every
+	// screen's own actions are in that screen's chunk. 338 KiB, still under
+	// two seconds on that link. uilet 0.57.1 measured 338.1 KiB with the same
+	// dashboard source: the design system's one stylesheet, which first paint
+	// carries whole, gained the proposal card's decision refusal and
+	// unconfirmed outcome, the non-modal overlay aside and table cells that
+	// wrap. 339 KiB, still under two seconds on that link. uilet 0.63.0
+	// measured 340.4 KiB with the same dashboard source: the deep work card,
+	// the file list and the attachment chip join the one stylesheet, and the
+	// labelled value field moves the form field, the text area and the
+	// character count into the shared chunk the entry already loads. Moving
+	// the setup form and its dialogs onto that field took it to 340.3 KiB.
+	// 341 KiB, still under two seconds on that link. One vocabulary for seat
+	// states and the plain sentence for each failure kind, which the frame's
+	// shared seat words carry into the entry, took it to 341.1 KiB. 342 KiB,
+	// still under two seconds on that link. uilet 0.66.0 and choosing screen
+	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
+	// 0.64.1 alignment and spacing pass across every component family, the
+	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
+	// still under two seconds on that link. uilet 0.67.0's product marks took
+	// it to 346.6 KiB with the same dashboard source: each mark now carries a
+	// 16 grid drawing beside its master, and the Ask button draws the
+	// assistant's spark, whose motion and soon rules ride the one sheet. 347
+	// KiB, still under two seconds on that link. uilet 0.69.0 took it to 348.3
+	// KiB while the entry's own script shrank by 2 KiB (the drawer's Needs you
+	// reads gone): BriefCard's rules ride the one sheet, and the release splits
+	// the status card and suggestion row code BriefCard shares into chunks of
+	// their own, each one more request's overhead in the entry's graph. 349
+	// KiB, still under two seconds on that link. A read named in the answer
+	// rather than drawn as a card (ADR-0061): the renderer saying which run
+	// of prose opens its block, in the shared Markdown module the entry
+	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
+	// link. A model's usage limit as one condition per entry (ADR-0064): the
+	// queue's wording of it and the CLI names it is said in, the time of day
+	// it lifts, its remedy in the link table, and the store keeping a row a
+	// push leaves as it was, all in the attention queue and the store the
+	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
+	// that link. Steering a turn whose coding run is out, merged beside it (the
+	// shared write hook reading a press label's own sentence for its receipt,
+	// `landed`, which says when a note is read, in the seats chunk the entry
+	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
+	// 351 KiB again, still under two seconds on that link.
+	// Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client,
+	// its routes and its rail are the frame's, because a reader is told of a
+	// mention on whatever screen they are on, and no part of it is fetched
+	// later without a reader waiting for it. The frame it joined measured
+	// 349.0 KiB (357,410 bytes): the steering above came to 348.8 KiB once
+	// merged beside the flattening that drawing what prose names moved out of
+	// the renderer (`lib/markdownText.ts`), and a coding run's question asked
+	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
+	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
+	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
+	// measured 351.0 KiB (359,385 bytes), the load measured 357.0 KiB (365,596
+	// bytes), 28 bytes past 357 KiB, so it moved to 358 KiB, which is 1.96
+	// seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to
+	// 373.8 KiB. The one sheet carries 9.2 KiB more: the kit's conversation
+	// parts (the transcript, a message and its tray, reactions, mentions,
+	// link and action cards, day pills) and the compact rail, whose rules
+	// ride it by the rule above. The entry script carries 3.9 KiB more: the
+	// compact rail, the sidebar's one reading of the reader's rooms that
+	// badges Chatlet, and the toast stack's top edge. The kit's shared chunks
+	// and SeatAvatar add about 4.6 KiB. It moved to 374 KiB, which is 2.04
+	// seconds on that link, past the two seconds every move before it kept.
+	// The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's
+	// shared chunks carry 1.4 KiB more (the rail's fold motion, which every
+	// page loads with the shell), the one sheet 0.4 KiB more (the fold's
+	// keyframes, the compact rail's status row and face, and the dock
+	// column's rules), and the entry's own files 0.2 KiB less. It moved to
+	// 376 KiB, which is 2.05 seconds on that link. uilet 0.84.0 took it to
+	// 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave
+	// and its arrival wash, the reading pane's entrance, the rail's chevron
+	// and its flyout, the calmer ActionCard, the catalogue tiles' status and
+	// the fill screens' scrollbars), and the entry script and the kit's
+	// shared chunks 0.2 KiB more each. It moved to 379 KiB, which is 2.07
+	// seconds on that link. A follow-up ships the conversation parts' rules
+	// as a lazy Chatlet sheet, which brings it back under.
+	// The code host, merged beside all of it, adds what it added to the frame
+	// it was built on, about 3 KiB there: its own changes to the frame (the
+	// store_full refusal's sentence among the act errors, a wait said in
+	// hours, and Not Found's hint said as a sentence, about 0.4 KiB, all in
+	// the entry's graph because the frame answers every write and every
+	// unknown address), the formatter cache's frozen shapes and fixes (about
+	// 0.2 KiB: every module's date and number shapes are frozen constants
+	// whose key the cache reads once, in lib/formatters.ts, which every
+	// screen formats through), and the Code workspace (its row, its two
+	// routes, its trail, its service notice and its words in the frame, about
+	// 0.3 KiB of the entry, and about 1.4 KiB of the bundler regrouping what
+	// the first paint already loaded: the code screens reach the peek rail
+	// through the grid and nothing of the lazy-screen table beside it, so the
+	// two are compressed apart). From 378.5 KiB that is about 381.5 KiB, so
+	// it moved to 382 KiB, which is 2.08 seconds on that link.
+	initialBudget = 382 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
-	// has not reached yet, so it gets half the initial budget. The largest,
+	// has not reached yet, so it got half the initial budget, set when that
+	// was 300 KiB, and stayed put as the initial budget grew. The largest,
 	// Settings, measured about 60 KB when this was set.
 	lazyChunkBudget = 150 << 10
 	// fontBudget is every face the build embeds, counted as served: woff2 is
@@ -1125,7 +1211,7 @@ const (
 	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
 	// screen that room was left for, and it moved to 3.5 MiB then: room for
 	// the screens still to come, while a bundle that doubled from the 2.3 MB
-	// baseline is still refused. The rich editor that Knowledge pages and doc
+	// baseline is still refused. The rich editor that Doclet's pages and doc
 	// tabs are edited in took it from about 3.23 MiB to about 3.53 MiB: its
 	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
 	// notices of the ten packages it brings add 15 KB. That chunk is fetched
@@ -1137,8 +1223,253 @@ const (
 	// gallery's selection about 50 KB, and the design system's new rules in
 	// the one sheet about 41 KB raw. Each of those screens is fetched only
 	// when it is opened, and it moved to 4.25 MiB then, which still refuses a
+	// doubled baseline. The Dashboard Assistant took it from 4285.7 KiB to
+	// 4400.5 KiB: its panel is a chunk of about 51 KiB fetched when the
+	// panel first opens, and the rest is the kit's assistant components and
+	// rules and the frame code that came with them. It moved to 4.3 MiB
+	// then, which still refuses a doubled baseline. The assistant's page
+	// actions took it to 4427.2 KiB, 26.6 KiB of it theirs (measured with
+	// and without them on uilet 0.56.0): each screen's parser, gate and
+	// setters in that screen's chunk, the claim and report flow in the
+	// panel's, and the address helper and contract table they share. 4432
+	// KiB, which still refuses a doubled baseline. uilet 0.57.2 measured
+	// 4432.4 KiB, up from 4431.6 KiB with the same dashboard source but the
+	// drawer's one prop: the release drops the result table's first column
+	// truncation and a flush side panel body's scrolling, and the drawer
+	// keeps a scrolling body for its offline notice. 4433 KiB, which still
+	// refuses a doubled baseline. Telling a person the assistant's model
+	// cannot answer before they ask took it to 4434.2 KiB: the drawer's
+	// notice, its words and the viewer's model member, in the panel's chunk
+	// and the frame's. 4435 KiB, which still refuses a doubled baseline.
+	// Folding the assistant's supporting reads and moving the Ask button's
+	// dot onto its mark, on uilet 0.60.0, took it to 4438.7 KiB: the kit's
+	// card fold and IndicatorAnchor and their rules in the one sheet, and
+	// the panel's fold store and summaries. 4439 KiB, which still refuses a
+	// doubled baseline. Drawing the assistant at work with the kit's
+	// ThinkingIndicator in place of the caret and the skeleton, and the new
+	// SendButton's held tint, running arc and glyph cross fade, on uilet
+	// 0.61.0, took it to 4444.1 KiB: their rules in the one sheet, the
+	// Assistant mark in the panel's chunk and the indicator's status words.
+	// 4445 KiB, which still refuses a doubled baseline. Telling the
+	// assistant which draft is open took it from 4444.3 KiB to 4479.1 KiB:
+	// the one draft hook and its parser in the frame, each editing screen's
+	// field list, help and setters in that screen's chunk (about thirty
+	// screens), the card's file thumbnail in the panel's, and the brand and
+	// integration field lists. 4480 KiB, which still refuses a doubled
+	// baseline. uilet 0.63.0 measured 4483.0 KiB with the same dashboard
+	// source: the assistant's deep work card, file list and attachment chip,
+	// and their rules in the one sheet. Moving the dashboard's own labelled
+	// field and its secret completion onto uilet's ValueField took it back
+	// to 4480.0 KiB (the field, its completion helper and its list's rules
+	// leave the bundle). 4481 KiB, which still refuses a doubled baseline.
+	// The assistant's deep work, delivered files and image attachments took
+	// it from 4480.0 KiB to 4491.9 KiB on uilet 0.63.0: in the panel's chunk,
+	// the run card's mapping and its nested steps, the file card, the
+	// composer's pick, drop and paste with their bounds and uploads, and the
+	// preview hook the draft file card now shares. 4493 KiB, which still
+	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
+	// the assistant's card rendering took it to 4499.8 KiB: the live view's
+	// CLI runs, their calls in flight and a run drawn before its first round.
+	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
+	// card value drawn as what it is (a list as its items, a body as code,
+	// page text as an inert preview, a colour beside its chip) took it to
+	// 4503.4 KiB, in the panel's chunk and ChangeList's block rules in the one
+	// sheet. 4504 KiB, which still refuses a doubled baseline. Marking the
+	// open conversation in the assistant's history, showing each one's last
+	// activity and telling the assistant of a brand draft in progress took it
+	// to 4504.1 KiB: the menu's checked answers and the summary's member in
+	// the panel's chunk, and the Brand page's read-only draft and its help in
+	// that page's. 4505 KiB, which still refuses a doubled baseline. Telling
+	// the assistant what each page action takes, built from each screen's
+	// own declaration (the address keys' schema in the entry's registry, the
+	// org builder's operation vocabulary, an open draft's fields), and each
+	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
+	// refuses a doubled baseline. Telling the assistant what the Inbox's
+	// "Needs you" holds, from the model the page draws it with, and reading
+	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
+	// and the shared format module. 4511 KiB, which still refuses a doubled
+	// baseline. Drawing the assistant's cards in a person's terms (a seat cell
+	// by its name, a refusal by its kind, a pending change as pending, an
+	// administrator's technical rows), in the panel's chunk, took it to 4511.5
+	// KiB. 4512 KiB, which still refuses a doubled baseline. One vocabulary for
+	// seat states, the plain sentence for each failure kind with the engine's
+	// message behind a disclosure, the assistant's credit in every history and
+	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
+	// which still refuses a doubled baseline. uilet 0.66.0 (the 0.64.1
+	// alignment and spacing pass across every component family, the stacking
+	// grid and the screen width hooks, a card title registered once,
+	// ProposalCard's danger tone and details, the thread's jumps and
+	// near-future times) and choosing screen shapes by the screen's width took
+	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
+	// Drawing a brand draft in its own cards with one next step, who last
+	// changed it and a confirmed discard, in the Brand page's chunk less the
+	// kit view's copy of the cards, which now shares the page's board, took it
+	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline. Saying
+	// which revision each node runs, a refusal included, took it to 4553.1
+	// KiB: the one rule a node's standing is read by (the sidebar's Nodes
+	// figure counts by it, so it is in the frame), its words beside the
+	// Settings screens that say them, the Nodes screen's Running panel and
+	// Lag fact, the Configuration screen's revision states, the after-save
+	// strip and the ceiling and charter followers settling on a refusal
+	// rather than "applying…", and the tab's last push kept through a
+	// dropped socket. 4554 KiB, which still refuses a doubled baseline. uilet
+	// 0.67.0's product marks (a 16 grid drawing beside each master, the spark's
+	// motion and the soon keyline) and its artifact kit took it to 4557.3 KiB.
+	// 4558 KiB, which still refuses a doubled baseline. Keeping an answered
+	// inbox row legible in place with its answer under it, the closed Answered
+	// group of the last week's answers and the answered ask's pane with its
+	// four steps, on uilet 0.68.0's inbox row outcome and status and its
+	// collapsible group, took it to 4566.4 KiB. 4567 KiB, which still refuses
+	// a doubled baseline. A brief of the page or its open record in the
+	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
+	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
+	// which still refuses a doubled baseline. Reading a landed write's
+	// caveats in a person's words off the act answer, each with whether the
+	// person must act, so the toast stays only when they must (ADR-0060),
+	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
+	// baseline. Telling a change nobody could confirm in the dashboard's
+	// own words, rather than the operation key's retry rule for a client
+	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
+	// doubled baseline. Sortable column heads with a default order, aligned
+	// columns, the filter pill in place of a tag of three spans, waits said
+	// as times and a link-only row opened by Enter, on uilet 0.70.0
+	// (FilterPill, the grid's align and icon columns, the value trigger),
+	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
+	// baseline. uilet 0.71.0's toast that stays up for as long as its words
+	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
+	// doubled baseline. A brief that says its verdict once and ranks its
+	// rows, on uilet 0.72.0, and the record chip and words-sized table
+	// columns uilet 0.73.0 ships beside it, took it to 4585.1 KiB. 4586 KiB,
+	// which still refuses a doubled baseline. A read named in the answer
+	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
+	// rule, the oversize card and a page that says it is one, less the folded
+	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
+	// refuses a doubled baseline. A limit's refusal naming where its ceiling
+	// is raised (ADR-0060's remedy): the link table and its gate, the press
+	// drawn on every surface a spent budget is shown on, a section arrived
+	// at on Budgets, each person's assistant ceiling edited there, and the
+	// one rule a refused question goes back in the box by, took it to
+	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
+	// review's fixes (a restore decided once per turn in the session, a
+	// section matched by its path and name, Home's spent week through the
+	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
+	// still refuses a doubled baseline. A model's usage limit as one
+	// condition per entry (ADR-0064): its wording, the CLI names and its
+	// remedy, the store keeping a row a push leaves as it was, and the Inbox
+	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
+	// refuses a doubled baseline. The review's fixes (a failure's own text
+	// and the spend by model entry kept to an admin, the provider split
+	// offered to an admin alone, and the card that says so) took it to
+	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
+	// baseline. Saying what became of an answer to a parked coding run (sent,
+	// recorded while its seat is busy and on what, answered, or not used and
+	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
+	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
+	// refuses a doubled baseline. Drawing what prose names with its mark
+	// (the recogniser, the link hosts and project keys the frame reads, and
+	// uilet 0.75.0's InlineRef with every vendor's mark) took it to
+	// 4624.2 KiB, all of it in the lazy chunks that render Markdown: the
+	// flattening moved out of the renderer (`lib/markdownText.ts`), so the
+	// first load fell to 349.1 KiB. 4625 KiB, which still refuses a doubled
+	// baseline. Linking only what the dashboard built in the assistant and the
+	// Inbox (each address rebuilt on the company's own host), placing a bare
+	// `#11` by its message, a bare `owner/repo` under the company's owners and
+	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
+	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
+	// still refuses a doubled baseline. Saying that a person's stop ended a
+	// seat's coding run (a stopped turn's tag and a stopped run's span drawn
+	// closed rather than failed, a seat whose last turn "was stopped", the
+	// task's "stopped by a person" pill and the pause dialog's words) and
+	// steering a turn whose coding run is out (Steer offered on a parked turn,
+	// and a note read inside a run drawn on the run's bar in the words of its
+	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
+	// refuses a doubled baseline. The hardening of inline links merged beside
+	// that (a cited address drawn by the checked rule, a reply scoped by its
+	// own words, references linked only under the company's owners, a
+	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
+	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
+	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
+	// refuses a doubled baseline. A coding run's question asked and answered
+	// as a decision (the run's ask drawn with the decision components, its
+	// options read back with the chosen one marked, and its answered history
+	// in the Inbox's Answered group), all in lazy chunks, took it to
+	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline. Its
+	// review's fixes (a run's question drawn whole and clamped with Show all
+	// rather than split, an answer naming the question it answers, a choice
+	// read back with the words beside it, and the focus kept on the outcome)
+	// took it to 4638.7 KiB. 4639 KiB, which still refuses a doubled
+	// baseline. A model's cloud or gateway sign-in (auth.mode env) named on the
+	// Models screen, its words in the shared models module every chunk that
+	// imports it carries, took it to 4639.1 KiB. The Audit log's row for a
+	// model gesture (`model_acted`, its action and its entry linked to the
+	// models) took it to 4639.4 KiB.
+	// 4640 KiB, which still refuses a doubled baseline. Settings › Models built
+	// on the engine's model answers (the list with its alarms, By job, a page
+	// per model, the one wizard that adds and edits a model, and the test,
+	// retry, device sign-in and removal flows), with uilet 0.76.0's choice
+	// cards and setup wizard, took it to 4758.3 KiB: the Settings chunk the
+	// first load does not fetch grew from 192 KiB to 303 KiB, and the first
+	// load is 350.1 KiB. 4759 KiB, which still refuses a doubled baseline.
+	// The device sign-in statuses held to the engine's set, with uilet
+	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
+	// company switched to a write (`reload`), and saying so when it did not
+	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
+	// which still refuses a doubled baseline. The models round (the Datadog
+	// keys tested together, each failure named at its own key; one reading of
+	// a /config failure by whether the engine answered, its sentence shared
+	// by every screen that writes the company; and the Models fixes from the
+	// owner's review: a removal on its entry's own tag, Review's list of who
+	// changes model, an edit keeping its seats; an answer read as the
+	// engine's only where it carries the engine's mark; every path segment
+	// through one rule; rgb channels and trailing slashes read in linear
+	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
+	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
 	// doubled baseline.
-	treeBudget = 4<<20 + 256<<10
+	// Chatlet (its workspace, its rail and its screens) took it from 4773.6
+	// KiB to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline:
+	// the 2.3 MiB the tree measured when this budget was first set, doubled,
+	// is about 4710 KiB. From here the budget holds the tree to what each
+	// change says it costs rather than refusing a bundle that doubled.
+	// Per-seat integration access (each integration's Agents tab and an
+	// agent's Access tab on uilet 0.79.0's DataTable: the table in the
+	// vendor's own terms, the review of the engine's plan, the permissions,
+	// rotate and removal dialogs, their readings and copy, and their
+	// stylesheet) took it from 4912.3 KiB to 4947.1 KiB (+34.8 KiB), each
+	// module once, in one chunk the integrations screen and the agent page
+	// share and the first load does not fetch. 4948 KiB. The Agents tab's
+	// polish (notes under the agents led by their titles, the review's change
+	// as a line of chips and its steps marked with Crewlet's mark or a
+	// person's, the integration read again when a sync ends) on uilet
+	// 0.81.1 (a DataTable sized to its content, an inline ChangeList, a
+	// counted tab beside its attention dot) took it to 4951.1 KiB, in the same
+	// chunk. 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it from
+	// 4950.7 KiB to 5214.2 KiB (+263.5 KiB): the Chatlet workspace (its top
+	// bar, Rooms panel, room, panes, dialogs and views, and their lazy sheets)
+	// +136.6 KiB, the one sheet (the kit's conversation parts and the compact
+	// rail) +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script
+	// +13.0 KiB, less 3.8 KiB elsewhere. 5215 KiB. The Chatlet follow-ups on
+	// uilet 0.83.0 (the rail's fold motion, its compact status row and face,
+	// the kit's dock column for the Rooms panel, stable trigger refs) took it
+	// from 5214.2 KiB to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the
+	// kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB (its script
+	// +0.6 KiB, its sheet less 0.4 KiB), less 0.5 KiB elsewhere. 5222 KiB.
+	// uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took
+	// it from 5221.4 KiB to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB,
+	// the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the
+	// entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the
+	// Inbox's answer motion +1.3 KiB, against the Overview tab Settings no
+	// longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less).
+	// 5251 KiB. The Inbox review fixes (a row answered here opened as
+	// answered, read-only until the engine lists it, the move guarded as it
+	// is written, the last answer opening Answered, an arrival washed once)
+	// took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk). 5252 KiB.
+	// The Home polish on uilet 0.84.1 (one row a decision under a band per
+	// asker, the integration issue tile with its agents' chips, and the
+	// smaller status badge) took it from 5251.2 KiB to 5253.0 KiB (+1.9 KiB):
+	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
+	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
+	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
+	treeBudget = 5<<20 + 134<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

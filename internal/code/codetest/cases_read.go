@@ -12,7 +12,7 @@ import (
 )
 
 // The reads of a repository by object id through a fleet's routing — asked of
-// the repository's home git node (ADR-0059) — as a seat's tool asks them.
+// the repository's home git node (ADR-0082) — as a seat's tool asks them.
 
 // homeWait is how long a case waits for a read through the fleet's routing to
 // be answered by the node it expects: a home asked to fill a copy answers
@@ -46,7 +46,7 @@ func lists(a code.GitAnswer, path string) bool {
 	return a.Tree != nil && slices.ContainsFunc(a.Tree.Entries, func(e code.TreeEntry) bool { return e.Path == path })
 }
 
-// F26: A READ IS ANSWERED BY THE HOME (ADR-0059). A read of a repository by
+// F26: A READ IS ANSWERED BY THE HOME (ADR-0082). A read of a repository by
 // object id through the fleet's routing is asked of the repository's home git
 // node — the first of rendezvous.Order(repository, every git node) — and once
 // the home's copy is warm it is the node that answers: a fleet of three git
@@ -97,7 +97,7 @@ func aReadIsAnsweredByTheHome(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F27: A HOME'S DEATH FILLS ONE COPY (ADR-0059). A repository only its home
+// F27: A HOME'S DEATH FILLS ONE COPY (ADR-0082). A repository only its home
 // holds — pushed through that member alone — is read, once the home is
 // KILLED, through each other member until one serves it. The walks that meet
 // the dead home ask its runner-up and the third member with their reads not

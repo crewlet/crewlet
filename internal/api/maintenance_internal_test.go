@@ -105,8 +105,8 @@ func TestARetentionSourceIsAnsweredWhereATrimRuns(t *testing.T) {
 }
 
 // nodeEngine boots a real engine — a data node on an embedded stream in a
-// directory of its own, running a two-seat company on the native tracker and
-// knowledge base — in mode, as `crewlet run -mode <mode>` does, or in service
+// directory of its own, running a two-seat company on Worklet and Doclet —
+// in mode, as `crewlet run -mode <mode>` does, or in service
 // where mode is empty ([bootNode]).
 func nodeEngine(t *testing.T, mode statelog.MaintenanceMode) *engine.Engine {
 	t.Helper()
@@ -151,6 +151,7 @@ func bootNode(t *testing.T, mode statelog.MaintenanceMode) (*engine.Engine, *con
 	company, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5

@@ -260,7 +260,7 @@ func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 	if err := checkout.Release(t.Context()); err != nil {
 		t.Errorf("Release: %v", err)
 	}
-	if ws.HasLogin() {
+	if hasLogin(t, ws) {
 		t.Error("HasLogin reported a login that was never written")
 	}
 }
@@ -370,7 +370,7 @@ func TestSwitchingBackToACLIFindsItsLoginIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Shared: %v", err)
 	}
-	if !back.HasLogin() {
+	if !hasLogin(t, back) {
 		t.Fatal("switching back to Claude Code found no login")
 	}
 	seat, err := back.Acquire(t.Context(), "dev", "call-after", nil)

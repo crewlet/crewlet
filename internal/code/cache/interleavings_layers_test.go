@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE PUBLISHED CHAIN in an interleaving (ADR-0061): a repository's
+// THE PUBLISHED CHAIN in an interleaving (ADR-0084): a repository's
 // publication by this node — its maintainer, which adopts what it built — and
 // by another git node, whose layer this node's installer fetches; the
 // installer's passes; a store that lost or spoiled a layer's part; and the

@@ -15,9 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0062). A seat's or a
+// AN ENGINE WRITE IS BUILT HERE AND LANDS AS A PUSH (ADR-0085). A seat's or a
 // person's change made through a tool — files committed, a commit reverted or
 // picked, a branch created or deleted — is built on the repository's git node,
 // in a scratch beside its cache, by git's own plumbing over exactly the trees
@@ -48,7 +49,7 @@ import (
 // `Crewlet <engine@<code.identity_domain>>`, a CONVENTION that marks the
 // commits the host built in a cooperating client's history and authenticates
 // nothing: any client can write it, and only the push row (`via engine`, its
-// principal) says who built a commit (ADR-0062). A coding box's push whose
+// principal) says who built a commit (ADR-0085). A coding box's push whose
 // pack holds a commit naming it that the repository does not already hold is
 // refused (forged_committer, landing.EngineCommitter); a person's may carry
 // one.
@@ -717,7 +718,7 @@ func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgeme
 // too_large, a change no node builds faster.
 func (wr *writing) spent() code.EngineWriteResult {
 	return wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("building this change ran the whole %s of git one "+
-		"%s is given on %s; make it in a coding box (run_sandbox)", wr.s.buildBudget(wr.w.Kind), wr.w.Kind,
+		"%s is given on %s; make it in a checkout of the repository ("+toolname.CodeCheckout+")", wr.s.buildBudget(wr.w.Kind), wr.w.Kind,
 		wr.s.o.NodeID))
 }
 
@@ -866,11 +867,11 @@ func (wr *writing) headSentence(head string) string {
 	w := wr.w
 	switch {
 	case w.ExpectedHead == "" && head != "":
-		return fmt.Sprintf("%s already exists, at %s; read it with code_resolve and write onto its head", w.Ref,
-			shortID(head))
+		return fmt.Sprintf("%s already exists, at %s; read it with %s and write onto its head", w.Ref,
+			shortID(head), toolname.CodeResolve)
 	case head == "":
-		return fmt.Sprintf("%s does not exist; read it again with code_resolve", w.Ref)
+		return fmt.Sprintf("%s does not exist; read it again with %s", w.Ref, toolname.CodeResolve)
 	}
-	return fmt.Sprintf("%s is at %s, not the %s you read; read it again with code_resolve", w.Ref, shortID(head),
-		shortID(w.ExpectedHead))
+	return fmt.Sprintf("%s is at %s, not the %s you read; read it again with %s", w.Ref, shortID(head),
+		shortID(w.ExpectedHead), toolname.CodeResolve)
 }

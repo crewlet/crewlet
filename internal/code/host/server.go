@@ -134,7 +134,7 @@ type BoxGrant struct {
 	// carries, and what its request is matched by.
 	Name string
 	// Access is code.AccessRead or code.AccessWrite: what the run's
-	// run_sandbox call asked for it, the seat's own grant capping it.
+	// code_checkout call asked for it, the seat's own grant capping it.
 	Access code.Access
 	// Branch is the run's branch, refs/heads/…, for the brief and the log.
 	Branch string

@@ -348,3 +348,20 @@ func readsWhatIsSent(t *testing.T, declaration string, rows []map[string]any,
 		}
 	}
 }
+
+// THE DASHBOARD KNOWS THE ASSISTANT'S CREDENTIAL CLASS. A write the Dashboard
+// Assistant made for a person records `assist:<grant>` as the credential it
+// came through, and every history surface reads that class to say the write
+// was the person's "with the assistant" instead of printing the grant id. A
+// class renamed on one side alone would print the raw id on every surface.
+func TestTheDashboardKnowsTheAssistantsCredentialClass(t *testing.T) {
+	t.Parallel()
+	prefix, err := clientsource.Scalar(clientsource.Tree(t), "ASSIST_CREDENTIAL_PREFIX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefix != iam.AssistPrefix {
+		t.Errorf("the dashboard reads the assistant's class as %q and the engine records %q: "+
+			"change ASSIST_CREDENTIAL_PREFIX in contract/identity.ts", prefix, iam.AssistPrefix)
+	}
+}

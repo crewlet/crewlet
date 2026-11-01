@@ -66,6 +66,8 @@ import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.t
 import { titleHold, titleProblem, useSaveIn, useWorkItem } from "../create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
 import { useWhoBuildsIt } from "../WhoBuildsIt.tsx";
+import { createDraft, linesOf } from "../assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTool, chosenAgent, taskRefusal, useAskPanel } from "../AskAgent.tsx";
 import { pageName, taskBody, taskTitle } from "./brief.ts";
 import { DraftPreview } from "./DraftPreview.tsx";
@@ -107,6 +109,70 @@ function answerOf(state: CheckState) {
     default:
       return null;
   }
+}
+
+/** What a new HTML page holds beyond what every create page does. */
+interface PageState {
+  readonly files: readonly PageFile[];
+  readonly capabilities: readonly ArtifactCapability[];
+}
+
+/** The capabilities a page may be granted, by the word a value names one with. */
+const CAPABILITY_IDS: readonly string[] = CAPABILITY_CHOICES.map((c) => c.capability);
+
+/**
+ * A new HTML page's own fields: each text file's source by its place, the
+ * file's path its label, and what the page may use from the choices under
+ * the source. A file of bytes (a picture, a font) is read by its path only.
+ */
+export function pageFields(files: readonly PageFile[]): DraftFieldSpec<PageState>[] {
+  return [
+    ...files.map((file, i): DraftFieldSpec<PageState> => {
+      const path = `files.${i + 1}`;
+      if (file.kind !== "text") {
+        return { path, label: file.path, hint: "A file the person brought", read: () => "" };
+      }
+      return {
+        path,
+        label: file.path,
+        hint: "The file's whole source",
+        read: (d) => {
+          const now = d.files[i];
+          return now?.kind === "text" ? now.text : "";
+        },
+        write: (d, text) => {
+          if (typeof text !== "string") return refuse("A file's source is text.");
+          const now = d.files[i];
+          if (!now || now.kind !== "text" || now.path !== file.path) {
+            return refuse("That file is no longer on the page.");
+          }
+          return {
+            ...d,
+            files: d.files.map((f, at) => (at === i ? { path: f.path, kind: "text", text } : f)),
+          };
+        },
+      };
+    }),
+    {
+      path: "capabilities",
+      label: "What the page may use",
+      hint: `Any of ${CAPABILITY_IDS.join(", ")}, one per line`,
+      read: (d) => d.capabilities,
+      write: (d, value) => {
+        const chosen = linesOf(value);
+        if (chosen === null) return refuse("What the page may use is a list, one per line.");
+        const unknown = chosen.find((c) => !CAPABILITY_IDS.includes(c));
+        return unknown
+          ? refuse(`A page may use ${CAPABILITY_IDS.join(", ")}; “${unknown}” is not one.`)
+          : {
+              ...d,
+              capabilities: CAPABILITY_CHOICES.map((c) => c.capability).filter((c) =>
+                chosen.includes(c),
+              ),
+            };
+      },
+    },
+  ];
 }
 
 export function SourceBody() {
@@ -187,9 +253,46 @@ export function SourceBody() {
       seat: who.seat,
       project: who.project,
     });
-    if (filed) nav.to(["work", filed.item]);
+    if (filed) nav.to(["worklet", filed.item]);
   };
   const used = CAPABILITY_CHOICES.filter((c) => capabilities.includes(c.capability));
+
+  // WHAT IS OPEN, for the assistant: the title, each text file's source, what
+  // the page may use, and the hand-off, set through the page's own setters;
+  // previewing and publishing stay the person's presses.
+  useAssistantDraft(
+    createDraft<PageState>({
+      what: "HTML page",
+      help:
+        "You can set the title, the source of each text file and what the page may use. A " +
+        "value here marked cut is longer than shown, so propose a whole new source only for " +
+        "a file you know in full. You make no images; pictures are files the person brings.",
+      step: panel.open ? "ask" : side,
+      title,
+      setTitle: setTypedTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: { files, capabilities },
+        fields: pageFields(files),
+        apply: (next) => {
+          if (next.files !== files) setFiles([...next.files]);
+          if (next.capabilities !== capabilities) {
+            setOverrides(
+              new Map(
+                CAPABILITY_CHOICES.map((c) => [
+                  c.capability,
+                  next.capabilities.includes(c.capability),
+                ]),
+              ),
+            );
+          }
+        },
+      },
+      blocked: () => (running ? "The preview is being published." : null),
+    }),
+  );
 
   // A FINDING IN ANOTHER FILE opens that file first, then its line once drawn.
   useEffect(() => {

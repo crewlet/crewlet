@@ -30,7 +30,7 @@ func openStore(t *testing.T) *store.DB {
 //
 // AND NO ANCHOR SWEEP. A domain's arbitration anchors are replicated rows,
 // which only an applier writes (ADR-0002): the trim removes them with a
-// trimmed record every node applies at one position (ADR-0050), and a job here
+// trimmed record every node applies at one position (ADR-0073), and a job here
 // deleting them below a floor each node read for itself would leave two copies
 // of one log holding different anchors.
 func TestEveryDomainGetsANodeLocalLedgerSweepAndNoAnchorSweep(t *testing.T) {

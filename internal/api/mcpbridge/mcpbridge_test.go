@@ -3,9 +3,9 @@ package mcpbridge_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -21,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // The bridge is the one place a sandbox can reach a live seat's tools, so
@@ -36,6 +36,8 @@ type stubTool struct {
 	name string
 	out  string
 	fail bool
+	// err is a call that could not run at all: the turn torn down.
+	err error
 
 	mu   sync.Mutex
 	args []map[string]any
@@ -57,6 +59,9 @@ func (s *stubTool) Call(_ context.Context, args map[string]any) (tools.Result, e
 	s.mu.Lock()
 	s.args = append(s.args, args)
 	s.mu.Unlock()
+	if s.err != nil {
+		return tools.Result{}, s.err
+	}
 	out := s.out
 	if out == "" {
 		out = s.name + " ok"
@@ -70,32 +75,14 @@ func (s *stubTool) seen() []map[string]any {
 	return append([]map[string]any(nil), s.args...)
 }
 
-// activator stands in for activate_tool: a bridged call that widens the very
-// surface it was called on, which is the only way a coding agent's active set
-// ever moves while its run is in a box.
-type activator struct {
-	surface func() *tools.Surface
-	target  string
-}
-
-func (a *activator) Name() string               { return "activate" }
-func (a *activator) Description() string        { return "activate " + a.target }
-func (a *activator) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) {
-	if a.surface().Activate(a.target) {
-		return tools.Result{Output: a.target + " is active"}, nil
-	}
-	return tools.Result{Output: "no such tool", Failed: true}, nil
-}
-
 // ledger records what a resume would read back.
 type ledger struct {
 	mu    sync.Mutex
-	calls []tools.Call
+	calls []mcpbridge.Call
 	err   error
 }
 
-func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
+func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
@@ -105,46 +92,11 @@ func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
 	return nil
 }
 
-func (l *ledger) rows() []tools.Call {
+func (l *ledger) rows() []mcpbridge.Call {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]tools.Call(nil), l.calls...)
+	return append([]mcpbridge.Call(nil), l.calls...)
 }
-
-// stopCheck stands in for the engine's one reading of a seat's stop: who
-// stopped the seat, or what kept the node from telling — and every seat it
-// was asked about, since only a call that may change something asks.
-type stopCheck struct {
-	mu    sync.Mutex
-	by    string
-	err   error
-	asked []string
-}
-
-func (s *stopCheck) stopped(_ context.Context, seat string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.asked = append(s.asked, seat)
-	return s.by, s.err
-}
-
-// set is what the check answers from now on.
-func (s *stopCheck) set(by string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.by, s.err = by, err
-}
-
-func (s *stopCheck) seats() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return slices.Clone(s.asked)
-}
-
-// nobody is a stop check answering that nobody stopped the seat: what every
-// session whose case is not about the stop carries, since [mcpbridge.Bridge.Open]
-// refuses a session with none.
-func nobody(context.Context, string) (string, error) { return "", nil }
 
 // denyGuard refuses one tool, standing in for the required-skill gate.
 type denyGuard struct{ tool, reason string }
@@ -156,7 +108,7 @@ func (g denyGuard) Check(name, _ string) string {
 	return ""
 }
 
-func (g denyGuard) Observe(string, map[string]any) {}
+func (g denyGuard) Observe(string, toolargs.Args) {}
 
 // --- fixture ---------------------------------------------------------------
 
@@ -203,20 +155,18 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		}
 		byName[name] = tool
 	}
-	f := &fixture{ledger: &ledger{}, byName: byName}
-	// In the universe for every case, offered only where a case names it.
-	widen := &activator{surface: func() *tools.Surface { return f.surface }, target: "post_message"}
-	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
-		t.Fatalf("Register(activate): %v", err)
+	if err := reg.Register(whoami{}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(whoami): %v", err)
 	}
+	f := &fixture{ledger: &ledger{}, byName: byName}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer).ForTurn(seatTurn())
 	f.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
 	f.session = &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
 	}
 
 	mux := http.NewServeMux()
@@ -235,13 +185,19 @@ func (f *fixture) open(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	return f.bridge.Open(f.session)
+	return f.bridge.Open(t.Context(), f.session)
 }
 
-// dial connects an MCP client the way a coding agent's own client would.
+// dial connects an MCP client the way a coding agent's own client would —
+// re-reading the tool list when the server says it changed, as the CLIs that
+// run in a box do, so an activation's held answer is let go by the re-list.
 func dial(t *testing.T, url string) *mcp.ClientSession {
 	t.Helper()
-	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			_, _ = req.Session.ListTools(ctx, nil)
+		},
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	// HTTPClient IS NOT OPTIONAL HERE. Left unset the SDK reaches for
@@ -373,9 +329,10 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // cost a fleet the one diagnosis the fleet's key buys: a peer a misrouted call
 // reaches could no longer tell a token its fleet signed from a forged one.
 // Every node holds a keyring now, so a caller arriving without one is a wiring
-// mistake, refused by name at both entrances — and [mcpbridge.Build] with no
-// base URL still builds nothing and refuses nothing, because most deployments
-// bridge nothing and that is not a keyring question.
+// mistake, refused by name at both entrances — and [mcpbridge.Build] with
+// neither a base URL nor a host URL still builds nothing and refuses nothing,
+// because a node with no address a box can dial is a node that binds no
+// listener, and that is not a keyring question.
 //
 // Mutation: restore the per-process fallback in runtoken.New and every row
 // builds a bridge.
@@ -391,25 +348,87 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 			if b, err := mcpbridge.New(mcpbridge.Options{Material: material}); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("New = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			if b, err := mcpbridge.Build(base, material); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+			if b, err := mcpbridge.Build(base, material, ""); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("Build = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			// THE CONTROL: with no base URL nothing is built, whatever the
-			// keyring, and that is a configuration rather than a refusal.
-			if b, err := mcpbridge.Build("", material); err != nil || b != nil {
+			// THE CONTROL: with no address at all nothing is built,
+			// whatever the keyring, and that is a configuration rather
+			// than a refusal.
+			if b, err := mcpbridge.Build("", material, ""); err != nil || b != nil {
 				t.Errorf("Build with no base URL = %v, %v, want nothing and no error", b, err)
 			}
 		})
 	}
 	// And a usable keyring builds one, so the rows above are refused for the
 	// keyring and not for something else Build dislikes.
-	if b, err := mcpbridge.Build(base, runtoken.OneKey("k1", "m")); err != nil || b == nil {
+	if b, err := mcpbridge.Build(base, runtoken.OneKey("k1", "m"), ""); err != nil || b == nil {
 		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
 	}
 }
 
+// A BOX ON THE NODE'S OWN HOST DIALS THE NODE'S OWN LISTENER. The `direct`
+// cell's run is a process of this host, so the listener the node bound is an
+// address it can always dial, and the quickstart's company — one `direct` cell
+// and no CREWLET_MCP_BRIDGE_URL — has to bridge on that alone. A box in any
+// other cell cannot dial the host's loopback, so it is given the variable's
+// address or nothing, never the loopback one.
+//
+// And preferred to the variable for a host box even where both are set:
+// loopback never leaves the host, while the variable may route through a load
+// balancer to any peer of the fleet.
+//
+// Mutation: drop hostURL from Build and the host-only row builds nothing; give
+// Reaches the host URL for every box and the container row dials loopback;
+// prefer the base URL for a host box and the both-set row does.
+func TestABoxOnTheHostDialsTheNodesOwnListener(t *testing.T) {
+	t.Parallel()
+	const host, base = "http://127.0.0.1:8080", "https://engine.example.com"
+	for _, tc := range []struct {
+		name string
+		// base is the variable as the engine parsed it, "" where it is unset.
+		base          string
+		host          string
+		onHost, other string
+	}{
+		{"the host URL alone", "", host, host, ""},
+		{"the variable alone", base, "", base, base},
+		{"both", base, host, host, base},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := mcpbridge.Build(tc.base, runtoken.OneKey("k", "k"), tc.host)
+			if err != nil || b == nil {
+				t.Fatalf("Build = %v, %v, want a bridge", b, err)
+			}
+			if got := b.Reaches(true); got != tc.onHost {
+				t.Errorf("a box on the host dials %q, want %q", got, tc.onHost)
+			}
+			if got := b.Reaches(false); got != tc.other {
+				t.Errorf("a box off the host dials %q, want %q", got, tc.other)
+			}
+			_ = b.Handler()
+			for _, onHost := range []bool{true, false} {
+				want := tc.other
+				if onHost {
+					want = tc.onHost
+				}
+				endpoint := b.Open(t.Context(), &mcpbridge.Session{
+					RunID: fmt.Sprintf("run-%t", onHost), Launch: "job-1", Handle: "dev",
+					Surface: emptySurface(), OnHost: onHost,
+				})
+				switch {
+				case want == "" && endpoint != "":
+					t.Errorf("on host %t: minted %q with no address that box can dial", onHost, endpoint)
+				case want != "" && !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix):
+					t.Errorf("on host %t: endpoint %q, want it under %q", onHost, endpoint, want)
+				}
+			}
+		})
+	}
+}
+
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
-// honest answer is an empty endpoint the caller can refuse agent mode on —
+// honest answer is an empty endpoint the caller can refuse the launch on —
 // not a run that starts and fails on its first tool call.
 //
 // AND NOTHING IS REGISTERED FOR IT. The minted token is the only way to reach
@@ -421,8 +440,8 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
-	if url := b.Open(&mcpbridge.Session{
-		RunID: "run-1", Surface: emptySurface(), Stopped: nobody,
+	if url := b.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Surface: emptySurface(),
 	}); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
 	}
@@ -442,7 +461,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	url := f.bridge.Open(f.session)
+	url := f.bridge.Open(t.Context(), f.session)
 
 	clock = clock.Add(2 * time.Minute)
 	res, err := f.server.Client().Post(url, "application/json",
@@ -573,198 +592,96 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	}
 }
 
-// --- a person's stop -------------------------------------------------------
-
-// A PERSON'S STOP REACHES A DETACHED RUN'S BRIDGED WRITES. A pause that asks
-// a seat's running work to stop ends a native turn at its next round, but a
-// detached run outlives its turn and its bridged calls run on no turn's fence
-// — so an agent-mode run's box went on changing things as the seat, through
-// the seat's own tools, after a person stopped it. Now every call of a tool
-// the surface has not proven read-only asks the session's stop check first,
-// about the seat the call acts as: STOPPED, it is refused as paused, naming
-// who stopped the seat, reaches no tool and is recorded; an unannotated tool
-// is refused the same, since a fence that admits what it cannot classify
-// admits every under-annotated write; UNKNOWN — a node that has not read the
-// pauses — it is refused as unavailable and never run; and NOBODY (which is
-// also what a pause without stop_running answers) lets it run. A read runs
-// throughout and is never asked about.
+// A CALL THAT COULD NOT RUN AT ALL IS TOLD IN WORDS OF ITS OWN: the turn the
+// run belongs to was torn down, and the bridge answered the coding agent in
+// the box, a model, with the Go error's text whole.
 //
-// Mutations: skip the check in the handler — the stopped seat's
-// post_message runs — red; fence with !WritesToSharedSurface in place of
-// ReadOnlyProven — the unannotated activate runs — red; ask about reads too —
-// the check is asked more than the writes — red.
-func TestAStoppedSeatsBridgedWritesAreRefused(t *testing.T) {
+// Mutation: put the error's text back into the refused answer and this fails.
+func TestACallThatCouldNotRunIsToldInWordsNotItsError(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, "read_page", "post_message", "activate")
-	stop := &stopCheck{}
-	f.session.Stopped = stop.stopped
-	sess := dial(t, f.open(t))
-
-	stop.set("jane", nil)
-	res := callTool(t, sess, "post_message", map[string]any{"text": "still here"})
-	if !res.IsError || !strings.Contains(text(res), "paused by jane") {
-		t.Fatalf("a stopped seat's write answered (failed %v) %q, want it refused naming who stopped it",
-			res.IsError, text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 0 {
-		t.Fatalf("a stopped seat's write reached its tool: %+v", seen)
-	}
-	if res := callTool(t, sess, "activate", nil); !res.IsError {
-		t.Errorf("a stopped seat's call of a tool nobody annotated ran: %s", text(res))
-	}
-	if res := callTool(t, sess, "read_page", map[string]any{}); res.IsError {
-		t.Errorf("a stopped seat's read was refused: %s", text(res))
-	}
-	if got := f.byName["read_page"].seen(); len(got) != 1 {
-		t.Errorf("a stopped seat's read ran %d times, want 1", len(got))
-	}
-	rows := f.ledger.rows()
-	switch {
-	case len(rows) != 3:
-		t.Fatalf("%d calls recorded, want the two refusals and the read: %+v", len(rows), rows)
-	case rows[0].Name != "post_message" || !rows[0].Failed || rows[0].Refusal() != tools.RefusalPaused ||
-		rows[0].Args["text"] != "still here" || !strings.Contains(rows[0].Output, "paused by jane"):
-		t.Errorf("the refused write is recorded as %+v (class %q), want it failed as paused, with its "+
-			"arguments and sentence", rows[0], string(rows[0].Refusal()))
-	case rows[1].Refusal() != tools.RefusalPaused:
-		t.Errorf("the refused unannotated call is recorded as class %q, want paused", string(rows[1].Refusal()))
-	case rows[2].Name != "read_page" || rows[2].Failed:
-		t.Errorf("the read is recorded as %+v, want it run", rows[2])
-	}
-	if got := stop.seats(); !slices.Equal(got, []string{"dev", "dev"}) {
-		t.Errorf("the stop check was asked about %v, want the run's seat once for each call "+
-			"that may change something and never for the read", got)
-	}
-
-	stop.set("", errors.New("this node has not yet read which seats are paused"))
-	res = callTool(t, sess, "post_message", map[string]any{})
-	if !res.IsError || !strings.Contains(text(res), "could not tell") {
-		t.Fatalf("a write whose stop is unknown answered (failed %v) %q, want it refused as unread",
-			res.IsError, text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 0 {
-		t.Fatalf("a write ran while nobody could tell whether its seat was stopped: %+v", seen)
-	}
-	if rows := f.ledger.rows(); rows[len(rows)-1].Refusal() != tools.RefusalUnavailable {
-		t.Errorf("the write refused while its stop is unknown is recorded as class %q, want unavailable",
-			string(rows[len(rows)-1].Refusal()))
-	}
-	if res := callTool(t, sess, "read_page", map[string]any{}); res.IsError {
-		t.Errorf("a read was refused while the stop is unknown: %s", text(res))
-	}
-
-	stop.set("", nil)
-	if res := callTool(t, sess, "post_message", map[string]any{"text": "resumed"}); res.IsError {
-		t.Fatalf("a write of a seat nobody stopped was refused: %s", text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 1 || seen[0]["text"] != "resumed" {
-		t.Errorf("a write of a seat nobody stopped reached its tool as %+v, want it once", seen)
-	}
-}
-
-// A STOPPED RUN STILL DISCOVERS, AND WHAT IT ACTIVATES IS FENCED BY ITS OWN
-// HINTS. The fence refuses every call the surface has not proven read-only,
-// and the runner's discovery pair reaches a phase's surface without the
-// registry, so it carries only the hints [runner.DiscoveryTools] gives it.
-// Given none, as it once was, a stopped run could neither list an MCP
-// server's tools nor activate a read it had not activated yet — while the
-// pause promised its reads still answer. Built here from the runner's own
-// pair, added to the snapshot as the runner adds it, so the case reads the
-// real hints rather than a stand-in's: listing and activating answer while
-// the seat is stopped, the activated read runs, and the activated write is
-// still refused paused and never reaches its tool. Only the write asks.
-//
-// Mutations: give the pair no hints in DiscoveryTools — the listing is
-// refused paused — red; give activate_tool ReadOnly No — the activation is
-// refused — red.
-func TestAStoppedSeatStillDiscoversAndActivatesItsReads(t *testing.T) {
-	t.Parallel()
-	reg := tools.NewRegistry()
-	read := &stubTool{name: "wiki_read"}
-	write := &stubTool{name: "wiki_edit"}
-	for tool, hints := range map[*stubTool]tools.Annotations{
-		read:  {ReadOnly: crewletmcp.Yes, Idempotent: crewletmcp.Yes},
-		write: {ReadOnly: crewletmcp.No, Destructive: crewletmcp.No, OpenWorld: crewletmcp.Yes},
-	} {
-		if err := reg.RegisterWith(tool, crewletmcp.Origin("wiki"), hints); err != nil {
-			t.Fatalf("Register(%s): %v", tool.name, err)
-		}
-	}
-	snapshot := reg.Snapshot()
-	var surface *tools.Surface
-	var active []string
-	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return surface }) {
-		next, err := snapshot.With(entry)
-		if err != nil {
-			t.Fatalf("With(%s): %v", entry.Name(), err)
-		}
-		snapshot = next
-		active = append(active, entry.Name())
-	}
-	surface = tools.NewSurface("execute", snapshot, active).ForTurn(seatTurn())
-
 	f := newFixture(t)
-	stop := &stopCheck{}
-	stop.set("jane", nil)
-	f.session.Surface = surface
-	f.session.Stopped = stop.stopped
+	f.byName["post_message"].err = fmt.Errorf("toolloop: %w", context.Canceled)
 	sess := dial(t, f.open(t))
 
-	res := callTool(t, sess, runner.ListMCPToolsTool, map[string]any{"server": "wiki"})
-	if res.IsError || !strings.Contains(text(res), "wiki_read") || !strings.Contains(text(res), "wiki_edit") {
-		t.Fatalf("a stopped seat's listing answered (failed %v) %q, want the server's tools",
-			res.IsError, text(res))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "post_message",
+		Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("a call that could not run failed the protocol: %v", err)
 	}
-	for _, name := range []string{"wiki_read", "wiki_edit"} {
-		if res := callTool(t, sess, runner.ActivateTool, map[string]any{"name": name}); res.IsError {
-			t.Fatalf("a stopped seat could not activate %s: %s", name, text(res))
-		}
-	}
-	if res := callTool(t, sess, "wiki_read", map[string]any{}); res.IsError {
-		t.Errorf("a stopped seat's activated read was refused: %s", text(res))
-	}
-	if got := read.seen(); len(got) != 1 {
-		t.Errorf("the activated read ran %d times, want 1", len(got))
-	}
-	res = callTool(t, sess, "wiki_edit", map[string]any{"text": "after the stop"})
-	if !res.IsError || !strings.Contains(text(res), "paused by jane") {
-		t.Fatalf("a stopped seat's activated write answered (failed %v) %q, want it refused paused",
-			res.IsError, text(res))
-	}
-	if got := write.seen(); len(got) != 0 {
-		t.Fatalf("a stopped seat's activated write reached its tool: %+v", got)
-	}
-	if rows := f.ledger.rows(); len(rows) == 0 || rows[len(rows)-1].Refusal() != tools.RefusalPaused {
-		t.Errorf("the refused write is not recorded as paused: %+v", rows)
-	}
-	if got := stop.seats(); !slices.Equal(got, []string{"dev"}) {
-		t.Errorf("the stop check was asked about %v, want it asked once, for the write alone", got)
+	if said := text(res); !strings.Contains(said, "the turn this coding run belongs to has ended") ||
+		strings.Contains(said, "context canceled") || strings.Contains(said, "toolloop") {
+		t.Errorf("a call that could not run was told %q", said)
 	}
 }
 
-// A SESSION NOBODY CAN STOP IS NOT OPENED. Its stop check is all that stands
-// between a person's emergency stop and a detached run's writes, and an
-// absent one would read as "never stopped" — so Open refuses a session without
-// one as it refuses one that cannot dispatch, and opens the same session once
-// it has one, or a bridge that refused everything would pass.
+// statusTool takes a closed set, so a case can tell the spelling a model sent
+// from the one its tool reads.
+type statusTool struct{ stubTool }
+
+func (*statusTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"status": map[string]any{"type": "string", "enum": []any{"draft", "published"}},
+		"note":   map[string]any{"type": "string"},
+	}}
+}
+
+// AN EXECUTOR RUN'S CALL IS HELD TO ITS TOOL'S SCHEMA OVER THE BRIDGE
+// (ADR-0059), by the surface's one path ([tools.Invoke]) and no check of the
+// bridge's own: the tool reads a closed set's member as its schema spells it;
+// a call answered outside its schema carries the note to the CLI and onto the
+// run's durable record, which a collected run's record is read from; and a
+// value the tool would misread is refused before it runs, the refusal on the
+// record too. The record keeps the spelling the model sent, which a resume
+// reads back canonically (internal/agent/runner's seedCalls).
 //
-// Mutation: drop the check from Open — the session opens, and its first write
-// asks a check that is not there — red.
-func TestASessionWithoutAStopCheckIsNotOpened(t *testing.T) {
+// Mutation: answer a bridged call with the tool's own output rather than the
+// surface's rendered one and the note reaches neither the CLI nor the record;
+// call the tool directly from the surface and the misread runs.
+func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
 	t.Parallel()
-	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
-	// Mounted, so the missing stop check is the only reason to refuse.
-	_ = b.Handler()
-	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
-	if url := b.Open(session); url != "" {
-		t.Errorf("a session with no stop check was opened at %q", url)
+	f := newFixture(t)
+	reg := tools.NewRegistry()
+	status := &statusTool{stubTool{name: "set_status"}}
+	if err := reg.RegisterWith(status, tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: crewletmcp.No}); err != nil {
+		t.Fatal(err)
 	}
-	if b.Live() != 0 {
-		t.Errorf("%d sessions live after a session with no stop check was refused", b.Live())
+	f.session.Surface = tools.NewSurface("execute", reg.Snapshot(), []string{"set_status"}).
+		ForTurn(seatTurn())
+	sess := dial(t, f.open(t))
+
+	res := callTool(t, sess, "set_status", map[string]any{"status": " Draft", "tittle": "x"})
+	if res.IsError {
+		t.Fatalf("the call failed: %s", text(res))
 	}
-	session.Stopped = nobody
-	if url := b.Open(session); url == "" {
-		t.Error("the same session with a stop check was refused")
+	if seen := status.seen(); len(seen) != 1 || seen[0]["status"] != "draft" {
+		t.Errorf("the tool read %+v, want the status as its schema spells it", seen)
+	}
+	const note = "\n\nNote: set_status ran, but these arguments are outside its schema"
+	if got := text(res); !strings.HasPrefix(got, "set_status ok"+note) ||
+		!strings.Contains(got, "`tittle` is not an argument") {
+		t.Errorf("the CLI was answered %q, want the output and the note on the unknown argument", got)
+	}
+
+	refused := callTool(t, sess, "set_status", map[string]any{"note": map[string]any{"x": 1}})
+	if !refused.IsError || !strings.Contains(text(refused), "set_status did not run") {
+		t.Errorf("a misread was answered %+v / %q", refused.IsError, text(refused))
+	}
+	if len(status.seen()) != 1 {
+		t.Error("the tool ran on a value it would misread")
+	}
+
+	rows := f.ledger.rows()
+	if len(rows) != 2 {
+		t.Fatalf("%d rows, want both calls: %+v", len(rows), rows)
+	}
+	if !strings.HasPrefix(rows[0].Output, "set_status ok"+note) || rows[0].Args["status"] != " Draft" {
+		t.Errorf("the record is %+v, want the noted answer and the model's own spelling", rows[0])
+	}
+	if !rows[1].Failed || !strings.Contains(rows[1].Output, "set_status did not run") {
+		t.Errorf("the refusal's record is %+v", rows[1])
 	}
 }
 
@@ -826,59 +743,11 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 
 // --- what the caller is offered --------------------------------------------
 
-// THE ADVERTISED SET IS THE SURFACE'S LIVE ONE. A server built once when the
-// run opened would advertise the set it started with for the run's whole life,
-// so a tool the agent activates mid-run would be invisible until it ended.
-func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, "read_page", "activate")
-	url := f.open(t)
-	// ONE SESSION, HELD FOR THE RUN, the way a coding agent's client holds
-	// it. A fresh session per list would rebuild the server and pass for a
-	// bridge whose connected boxes never see an activation at all.
-	sess := dial(t, url)
-
-	names := func() []string {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		listed, err := sess.ListTools(ctx, nil)
-		if err != nil {
-			t.Fatalf("ListTools: %v", err)
-		}
-		var out []string
-		for _, tool := range listed.Tools {
-			out = append(out, tool.Name)
-		}
-		slices.Sort(out)
-		return out
-	}
-
-	if got := names(); !slices.Equal(got, []string{"activate", "read_page"}) {
-		t.Fatalf("tools = %v", got)
-	}
-	// Activated the only way a box can activate anything: over the bridge.
-	if res := callTool(t, sess, "activate", nil); res.IsError {
-		t.Fatalf("activate failed: %s", text(res))
-	}
-	if got := names(); !slices.Contains(got, "post_message") {
-		t.Fatalf("a tool activated mid-run is not advertised on the box's own session: %v", got)
-	}
-	// Listed AND callable — the server's table is what dispatches, and a
-	// name the surface offers but the server never learned is refused as
-	// unknown before the surface is asked.
-	if res := callTool(t, sess, "post_message", map[string]any{"text": "hi"}); res.IsError {
-		t.Errorf("an activated tool is listed but not callable: %s", text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 1 {
-		t.Errorf("post_message ran %d times, want 1", len(seen))
-	}
-}
-
 // CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
 // own map entry. The SDK keeps every session a box opened — transport,
 // server, and through the server's handlers the seat's live surface — until
 // the client sends a DELETE or an idle clock fires, and a box torn down
-// mid-run sends nothing. Left there, each agent-mode run this process ever
+// mid-run sends nothing. Left there, each executor run this process ever
 // served would pin its seat's surface for the life of the process.
 func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	t.Parallel()
@@ -920,10 +789,10 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	}
 
 	second := &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
+		RunID: "run-1", Launch: "job-2", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
 	}
-	url := f.bridge.Open(second)
+	url := f.bridge.Open(t.Context(), second)
 	if n := first.Connections(); n != 0 {
 		t.Errorf("the relaunched run's earlier session keeps %d box connections", n)
 	}
@@ -949,9 +818,9 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Fatalf("the first run could not dispatch: %s", text(res))
 	}
 
-	fresh := f.bridge.Open(&mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
+	fresh := f.bridge.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-2", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
 	})
 	if fresh == stale {
 		t.Fatal("the relaunched run was handed the superseded box's own URL")
@@ -972,6 +841,65 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Error("a superseded token resolved")
 	} else if !strings.Contains(reason, "relaunched") {
 		t.Errorf("the miss does not say the run was relaunched: %s", reason)
+	}
+}
+
+// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A detached run goes on
+// calling for as long as its CLI runs, and the node it dials can restart in
+// the meantime: the new process holds no session until it takes the run's
+// seat back, and then it opens the run's JOB again — and the token the box
+// already holds, signed under the fleet's keyring, resolves to it. Nothing the
+// box was given names the process that gave it. And the run's calls go on in
+// its own order: the reopened session numbers them after the last one the
+// run's row records.
+//
+// Mutation: name an opening by an id the opening process draws for itself, and
+// the restarted node refuses the box's every call for the rest of its run;
+// number a reopened session's calls from one, and they sort among the calls
+// made before the restart.
+func TestABoxsTokenOutlivesTheProcessThatMintedIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	url := f.open(t)
+	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the run could not dispatch before the restart: %s", text(res))
+	}
+
+	// THE RESTART: a fresh process at the same address, over the same fleet
+	// keyring, holding nothing yet.
+	restarted := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
+	})
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", restarted.Handler())
+	f.server.Config.Handler = mux
+	token := strings.TrimPrefix(url, f.server.URL+mcpbridge.PathPrefix)
+	if _, reason := restarted.Miss(token); !strings.Contains(reason, "taken the run's seat back") {
+		t.Errorf("before the seat is recovered the miss does not say why: %q", reason)
+	}
+
+	// THE RECOVERY: the run's job opened again, on a surface rebuilt here.
+	recovered := &ledger{}
+	before := f.ledger.rows()
+	if len(before) != 1 {
+		t.Fatalf("%d calls recorded before the restart, want 1", len(before))
+	}
+	if again := restarted.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", LastSeq: before[0].Seq, Handle: "dev",
+		Role: "Engineer", Surface: f.surface, Ledger: recovered,
+	}); again == "" {
+		t.Fatal("the recovered job's session was not opened")
+	}
+	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the box's own token does not reach the recovered session: %s", text(res))
+	}
+	rows := recovered.rows()
+	if len(rows) != 1 || rows[0].Name != "read_page" {
+		t.Fatalf("the recovered session recorded %+v, want the box's call", rows)
+	}
+	if rows[0].Seq != before[0].Seq+1 {
+		t.Errorf("the first call after the recovery is #%d, want #%d: after the run's "+
+			"last call before it", rows[0].Seq, before[0].Seq+1)
 	}
 }
 
@@ -1038,9 +966,7 @@ func literal(v any) string {
 
 // A SESSION THAT CANNOT DISPATCH IS WORSE THAN NONE. Registered, it would
 // answer a box's handshake and then take the process down on its first
-// tools/list — one seat's wiring mistake becoming a fleet node's crash. Each
-// row lacks exactly the one thing it names, a stop check included where the
-// row is not about it, so each is refused for its own reason.
+// tools/list — one seat's wiring mistake becoming a fleet node's crash.
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
@@ -1050,17 +976,28 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 		name    string
 		session *mcpbridge.Session
 	}{
-		{"no run id", &mcpbridge.Session{Handle: "dev", Surface: emptySurface(), Stopped: nobody}},
-		{"no surface", &mcpbridge.Session{RunID: "run-1", Handle: "dev", Stopped: nobody}},
+		{"no run id", &mcpbridge.Session{Launch: "job-1", Handle: "dev", Surface: emptySurface()}},
+		// NO JOB, and a token is minted for one: without it a relaunch's
+		// box could not be told from its predecessor's, and a recovery
+		// would have nothing to open the same session under.
+		{"no job", &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}},
+		// A JOB A TOKEN CANNOT CARRY: "~" ends the job in a token's subject
+		// and "." ends the subject, so either would mint a token that names
+		// some other job.
+		{"a job with the subject's separator", &mcpbridge.Session{RunID: "run-1",
+			Launch: "job~1", Handle: "dev", Surface: emptySurface()}},
+		{"a job with the token's separator", &mcpbridge.Session{RunID: "run-1",
+			Launch: "job.1", Handle: "dev", Surface: emptySurface()}},
+		{"no surface", &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev"}},
 		// A SURFACE NO TURN WAS BOUND TO names no seat, and every bridged
 		// call acts as the run's seat — so it would answer the handshake
 		// and then decide nothing it was asked.
-		{"no seat", &mcpbridge.Session{RunID: "run-1", Handle: "dev",
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil), Stopped: nobody}},
+		{"no seat", &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev",
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)}},
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if url := b.Open(tc.session); url != "" {
+			if url := b.Open(t.Context(), tc.session); url != "" {
 				t.Errorf("endpoint = %q, want empty", url)
 			}
 		})
@@ -1070,35 +1007,35 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	}
 }
 
-// A BRIDGE NO LISTENER MOUNTED OPENS NO SESSION. Its endpoint would name this
-// node, and a node that built no handler (api.port 0) answers nothing there, so
-// the box would launch with a tool server that refuses every connection. The
-// same bridge opens the same session once a listener has taken its handler,
-// or a bridge that always refused would pass.
-func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
+// A BRIDGE NOTHING REACHES OPENS NO SESSION. A node that serves no route
+// (api.port 0) and has joined no fleet answers nothing a box could dial, so the
+// box would launch with a tool server that refuses every connection. The same
+// bridge opens the same session once a listener has taken its handler, or a
+// bridge that always refused would pass.
+func TestABridgeNothingReachesOpensNoSession(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
-	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface(), Stopped: nobody}
-	if b.Mounted() {
-		t.Fatal("a bridge nothing mounted reports itself mounted")
+	session := &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev", Surface: emptySurface()}
+	if b.Reachable() {
+		t.Fatal("a bridge nothing mounted or joined reports itself reachable")
 	}
-	if url := b.Open(session); url != "" {
-		t.Errorf("endpoint = %q for a bridge no listener serves, want empty", url)
+	if url := b.Open(t.Context(), session); url != "" {
+		t.Errorf("endpoint = %q for a bridge nothing reaches, want empty", url)
 	}
 	if b.Live() != 0 {
-		t.Errorf("%d sessions live on a bridge no listener serves", b.Live())
+		t.Errorf("%d sessions live on a bridge nothing reaches", b.Live())
 	}
 
 	_ = b.Handler()
-	if !b.Mounted() {
-		t.Fatal("building the handler did not mark the bridge mounted")
+	if !b.Reachable() {
+		t.Fatal("building the handler did not make the bridge reachable")
 	}
-	if url := b.Open(session); url == "" {
+	if url := b.Open(t.Context(), session); url == "" {
 		t.Error("a mounted bridge refused a complete session")
 	}
 	var unset *mcpbridge.Bridge
-	if unset.Mounted() {
-		t.Error("a nil bridge reports itself mounted")
+	if unset.Reachable() {
+		t.Error("a nil bridge reports itself reachable")
 	}
 }
 
@@ -1121,14 +1058,15 @@ func seatTurn() *turnctx.Turn {
 //
 // The response deliberately cannot say why — forged, expired and "that run is
 // over" are three different facts, and naming one tells an attacker the same.
-// But the operator needs the fourth: a bridge URL that resolves to a node
-// other than the one holding the session answers 401 to every call of a LIVE
-// run, forever, and without this it is indistinguishable from a forged token.
+// But the operator needs the difference in the log: a node that has joined no
+// fleet holds the only sessions it can answer for, and a signed token it holds
+// nothing for is a run that ended or one it has not taken back yet — never a
+// forgery.
 func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	// A session THIS node opened, then a PEER over the same fleet key —
-	// which is exactly a load balancer in front of two nodes.
+	// A session THIS node opened, then a PEER over the same fleet key that
+	// has joined no fleet to find the session's holder in.
 	endpoint := f.open(t)
 	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
 
@@ -1139,8 +1077,8 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	if runID != "run-1" {
 		t.Fatalf("the peer could not even name the run: %q", runID)
 	}
-	if !strings.Contains(reason, mcpbridge.BaseURLVar) {
-		t.Errorf("the reason does not name the setting that fixes it: %q", reason)
+	if !strings.Contains(reason, "no fleet") {
+		t.Errorf("the reason does not say the node has no fleet to find the holder in: %q", reason)
 	}
 
 	// A FORGED token is the other reason, and it names no run — telling
@@ -1149,8 +1087,8 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	if forgedID != "" {
 		t.Errorf("a forged token resolved to run %q", forgedID)
 	}
-	if strings.Contains(forgedReason, mcpbridge.BaseURLVar) {
-		t.Errorf("a forged token was blamed on the deployment: %q", forgedReason)
+	if !strings.Contains(forgedReason, "forged") || strings.Contains(forgedReason, "fleet") {
+		t.Errorf("a forged token was blamed on anything but itself: %q", forgedReason)
 	}
 }
 
@@ -1158,8 +1096,8 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 // for, so a case can hand the transport exactly what a box would.
 func (f *fixture) token(t *testing.T, runID string) string {
 	t.Helper()
-	url := f.bridge.Open(&mcpbridge.Session{
-		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface, Stopped: nobody,
+	url := f.bridge.Open(t.Context(), &mcpbridge.Session{
+		RunID: runID, Launch: "job-of-" + runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
 	})
 	if url == "" {
 		t.Fatal("no endpoint")

@@ -61,7 +61,7 @@ import (
 //
 // # A merge makes no reachability judgement
 //
-// Every object of the inputs is in the outputs ([Compaction], ADR-0060), so no
+// Every object of the inputs is in the outputs ([Compaction], ADR-0083), so no
 // push decided against the inputs can land a ref whose closure a compaction
 // removed: a compaction is decided against the inputs alone, never against the
 // refs, and the subject's compare-and-set orders it with every push.

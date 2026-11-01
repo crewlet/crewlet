@@ -34,9 +34,9 @@ var _ host.Runs = boxRuns{}
 
 // codeBoxRuns is the code host's view of this engine's coding runs: their rows
 // on the fleet's coordination store, and a seat's stop as this node reads it
-// (stoppedBy) — the one reading every bridge session a launch opens carries
-// too (agentLauncher.bridgeSession), so a box's pushes and its run's bridged
-// writes are refused, and let through again, together.
+// (stoppedBy) — off the same pause record the fence every bridge session a
+// launch opens carries reads (Engine.seatFence), so a box's pushes and its
+// run's bridged calls are refused, and let through again, together.
 func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 	return boxRuns{pending: sandbox.NewCoordStore(e.backends.Fleet), stopped: e.stoppedBy, log: log}
 }
@@ -45,10 +45,9 @@ func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 // it: an error is the store unreachable, never "no run".
 //
 // ONE READ OF THE RUN'S FACTS, made by every request a box sends — a lazy
-// fetch of a blobless clone's blob included — so it moves the row and never
-// the job's conversation or tool log, which the store keeps beside the row
-// (sandbox.PendingRun's note): a few kilobytes from the bucket's stream
-// leader, whatever the turn's size.
+// fetch of a blobless clone's blob included — so it moves the row: its facts
+// and the job's bridged-call log the row carries, which is bounded
+// (sandbox.MaxBridgeCalls) whatever the turn's size.
 //
 // LIVE is a row whose job is in its box: LAUNCHING — the clone steps run
 // during the launch, before the job is marked suspended — or RUNNING, with no
@@ -178,7 +177,7 @@ func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) er
 var errForeignFloor = errors.New("engine: a coding run's code floor names a position on another log than " +
 	"the code log")
 
-// stoppedBy is the engine's ONE reading of a seat's STOP — who paused the
+// stoppedBy is the code host's reading of a seat's STOP — who paused the
 // seat and asked its running work to stop (coord.SeatPause's By, the person
 // a bound credential pauses as, ADR-0032) — read off this node's pause watch:
 // "" for a seat not paused, paused without stop_running, or a handle the
@@ -187,14 +186,16 @@ var errForeignFloor = errors.New("engine: a coding run's code floor names a posi
 // never "not stopped". Every node runs the watch from boot, so a git node
 // that serves no seat answers too.
 //
-// The code host refuses a coding box's push on it (host.Runs.Stopped), and
-// the run's bridge session its bridged calls of every tool not proven
-// read-only (mcpbridge.Session.Stopped, set by agentLauncher.bridgeSession):
-// a detached coding run is deliberately not fenced by a pause — it outlives
-// its turn — so without them a box went on pushing to the company's
-// repositories, and calling the seat's tools that write, as the seat after a
-// person stopped the seat "because it was doing damage". ONE function for
-// both edges, so the two are stopped, and let through again, together.
+// The code host refuses a coding box's push on it (host.Runs.Stopped). A
+// box's git is not a bridged call, so the fence the run's bridge session asks
+// before and after every call (mcpbridge.Session.Fence, Engine.seatFence,
+// which reads the same pause through stopFor) never sees it: without this a
+// box went on pushing to the company's repositories as the seat after a
+// person stopped the seat "because it was doing damage". The same record and
+// the same StopRunning, so the two edges are stopped, and let through again,
+// together. Where the two differ is a node that has not read the pauses:
+// here that is unknown, because a git node serves boxes from boot, while no
+// turn runs there to ask the fence (the screening defers its delivery).
 func (e *Engine) stoppedBy(_ context.Context, handle string) (string, error) {
 	seat, err := e.seatID(handle)
 	if err != nil {

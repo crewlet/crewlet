@@ -5,17 +5,17 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE INDEX FOLLOWS BOTH BACKENDS, not the wiki's alone.
 //
 // The lexical index covers pages AND work items, and it used to be built
-// inside the block gated on `knowledge.backend: native`. A company running the
-// engine's own tracker with Confluence for its knowledge therefore indexed
+// inside the block gated on `knowledge.backend: doclet`. A company running
+// Worklet with Confluence for its knowledge therefore indexed
 // none of its own work items and served no ranked item search — while the
 // embedding duty, armed on EITHER backend, went on paying for a vector on
 // every one of them. A paid index nobody could query.
@@ -65,11 +65,11 @@ func TestTheIndexerIsBuiltOverTheCorporaTheBackendsName(t *testing.T) {
 }
 
 // THE RANKED WORK SEARCH FOLLOWS THE TRACKER, not the index alone. The index is
-// built under EITHER backend, so a data node of a company on Jira with the
-// native knowledge base holds an item searcher over an index with no task in
+// built under EITHER backend, so a data node of a company on Jira with
+// Doclet for its knowledge holds an item searcher over an index with no task in
 // it — and handing that searcher out answered the dashboard's `work_search`
 // with a ranking of nothing on a company whose work lives in Jira, where every
-// other native tracker question answers unknown, the operator's catalogue and
+// other Worklet question answers unknown, the operator's catalogue and
 // the seats' tools offer no such search, and a node without `data` hands out
 // none. "Nothing matched" is the one answer a person acts on by filing the
 // duplicate.
@@ -93,12 +93,12 @@ func TestTheRankedWorkSearchFollowsTheTracker(t *testing.T) {
 		remote *remoteNative
 		want   bool
 	}{
-		{"a data node on the native tracker",
-			&native{trackerReader: &tracker.Reader{}, itemSearch: &tracker.Searcher{}}, nil, true},
-		{"a data node on Jira with the native knowledge base",
-			&native{pageReader: &pages.Reader{}, itemSearch: &tracker.Searcher{}}, nil, false},
-		{"a node without data on the native tracker", nil, &remoteNative{tracker: true}, true},
-		{"a node without data on Jira with the native knowledge base",
+		{"a data node on Worklet",
+			&native{trackerReader: &worklet.Reader{}, itemSearch: &worklet.Searcher{}}, nil, true},
+		{"a data node on Jira with Doclet",
+			&native{pageReader: &doclet.Reader{}, itemSearch: &worklet.Searcher{}}, nil, false},
+		{"a node without data on Worklet", nil, &remoteNative{tracker: true}, true},
+		{"a node without data on Jira with Doclet",
 			nil, &remoteNative{wiki: true}, false},
 		{"a node running no native runtime", nil, nil, false},
 	} {

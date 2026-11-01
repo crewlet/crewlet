@@ -17,23 +17,23 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // withDuplicate is the fake tracker holding a SECOND task under ENG-1: `dup`,
 // which the key directory does not name, so it carries `key_collision` and is
 // reached by its id. ENG-1 itself goes on opening the claimant, `i1`.
 func withDuplicate(trk *fakeTracker, removed bool) *fakeTracker {
-	dup := tracker.TaskDetail{
-		Task: tracker.Task{
+	dup := worklet.TaskDetail{
+		Task: worklet.Task{
 			ID: "dup", Key: "ENG-1", Project: "ENG", Title: "the duplicate",
-			Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
+			Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted,
 			Version: 3,
 		},
 		KeyCollision: true, Complete: true,
 	}
 	if removed {
-		dup.Task.Removed = &tracker.Tombstone{By: "cto"}
+		dup.Task.Removed = &worklet.Tombstone{By: "cto"}
 	}
 	trk.tasks["dup"] = dup
 	return trk
@@ -93,9 +93,9 @@ func TestEveryReceiptNamesAKeysDuplicateByItsID(t *testing.T) {
 	}{
 		{builtin.UpdateWorkItemTool, map[string]any{"status": "in_progress"}, false},
 		{builtin.CommentOnWorkTool, map[string]any{"body": "is this the one?"}, false},
-		{tracker.MergeWorkItemTool, map[string]any{"into": "ENG-2"}, false},
-		{tracker.RemoveWorkItemTool, map[string]any{}, false},
-		{tracker.RestoreWorkItemTool, map[string]any{}, true},
+		{worklet.MergeWorkItemTool, map[string]any{"into": "ENG-2"}, false},
+		{worklet.RemoveWorkItemTool, map[string]any{}, false},
+		{worklet.RestoreWorkItemTool, map[string]any{}, true},
 	} {
 		for ref, want := range map[string]struct {
 			item      string
@@ -109,7 +109,7 @@ func TestEveryReceiptNamesAKeysDuplicateByItsID(t *testing.T) {
 				trk := withDuplicate(newFakeTracker(), c.removed)
 				if c.removed && ref == "ENG-1" {
 					claimant := trk.tasks["ENG-1"]
-					claimant.Task.Removed = &tracker.Tombstone{By: "cto"}
+					claimant.Task.Removed = &worklet.Tombstone{By: "cto"}
 					trk.tasks["ENG-1"] = claimant
 				}
 				args := map[string]any{"item": ref}
@@ -147,7 +147,7 @@ func TestEveryReceiptNamesAKeysDuplicateByItsID(t *testing.T) {
 func TestACreateOrAMoveOntoAHeldKeyNamesItsID(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.createAnswer = &tracker.WriteResult{Key: "ENG-1", KeyCollision: true,
+	trk.createAnswer = &worklet.WriteResult{Key: "ENG-1", KeyCollision: true,
 		Result: statelog.Result{Outcome: statelog.OutcomeApplied,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
 			Version:  11}}
@@ -175,8 +175,8 @@ func TestACreateOrAMoveOntoAHeldKeyNamesItsID(t *testing.T) {
 			t.Fatalf("register %s: %v", tool.Name(), err)
 		}
 	}
-	answer = receiptFields(t, tracker.MoveWorkItemTool, callNoTurn(t, reg,
-		tracker.MoveWorkItemTool, map[string]any{"item": "ENG-1", "project": "OPS"}))
+	answer = receiptFields(t, worklet.MoveWorkItemTool, callNoTurn(t, reg,
+		worklet.MoveWorkItemTool, map[string]any{"item": "ENG-1", "project": "OPS"}))
 	if answer["item"] != "i1" || answer["key"] != "OPS-3" ||
 		answer["key_collision"] != true || answer["moved_from"] != "ENG-1" {
 		t.Errorf("a move onto a held key answered %v — want item i1 beside "+
@@ -188,7 +188,7 @@ func TestACreateOrAMoveOntoAHeldKeyNamesItsID(t *testing.T) {
 type collidingMoves struct{ *fakeTracker }
 
 func (c *collidingMoves) MoveTaskToProject(ctx context.Context, opID, taskID,
-	target string, notify *tracker.Notify) (tracker.WriteResult, error) {
+	target string, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	got, err := c.fakeTracker.MoveTaskToProject(ctx, opID, taskID, target, notify)
 	got.KeyCollision = true
@@ -209,17 +209,17 @@ func TestAnUnknownWriteOnAKeysDuplicateSendsTheCallerToItsID(t *testing.T) {
 	for name, args := range map[string]map[string]any{
 		builtin.UpdateWorkItemTool:  {"item": "dup", "status": "done"},
 		builtin.CommentOnWorkTool:   {"item": "dup", "body": "done, see the PR"},
-		tracker.MergeWorkItemTool:   {"item": "dup", "into": "ENG-2"},
-		tracker.MoveWorkItemTool:    {"item": "dup", "project": "OPS"},
-		tracker.RemoveWorkItemTool:  {"item": "dup"},
-		tracker.RestoreWorkItemTool: {"item": "dup"},
+		worklet.MergeWorkItemTool:   {"item": "dup", "into": "ENG-2"},
+		worklet.MoveWorkItemTool:    {"item": "dup", "project": "OPS"},
+		worklet.RemoveWorkItemTool:  {"item": "dup"},
+		worklet.RestoreWorkItemTool: {"item": "dup"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// UNVOUCHED, the one unknown whose answer always says what to
 			// read: this node cannot tell, so the caller has to look.
 			u := &unknownWriter{fakeTracker: withDuplicate(newFakeTracker(),
-				name == tracker.RestoreWorkItemTool), unvouched: true}
+				name == worklet.RestoreWorkItemTool), unvouched: true}
 			got := callNoTurn(t, u.operatorSurface(t), name, args)
 			if !got.Failed {
 				t.Fatalf("%s answered an unknown outcome as a receipt: %s",
@@ -329,7 +329,7 @@ func walkArguments(prefix string, schema map[string]any, fn func(path, descripti
 // and hints each echoed `before.Task.Key` where the caller needed the task's
 // address, and each looked right beside the others. So the expression itself
 // is what is refused — a new receipt or hint reaches for
-// [tracker.TaskDetail.Address], [tracker.TaskDetail.Named] or the receipt
+// [worklet.TaskDetail.Address], [worklet.TaskDetail.Named] or the receipt
 // helper, or it is declared here with the reason the key is the right thing.
 //
 // Both directions: an undeclared use fails, and so does a declared function
@@ -344,6 +344,9 @@ func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 			"beside the id it routes on, and shows it to nobody as a reference",
 		"moveWorkItem.CallForTurn": "`moved_from` reports the key the item is " +
 			"LEAVING — what it was called, not a reference to it",
+		"evidenceLookup.Task": "the keys a cited task has carried, matched " +
+			"against its evidence label to strip one it repeats, never " +
+			"written anywhere as a reference",
 	}
 	dir := filepath.Join(sourcetree.Root(t), "internal", "agent", "builtin")
 	entries, err := os.ReadDir(dir)

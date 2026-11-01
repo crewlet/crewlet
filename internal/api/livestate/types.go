@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -101,12 +102,22 @@ func WebhookTopic(source string) string { return "crewlet.webhooks." + source }
 
 // ErrorInfo is why a seat stopped.
 //
-// One shape for every stop — a failed phase, a failed task, an exhausted
-// budget, a dead provider, a guard breach — so one panel explains all of them
+// One shape for every stop (a failed phase, a failed task, an exhausted
+// budget, a dead provider, a guard breach) so one panel explains all of them
 // rather than each kind of failure needing the reader to know where to look.
+//
+// A FAILURE IS TOLD BY ITS KIND, and its own text only to a reader of the
+// company's configuration ([Reach.Config]). The text is what the engine,
+// a vendor or a tool wrote, and it names the company's entries ("llm chain
+// exhausted after 1 providers (default)"); every other reader is sent the
+// kind, which the dashboard words for a person (contract/failures.ts), and
+// finds the rest on the turn's own record.
 type ErrorInfo struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Kind string `json:"kind"`
+	// Detail is the failure in its own words, which [MaskCall],
+	// [Overlay.For] and [MaskRow] leave out for a reader without
+	// [Reach.Config].
+	Detail  string `json:"detail,omitempty"`
 	Phase   string `json:"phase"`
 	TurnID  string `json:"turn_id"`
 	At      string `json:"at"`
@@ -175,9 +186,17 @@ type LiveCall struct {
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
-	// and for the whole of an agent-mode executor, whose rounds run inside
-	// the coding CLI.
+	// and for the whole of an executor, whose rounds run inside its coding
+	// CLI's run.
 	Rounds []any `json:"rounds"`
+
+	// Invocations is the phase's CLI runs that have ENDED — when each was
+	// launched and how long it lived, who served it, how it ended, the
+	// rounds it made (`first_round`, `last_round`) and what it spent — as
+	// the progress frame carries them ([types.PhaseInvocation]). The run in
+	// flight is not on it until it ends: its rounds are the ones past every
+	// entry's last. Empty until the first run ends.
+	Invocations []any `json:"invocations"`
 
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
 	// extension raises mid-phase, and RoundCeiling the most any extension
@@ -192,13 +211,21 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
-	// RunningCall is the tool call the phase is running RIGHT NOW —
-	// `{round, name, arguments, started_at}`, published before the call is
-	// handed to its tool and cleared by the frame after it returns. Absent
+	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// rounds are past every entry in Invocations. Empty between runs, and on
+	// a frozen call.
+	RunStartedAt string `json:"run_started_at,omitempty"`
+
+	// RunningCalls is every tool call the phase is running RIGHT NOW, in the
+	// order they arrived — `{id, round, name, arguments, started_at}`, each
+	// listed by the frame published before the call is handed to its tool
+	// and gone from the frame after it returns ([types.RunningCall]). A
+	// LIST because a coding CLI may run a response's calls at once. Absent
 	// between calls. Never merged into ToolExecutions, which lists calls
 	// that ANSWERED: a reader has to be able to tell a call in flight from
-	// one that returned nothing.
-	RunningCall map[string]any `json:"running_call,omitempty"`
+	// one that returned nothing — and `id` is what the answered row's
+	// `call_id` carries, so a reader can tell which one did.
+	RunningCalls []any `json:"running_calls,omitempty"`
 
 	// Steers is every person's note the phase has read so far —
 	// `{round, note_id}`, the round whose provider call first saw it — as
@@ -238,10 +265,10 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 
 	// Versions numbers the copy of each heavy field — the prompt, the
-	// response, the narration, the tool calls, the rounds' timing — this
-	// call holds, so an `agents` push can leave out what a tab already has
-	// and a tab can tell when it missed a change (see detail.go). ALWAYS
-	// PRESENT, on every surface that carries a call.
+	// response, the narration, the tool calls, the rounds' timing, the CLI
+	// runs — this call holds, so an `agents` push can leave out what a tab
+	// already has and a tab can tell when it missed a change (see
+	// detail.go). ALWAYS PRESENT, on every surface that carries a call.
 	Versions CallVersions `json:"versions"`
 }
 
@@ -347,6 +374,13 @@ type Overlay struct {
 	// at boot from the coordination record, so a pause taken before this
 	// process started is still on the seat.
 	Paused *Paused `json:"paused"`
+
+	// ProviderLimit is the seat's models at their usage limit, nil when they
+	// are not: one steady condition for as long as the limit lasts, which
+	// says whether the seat waits for it or runs on a fallback. ALWAYS
+	// present, as null when there is none, so a merged overlay never leaves
+	// a seat wearing a limit that lifted. See provider.go.
+	ProviderLimit *ProviderLimit `json:"provider_limit"`
 }
 
 // Stage is where in a turn a seat is.
@@ -418,10 +452,14 @@ const (
 	// a lost coding run. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
+	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
+	// reached it at a round, or ended the coding run it was parked on. Not a
+	// failure, whatever else went wrong in it — the turn list's `stopped`.
+	OutcomeStopped TurnOutcome = "stopped"
 )
 
 // TurnOutcomes is the closed set.
-var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed}
+var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed, OutcomeStopped}
 
 // Valid reports whether o is an outcome this build knows.
 func (o TurnOutcome) Valid() bool { return slices.Contains(TurnOutcomes, o) }
@@ -449,6 +487,14 @@ type SandboxEntry struct {
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
 	CodingAgent string `json:"coding_agent"`
+	// ProviderKey and Model are the executor-chain member the run was
+	// launched on and the model it runs under — see
+	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
+	// announcement and record named none. The key is the company's
+	// configuration and reaches an admin alone ([SandboxEntry.For]); the
+	// model is everybody's.
+	ProviderKey string `json:"provider_key,omitempty"`
+	Model       string `json:"model,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	Task        string `json:"task"`
 
@@ -458,9 +504,16 @@ type SandboxEntry struct {
 
 	StartedAt string `json:"started_at"`
 
-	// Question and Audience appear once a run pauses on a clarification.
-	Question string `json:"question,omitempty"`
-	Audience string `json:"audience,omitempty"`
+	// Question and Audience appear once a run pauses on a clarification,
+	// with the choice it offers where it has one (ADR-0068). Its Markdown
+	// context is ALWAYS on the wire, empty where it gave none, as every
+	// reader of a run's ask sends it, so a client never reads its absence
+	// as a different kind of question. The question and both of those are
+	// the run's body, withheld together ([SandboxEntry.For]).
+	Question        string             `json:"question,omitempty"`
+	QuestionContext string             `json:"question_context"`
+	Decision        *decision.Decision `json:"decision,omitempty"`
+	Audience        string             `json:"audience,omitempty"`
 
 	// AudienceHandles are the seats the parked question may be answered by
 	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the
@@ -593,7 +646,7 @@ func (c *Change) agentMoved(agentID string) {
 // str returns the first non-empty string among keys.
 //
 // FIRST NON-EMPTY, not first present: several payloads name the same thing two
-// ways (role / agent_role, model / provider_key) and the fallback only helps if
+// ways (role / agent_role) and the fallback only helps if
 // an empty value falls through to it.
 func str(payload map[string]any, keys ...string) string {
 	for _, key := range keys {

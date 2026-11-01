@@ -95,7 +95,7 @@ func ArtifactOrigin(e *Engine, boot *config.Bootstrap, creds artifactserve.Crede
 // its own copy right now, as far as it can tell WITHOUT WAITING: it holds the
 // estate, the last verdict read of its artifacts copy found it sound, and that
 // copy answers rather than lags its log — the artifacts domain's own verdict
-// (ADR-0049), since a wrong copy of another domain is no reason to send an
+// (ADR-0072), since a wrong copy of another domain is no reason to send an
 // artifacts read away. False is a decision the estate router
 // takes through another data node.
 //

@@ -7,7 +7,7 @@ import "context"
 // it.
 //
 // A TYPE BESIDE THE FUNCTIONS, because the reads cross the estate's router
-// (ADR-0049): the API holds whatever answers them — a data node's own copy,
+// (ADR-0072): the API holds whatever answers them — a data node's own copy,
 // or the router asking a data node whose usage copy is in service — and asks
 // both the same way. A node whose usage copy was wrong answered its spend and
 // activity screens from it while every other domain's reads went to a peer.

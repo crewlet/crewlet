@@ -21,8 +21,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1476,6 +1479,7 @@ type embedHarness struct {
 	t         *testing.T
 	db        *store.DB
 	log       *js.DomainLog
+	stream    jetstream.Stream
 	duty      *search.Embedder
 	publisher *statelog.Publisher
 	applier   search.Applier
@@ -1523,7 +1527,11 @@ func (h *embedHarness) advance(d time.Duration) { h.now = h.now.Add(d) }
 
 func newEmbedHarness(t *testing.T) *embedHarness {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// a fact about the machine rather than about the round trip under test.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1534,8 +1542,9 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	})
 	spec := search.Domain{}.Stream()
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES: the shipped
-	// default is sized for the declared supported corpus, and an embedded
-	// broker in a temporary directory refuses to reserve it.
+	// default is sized for the declared supported corpus, and a case here
+	// embeds a corpus of its own making, which the sixteen mebibytes it is
+	// held to instead keep with room to spare.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
 		MaxMessageBytes: spec.MaxAppendBytes(),
@@ -1548,11 +1557,17 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
+	// THE STREAM BESIDE THE LOG, for [embedHarness.readLog]: the log reads
+	// one record a request, and this harness reads the log whole.
+	stream, err := q.JetStream().Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log's stream: %v", err)
+	}
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	h := &embedHarness{
-		t: t, db: db, log: log, applier: search.NewApplier(),
+		t: t, db: db, log: log, stream: stream, applier: search.NewApplier(),
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
 		refusals: search.NewRefusals(),
 		now:      time.Unix(1_700_000_000, 0).UTC(),
@@ -1767,15 +1782,15 @@ func (h *embedHarness) removeTask(id string) {
 // 2 048 rows. So a drain is one run and one commit — where one commit a
 // record, which is what this helper used to make, was a synchronous commit per
 // vector the duty wrote.
+//
+// THE RECORDS ARE READ BEFORE THE TRANSACTION OPENS ([embedHarness.readLog]),
+// so no broker round trip runs while the estate's writer is held.
 func (h *embedHarness) drain() {
 	h.t.Helper()
-	last, err := h.log.End(h.t.Context())
-	if err != nil {
-		h.t.Fatalf("read the log's end: %v", err)
-	}
+	last, records := h.readLog(h.consumed + 1)
 	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
-		for seq := h.consumed + 1; seq <= last; seq++ {
-			if err := h.applyRecord(tx, seq); err != nil {
+		for _, rec := range records {
+			if err := h.applyRecord(tx, rec); err != nil {
 				return err
 			}
 		}
@@ -1786,23 +1801,104 @@ func (h *embedHarness) drain() {
 	h.consumed = last
 }
 
-// applyRecord applies the record at seq in tx — nothing, for a sequence the
-// log no longer holds.
-func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
-	_, payload, storedAt, ok, err := h.log.At(h.t.Context(), seq)
+// logRecord is one record read back off the log.
+type logRecord struct {
+	seq      uint64
+	payload  []byte
+	storedAt time.Time
+}
+
+// readBudget bounds one [embedHarness.readLog]: the log's end, the consumer
+// it creates, and every record it delivers.
+//
+// ONE BOUND OVER THE WHOLE READ, AND AN EXPLICIT ONE. The read this replaced
+// was a GetMsg per sequence — about two thousand of them for the largest
+// drain here — each under t.Context(), which carries no deadline, so the
+// JetStream client gave every request its own default API timeout of five
+// seconds. On a runner at a load average of about fifteen on four CPUs one of
+// those two thousand requests waited past its five seconds, and
+// TestTheIndexWaitsForTheLog and TestTheDutyTrainsAnIndexAndItsRolloutConverges
+// failed reading a record the log held. The exposure was the count: two
+// thousand chances at one stall.
+//
+// TWO MINUTES is sized for that runner, not for an idle one. The largest read
+// in this package, about 2 200 records, took 0.14 s under -race on a lightly
+// loaded four-CPU machine (the GetMsg loop took 2.8 s for the same records),
+// so this is several hundred times that. It is still a fifteenth of the
+// thirty-minute hang detector every test binary runs under (TEST_TIMEOUT in
+// the Makefile), so a broker that has truly stopped answering fails the case
+// by name rather than as a hung binary.
+const readBudget = 2 * time.Minute
+
+// readLog reads every record the log holds from sequence `from` to its end, in
+// log order, and the end it read to.
+//
+// ONE ORDERED CONSUMER, NOT ONE REQUEST A RECORD: the broker streams the
+// records over a handful of pulls, so a read of two thousand records is a few
+// round trips rather than two thousand — the same records [js.DomainLog.At]
+// would return, a sequence the log no longer holds simply not delivered.
+func (h *embedHarness) readLog(from uint64) (uint64, []logRecord) {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(h.t.Context(), readBudget)
+	defer cancel()
+	last, err := h.log.End(ctx)
 	if err != nil {
-		return fmt.Errorf("read record %d: %w", seq, err)
+		h.t.Fatalf("read the log's end: %v", err)
 	}
-	if !ok {
-		return nil
+	if from > last {
+		return last, nil
 	}
+	cons, err := h.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy, OptStartSeq: from,
+	})
+	if err != nil {
+		h.t.Fatalf("read the log from %d: %v", from, err)
+	}
+	defer func() {
+		if info := cons.CachedInfo(); info != nil {
+			_ = h.stream.DeleteConsumer(context.WithoutCancel(ctx), info.Name)
+		}
+	}()
+	if info := cons.CachedInfo(); info == nil || info.NumPending == 0 {
+		return last, nil
+	}
+	msgs, err := cons.Messages()
+	if err != nil {
+		h.t.Fatalf("read the log from %d: %v", from, err)
+	}
+	defer msgs.Stop()
+	var out []logRecord
+	for {
+		msg, err := msgs.Next(jetstream.NextContext(ctx))
+		if err != nil {
+			h.t.Fatalf("read the log from %d to %d, %d record(s) in: %v",
+				from, last, len(out), err)
+		}
+		meta, err := msg.Metadata()
+		if err != nil {
+			h.t.Fatalf("read a record's position: %v", err)
+		}
+		seq := meta.Sequence.Stream
+		if seq > last {
+			return last, out
+		}
+		out = append(out, logRecord{seq: seq, payload: msg.Data(), storedAt: meta.Timestamp})
+		if seq == last || meta.NumPending == 0 {
+			return last, out
+		}
+	}
+}
+
+// applyRecord applies one record read off the log in tx.
+func (h *embedHarness) applyRecord(tx *sql.Tx, rec logRecord) error {
+	seq := rec.seq
 	// THE FRAME FIRST, exactly as the framework's loop does it: a record is
 	// signed on its way to the appender, and what a domain decodes is the
 	// BODY. A replay that handed the domain's decoder these bytes would be
 	// reading the signature as JSON, which is what every reader of a signed
 	// log has to get right. Refused as an error rather than a Fatalf, since
 	// this runs inside the drain's transaction.
-	body, verdict := h.verifier.Open(payload)
+	body, verdict := h.verifier.Open(rec.payload)
 	if verdict != statelog.Verified {
 		return fmt.Errorf("record %d did not verify: %s", seq, verdict)
 	}
@@ -1815,10 +1911,10 @@ func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
 		Position: statelog.Position{
 			Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
 		},
-		Payload: body, StoredAt: storedAt,
+		Payload: body, StoredAt: rec.storedAt,
 	}
 	if _, err := h.applier.Apply(h.t.Context(), tx, record,
-		statelog.ApplyOptions{StoredAt: storedAt}); err != nil {
+		statelog.ApplyOptions{StoredAt: rec.storedAt}); err != nil {
 		return fmt.Errorf("apply record %d: %w", seq, err)
 	}
 	return nil
@@ -1849,22 +1945,12 @@ func (h *embedHarness) open(seq uint64, framed []byte) []byte {
 // opIDs is every operation id on the stream, in order.
 func (h *embedHarness) opIDs() []string {
 	h.t.Helper()
-	last, err := h.log.End(h.t.Context())
-	if err != nil {
-		h.t.Fatalf("read the log's end: %v", err)
-	}
-	var out []string
-	for seq := uint64(1); seq <= last; seq++ {
-		_, payload, _, ok, err := h.log.At(h.t.Context(), seq)
+	_, records := h.readLog(1)
+	out := make([]string, 0, len(records))
+	for _, rec := range records {
+		env, err := search.DecodeEnvelope(h.open(rec.seq, rec.payload))
 		if err != nil {
-			h.t.Fatalf("read record %d: %v", seq, err)
-		}
-		if !ok {
-			continue
-		}
-		env, err := search.DecodeEnvelope(h.open(seq, payload))
-		if err != nil {
-			h.t.Fatalf("decode record %d: %v", seq, err)
+			h.t.Fatalf("decode record %d: %v", rec.seq, err)
 		}
 		out = append(out, env.OpID)
 	}

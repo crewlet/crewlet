@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Domain is one replicated state machine: one ordered stream, one
@@ -129,7 +131,7 @@ type Domain interface {
 	//
 	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
 	// judged ([Health.Healthy]) and a wrong one goes out of service for
-	// that domain's operations alone, whatever this answers — ADR-0049. The
+	// that domain's operations alone, whatever this answers — ADR-0072. The
 	// one declaration that used to answer both questions let a domain that
 	// did not gate seats escape the judgement too, so a wrong copy of it was
 	// served for ever.
@@ -416,9 +418,9 @@ func (s StreamSpec) Instantiates(d Domain) error {
 	case s.Name != want.Name,
 		s.SubjectPrefix != want.SubjectPrefix,
 		!slices.Equal(s.Subjects, want.Subjects):
-		return fmt.Errorf("statelog: stream (%q, %q, %v) is not the %s domain's, "+
-			"which is (%q, %q, %v)", s.Name, s.SubjectPrefix, s.Subjects, d.Name(),
-			want.Name, want.SubjectPrefix, want.Subjects)
+		return fmt.Errorf("statelog: stream (%q, %q, %s) is not the %s domain's, "+
+			"which is (%q, %q, %s)", s.Name, s.SubjectPrefix, words.And(s.Subjects), d.Name(),
+			want.Name, want.SubjectPrefix, words.And(want.Subjects))
 	case s.Replay != want.Replay,
 		s.MaxPerSubject != want.MaxPerSubject,
 		s.MaxAge != want.MaxAge,

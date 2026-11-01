@@ -464,7 +464,7 @@ func TestAChangeIsOpenedFromThePushsOneBranch(t *testing.T) {
 			source: -1, refusal: code.ChangeRefusalNoSource, says: "this push sets no branch"},
 		{name: "two branches", cmds: []code.Command{update(featureRef, oidOf("B"), oidOf("C")),
 			update(mainRef, oidOf("A"), oidOf("C"))}, source: -1, refusal: code.ChangeRefusalAmbiguousSource,
-			says: "sets 2 branches (refs/heads/feature and refs/heads/main)"},
+			says: `sets 2 branches ("refs/heads/feature" and "refs/heads/main")`},
 		{name: "three branches", cmds: []code.Command{update(featureRef, oidOf("B"), oidOf("C")),
 			update(mainRef, oidOf("A"), oidOf("C")), refused}, source: -1,
 			refusal: code.ChangeRefusalAmbiguousSource, says: "and 1 more"},
@@ -497,7 +497,7 @@ func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 	boxed := func(workID string) code.Principal {
 		who := dev
 		who.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), RunID: uuid.NewString(),
-			CodingAgent: "claude-code", WorkBackend: string(types.WorkNative), WorkID: workID, WorkKey: "ENG-42"}
+			CodingAgent: "claude-code", WorkBackend: string(types.WorkWorklet), WorkID: workID, WorkKey: "ENG-42"}
 		return who
 	}
 	for _, tc := range []struct {
@@ -505,7 +505,7 @@ func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
 		want               types.WorkItem
 	}{
 		{"by its identity", "web", "0190d8f0-3333-7000-8000-0123456789ab",
-			types.WorkItem{Backend: types.WorkNative, ID: "0190d8f0-3333-7000-8000-0123456789ab", Key: "ENG-42"}},
+			types.WorkItem{Backend: types.WorkWorklet, ID: "0190d8f0-3333-7000-8000-0123456789ab", Key: "ENG-42"}},
 		{"by its label alone", "api", "", types.WorkItem{}},
 	} {
 		repo := changeRepo(t, n, tc.repo)

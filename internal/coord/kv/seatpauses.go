@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/google/uuid"
@@ -149,137 +148,44 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, seat uuid.UUID, versio
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
 // A KV watcher over the class filter, so the broker sends this class and no
-// other of the eight sharing the register. Deletes are NOT ignored — a purge
-// is exactly what a resume looks like on the wire.
+// other of the ten sharing the register. Deletes are NOT ignored — a purge
+// is exactly what a resume looks like on the wire. The answer and the changes
+// are [watchRecords]': the first answer certified, so a pause missing from it
+// is never a hold a node lifts and a seat it lets take work, and a change the
+// consumer delivers late filtered by revision.
 //
-// # The first answer is a certified listing, and the call waits for it
-//
-// Everything before [coord.SeatPauseUpdate.Current] is the answer a node
-// REPLACES its copy with, so a pause missing from it is a hold the node lifts
-// and a seat it lets take work. The client's own end of the initial values
-// cannot be that answer: it ends them on a count guess, while a pause live
-// throughout can still be ahead of the cursor, and it never ends them at all
-// for a consumer whose pending messages were removed before it reached them —
-// a resume's purge marker swept from the register, say — so that answer never
-// came, and every node that met it deferred its deliveries until somebody
-// paused or resumed a seat. So the first answer is [watchUnder]'s, certified
-// against the register's key index exactly as [FleetStore.ListSeatPauses] is,
-// and the client's marker is ignored whenever it arrives.
-//
-// The call returns once that answer is in hand, and a failure to certify it
-// is the call's error rather than a closed channel: there is no answer for a
-// consumer to have stopped hearing. A record in it this build cannot read
-// fails the call the same way, naming the seat.
-//
-// # A change after the answer is the consumer's, and filtered by revision
-//
-// Every update after the answer comes off the same consumer, which is a
-// replica's copy (walk.go): a change it delivers can be LATE, never wrong in
-// order, because the consumer delivers a key's revisions in the order the
-// stream holds them. The revision filter below is what keeps a late one from
-// undoing a newer one the answer already holds, so the worst a lagging replica
-// costs a node is the lag itself — a pause or a resume taken up a moment
-// later, never one taken back. Confirming each change with a leader read would
-// close that lag too, at a read per change on every node; it is not done,
-// because a pause is a person's gesture and a moment's lag in honouring one
-// moves no work that a fence does not already stop.
+// That lag is carried rather than closed. Confirming each change with a leader
+// read would close it too, at a read per change on every node; it is not
+// done, because a pause is a person's gesture and a moment's lag in honouring
+// one moves no work that a fence does not already stop.
 func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
-	current, w, err := watchUnder(ctx, f.js, f.positions,
-		coord.DocumentFilter(coord.SeatPauseClass), "the seat pauses")
-	if err != nil {
-		return nil, err
-	}
-	// held is the revision of each key the answer holds — a marker's too,
-	// since a resume the answer saw is a revision of its key like any other.
-	held := make(map[string]uint64, len(current))
-	answer := make([]coord.SeatPauseUpdate, 0, len(current)+1)
-	for _, key := range slices.Sorted(maps.Keys(current)) {
-		kve := current[key]
-		held[key] = kve.Revision()
-		seat, ok := coord.SeatPauseSeat(key)
-		if !ok || kve.Operation() != jetstream.KeyValuePut {
-			continue
-		}
-		p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
-		if err != nil {
-			// RAISED rather than skipped, as the listing raises it: a
-			// pause dropped from the answer is a seat every node reads
-			// as free to work. The consumer watches again and says why.
-			_ = w.Stop()
-			return nil, err
-		}
-		answer = append(answer, coord.SeatPauseUpdate{Seat: seat, Pause: &p})
-	}
-	answer = append(answer, coord.SeatPauseUpdate{Current: true})
-
-	out := make(chan coord.SeatPauseUpdate)
-	go func() {
-		defer close(out)
-		defer func() { _ = w.Stop() }()
-		send := func(u coord.SeatPauseUpdate) bool {
-			select {
-			case out <- u:
-				return true
-			case <-ctx.Done():
-				return false
-			}
-		}
-		for _, u := range answer {
-			if !send(u) {
-				return
-			}
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case kve, ok := <-w.Updates():
-				if !ok {
-					// The client ended the watch (a closed connection, a
-					// deleted consumer). Closing is the contract's word for
-					// "stopped hearing", which the consumer answers by
-					// watching again — never by reading it as a resume.
-					return
-				}
-				if kve == nil {
-					// The client's end of the initial values, late or
-					// never: the certified answer has already ended them.
-					continue
-				}
-				seat, ok := coord.SeatPauseSeat(kve.Key())
-				if !ok {
-					continue
-				}
-				if r, seen := held[kve.Key()]; seen && kve.Revision() <= r {
-					// NOT A CHANGE: the revision the answer holds for this
-					// key, or an older one — the consumer reaching a key its
-					// pass was ended before, or one the leader's read was
-					// ahead of it on. Sent, an older revision would undo the
-					// newer one on every node until the consumer caught up.
-					continue
-				}
-				held[kve.Key()] = kve.Revision()
+	return watchRecords(ctx, f, f.positions, coord.DocumentFilter(coord.SeatPauseClass),
+		recordWatch[coord.SeatPauseUpdate]{
+			what: "the seat pauses",
+			ours: func(key string) bool {
+				_, ok := coord.SeatPauseSeat(key)
+				return ok
+			},
+			update: func(kve jetstream.KeyValueEntry) (coord.SeatPauseUpdate, error) {
+				seat, _ := coord.SeatPauseSeat(kve.Key())
 				u := coord.SeatPauseUpdate{Seat: seat}
-				if op := kve.Operation(); op != jetstream.KeyValueDelete && op != jetstream.KeyValuePurge {
-					p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
-					if err != nil {
-						// A record this build cannot read ends the watch
-						// rather than being skipped: skipped, it would
-						// be a pause every node forgot. The consumer
-						// watches again and logs the same failure.
-						log.WarnContext(ctx, "seat_pause_undecodable", "seat", seat.String(),
-							"error", err.Error())
-						return
-					}
-					u.Pause = &p
+				if removed(kve) {
+					return u, nil
 				}
-				if !send(u) {
-					return
+				p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
+				if err != nil {
+					return coord.SeatPauseUpdate{}, err
 				}
-			}
-		}
-	}()
-	return out, nil
+				u.Pause = &p
+				return u, nil
+			},
+			undecodable: func(ctx context.Context, kve jetstream.KeyValueEntry, err error) {
+				seat, _ := coord.SeatPauseSeat(kve.Key())
+				log.WarnContext(ctx, "seat_pause_undecodable", "seat", seat.String(),
+					"error", err.Error())
+			},
+			current: coord.SeatPauseUpdate{Current: true},
+		})
 }
 
 func encodeSeatPause(p coord.SeatPause) ([]byte, error) {

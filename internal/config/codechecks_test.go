@@ -46,11 +46,10 @@ func checksDoc(cat cells, checks ...string) string {
 	return doc
 }
 
-// A DIRECT CHECK CELL IS REFUSED (M3 decision U1 a), by name and with why, and
-// so is `self`: a check runs a change's own code, which a `direct` box would
-// run as the engine's own user on the engine host, reading what the engine
-// reads, and `self` is a seat's own executor box, which no check has. Refused
-// at code.checks.run_in and at each of allow_run_in alike, as a RUNNABLE rule —
+// A DIRECT CHECK CELL IS REFUSED (M3 decision U1 a), by name and with why: a
+// check runs a change's own code, which a `direct` box would run as the
+// engine's own user on the engine host, reading what the engine reads.
+// Refused at code.checks.run_in and at each of allow_run_in alike, as a RUNNABLE rule —
 // a stored revision carrying one is refused to run, not merely warned about —
 // and such a cell reaches no backend.
 //
@@ -64,10 +63,9 @@ func TestADirectCheckCellIsRefused(t *testing.T) {
 		path  string
 		says  string
 	}{
-		"run_in: direct":     {[]string{"run_in: direct"}, "code.checks.run_in", "engine host"},
-		"run_in: self":       {[]string{"run_in: self"}, "code.checks.run_in", "executor box"},
-		"direct allowed":     {[]string{"allow_run_in: [direct]"}, "code.checks.allow_run_in[0]", "engine host"},
-		"self allowed later": {[]string{"allow_run_in: [e2b, self]"}, "code.checks.allow_run_in[1]", "executor box"},
+		"run_in: direct":       {[]string{"run_in: direct"}, "code.checks.run_in", "engine host"},
+		"direct allowed":       {[]string{"allow_run_in: [direct]"}, "code.checks.allow_run_in[0]", "engine host"},
+		"direct allowed later": {[]string{"allow_run_in: [e2b, direct]"}, "code.checks.allow_run_in[1]", "engine host"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -157,13 +155,13 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 			path: "code.checks.env." + strings.Repeat("A", config.CodeMaxCheckEnvNameBytes+1), kind: "shape",
 			says: []string{"128 bytes"}},
 		"a cell no check runs in": {doc: checksDoc(direct, "run_in: gpu"),
-			path: "code.checks.run_in", kind: "unknown_value", says: []string{"container, e2b"}},
+			path: "code.checks.run_in", kind: "unknown_value", says: []string{`"container" or "e2b"`}},
 		"a cell allowed twice": {doc: checksDoc(both, "allow_run_in: [container, container]"),
 			path: "code.checks.allow_run_in[1]", kind: "conflict", says: []string{"allow_run_in[0]"}},
 		"checks with nothing hosting code": {doc: "name: Acme\ncode:\n  checks:\n    max_timeout_seconds: 600\n",
 			path: "code.checks", kind: "conflict", says: []string{"code.native"}},
 		"a cell no backend serves": {doc: checksDoc(direct, "run_in: e2b"),
-			path: "code.checks.run_in", kind: "conflict", says: []string{"`e2b:`", "direct, container"}},
+			path: "code.checks.run_in", kind: "conflict", says: []string{"`e2b:`", `"direct" or "container"`}},
 		"an allowed cell no backend serves": {
 			doc:  checksDoc(cells{local: true, image: true}, "run_in: container", "allow_run_in: [container, e2b]"),
 			path: "code.checks.allow_run_in[1]", kind: "conflict", says: []string{"`e2b:`"}},

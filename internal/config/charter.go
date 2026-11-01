@@ -60,6 +60,11 @@ type Charter struct {
 	Policies []string `json:"policies"`
 }
 
+// CharterSettings are the company document's top-level keys the charter is,
+// as [OrgDiff.Settings] names a changed one: what a charter write may change
+// and nothing else (internal/api/configapi's admission).
+var CharterSettings = []string{"mission", "vision", "policies"}
+
 // Charter is c's charter, a copy: changing it changes nothing in c.
 func (c *Company) Charter() Charter {
 	return Charter{

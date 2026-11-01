@@ -49,7 +49,7 @@ import {
   useSlideKeys,
   useToast,
   type SlideGridSection,
-  useMediaMatch,
+  useScreenBelow,
 } from "@crewlethq/ui";
 import type {
   ArtifactDeck,
@@ -90,7 +90,14 @@ import {
   type DeckDraft,
   type DeckMerge,
 } from "~/lib/artifacts/deck.ts";
-import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
+import {
+  nodeAt,
+  renderSlide,
+  titlePath,
+  withText,
+  type SlideRenderContext,
+} from "~/lib/slides.tsx";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
 import {
   EyeOffGlyph,
@@ -181,6 +188,31 @@ function Deck({
 
   const slides = useMemo(() => shown.order.map((id) => deckSlide(shown.slides[id]!)), [shown]);
   const current = slides.find((s) => s.id === slideParam) ?? slides[0]!;
+
+  // WHAT IS OPEN, for the assistant, while the deck is edited: its title and
+  // each slide's title and speaker notes, over the version the edit is based
+  // on, set through the draft its own controls write; Save stays the
+  // editor's. Read or presented, the deck holds no draft.
+  useAssistantDraft<DeckDraft>(
+    primary && editable && mode === ""
+      ? {
+          kind: "client",
+          id: detail.id,
+          revision: shown.base,
+          step: `slides.${shown.order.indexOf(current.id) + 1}`,
+          help:
+            "You can set the deck's title and each slide's title and speaker notes. Other " +
+            "text is edited on the stage; adding, moving, hiding and deleting slides are the " +
+            "person's, and you make no images. Saving makes a new version as them.",
+          scope: `Your edit of “${detail.title}” (not saved)`,
+          value: shown,
+          fields: deckEditFields(shown.order),
+          apply: setDraft,
+          blocked: () =>
+            merge && merge.conflicts.length > 0 ? "Settle where both edits differ first." : null,
+        }
+      : null,
+  );
   const image = useDeckAssets(detail.id, version, deck);
 
   // WHERE THIS READER IS, said to the room: the slide, and whether they are
@@ -357,6 +389,71 @@ function useShowChannel(
   return useMemo(() => ({ post: (id: string) => ref.current?.postMessage({ slide: id }) }), []);
 }
 
+// ---- what the assistant reads and sets ------------------------------------ //
+
+/** The most a deck's title and a slide's notes hold, as their fields hold them. */
+const DECK_TITLE_MAX = 120;
+const NOTES_MAX = 4000;
+
+/**
+ * The fields of a deck's edit: its title, and each slide's title (the first
+ * run of its heading, as the engine reads a slide's title) and speaker
+ * notes, by the slide's place in the order.
+ */
+export function deckEditFields(order: readonly string[]): DraftFieldSpec<DeckDraft>[] {
+  const slideAt = (d: DeckDraft, i: number) => d.slides[order[i]!];
+  return [
+    {
+      path: "title",
+      label: "Deck title",
+      read: (d) => d.title,
+      write: (d, title) =>
+        typeof title !== "string"
+          ? refuse("The deck's title is a line of text.")
+          : [...title].length > DECK_TITLE_MAX
+            ? refuse(`The deck's title holds at most ${DECK_TITLE_MAX} characters.`)
+            : { ...d, title },
+    },
+    ...order.flatMap((id, i): DraftFieldSpec<DeckDraft>[] => [
+      {
+        path: `slides.${i + 1}.title`,
+        label: `Slide ${i + 1} title`,
+        read: (d) => {
+          const slide = slideAt(d, i);
+          const at = slide ? titlePath(slide.root) : null;
+          return slide && at ? (nodeAt(slide.root, at)?.text ?? "") : "";
+        },
+        write: (d, title) => {
+          const slide = slideAt(d, i);
+          if (!slide) return refuse("That slide is no longer in the deck.");
+          if (typeof title !== "string") return refuse("A slide's title is a line of text.");
+          const at = titlePath(slide.root);
+          if (!at) return refuse(`Slide ${i + 1} has no title; its text is edited on the stage.`);
+          return {
+            ...d,
+            slides: { ...d.slides, [id]: { ...slide, root: withText(slide.root, at, title) } },
+          };
+        },
+      },
+      {
+        path: `slides.${i + 1}.notes`,
+        label: `Slide ${i + 1} speaker notes`,
+        hint: "Everyone who can open the deck can read them",
+        read: (d) => slideAt(d, i)?.notes ?? "",
+        write: (d, notes) => {
+          const slide = slideAt(d, i);
+          if (!slide) return refuse("That slide is no longer in the deck.");
+          if (typeof notes !== "string") return refuse("Speaker notes are text.");
+          if ([...notes].length > NOTES_MAX) {
+            return refuse(`Speaker notes hold at most ${NOTES_MAX} characters.`);
+          }
+          return { ...d, slides: { ...d.slides, [id]: { ...slide, notes } } };
+        },
+      },
+    ]),
+  ];
+}
+
 // ---- the editor ----------------------------------------------------------- //
 
 function DeckEditor({
@@ -406,7 +503,7 @@ function DeckEditor({
   const position = slides.findIndex((s) => s.id === current.id);
   // ON A PHONE THE STRIP IS A ROW UNDER THE STAGE, where the next slide is a
   // swipe away, rather than a column of full-width slides under the notes.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
 
   const change = onChange;
   const edit: SlideRenderContext["edit"] = editable

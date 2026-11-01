@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,21 +26,21 @@ import (
 //     daemon (DOCKER_HOST, a rootless socket forwarded from elsewhere) mounts
 //     the DAEMON's filesystem instead, so the box directory the engine wrote
 //     is not the one the container sees. Nothing errors; the agent simply
-//     finds no brief, no credentials and no shim.
+//     finds no brief, no credentials and no tools.
 //
 //  2. What the container writes there, the engine must be able to manage.
 //     Under a ROOTFUL runtime a container's root is the host's root, so every
 //     directory the box creates in the mount is root-owned: the engine, which
-//     is not root, can then neither write into it — `Install` creating
-//     .crewlet/bin from inside the box and then writing the ask shim from
-//     outside failed with EACCES, which is exactly how this was found — nor
+//     is not root, can then neither write into it (`Install` creating
+//     .crewlet/bin from inside the box and then writing a file into it from
+//     outside failed with EACCES, which is exactly how this was found) nor
 //     unlink from it, so `removeBox`'s RemoveAll leaves the checkout behind
 //     and every box directory leaks on the engine host for good.
 
 // containerProbeTimeout bounds the runtime queries around a box's creation:
 // the rootless probe and the in-box half of the mount proof.
 //
-// Short on purpose, and shorter than [controlTimeout]. Both run against a
+// Short on purpose, and shorter than [ControlTimeout]. Both run against a
 // daemon this process is about to ask for a container anyway, so a daemon slow
 // enough to blow this is a create that is about to fail regardless — the only
 // thing a longer bound would buy is a later error. Ten seconds is well past a
@@ -87,12 +88,9 @@ func containerUserArgs(ctx context.Context, cli containerCLI) []string {
 // Anything else — a daemon that is down, an answer this build does not
 // recognise — is not an answer, and the caller's default covers it.
 func runtimeIsRootless(ctx context.Context, cli containerCLI) bool {
-	var format string
-	switch filepath.Base(cli.path) {
-	case "podman":
+	format := "{{.SecurityOptions}}"
+	if cli.podman() {
 		format = "{{.Host.Security.Rootless}}"
-	default:
-		format = "{{.SecurityOptions}}"
 	}
 	result, err := runHost(ctx, cli.command(containerProbeTimeout,
 		"info", "--format", format))
@@ -123,6 +121,65 @@ type execer interface {
 	Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 }
 
+// The mount probe's own exits, one per half of its command, which no exit of
+// a container runtime (125 to 127) or of a box (124 for its timeout, above
+// 128 for a signal) is.
+const (
+	// probeUnread is the probe the engine wrote not being there to read.
+	probeUnread = 3
+	// probeUnmade is the box unable to make a directory in its own home.
+	probeUnmade = 4
+)
+
+// probeFailed is what the mount probe's answer says, or nil for a probe that
+// ran and read the engine's own token back.
+//
+// FOUR FAILURES, EACH WITH ITS OWN CLASS AND ITS OWN WORDS, because they send
+// a reader to four different places. A probe that RAN and read something else
+// — the file not there, or other bytes in it — is a mount on another host's
+// filesystem, a configuration. A box that could not make a directory in its
+// own home is a mount it may not write, a configuration too. A probe that ran
+// out of its time is the runtime not answering, which a wait can clear. A
+// probe the runtime refused to run at all — the container gone, an exec the
+// daemon would not take — is the runtime's refusal, a configuration as every
+// one of its refusals is. And a runtime this host could not even start is no
+// class at all, but the engine host's own fault. Every one of them was told
+// as the first, so an exec that never happened sent an operator to look for a
+// remote daemon that was not there.
+func probeFailed(ctx context.Context, layout boxLayout, token string, result ExecResult, err error) error {
+	said := strings.TrimSpace(result.Stderr)
+	switch {
+	case err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) == token:
+		return nil
+	case ctx.Err() != nil:
+		// THE CALLER STOPPED WAITING, which a timed-out probe would
+		// otherwise be read as: the box is torn down either way, and the
+		// launch says why.
+		return fmt.Errorf("container sandbox %s: its mount probe was abandoned: %w",
+			layout.id, ctx.Err())
+	case err != nil:
+		return localErrorf("container sandbox %s could not run its mount probe, because "+
+			"this host could not run the container runtime: %v", layout.id, err)
+	case result.ExitCode == 124:
+		return localRefusedf(WhyProviderUnavailable, "container sandbox %s did not answer "+
+			"its mount probe in %s: %s", layout.id, containerProbeTimeout, said)
+	case result.ExitCode == probeUnread, result.ExitCode == 0:
+		return localRefusedf(WhyConfiguration, "container sandbox %s cannot see its own box directory: %s is "+
+			"mounted at %s but the container reads something else there. The runtime is "+
+			"driving a daemon on another host (DOCKER_HOST, a forwarded socket), which "+
+			"cannot bind-mount this filesystem — point providers.sandbox.local.runtime at "+
+			"a local daemon, or use the %q sandbox provider for a remote runtime",
+			layout.id, layout.home(), DefaultHome, E2BKind)
+	case result.ExitCode == probeUnmade:
+		return localRefusedf(WhyConfiguration, "container sandbox %s cannot make a directory in "+
+			"its own home: %s is mounted at %s, and the container may not write there (%s). "+
+			"Run the container as a user that can, with providers.sandbox.local.run_args, "+
+			"or mount the box directory writable", layout.id, layout.home(), DefaultHome, said)
+	}
+	return localRefusedf(WhyConfiguration, "the container runtime refused to run container "+
+		"sandbox %s's mount probe (exit %d): %s", layout.id, result.ExitCode, said)
+}
+
 // verifyMount proves the two properties above, using the operations that
 // actually break when they do not hold.
 //
@@ -133,54 +190,62 @@ type execer interface {
 // file. Unlinking a file needs write permission on its PARENT, not on the
 // file, so an engine that removes a root-owned file proves nothing at all; it
 // is the box-made DIRECTORY that the engine cannot write into or empty.
+//
+// EVERY FILE OF IT THROUGH THE BOX'S HOME ([boxLayout.openHome]): the container
+// is running by now, and the directory the proof writes into is one the
+// container made.
 func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
-	if err := os.MkdirAll(layout.meta(), hostbox.DirMode); err != nil {
+	home, err := layout.openHome()
+	if err != nil {
+		return localErrorf("container sandbox %s could not prepare %s: %v",
+			layout.id, layout.meta(), err)
+	}
+	defer func() { _ = home.Close() }()
+	if err = home.MkdirAll(metaName, hostbox.DirMode); err != nil {
 		return localErrorf("container sandbox %s could not prepare %s: %v",
 			layout.id, layout.meta(), err)
 	}
 	token := uuid.NewString()
-	fromEngine := filepath.Join(layout.meta(), "mount-probe")
-	if err := os.WriteFile(fromEngine, []byte(token), hostbox.FileMode); err != nil {
+	fromEngine := filepath.Join(metaName, "mount-probe")
+	if err = replaceIn(home, fromEngine, []byte(token)); err != nil {
 		return localErrorf("container sandbox %s could not write its mount probe: %v",
 			layout.id, err)
 	}
-	defer func() { _ = os.Remove(fromEngine) }()
+	defer func() { _ = home.Remove(fromEngine) }()
 
 	// Unquoted, because every path here is a compile-time constant under
-	// DefaultHome — there is no operator input in this command line.
+	// DefaultHome — there is no operator input in this command line. Each
+	// half exits with a status of its own, so a probe that ran and read
+	// something else is told apart from one the runtime never ran.
 	inBox := DefaultHome + "/.crewlet"
-	result, err := box.Exec(ctx, "cat "+inBox+"/mount-probe"+
-		" && mkdir -p "+inBox+"/mount-probe.d", ExecOptions{
+	result, err := box.Exec(ctx, "cat "+inBox+"/mount-probe || exit "+
+		strconv.Itoa(probeUnread)+"; mkdir -p "+inBox+"/mount-probe.d || exit "+
+		strconv.Itoa(probeUnmade), ExecOptions{
 		// Not the workspace: the proof must not depend on a working
 		// directory a setup step could still be creating.
 		Cwd:        DefaultHome,
 		TimeoutSec: containerProbeTimeout.Seconds(),
 	})
-	if err != nil || result.ExitCode != 0 || strings.TrimSpace(result.Stdout) != token {
-		return localErrorf("container sandbox %s cannot see its own box directory: %s is "+
-			"mounted at %s but the container reads something else there. The runtime is "+
-			"driving a daemon on another host (DOCKER_HOST, a forwarded socket), which "+
-			"cannot bind-mount this filesystem — point providers.sandbox.local.runtime at "+
-			"a local daemon, or use the %q sandbox provider for a remote runtime",
-			layout.id, layout.home(), DefaultHome, E2BKind)
+	if failed := probeFailed(ctx, layout, token, result, err); failed != nil {
+		return failed
 	}
 
 	// The box made this directory; the engine now has to live in it.
-	made := filepath.Join(layout.meta(), "mount-probe.d")
-	writeErr := os.WriteFile(filepath.Join(made, "from-engine"), []byte(token), hostbox.FileMode)
-	removeErr := os.RemoveAll(made)
+	made := filepath.Join(metaName, "mount-probe.d")
+	writeErr := replaceIn(home, filepath.Join(made, "from-engine"), []byte(token))
+	removeErr := home.RemoveAll(made)
 	if writeErr != nil || removeErr != nil {
 		detail := writeErr
 		if detail == nil {
 			detail = removeErr
 		}
-		return localErrorf("container sandbox %s writes its box directory as a user this "+
+		return localRefusedf(WhyConfiguration, "container sandbox %s writes its box directory as a user this "+
 			"engine cannot manage: the container created %s and this process can neither "+
 			"write into it nor remove it (%v). The engine would be left unable to install "+
-			"the agent's shim or reclaim the box's disk. Run the container as this user by "+
+			"a run's files or reclaim the box's disk. Run the container as this user by "+
 			"passing `--user %d:%d` in providers.sandbox.local.run_args, or use a rootless "+
 			"container runtime",
-			layout.id, made, detail, os.Getuid(), os.Getgid())
+			layout.id, filepath.Join(layout.home(), made), detail, os.Getuid(), os.Getgid())
 	}
 	return nil
 }

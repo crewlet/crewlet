@@ -28,7 +28,7 @@ func TestTheInvitationAndResetCommandsReachTheirRoutes(t *testing.T) {
 		switch {
 		case r.URL.Path == "/iam/invitations":
 			_, _ = w.Write([]byte(`{"invitations":[{"id":"inv-1","state":"expired",` +
-				`"email":"sam@example.com","grants":["tracker"]}],"position":"x"}`))
+				`"email":"sam@example.com","grants":["worklet"]}],"position":"x"}`))
 		case r.URL.Path == "/iam/people" && r.URL.Query().Get("after") == "":
 			// THE SUBSTRING SEARCH ANSWERS A NEAR MISS FIRST, which a
 			// resolution by the first row would take — and the exact
@@ -86,7 +86,7 @@ func TestTheInvitationAndResetCommandsReachTheirRoutes(t *testing.T) {
 
 	for _, refused := range [][]string{
 		{"people", "-all"},
-		{"reset-password", person, "-idempotency-key",
+		{"reset-password", person, "-op-id",
 			statelog.NewOpID(time.Now(), "x")},
 	} {
 		if _, err := cli(refused...); err == nil {

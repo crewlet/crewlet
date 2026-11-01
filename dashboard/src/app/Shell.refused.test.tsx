@@ -65,7 +65,7 @@ beforeAll(async () => {
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   Element.prototype.scrollIntoView = () => {};
-  location.hash = "#/work";
+  location.hash = "#/worklet";
   sent = [];
   grants = [];
   vi.stubGlobal(
@@ -147,7 +147,7 @@ async function panelTitled(title: string): Promise<HTMLElement> {
 }
 
 test("every screen is one panel giving the engine's reason, and it signs out", async () => {
-  grants = ["tracker"];
+  grants = ["worklet"];
   await mount();
   const panel = await panelTitled("You can’t use Crewlet right now");
   expect(
@@ -194,9 +194,10 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   const rows = screen.getByRole("navigation", { name: "Navigation" });
   const row = (name: RegExp) => within(rows).getByRole("link", { name });
   await waitFor(() =>
-    expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull(),
+    expect(row(/^Worklet/).querySelector("[title='Needs Worklet access']")).not.toBeNull(),
   );
-  expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
+  expect(row(/^Doclet/).querySelector("[title='Needs Doclet access']")).not.toBeNull();
+  expect(row(/^Chatlet/).querySelector("[title='Needs Chatlet access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
   // THE INBOX NAMES NO APP: it is composed from every native domain's
   // notices, each read under its own permission.
@@ -227,9 +228,9 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   );
   expect(settings.getAttribute("title")).toBe("Settings");
   expect(settings.getAttribute("aria-current")).toBe("page");
-  // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
-  // row leads to Token spend rather than to a refusal ([landingPath]).
-  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));
+  // AND IT OPENS ON ITS LANDING, Models, which every member reads: each
+  // model's condition is what tells a member why a seat waits.
+  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/models"));
   const column = await screen.findByRole("navigation", { name: "Settings sections" });
   const spend = within(column)
     .getAllByRole("link")
@@ -261,7 +262,7 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
     for (const a of rows) {
       const at = a.getAttribute("href") ?? "";
       if (locked.includes(a)) {
-        expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
+        expect(a.textContent, at).toMatch(/, Needs (Admin|Worklet) access/);
       } else {
         expect(a.textContent, at).not.toMatch(/needs/);
       }
@@ -290,11 +291,11 @@ test("a section the session's access does not open is locked though the viewer n
 // refusal may hold what it no longer does. Mutation: drop the re-read and the
 // count stays where it was.
 test("a refusal asks who this is again", async () => {
-  grants = ["tracker", "knowledge"];
+  grants = ["worklet", "doclet"];
   const { store, dial } = await mount(null);
   await waitFor(() => expect(dial).toHaveBeenCalled());
   const before = sent.filter((s) => s.path === "/auth/session").length;
-  grants = ["knowledge"];
+  grants = ["doclet"];
   act(() => store.setAccessRefused("your seat is no longer in the chart"));
   await panelTitled("You can’t use Crewlet right now");
   await waitFor(() =>
@@ -304,10 +305,10 @@ test("a refusal asks who this is again", async () => {
 
 // NO NEW TASK IS OFFERED IN A FRAME THE ENGINE REFUSED, nor where Work is
 // closed: every door is on a screen the panel or the lock replaces. The
-// CONTROL is the same frame for a session holding Tracker, whose Tasks lens
+// CONTROL is the same frame for a session holding Worklet, whose Tasks lens
 // offers New task in its page bar.
 test("a refused session is offered no New task, and is told why", async () => {
-  location.hash = "#/work/tasks";
+  location.hash = "#/worklet/tasks";
   const { store } = await mount();
   await panelTitled("You can’t use Crewlet right now");
   expect(screen.queryAllByRole("button", { name: /^New task/ })).toEqual([]);
@@ -316,16 +317,16 @@ test("a refused session is offered no New task, and is told why", async () => {
   expect(screen.queryByText(/Offline\. Reconnect/)).toBeNull();
 });
 
-test("a session holding no Tracker finds Work locked, and no New task in it", async () => {
-  location.hash = "#/work/tasks";
+test("a session holding no Worklet finds Worklet locked, and no New task in it", async () => {
+  location.hash = "#/worklet/tasks";
   await mount(null);
-  expect(await screen.findByText("You need Tracker access")).toBeDefined();
+  expect(await screen.findByText("You need Worklet access")).toBeDefined();
   expect(screen.queryAllByRole("button", { name: /^New task$/ })).toEqual([]);
 });
 
-test("a session holding Tracker is offered New task", async () => {
-  location.hash = "#/work/tasks";
-  grants = ["tracker"];
+test("a session holding Worklet is offered New task", async () => {
+  location.hash = "#/worklet/tasks";
+  grants = ["worklet"];
   await mount(null);
   const press = await screen.findByRole("button", { name: /^New task$/ });
   expect(press.getAttribute("aria-disabled")).toBeNull();

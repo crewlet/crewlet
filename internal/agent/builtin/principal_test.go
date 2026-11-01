@@ -8,10 +8,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // boundPerson is somebody signed in whose directory row binds them to a seat.
@@ -40,16 +41,16 @@ func machine(id string, grants ...iam.Grant) iam.Principal {
 func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	t.Parallel()
 	ana := boundPerson("ana.silva", "ana")
-	task := tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
-		Status: tracker.StatusTodo}
+	task := worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
+		Status: worklet.StatusTodo}
 	moved := task
-	moved.Status = tracker.StatusInProgress
-	notify := tracker.Wake{Kind: tracker.ChangeStatus, Before: task,
+	moved.Status = worklet.StatusInProgress
+	notify := worklet.Wake{Kind: worklet.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
-	candidates := tracker.Candidates(notify, false)
+	candidates := worklet.Candidates(notify)
 
 	woken := func(actor string) bool {
-		for _, c := range tracker.Route(candidates, nil, actor) {
+		for _, c := range worklet.Route(candidates, nil, actor) {
 			if c.Handle == "ana" {
 				return true
 			}
@@ -57,7 +58,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 		return false
 	}
 	actor := builtin.ActorOf(ana)
-	if actor.Handle != "ana" || actor.Kind != tracker.AuthorHuman {
+	if actor.Handle != "ana" || actor.Kind != worklet.AuthorHuman {
 		t.Fatalf("a bound person writes as %q (%s), want their seat as a human",
 			actor.Handle, actor.Kind)
 	}
@@ -73,7 +74,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	// AND THE KNOWLEDGE BASE WRITES THE SAME NAME, or the audit feed that
 	// reads both histories shows one person as two.
 	page, err := builtin.PageActorOf(ana)
-	if err != nil || page.Name() != actor.Handle || page.Kind != pages.AuthorHuman {
+	if err != nil || page.Name() != actor.Handle || page.Kind != doclet.AuthorHuman {
 		t.Errorf("a page write is attributed as %+v (%v), the tracker as %q",
 			page, err, actor.Handle)
 	}
@@ -95,7 +96,7 @@ func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 	for _, id := range []string{"ops", "ci", "release-bot"} {
 		// HOLDING THE TRACKER, which the own-record verbs ask beside the
 		// relation — so what refuses the token below is its NAME.
-		token := machine(id, iam.GrantTracker)
+		token := machine(id, iam.GrantWorklet)
 		actor := builtin.ActorOf(token)
 		if org.ValidHandle(actor.Handle) {
 			t.Errorf("a token acts as %q, which a seat could also be called",
@@ -133,11 +134,11 @@ func TestAnUnboundCredentialWritesAsItsLogin(t *testing.T) {
 	for name, c := range map[string]struct {
 		p    iam.Principal
 		name string
-		kind tracker.AuthorKind
+		kind worklet.AuthorKind
 	}{
-		"a token":          {machine("ops-bot"), "token:ops-bot", tracker.AuthorOperator},
-		"an unbound human": {boundPerson("jane.doe", ""), "jane.doe", tracker.AuthorOperator},
-		"a bound human":    {boundPerson("jane.doe", "jane"), "jane", tracker.AuthorHuman},
+		"a token":          {machine("ops-bot"), "token:ops-bot", worklet.AuthorOperator},
+		"an unbound human": {boundPerson("jane.doe", ""), "jane.doe", worklet.AuthorOperator},
+		"a bound human":    {boundPerson("jane.doe", "jane"), "jane", worklet.AuthorHuman},
 	} {
 		actor := builtin.ActorOf(c.p)
 		if actor.Handle != c.name || actor.Kind != c.kind {
@@ -168,16 +169,16 @@ func TestAWriteThroughAMachineTokenNamesTheToken(t *testing.T) {
 	for name, c := range map[string]struct {
 		p      iam.Principal
 		author string
-		kind   tracker.AuthorKind
+		kind   worklet.AuthorKind
 	}{
 		"a person's own token": {func() iam.Principal {
 			p := boundPerson("sarah.chen", "sarah")
 			p.Via = via
 			return p
-		}(), "sarah", tracker.AuthorHuman},
+		}(), "sarah", worklet.AuthorHuman},
 		"a service account's token": {iam.Principal{ID: uuid.New(),
 			Login: "svc:ci", Kind: iam.KindMachine, Stage: iam.StageActive,
-			Via: via}, "svc:ci", tracker.AuthorOperator},
+			Via: via}, "svc:ci", worklet.AuthorOperator},
 	} {
 		work := builtin.ActorOf(c.p)
 		if work.Handle != c.author || work.Kind != c.kind || work.OperatorID != via {
@@ -221,5 +222,47 @@ func TestAWriteWithNobodyBehindItIsRefused(t *testing.T) {
 	if actor, err := builtin.PrincipalActor(resolved, nil); err != nil ||
 		actor.Handle != "token:ops" {
 		t.Errorf("a resolved token writes as %+v (%v)", actor, err)
+	}
+}
+
+// A CHAT WRITE IS ATTRIBUTED AS EVERY OTHER DOMAIN'S, AND NEVER AS THE ENGINE.
+//
+// One person under two names across the histories an audit reads side by side
+// is two people, so a chat write carries the name and the credential a work
+// record and a page record carry: a bound person their seat, as a person; a
+// service account's token its login, as an operator, through the token. And
+// the engine's own principal is REFUSED although chat has a word for it: that
+// kind is the engine narrating a room from its own records, and a tool call
+// made as it would put a narration where a speaker belongs.
+//
+// Mutation: admit [chatlet.AuthorSystem] in ChatActorOf and the engine's call is
+// attributed; record the login rather than the seat and the person's is.
+func TestAChatWriteIsAttributedAsEveryOtherDomainsAndNeverAsTheEngine(t *testing.T) {
+	t.Parallel()
+	const token = "0192f00d-0000-7000-8000-00000000000b"
+	via := iam.MachineTokenName(token)
+	person := boundPerson("sarah.chen", "sarah", iam.GrantChatlet)
+	person.Via = via
+	service := iam.Principal{ID: uuid.New(), Login: "svc:ci", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Via: via}
+	for name, c := range map[string]struct {
+		p    iam.Principal
+		kind chatlet.AuthorKind
+	}{
+		"a person bound to a seat": {person, chatlet.AuthorHuman},
+		"a service account":        {service, chatlet.AuthorOperator},
+	} {
+		got, err := builtin.ChatActorOf(c.p)
+		work := builtin.ActorOf(c.p)
+		if err != nil || got.Handle != work.Handle || got.Kind != c.kind ||
+			got.OperatorID != work.OperatorID {
+			t.Errorf("%s: a chat write is attributed as %+v (%v), a work record "+
+				"as %q through %q, want the same as %s", name, got, err,
+				work.Handle, work.OperatorID, c.kind)
+		}
+	}
+	engine := iam.Principal{Kind: iam.KindEngine, Login: "node-7", Stage: iam.StageActive}
+	if got, err := builtin.ChatActorOf(engine); err == nil {
+		t.Errorf("the engine's own principal is attributed a chat write as %+v", got)
 	}
 }

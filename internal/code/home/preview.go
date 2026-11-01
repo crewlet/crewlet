@@ -80,7 +80,7 @@ type PreviewOptions struct {
 //     (behind_config) or holds no chart (no_chart), before anything starts.
 //  3. A node holding no copy of the repository, nor filling one, answers a
 //     preview that is not its walk's effective home's unready (not_held) at
-//     once: one node a walk fills a copy (ADR-0059).
+//     once: one node a walk fills a copy (ADR-0082).
 //  4. The copy is synced to the asker's floor, or read as it stands where
 //     the asker names none, the wait bounded by statelog.ReadBudget, and a
 //     sync that cannot be answered in time is unready as a read's is.

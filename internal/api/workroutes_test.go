@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
@@ -22,7 +22,7 @@ func (s *workStub) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, func(*http.Request, authz.Policy) authz.Decision {
 		return authz.Decision{Allowed: true, Reason: authz.ReasonGrant}
 	})
-	return router.Handle("POST /work/items",
+	return router.Handle("POST /worklet/items",
 		authz.Policy{Action: authz.ActionWorkCreate},
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			s.reached++
@@ -47,13 +47,13 @@ func TestTheWriteSurfaceIsMountedBehindTheGuard(t *testing.T) {
 	a := newApp(t, api.Options{Work: stub})
 
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/work/items", nil))
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worklet/items", nil))
 	if rec.Code != http.StatusUnauthorized || stub.reached != 0 {
 		t.Fatalf("an uncredentialled write answered %d and reached the "+
 			"surface %d times", rec.Code, stub.reached)
 	}
 	rec = httptest.NewRecorder()
-	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/work/items", nil)))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/worklet/items", nil)))
 	if rec.Code != http.StatusOK || stub.reached != 1 {
 		t.Fatalf("the control answered %d and reached the surface %d times — "+
 			"the route is not mounted, so the refusal above proves nothing",
@@ -74,18 +74,18 @@ type (
 
 // Rename is ambiguous between the two embedded seams it satisfies, so it is
 // named once here — which is also why it is never called.
-func (unreadPages) Rename(context.Context, pages.Actor, string, string, bool) (
-	pages.Written, error) {
+func (unreadPages) Rename(context.Context, doclet.Actor, string, string, bool) (
+	doclet.Written, error) {
 
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
 // THE REAL WRITE SURFACE MOUNTS BESIDE EVERY READ THE APP ALREADY SERVES.
 //
 // Go's mux PANICS at registration on two patterns that match the same request
 // with neither more specific, and the write surface shares its prefixes with
-// the read routes — `/work/items/{key}` beside `/work/{id}`, `PUT /pages/{id}`
-// beside `GET /pages/{id}`. A collision would be a node that panics at boot
+// the read routes: `/worklet/items/{key}` beside `/worklet/{id}`, and
+// `PUT /doclet/pages/{id}` beside `GET /doclet/pages/{id}`. A collision would be a node that panics at boot
 // with the API on, and no unit suite of either surface alone can see it,
 // because each mounts on a mux of its own. So this builds the app with the
 // real surface on it — and then asks it something only a MOUNTED route could
@@ -115,7 +115,7 @@ func TestTheRealWriteSurfaceMountsBesideTheReads(t *testing.T) {
 		t.Fatalf("workapi.New: %v", err)
 	}
 	a := newApp(t, api.Options{Work: surface})
-	for _, target := range []string{"/work/items/ENG-1/purge", "/pages/p-1/purge"} {
+	for _, target := range []string{"/worklet/items/ENG-1/purge", "/doclet/pages/p-1/purge"} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, target, nil))
 		if rec.Code != http.StatusUnauthorized {

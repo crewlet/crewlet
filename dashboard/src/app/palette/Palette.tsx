@@ -34,7 +34,7 @@
  * Three rows change the company, each through `useAct` AS THE SIGNED-IN
  * PRINCIPAL (ADR-0024), the seat the directory binds them to where it binds
  * one, their own login where it does not. Each files or moves a task in
- * Crewlet Works, so where the company runs none of it none of the three is
+ * Worklet, so where the company runs none of it none of the three is
  * offered (`lib/services.ts`); elsewhere each is drawn for every reader and
  * says why where it cannot act:
  *
@@ -59,7 +59,14 @@
  * on the asker's behalf, and said so.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   ArtifactKindGlyph,
   CommandPalette as KitPalette,
@@ -85,10 +92,12 @@ import {
   UsersGlyph,
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator, useRoute } from "../router.tsx";
+import { buildHash, useNavigator, useRoute } from "../router.tsx";
+import { ProductMark } from "@crewlethq/icons/product-mark";
+import { useAssistantControl } from "../assistant/control.ts";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { DOCLET_SEARCH_BACKEND, useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
@@ -110,7 +119,7 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
-import { itemPath, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
+import { itemPath, PROJECT_PAGE, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import { useOpenProjectSwitcher } from "../header/ProjectSwitcher.tsx";
 import { fmtCount } from "~/lib/format.ts";
@@ -129,7 +138,6 @@ import {
   ALL_ROWS,
   ALL_ROWS_UNDER_ANSWER,
   GO_TO_ROWS,
-  PROJECT_PAGE,
   SCOPES,
   SOURCE_CHIPS,
   ARTIFACT_HITS,
@@ -158,6 +166,7 @@ import {
 } from "./hits.ts";
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 
 /** What a project step files once the person has chosen where. */
 type Filing =
@@ -201,6 +210,7 @@ export function CommandPalette({
   const nav = useNavigator();
   const route = useRoute();
   const viewer = useViewer();
+  const assistant = useAssistantControl();
   // WHO THE LOCKS ARE READ FOR, or null while nobody has said — a lock
   // claimed on a guess is a refusal nobody made.
   const standing: Standing = viewer.loading
@@ -282,6 +292,16 @@ export function CommandPalette({
   const lower = term.toLowerCase();
   const picking = pick !== null;
   const pickTerm = pickQuery.trim();
+  // THE ENGINE'S QUESTIONS READ THE TERM DEFERRED. Asked with the term as
+  // typed, every keystroke changed each search's parameters, so the render a
+  // keystroke commits ran each search's effect, and each set its state
+  // again. Under keystrokes arriving back to back, React counted those
+  // updates towards its nested-update limit and threw a keystroke away
+  // (error #185). Deferred, a keystroke's own render leaves every search as
+  // it was; React asks again in a render of its own, which the next keystroke
+  // interrupts rather than piles onto. What is drawn from the chart and the
+  // screens still reads the term as typed.
+  const searchTerm = useDeferredValue(term);
 
   // ---- the three questions ---------------------------------------------
   // A TERM PAST THE ENGINE'S SEARCH BOUND ASKS NEITHER SEARCH NOR THE ANSWER,
@@ -291,16 +311,17 @@ export function CommandPalette({
     (scope === "all" || scope === "tasks" || scope === "pages" || scope === "artifacts") &&
     !picking;
   const tooLong = searchable ? searchTooLong(term) : null;
+  const askable = searchable && searchTooLong(searchTerm) === null;
   const wantsTasks =
     served &&
     runs.tracker &&
     !picking &&
     (scope === "all" || scope === "tasks") &&
-    term.length >= SEARCH_MIN &&
-    tooLong === null;
+    searchTerm.length >= SEARCH_MIN &&
+    askable;
   const tasks = useSearchQuery(
     "work_search",
-    { q: term, mode: "hybrid", limit: TASK_HITS },
+    { q: searchTerm, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
   );
   const wantsPages =
@@ -308,20 +329,20 @@ export function CommandPalette({
     runs.knowledge &&
     !picking &&
     (scope === "all" || scope === "pages") &&
-    term.length >= SEARCH_MIN &&
-    tooLong === null;
-  const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
+    searchTerm.length >= SEARCH_MIN &&
+    askable;
+  const pages = useSearchQuery("knowledge", { q: searchTerm }, { enabled: wantsPages });
   // ARTIFACTS IN THEIR OWN SCOPE ONLY, so All still asks three questions. The
   // listing is open to every signed-in reader and the engine decides each row.
   const wantsArtifacts =
-    served && !picking && scope === "artifacts" && term.length >= SEARCH_MIN && tooLong === null;
+    served && !picking && scope === "artifacts" && searchTerm.length >= SEARCH_MIN && askable;
   const artifacts = useQuery(
     "artifacts",
-    { scope: "all", q: term, sort: "updated", "max-keys": ARTIFACT_HITS },
+    { scope: "all", q: searchTerm, sort: "updated", "max-keys": ARTIFACT_HITS },
     { enabled: wantsArtifacts },
   );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
-  const nameTerm = picking ? pickTerm : term;
+  const nameTerm = useDeferredValue(picking ? pickTerm : term);
   const wantsNames =
     served &&
     (pickingAgent || (!picking && (scope === "all" || scope === "agents"))) &&
@@ -329,13 +350,13 @@ export function CommandPalette({
   const names = useQuery("colleague", { q: nameTerm }, { enabled: wantsNames });
   // THE COMPANY'S PROJECTS, once: to name the project a create lands in, and
   // to offer them when nothing on screen or in the chart says which.
-  // A TRACKER QUESTION, asked only of a reader holding Tracker: without it the
+  // A WORKLET QUESTION, asked only of a reader holding Worklet: without it the
   // engine refuses the list, and nothing a reader without it can do here
   // files a task anyway.
   const projectsRead = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { enabled: served && runs.tracker && viewer.tracker },
+    { enabled: served && runs.tracker && viewer.worklet },
   );
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
@@ -343,9 +364,9 @@ export function CommandPalette({
   // leaves behind it as it closes.
   const openSwitcher = useOpenProjectSwitcher();
   // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY, NOR TO A READER WITHOUT
-  // TRACKER: the switcher lists projects, which is the tracker's question.
+  // WORKLET: the switcher lists projects, which is Worklet's question.
   const switchHits =
-    served && runs.tracker && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
+    served && runs.tracker && viewer.worklet ? [switchProjectHit(openSwitcher)] : [];
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -353,9 +374,9 @@ export function CommandPalette({
   // nothing saying a search was in flight. The answer carries no echo of its
   // question, so the term is remembered against the answer's own identity:
   // a new object is this term's answer arriving, and nothing else.
-  const taskAnswer = useSettled(tasks, term, wantsTasks);
-  const pageAnswer = useSettled(pages, term, wantsPages);
-  const artifactAnswer = useSettled(artifacts, term, wantsArtifacts);
+  const taskAnswer = useSettled(tasks, searchTerm, wantsTasks);
+  const pageAnswer = useSettled(pages, searchTerm, wantsPages);
+  const artifactAnswer = useSettled(artifacts, searchTerm, wantsArtifacts);
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
@@ -376,7 +397,7 @@ export function CommandPalette({
   const itemRead = useQuery(
     "work_item",
     { id: pickItem },
-    { enabled: pickItem !== "" && ask.tracker && viewer.tracker },
+    { enabled: pickItem !== "" && ask.tracker && viewer.worklet },
   );
 
   // The task at hand: the one on screen, else the best task hit for this term.
@@ -416,20 +437,34 @@ export function CommandPalette({
   const openPick = (next: Pick) => {
     setSuggestedForPick(suggested);
     setPick(next);
-    setPickQuery("");
+    editPickQuery("");
   };
   /** The project step, for a filing that has everything but where. */
   const openProjectPick = (filing: Filing, suggestion: ProjectSuggestion) => {
     setPick({ kind: "project", filing, suggested: suggestion });
-    setPickQuery("");
+    editPickQuery("");
   };
   const leavePick = () => {
     setPick(null);
     setSuggestedForPick(null);
   };
 
-  // A fresh keystroke clears what the last press said.
-  useEffect(() => setNotice(null), [query, pickQuery, scope]);
+  // A FRESH KEYSTROKE CLEARS WHAT THE LAST PRESS SAID, in the same event
+  // that changes the term, the picker's term or the scope. An effect keyed on
+  // them set state once more after every keystroke, which is the cascade the
+  // deferred term above exists to prevent.
+  const editQuery = (next: string) => {
+    setNotice(null);
+    setQuery(next);
+  };
+  const editPickQuery = (next: string) => {
+    setNotice(null);
+    setPickQuery(next);
+  };
+  const editScope = (next: ScopeId) => {
+    setNotice(null);
+    setScope(next);
+  };
 
   // PAIRED BY THE SEAT'S OWN ROW, never by its name: two seats may share a
   // name, and a seat's ring read off its namesake's row is a state it is not in.
@@ -515,7 +550,7 @@ export function CommandPalette({
     // is one another task already claimed, and it opens that task.
     const address =
       result.kind === "unknown" ? undefined : (result.receipt as { item?: string } | null)?.item;
-    if (address) nav.to(["work", address]);
+    if (address) nav.to(["worklet", address]);
     else onClose();
   };
 
@@ -537,12 +572,33 @@ export function CommandPalette({
     );
   };
 
+  // --- assistant page actions (WP12) ---
+  // THE QUESTION, ASKED OF THE ASSISTANT, beside the page it was typed on, as
+  // the LAST answer for any typed text (05-ux-design, "Keyboard"): a row the
+  // reader goes to, never the one Enter takes in place of a match. Offered
+  // only where this reader may ask, and asked as the panel would ask it
+  // (`control.ts`).
+  const assistantRows = (): CommandPaletteItem[] =>
+    term && !picking && (scope === "all" || scope === "actions") && assistant.unavailable === null
+      ? [
+          {
+            id: "act-assistant",
+            icon: <ProductMark product="assistant" size="sm" />,
+            label: `Ask Crewlet: “${term}”`,
+            hint: "answers in the panel, with this page attached",
+            onSelect: () => assistant.ask(term),
+          },
+        ]
+      : [];
+  // --- end assistant page actions (WP12) ---
+
   // ---- the three action rows -----------------------------------------------
   const answeredMd = answer.kind === "answered" ? answer.answer : null;
 
   const actionRows = (): CommandPaletteItem[] => {
-    if (picking || !runs.tracker) return [];
+    if (picking) return [];
     const rows: CommandPaletteItem[] = [];
+    if (!runs.tracker) return rows;
     const blockedRow = (reason: string) => () => {
       stay();
       setNotice({ refused: false, text: reason });
@@ -577,7 +633,7 @@ export function CommandPalette({
       const why = !create.access.can
         ? create.access.reason
         : noProjects
-          ? "No projects yet. Add one in Work."
+          ? "No projects yet. Add one in Worklet."
           : "";
       const body = answeredMd ? answerBody(answeredMd) : "";
       const choose = hitProject
@@ -675,7 +731,7 @@ export function CommandPalette({
         ),
         label: name,
         // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
-        // says ("Executing ENG-412", "3 workers on ENG-405") — while the seat
+        // says ("Executing ENG-412", "Coding run on ENG-9") — while the seat
         // is still on the turn the row was read for.
         hint:
           row && turnIdOf(row) === turnId ? stateLine(row, { now: Date.now(), seat }) : "Finished",
@@ -735,9 +791,9 @@ export function CommandPalette({
 
   const openPage = (id: string, url: string) => {
     // A PAGE THIS ENGINE HOLDS OPENS HERE; a vendor wiki's opens there.
-    if (url && /^https?:/.test(url) && pageAnswer.data?.backend !== "native") {
+    if (url && /^https?:/.test(url) && pageAnswer.data?.backend !== DOCLET_SEARCH_BACKEND) {
       window.open(url, "_blank", "noopener");
-    } else nav.to(["knowledge", "pages", id]);
+    } else nav.to(["doclet", "pages", id]);
   };
 
   // THE ANSWER'S SOURCES ARE ROWS TOO, where the search did not already list
@@ -764,7 +820,7 @@ export function CommandPalette({
                 ),
               hint: `source ${i + 1} of the answer`,
               onSelect: () =>
-                s.kind === "task" ? nav.to(["work", s.ref]) : openPage(s.ref, s.url ?? ""),
+                s.kind === "task" ? nav.to(["worklet", s.ref]) : openPage(s.ref, s.url ?? ""),
             },
           ],
     );
@@ -967,7 +1023,7 @@ export function CommandPalette({
       push("recent", "Recent", asItems(recentHits(recents, nav, runs)));
       push("running", "Running now", runningRows());
       // EVERY PLACE, UNDER THE SIDEBAR'S OWN HEADINGS ([destinationGroups]),
-      // and Switch project with Work's, where it belongs.
+      // and Switch project with Worklet's, where it belongs.
       for (const g of destinationGroups(nav, standing, runs)) {
         const extra = g.place === "workspace" ? switchHits : [];
         push(`go-${g.place}`, g.label, asItems([...g.hits, ...extra]));
@@ -986,20 +1042,6 @@ export function CommandPalette({
       push("tasks", "Tasks", taskRows(allRows));
       push("pages", "Pages", pageRows(allRows));
       for (const g of agentGroups(ALL_ROWS, true)) push(g.id, g.label, g.items);
-      if (term.length >= SEARCH_MIN && tooLong === null) {
-        push("artifacts", "Artifacts", [
-          {
-            id: "artifact-scope",
-            icon: <SearchGlyph size="sm" />,
-            label: `Find “${term}” in artifacts →`,
-            hint: KIND_LIST,
-            onSelect: () => {
-              setScope("artifacts");
-              return false;
-            },
-          },
-        ]);
-      }
       push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
       push("actions", "Actions", actionRows());
       const drawn = new Set([
@@ -1008,6 +1050,24 @@ export function CommandPalette({
       ]);
       push("sources", "Sources of the answer", sourceRows(drawn));
       push("search", "Search", asItems(searchHits(term, nav, runs)));
+      // A SCOPE TO GO ON IN, NOT A MATCH: with nothing found above it, a row
+      // first in the list is the one Enter takes, and Enter on a question then
+      // left the reader in the artifacts scope rather than at an answer.
+      if (term.length >= SEARCH_MIN && tooLong === null) {
+        push("artifacts", "Artifacts", [
+          {
+            id: "artifact-scope",
+            icon: <SearchGlyph size="sm" />,
+            label: `Find “${term}” in artifacts →`,
+            hint: KIND_LIST,
+            onSelect: () => {
+              editScope("artifacts");
+              return false;
+            },
+          },
+        ]);
+      }
+      push("assistant", "Ask Crewlet", assistantRows());
     }
   } else if (scope === "tasks") {
     const rows = taskRows(TASK_HITS);
@@ -1017,7 +1077,7 @@ export function CommandPalette({
         icon: <SearchGlyph size="sm" />,
         label: `See every match for “${term}” →`,
         hint: "the full search, with its modes",
-        onSelect: () => nav.to(["work", "search"], { q: term }),
+        onSelect: () => nav.to(["worklet", "search"], { q: term }),
       });
     }
     push("tasks", "Tasks", rows);
@@ -1055,12 +1115,13 @@ export function CommandPalette({
           showKeys: onShowKeys,
           changeTheme: openThemeStep,
           themeName: themeEntry(prefs.palette).name,
-          switchProject: served && runs.tracker && viewer.tracker ? openSwitcher : null,
+          switchProject: served && runs.tracker && viewer.worklet ? openSwitcher : null,
           hash: route.hash || "#/",
         }),
       ),
     );
     push("actions", "Actions", actionRows());
+    push("assistant", "Ask Crewlet", assistantRows());
   }
 
   // ---- what the list says when it has no rows ------------------------------
@@ -1077,7 +1138,7 @@ export function CommandPalette({
     if (picking)
       return pickTerm ? `No agent matches “${pickTerm}”.` : "This company has no agents.";
     if (scope === "tasks") {
-      // WITHHELD FIRST: no term a reader without Tracker types finds a task.
+      // WITHHELD FIRST: no term a reader without Worklet types finds a task.
       if (tasks.withheld) return tasks.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
@@ -1092,10 +1153,10 @@ export function CommandPalette({
       if (pages.withheld) return pages.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
-      if (pageAnswer.error) return "Knowledge search did not run.";
+      if (pageAnswer.error) return "Page search did not run.";
       if (!pageAnswer.data) return "Searching…";
       if (pageAnswer.data.available === false)
-        return pageAnswer.data.note || "Knowledge search did not run.";
+        return pageAnswer.data.note || "Page search did not run.";
       return `No page matches “${term}”.`;
     }
     if (scope === "artifacts") {
@@ -1195,7 +1256,7 @@ export function CommandPalette({
       return;
     }
     if (picking) {
-      setPickQuery(value);
+      editPickQuery(value);
       return;
     }
     // A SIGIL AT THE START SELECTS ITS TAB and leaves the box — so the tab
@@ -1203,11 +1264,11 @@ export function CommandPalette({
     // they are.
     const { scope: opened, rest } = readSigil(value);
     if (opened) {
-      setScope(opened);
-      setQuery(rest);
+      editScope(opened);
+      editQuery(rest);
       return;
     }
-    setQuery(value);
+    editQuery(value);
   };
 
   const mode = modeWord(taskAnswer.data, pageAnswer.data);
@@ -1223,7 +1284,7 @@ export function CommandPalette({
             label: s.label,
           })),
           scope,
-          onScopeChange: (next: string) => setScope(next as ScopeId),
+          onScopeChange: (next: string) => editScope(next as ScopeId),
           groupsScope: scope,
           scopesLabel: "Search in",
         };
@@ -1430,9 +1491,12 @@ function AnswerLead({
       );
     case "refused":
       return (
-        <p className="palette-answer-note">
-          <BookOpenGlyph size="sm" /> {state.sentence}
-        </p>
+        <div className="palette-answer">
+          <p className="palette-answer-note">
+            <BookOpenGlyph size="sm" /> {state.sentence}
+          </p>
+          <LimitRemedy remedy={state.remedy} />
+        </div>
       );
     case "unknown":
       return (
@@ -1456,10 +1520,10 @@ function AnswerLead({
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
-                  href={s.kind === "task" ? `#/work/${encodeURIComponent(s.ref)}` : undefined}
+                  href={s.kind === "task" ? buildHash(["worklet", s.ref]) : undefined}
                   onClick={(e) => {
                     e.preventDefault();
-                    if (s.kind === "task") nav.to(["work", s.ref]);
+                    if (s.kind === "task") nav.to(["worklet", s.ref]);
                     else openPage(s.ref, s.url ?? "");
                   }}
                   // NOT A TAB STOP: focus stays in the field, and every source

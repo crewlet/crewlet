@@ -1,6 +1,11 @@
 package prompts
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // PriorWorkHeader introduces the prior-work ledger: what an EARLIER ROUND of
 // this same turn already did.
@@ -25,7 +30,7 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" over: re-run it if you need the data, never invent it." +
 	"\n- **Everything else** changed something outside the engine: do NOT" +
 	" issue it again — a person sees the second one as a duplicate. If it" +
-	" was the delivery, it still counts: name it in `submit_work`'s" +
+	" was the delivery, it still counts: name it in `" + toolname.SubmitWork + "`'s" +
 	" `deliveries`." +
 	"\n- **`→ error`** did not take effect: retry it, fixed." +
 	"\nDeliver only what is still missing. A follow-up to an earlier" +
@@ -77,6 +82,17 @@ type UserMessage struct {
 	// on its first turn and whenever the trigger has no reproducible
 	// conversation key.
 	ConversationHistory string
+
+	// Steered is every note a person sent this turn that the brief carries,
+	// each rendered by [SteerMessage]: the ones the turn has already read, in
+	// the order read, then the ones this brief is the first to read.
+	//
+	// IN THE BRIEF, LAST, because the run it opens is a fresh session: a
+	// phase the engine drives carries a read note in its conversation, after
+	// its opening, and a run has no conversation of the engine's to carry
+	// it in — so a correction a reviewer read would otherwise bind every
+	// phase of the turn but the one that does the work again.
+	Steered []string
 }
 
 // taskHeader introduces the ask.
@@ -118,32 +134,46 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 	if m.PriorWork != "" {
 		b.Heading("prior_work", PriorWorkHeader+"\n"+m.PriorWork)
 	}
+	for i, note := range m.Steered {
+		// A key per note: a section's key is unique within its prompt,
+		// and each note is its own heading.
+		b.Heading(fmt.Sprintf("steered_%d", i+1), note)
+	}
 	return b.Build()
 }
 
 // SteerMessage is a person's note to a running turn, as the model reads it.
 //
-// A USER message, sent at a round boundary — see internal/agent/steer for why
-// there and why never a system message. It says three things a bare note
-// would leave the model to guess, and each has cost a turn when guessed wrong:
-// WHO sent it, so a note from the person who runs the company is not weighed
-// like text a tool returned; that it arrived MID-TURN, so the model neither
-// restarts the task from scratch nor reads it as a new request needing its own
-// reply; and that it STANDS for the rest of the turn, so a correction made in
-// round 3 still binds round 9. The note itself is fenced last and verbatim.
+// RUNTIME-NEUTRAL AND FACTUAL, because the same text is read in every place a
+// note lands: as a user message at the opening of a run of the engine's loop,
+// in a coding run's brief, and inside a coding run where its CLI places what a
+// hook hands it — after tool results, or as it is about to finish
+// (internal/agent/steer). So it says nothing about WHERE it arrived, which would
+// be false in all but one of them, and states only what holds everywhere — and
+// each has cost a turn when a bare note left the model to guess: WHO sent it,
+// through what, so a note from the person who runs the company is not weighed
+// like text a tool returned; that it arrived while the work was UNDER WAY, so
+// the model neither restarts the task nor reads it as a new request needing its
+// own reply; and that it STANDS for the rest of the turn and is the later word
+// where it and the task disagree, so a correction made early still binds the
+// work done at the end. Plain statements rather than commands, because a vendor
+// warns that command-like text a hook adds can trip a model's guard against
+// instructions arriving from where they should not. The note itself is last and
+// verbatim.
 //
 // Phase-neutral on purpose: the reviewer reads the same message as the
 // executor. For one the note is an instruction and for the other it is part
 // of what the work is now judged against, and one sentence says both.
 func SteerMessage(sender, note string) string {
+	who, lead := sender, sender
 	if strings.TrimSpace(sender) == "" {
-		sender = "a person who runs this company"
+		who, lead = "a person who runs this company", "A person who runs this company"
 	}
-	return "## A note from " + sender + ", sent while this turn was running" +
-		"\nIt reached you between rounds. It is not a new request and not a" +
-		" repeat of the task: it is a correction or an addition to the work" +
-		" already in hand. Take it into account from here to the end of this" +
-		" turn — it overrides the task where the two disagree — and keep what" +
-		" has already been done unless the note says otherwise." +
+	return "## A note from " + who + ", sent while this turn was running" +
+		"\n" + lead + " sent this through Crewlet while the work was under way." +
+		" It is not a new request and not a repeat of the task: it corrects or" +
+		" adds to the work in hand and stands for the rest of this turn; where" +
+		" it and the task disagree, the note is the later word. What has" +
+		" already been done stays unless the note says otherwise." +
 		"\n\n" + strings.TrimSpace(note)
 }

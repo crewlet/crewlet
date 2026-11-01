@@ -23,11 +23,23 @@
  */
 
 import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
+import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./providerLimit.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
+import {
+  failureWords,
+  roundLabel,
+  shownStateOf,
+  staleness,
+  stateWord,
+  stoppedLine,
+  type NameOf,
+} from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
+import { fmtDateTime } from "./format.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
+import { andList } from "./words.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -88,11 +100,27 @@ export const WHERE_OF: Record<Subject, Where> = {
 
 /** The subjects shown in one place, as the clause its quiet state says. */
 export function watchedIn(where: Where): string {
-  return joinClauses(
+  return andList(
     (Object.keys(SUBJECTS) as Subject[])
       .filter((subject) => WHERE_OF[subject] === where)
       .map((subject) => SUBJECTS[subject]),
+    // THE SERIAL COMMA IS LOAD-BEARING HERE: the clauses carry their own
+    // "and" ("the company's and every seat's token budget").
+    { serialComma: true },
   );
+}
+
+/** The one seat a limit holds, where it holds one, as a row's `who`. */
+function whoOfLimit(limit: EntryLimit): { who?: string } {
+  const seats = [...limit.parked, ...limit.carried];
+  const only = seats.length === 1 ? seats[0] : undefined;
+  return only ? { who: String(only.handle ?? only.id) } : {};
+}
+
+/** The id of a seat's own condition (stopped, or its last turn failed): the
+ *  seat's, whichever it is in, so its row keeps its place and its key. */
+export function seatStateId(agentID: string): string {
+  return `seat-state-${agentID}`;
 }
 
 /**
@@ -114,22 +142,6 @@ export function conditionKey(id: string): string {
   return `condition:${id}`;
 }
 
-function joinClauses(parts: readonly string[]): string {
-  if (parts.length < 3) return parts.join(" and ");
-  // THE OXFORD COMMA IS LOAD-BEARING HERE: the clauses carry their own "and"
-  // ("the company's and every seat's token budget"), so without it the last two
-  // run together and read as one item.
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
-}
-
-/*
- * THE CLAUSES ARE JOINED HERE, beside the words they join. `Intl.ListFormat` is the obvious
- * alternative and is wrong for this string: it joins in the BROWSER's locale,
- * so a reader on a Japanese one would get "、" between clauses that are
- * themselves hardcoded English, and the assertion that the band names every
- * subject would pass or fail on the machine's locale.
- */
-
 export interface Attention {
   id: string;
   severity: Severity;
@@ -141,9 +153,21 @@ export interface Attention {
   title: string;
   /** What it costs to leave it, or what to do about it. */
   detail: string;
+  /**
+   * The engine's own message behind the condition, where it recorded one: a
+   * failed turn's raw error. NEVER drawn as the title or the detail, only
+   * behind a "Technical details" disclosure, for whoever is fixing it.
+   */
+  technical?: string;
   /** Where the answer is. */
   path?: string[];
   query?: Record<string, string>;
+  /**
+   * Where the limit behind the condition is raised, for a condition a limit
+   * caused (a spent budget): drawn in place of `path`, behind the gate of the
+   * editor it opens (`components/LimitRemedy.tsx`).
+   */
+  remedy?: Remedy;
   /** The instant this became true, for ordering within a severity. */
   at?: string;
   who?: string;
@@ -272,8 +296,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
-      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${orgRefusing.resets_at}.`,
-      path: ["settings", "spend"],
+      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${fmtDateTime(orgRefusing.resets_at)}.`,
+      // THE CEILING ITSELF, where it is raised: Token spend says what was
+      // spent, and has nothing on it that clears this.
+      remedy: { setting: "company_token_budget" },
       at: orgRefusing.refused_at,
     });
   } else if (orgNear) {
@@ -283,8 +309,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
-      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${orgNear.resets_at}.`,
-      path: ["settings", "spend"],
+      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${fmtDateTime(orgNear.resets_at)}.`,
+      remedy: { setting: "company_token_budget" },
     });
   }
 
@@ -314,40 +340,86 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     });
   }
 
+  // --- models at their usage limit ------------------------------------------
+  // ONE ROW PER KIND OF LIMIT, keyed by it, for as long as the limit lasts:
+  // what the seats it holds up are waiting for, and until when
+  // (providerLimit.ts). The seats themselves draw no row of their own for it
+  // below.
+  for (const limit of entryLimits(agents)) {
+    out.push({
+      id: `provider-limit-${limit.key}`,
+      severity: limit.parked.length > 0 ? "critical" : "caution",
+      subject: "seat",
+      icon: "clock",
+      title: limitTitle(limit),
+      detail: limitDetail(limit, now),
+      // THE COMPANY'S MODELS, where a fallback is given or a plan changed,
+      // behind the same gate as the screen it opens (lib/remedy.ts).
+      remedy: { setting: "model_providers" },
+      at: limit.since,
+      ...whoOfLimit(limit),
+    });
+  }
+
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
-    const state = activityOf(agent);
-    if (agent.last_error) {
+    const state = shownStateOf(agent);
+    const seatPath = ["company", "org", "seats", String(agent.handle ?? agent.id)];
+    const who = String(agent.handle ?? agent.role);
+    // A PAUSED OR STOPPED SEAT, in the seat vocabulary's own word (`stateWord`):
+    // "is paused" for a person's decision, "is stopped" for a fault, for the
+    // engine's reason. The budget's stop has its own row above, which names
+    // the window and when it resets, so it is not said twice. A stop whose
+    // cause also left a failed turn is ONE row: the stop is what a reader acts
+    // on, and the failure is why.
+    // A SEAT HELD BY ITS MODELS' LIMIT is its entry's row above, which says
+    // until when: its stop, and the failed turn the limit left on it, are
+    // not said twice, once per seat.
+    const limited = agent.provider_limit != null;
+    if (
+      (state === "paused" || state === "stopped") &&
+      agent.stopped_reason !== "budget" &&
+      !(limited && agent.stopped_reason === "provider")
+    ) {
       out.push({
-        id: `error-${agent.agent_id}`,
-        severity: "critical",
-        subject: "seat",
-        icon: "triangle-alert",
-        title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
-        detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
-        at: agent.last_error.at,
-        who: String(agent.handle ?? agent.role),
-      });
-      continue;
-    }
-    // A STOPPED SEAT, in the engine's word and for the engine's reason. The
-    // budget's stop has its own row above, which names the window and when
-    // it resets, so it is not said twice.
-    if (state === "stopped" && agent.stopped_reason !== "budget") {
-      out.push({
-        id: `stopped-${agent.agent_id}`,
-        severity: "caution",
+        // THE SEAT'S OWN ID, whichever condition it is in: a seat moving
+        // between "stopped" and "last turn failed" is one row whose words
+        // change, never one row leaving and another arriving, which a list
+        // keyed on the id would draw as a remount.
+        id: seatStateId(agent.agent_id),
+        severity: state === "stopped" && agent.last_error ? "critical" : "caution",
         subject: "seat",
         icon: "pause",
-        title: `${agent.role} is stopped`,
+        title: `${agent.role} is ${stateWord(state).toLowerCase()}`,
         detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
+        path: seatPath,
         // WHEN A PERSON PAUSED IT, where one did: the instant the condition
         // began, which is what orders it among the rest and what its row's
         // age says.
         ...(agent.paused?.at ? { at: agent.paused.at } : {}),
-        who: String(agent.handle ?? agent.role),
+        ...(agent.last_error?.detail ? { technical: agent.last_error.detail } : {}),
+        who,
+      });
+      continue;
+    }
+    // A FAILED LAST TURN IS NOT A STOP. The engine keeps `last_error` on a
+    // seat that went on to idle or work again, so the row says what happened
+    // to the turn and never calls the seat stopped (the roster files the same
+    // seat with the idle ones, `People.tsx`).
+    if (agent.last_error && !limited) {
+      out.push({
+        id: seatStateId(agent.agent_id),
+        severity: "critical",
+        subject: "seat",
+        icon: "triangle-alert",
+        title: `${agent.role}'s last turn failed`,
+        // THE KIND IN PLAIN WORDS, never the machine code or the engine's
+        // raw message, which rides along as `technical`.
+        detail: failureWords(agent.last_error.kind).sentence,
+        ...(agent.last_error.detail ? { technical: agent.last_error.detail } : {}),
+        path: seatPath,
+        at: agent.last_error.at,
+        who,
       });
       continue;
     }
@@ -391,11 +463,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "budget",
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
-        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${refusing.resets_at}.`,
-        // THE SETTINGS TAB, where the ceiling that refused is written beside
-        // each window's live meter.
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
-        query: { tab: "settings" },
+        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${fmtDateTime(refusing.resets_at)}.`,
+        // THE SEAT'S OWN CEILING, where it is raised: its row on Budgets.
+        // A seat a remedy cannot name (no handle) keeps its profile's
+        // Settings tab, where the ceiling is read beside its meter.
+        ...(agent.handle
+          ? { remedy: { setting: "seat_token_budget" as const, seat: agent.handle } }
+          : { path: ["company", "org", "seats", agent.id], query: { tab: "settings" } }),
         at: refusing.refused_at,
       });
     }
@@ -428,7 +502,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  */
 function waitingDetail(run: SandboxRun, now: number): string {
   const asked =
-    run.question ||
+    (run.question ?? "").trim() ||
     (questionWithheld(run)
       ? `${QUESTION_WITHHELD}.`
       : "A coding run needs your answer to continue.");
@@ -462,7 +536,7 @@ function tokensOf(w: BudgetWindow): string {
 function refusalWords(w: BudgetWindow): string {
   const spent = `${tokensOf(w)} in ${w.window}.`;
   return w.refused_at
-    ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
+    ? `Turns are being declined at the budget gate; last refusal ${fmtDateTime(w.refused_at)}. ${spent}`
     : `No further charge fits, so turns are being declined at the gate. ${spent}`;
 }
 

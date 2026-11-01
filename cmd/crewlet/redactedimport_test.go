@@ -116,7 +116,7 @@ func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		cfg, redacted := storeWithInlineKey(t, dir)
-		before := activeRevisionID(t, cfg)
+		before := bootRevisionID(t, cfg)
 		renamed := strings.NewReplacer("main:", "primary:", "llm: main", "llm: primary",
 			"- main", "- primary").Replace(redacted)
 		path := filepath.Join(dir, "renamed.yaml")
@@ -127,7 +127,7 @@ func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "providers.llm.primary.auth.api_key") {
 			t.Fatalf("a renamed entry's mask = %v, want a refusal naming its field", err)
 		}
-		if after := activeRevisionID(t, cfg); after != before {
+		if after := bootRevisionID(t, cfg); after != before {
 			t.Errorf("the refused import moved the active revision from %s to %s", before, after)
 		}
 	})

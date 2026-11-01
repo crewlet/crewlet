@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -1950,11 +1951,13 @@ func openWith(t testing.TB, client jetstream.JetStream, cfg natsobj.Config) *nat
 func memberClient(t testing.TB) jetstream.JetStream { return memberClientAt(t, js.Config{}) }
 
 // memberClientAt is a client of a fresh member started from base, whose
-// server name and store directory are its own — the rest of base, the file
+// server name, store directory and declared store size
+// ([brokertest.StoreMaxBytes]) are its own — the rest of base, the file
 // store's sync among it, is the caller's.
 func memberClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
 	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.StoreMaxBytes = brokertest.StoreMaxBytes
 	srv, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -1981,6 +1984,7 @@ func leafClient(t testing.TB) jetstream.JetStream { return leafClientAt(t, js.Co
 func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
 	base.ServerName, base.StoreDir = "member", t.TempDir()
+	base.StoreMaxBytes = brokertest.StoreMaxBytes
 	base.LeafHost, base.LeafPort = "127.0.0.1", js.AnyPort
 	base.FleetAuth = linkFleetAuth()
 	member, err := js.StartServer(t.Context(), base)
@@ -2076,7 +2080,7 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	}
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
 		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
-		FleetAuth: linkFleetAuth()})
+		StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -2265,9 +2269,10 @@ func later(a, b time.Time) time.Time {
 // and a tail (some 256 KiB, a thirty-second of the ceiling). The margin asks
 // for nothing more: a case needs only its own bytes to fit, and a case about
 // the ceiling opens a bucket of its own size
-// ([TestAFullBucketLeavesTheCoordinationRemainder]). Small enough
-// besides that a test machine's brokers, which reserve against three quarters
-// of its free disk, grant one to every case running at once. The engine never
+// ([TestAFullBucketLeavesTheCoordinationRemainder]). Every member it is
+// opened on declares its own limit ([brokertest.StoreMaxBytes]) rather than
+// read one off the runner's free disk, so whether it is granted does not
+// depend on the machine. The engine never
 // derives one this small (store.objects.nats_max_bytes takes a gibibyte at
 // least); the package itself takes any positive reservation.
 const testCeiling = 8 << 20

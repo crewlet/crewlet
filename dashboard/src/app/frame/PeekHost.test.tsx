@@ -29,7 +29,7 @@ function List({ refs, query }: { refs: ObjectRef[]; query?: Record<string, strin
 }
 
 async function mount(peek: string, query?: Record<string, string>) {
-  location.hash = `#/work/ENG?peek=${peek}`;
+  location.hash = `#/worklet/ENG?peek=${peek}`;
   // IN AN ASYNC ACT: the item's peek body is a lazy chunk, and a render that
   // suspends on one leaves the list's publishing effect queued until the act
   // that started it settles.
@@ -58,7 +58,7 @@ test("a task opened through the peek carries the list it was opened from", async
   // THE LIST PUBLISHES IN AN EFFECT, so the rail's link is the second render's.
   await waitFor(() =>
     expect(screen.getByRole("link", { name: /^Open/ }).getAttribute("href")).toBe(
-      `#/work/ENG-2?list=${encodeURIComponent(LIST)}`,
+      `#/worklet/ENG-2?list=${encodeURIComponent(LIST)}`,
     ),
   );
 });
@@ -66,5 +66,5 @@ test("a task opened through the peek carries the list it was opened from", async
 // ONLY FOR AN OBJECT IN THAT LIST: a peek on something else has no place in it.
 test("a peek on something the list does not hold opens its plain page", async () => {
   await mount("item:ENG-9", { list: LIST });
-  expect(screen.getByRole("link", { name: /^Open/ }).getAttribute("href")).toBe("#/work/ENG-9");
+  expect(screen.getByRole("link", { name: /^Open/ }).getAttribute("href")).toBe("#/worklet/ENG-9");
 });

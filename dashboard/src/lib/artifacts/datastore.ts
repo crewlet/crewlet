@@ -896,11 +896,22 @@ function decidedVerdict(err: RestError): Decided {
     case 403:
       return "forbidden";
     case 409:
-      return err.code === "not_undoable" ? "invalid" : "conflict";
+      // ONE STATUS, FOUR MEANINGS, told apart by the code the engine gives
+      // each: the company at its limit, an artifact in the trash (whose data
+      // is not written until it is restored), an undo the history cannot
+      // make, and somebody else's change.
+      switch (err.code) {
+        case "quota_exceeded":
+          return "quota";
+        case "artifact_trashed":
+          return "gone";
+        case "not_undoable":
+          return "invalid";
+        default:
+          return "conflict";
+      }
     case 410:
       return "gone";
-    case 413:
-      return "quota";
     default:
       return "invalid";
   }
@@ -929,6 +940,11 @@ export function stepRefusal(result: WriteResult, done: "undone" | "redone"): str
 function refusedReason(err: RestError, fallback: string): string {
   if (err.status === 429) return "Too many changes at once. Wait a moment, then try again.";
   if (err.status === 403) return "You can view this but not change it.";
-  if (err.status === 410) return "This artifact is in the trash, so nothing can be changed.";
+  // THE TRASH IS A STATE AND A PURGE IS FOR GOOD, and the engine answers them
+  // apart (409 `artifact_trashed`, 410 `data_gone`): read as one, a person was
+  // told a deleted sheet was in a trash nobody could restore it from.
+  if (err.status === 409 && err.code === "artifact_trashed")
+    return "This artifact is in the trash, so nothing can be changed.";
+  if (err.status === 410) return "This artifact was deleted, so nothing can be changed.";
   return fallback;
 }

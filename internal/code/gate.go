@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A PROTECTION RULE'S MERGE GATE: what a merge into the refs the rule matches
@@ -311,17 +312,17 @@ func (g MergeGate) invalid() (field, why string) {
 func (g MergeGate) fieldsInvalid() (field, why string) {
 	switch {
 	case !g.MergeBy.Valid():
-		return "merge_by", fmt.Sprintf("%q is not one of %v", g.MergeBy, MergeBys())
+		return "merge_by", fmt.Sprintf("%q is not one of %s", g.MergeBy, words.Or(MergeBys()))
 	case !g.Approvals.Valid():
-		return "approvals", fmt.Sprintf("%q is not one of %v", g.Approvals, ApprovalCounts())
+		return "approvals", fmt.Sprintf("%q is not one of %s", g.Approvals, words.Or(ApprovalCounts()))
 	case !g.Landing.Policy.Valid():
-		return "landing.policy", fmt.Sprintf("%q is not one of %v", g.Landing.Policy, LandingPolicies())
+		return "landing.policy", fmt.Sprintf("%q is not one of %s", g.Landing.Policy, words.Or(LandingPolicies()))
 	case g.Landing.Depth < 1 || g.Landing.Depth > MaxQueueDepth:
 		return "landing.depth", fmt.Sprintf("%d is outside 1..%d", g.Landing.Depth, MaxQueueDepth)
 	case g.Landing.Batch < 1 || g.Landing.Batch > MaxQueueBatch:
 		return "landing.batch", fmt.Sprintf("%d is outside 1..%d", g.Landing.Batch, MaxQueueBatch)
 	case !g.DeleteSource.Valid():
-		return "delete_source", fmt.Sprintf("%q is not one of %v", g.DeleteSource, DeleteSources())
+		return "delete_source", fmt.Sprintf("%q is not one of %s", g.DeleteSource, words.Or(DeleteSources()))
 	case len(g.HumanPaths) > MaxHumanPaths:
 		return "human_paths", fmt.Sprintf("%d paths, past the cap of %d", len(g.HumanPaths), MaxHumanPaths)
 	case len(g.Checks) > MaxRequiredChecks:
@@ -369,7 +370,7 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 			return field, "no_code_change is a revision's class, never a path's: an approval already carries " +
 				"across a revision that changed nothing, so it has nothing to exempt"
 		case !slices.Contains(PathClasses(), c):
-			return field, fmt.Sprintf("%q is not one of %v", c, PathClasses())
+			return field, fmt.Sprintf("%q is not one of %s", c, words.Or(PathClasses()))
 		case k > 0 && list[k-1] >= c:
 			return field, fmt.Sprintf("%q is not after %q — the classes are sorted and each named once", c,
 				list[k-1])
@@ -383,7 +384,7 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 // lets it through on less. Each is the phrase a refusal names it by, which
 // names its field; nil where g holds every merge to all old did. THE ONE
 // JUDGEMENT of a gate's loosening, read by the lifecycle decide
-// ([loosenings]), which leaves a loosening to a person (ADR-0058) — field by
+// ([loosenings]), which leaves a loosening to a person (ADR-0081) — field by
 // field, so a change that tightens one field and opens another loosens by the
 // one it opens:
 //
@@ -422,7 +423,7 @@ func (g MergeGate) LoosenedBy(old MergeGate) []string {
 		opens = append(opens, fmt.Sprintf("lowers approvals from %s to %s", old.Approvals, g.Approvals))
 	}
 	if added := notIn(g.ApprovalsUnless, old.ApprovalsUnless); len(added) > 0 {
-		opens = append(opens, fmt.Sprintf("adds %s to approvals_unless", listed(added)))
+		opens = append(opens, fmt.Sprintf("adds %s to approvals_unless", words.And(added)))
 	}
 	var dropped []string
 	for _, h := range old.HumanPaths {
@@ -432,15 +433,15 @@ func (g MergeGate) LoosenedBy(old MergeGate) []string {
 			continue
 		}
 		if added := notIn(g.HumanPaths[i].Unless, h.Unless); len(added) > 0 {
-			opens = append(opens, fmt.Sprintf("adds %s to the unless of %s in human_paths", listed(added),
+			opens = append(opens, fmt.Sprintf("adds %s to the unless of %s in human_paths", words.And(added),
 				h.Glob))
 		}
 	}
 	if len(dropped) > 0 {
-		opens = append(opens, fmt.Sprintf("drops %s from human_paths", listed(dropped)))
+		opens = append(opens, fmt.Sprintf("drops %s from human_paths", words.And(dropped)))
 	}
 	if dropped := notIn(old.Checks, g.Checks); len(dropped) > 0 {
-		opens = append(opens, fmt.Sprintf("drops %s from checks", listed(dropped)))
+		opens = append(opens, fmt.Sprintf("drops %s from checks", words.And(dropped)))
 	}
 	if lowered(landingStrictness(), old.Landing.Policy, g.Landing.Policy) {
 		opens = append(opens, fmt.Sprintf("moves landing.policy from %s to %s", old.Landing.Policy,
@@ -492,18 +493,6 @@ func notIn[T comparable](list, of []T) []T {
 		}
 	}
 	return out
-}
-
-// listed is values as a sentence names them: "a", "a and b", "a, b and c".
-func listed[T ~string](values []T) string {
-	words := make([]string, len(values))
-	for i, v := range values {
-		words[i] = string(v)
-	}
-	if len(words) < 2 {
-		return strings.Join(words, "")
-	}
-	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // defaultGate is the gate a rule with none takes where a protect request's
@@ -623,7 +612,7 @@ func (c GateChange) invalid() (field, why string) {
 	switch {
 	case c.Remove && len(named) > 0:
 		return "remove", fmt.Sprintf("a change removing the gate names none of its fields, and this one "+
-			"names %s", listed(named))
+			"names %s", words.And(named))
 	case c.Remove:
 		return "", ""
 	case len(named) == 0:

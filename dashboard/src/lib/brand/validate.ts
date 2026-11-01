@@ -26,11 +26,11 @@ import { familyProblem, fontCountProblem, fontProblem, type BrandEdit } from "./
 export type BrandPart = "identity" | "logos" | "colours" | "type" | "voice";
 
 /** The edit with its document changed by `change`, the picked files as they were. */
-export function withDocument(
-  edit: BrandEdit,
+export function withDocument<E extends BrandEdit>(
+  edit: E,
   change: (doc: BrandDocument) => BrandDocument,
-): BrandEdit {
-  return { document: change(edit.document), files: edit.files };
+): E {
+  return { ...edit, document: change(edit.document) };
 }
 
 /** A text that names a place to go, which the format refuses in a brand's words. */
@@ -161,14 +161,15 @@ export function adoptionProblem(doc: BrandDocument): string | undefined {
 }
 
 /**
- * A draft's readiness in one sentence, for where a draft is offered: "Draft,
- * not ready to adopt: add a primary logo and colour." for one that lacks what
+ * A draft's readiness in one sentence, for where a draft is offered: "Not
+ * ready to publish: add a primary logo and colour." for one that lacks what
  * an adoption requires, and the refusing pair's reason for one whose text
- * cannot be read; undefined for a draft ready to adopt.
+ * cannot be read; undefined for a draft ready to publish. PUBLISH IS THE
+ * PERSON'S WORD for an adoption: the route and the permission keep "adopt".
  */
 export function draftReadiness(doc: BrandDocument): string | undefined {
   const missing = missingWords(doc);
-  if (missing) return `Draft, not ready to adopt: add ${missing}.`;
+  if (missing) return `Not ready to publish: add ${missing}.`;
   const refusing = refusingPair(brandContrast(doc.colors));
-  return refusing ? `Draft, not ready to adopt. ${refusalWords(refusing)}` : undefined;
+  return refusing ? `Not ready to publish. ${refusalWords(refusing)}` : undefined;
 }

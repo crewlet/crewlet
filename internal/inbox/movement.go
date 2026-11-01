@@ -3,6 +3,7 @@ package inbox
 import (
 	"cmp"
 	"slices"
+	"time"
 )
 
 // HOW A PERSON LEARNS THEY HAVE WORK.
@@ -20,15 +21,15 @@ import (
 // sockets open tells its own, from its own apply, and nothing crosses between
 // nodes — but for a node whose own copy of the domain is out of service,
 // whose movements the engine relays from a sound peer (internal/engine's
-// inboxrelay.go). A node without `data` runs no applier and has no dashboards
+// liverelay.go). A node without `data` runs no applier and has no dashboards
 // to tell.
 //
 // # A HINT, NEVER CONTENT
 //
 // A movement names its domain, a handle, how many notices arrived for it —
 // none, when the batch only took notices away, which a purge does — and the
-// subject and reason of the newest: identifiers, never an excerpt, a title or
-// who wrote it. It rides a socket frame routed to whoever watches that seat,
+// subject and reason of the newest — identifiers — and the broker's instant
+// its push is timed from: never an excerpt, a title or who wrote it. It rides a socket frame routed to whoever watches that seat,
 // and what the frame is for is telling a screen to re-read the inbox it
 // already polls, through the same question and the same authority as the
 // poll. A payload carrying content would be a second read path around that
@@ -42,9 +43,9 @@ import (
 // Movement is one person's inbox having moved in one committed batch of one
 // domain's applier on this node.
 //
-// EXACTLY FIVE FIELDS, and a test holds the set: every one of them is an
-// identifier, and a field that carried content would be a read path the inbox
-// question's own authority never decided.
+// EXACTLY SIX FIELDS, and a test holds the set: five identifiers and the
+// broker's instant, and a field that carried content would be a read path the
+// inbox question's own authority never decided.
 type Movement struct {
 	// Source is the domain whose applier wrote the notices — its state log
 	// name, `tracker` — so it names the one copy whose service the
@@ -76,6 +77,16 @@ type Movement struct {
 	// Reason is the one reason that notice reached them under, in its
 	// domain's own vocabulary.
 	Reason string `json:"reason"`
+
+	// At is the broker's own instant for the OLDEST record of the batch
+	// that moved this inbox — when the first of its notices was stored,
+	// which every node reads alike — and what the socket's push is timed
+	// from (internal/objectives' change visibility). The oldest because
+	// one push answers every record in the batch, and the person waited
+	// longest for the first of them. An instant, never content, and it
+	// crosses the live relay with the rest, so a peer's movement is timed
+	// from the same instant as this node's.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Note is one notice a batch wrote or deleted, until the commit is known.
@@ -90,6 +101,11 @@ type Note struct {
 	// Position is the record's PACKED position on its log, which orders a
 	// batch's notices newest first.
 	Position int64
+
+	// At is the broker's instant for the record that wrote or deleted it —
+	// a purge's notes carry the purge's, the record that moved them, never
+	// the instant of the record that wrote the notice it deleted.
+	At time.Time
 
 	// Removed is a notice the batch DELETED rather than wrote — a purge's.
 	// It moves its recipient's inbox and adds nothing to
@@ -123,7 +139,7 @@ func (b *Batch) Note(n Note) {
 }
 
 // Drain is the batch's notices as one movement per handle, each naming
-// source, sorted by handle so a batch announces identically on every run — and
+// source and timed from its OLDEST note's instant, sorted by handle so a batch announces identically on every run — and
 // it resets the batch. AFTER THE COMMIT and never inside the transaction: the
 // store re-runs the body of an attempt that failed transiently, and a
 // movement announced from inside it would announce a notice no row holds.
@@ -141,6 +157,9 @@ func (b *Batch) Drain(source string) []Movement {
 		}
 		if !n.Removed {
 			m.UnreadDelta++
+		}
+		if !n.At.IsZero() && (m.At.IsZero() || n.At.Before(m.At)) {
+			m.At = n.At
 		}
 		// THE NEWEST BY POSITION, a tie broken on the record id: a map's
 		// iteration order is not an answer, and the same batch must

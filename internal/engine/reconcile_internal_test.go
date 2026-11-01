@@ -29,12 +29,12 @@ func TestAReconcilerIsRefusedAnEngineWithNoKeyring(t *testing.T) {
 		Store: refinementStore(t), Fleet: coordmem.NewFleet(), Queue: qmem.New(),
 		NodeID: "node-a",
 	}
-	if r, err := (&Engine{}).NewReconciler(opts); !errors.Is(err, ErrNoKeyring) {
+	if r, err := (&Engine{}).NewReconciler(t.Context(), opts); !errors.Is(err, ErrNoKeyring) {
 		t.Fatalf("a reconciler over an engine with no keyring = (%v, %v), want ErrNoKeyring", r, err)
 	}
 
 	_, cipher := testKeyring(t)
-	r, err := (&Engine{cipher: cipher}).NewReconciler(opts)
+	r, err := (&Engine{cipher: cipher}).NewReconciler(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("NewReconciler over an engine holding a keyring: %v", err)
 	}

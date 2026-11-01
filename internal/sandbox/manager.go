@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
@@ -41,14 +43,14 @@ const provisionRefresh = DefaultPollInterval
 // the work re-seeds from the pushed branch, which was always the durable half.
 const DefaultPauseTTL = 1800 * time.Second
 
-// DefaultCodingAgent is the runner a provider that names none resolves to.
-const DefaultCodingAgent = "claude-code"
-
 // ConfigError reports providers.sandbox being misconfigured — a placement
 // with no backend behind it, or a coding agent with no registered runner.
 type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
+
+// why classes it as what it is: a catalogue a person writes.
+func (e *ConfigError) why() (Why, bool) { return WhyConfiguration, true }
 
 // ManagerOptions configures a [Manager].
 type ManagerOptions struct {
@@ -65,11 +67,10 @@ type ManagerOptions struct {
 	// checked here rather than at the first coding run.
 	DefaultPlacement Placement
 
+	// Runners are the coding agents a box can run, by CLI name. A launch
+	// names its own — the CLI of the executor-chain member it launches on —
+	// so there is no default among them to fall back to.
 	Runners map[string]Runner
-
-	// DefaultCodingAgent is the effective agent when a role leaves
-	// role.sandbox.coding_agent empty. Empty takes [DefaultCodingAgent].
-	DefaultCodingAgent string
 
 	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
 	DefaultTimeout time.Duration
@@ -86,10 +87,10 @@ type ManagerOptions struct {
 	// could ever reach.
 	DefaultPauseTTL *time.Duration
 
-	// DefaultMaxTurns caps the agentic rounds of a coding run on a seat
-	// that names none. Zero is uncapped, which is the default: the right
-	// number depends on the work a company gives its agents, and one that
-	// is too low truncates a real task mid-flight.
+	// DefaultMaxTurns caps the agentic rounds of a run on a seat that names
+	// none: providers.sandbox.default_max_turns, whose default and its reason
+	// are the config's. Zero is uncapped — an explicit setting this layer
+	// passes through rather than a value it fills in.
 	DefaultMaxTurns int
 
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
@@ -123,12 +124,11 @@ type Manager struct {
 	// [Manager.carrying] — and nothing is ever provisioned through one.
 	retired map[Placement]Provider
 
-	codingAgent string
-	timeout     time.Duration
-	pauseTTL    time.Duration
-	maxTurns    int
-	setup       []SetupStep
-	telemetry   *OtelReceiver
+	timeout   time.Duration
+	pauseTTL  time.Duration
+	maxTurns  int
+	setup     []SetupStep
+	telemetry *OtelReceiver
 }
 
 // NewManager validates the options and returns the manager.
@@ -139,7 +139,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	for placement, provider := range opts.Providers {
 		if !placement.Valid() {
 			return nil, &ConfigError{msg: fmt.Sprintf(
-				"providers.sandbox: %q is not a placement (have: %v)", placement, Placements)}
+				"providers.sandbox: %q is not a placement (have: %s)", placement, words.And(Placements))}
 		}
 		if provider == nil {
 			return nil, &ConfigError{msg: fmt.Sprintf(
@@ -150,23 +150,19 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
 	}
 	m := &Manager{
-		providers:   maps.Clone(opts.Providers),
-		placement:   opts.DefaultPlacement,
-		runners:     maps.Clone(opts.Runners),
-		codingAgent: opts.DefaultCodingAgent,
-		timeout:     opts.DefaultTimeout,
-		maxTurns:    max(opts.DefaultMaxTurns, 0),
-		setup:       slices.Clone(opts.DefaultSetup),
-		telemetry:   opts.Telemetry,
-	}
-	if m.codingAgent == "" {
-		m.codingAgent = DefaultCodingAgent
+		providers: maps.Clone(opts.Providers),
+		placement: opts.DefaultPlacement,
+		runners:   maps.Clone(opts.Runners),
+		timeout:   opts.DefaultTimeout,
+		maxTurns:  max(opts.DefaultMaxTurns, 0),
+		setup:     slices.Clone(opts.DefaultSetup),
+		telemetry: opts.Telemetry,
 	}
 	if m.placement == "" && len(m.providers) == 1 {
 		// One backend is not a choice, so nothing is being decided for the
 		// operator. More than one without a default is a catalogue whose
 		// EVERY CALLER NAMES ITS CELL — config validation holds that for
-		// each seat and each agent-mode entry — and it is never resolved
+		// every executor entry a seat can launch on — and it is never resolved
 		// by map order here: that order is random, so the company would
 		// run somewhere different on every restart. A caller that names
 		// none against such a catalogue is refused by [Manager.Provider]
@@ -178,8 +174,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if m.placement != "" {
 		if _, ok := m.providers[m.placement]; !ok {
 			return nil, &ConfigError{msg: fmt.Sprintf(
-				"providers.sandbox.default_run_in %q has no backend configured (have: %v)",
-				m.placement, slices.Sorted(maps.Keys(m.providers)))}
+				"providers.sandbox.default_run_in %q has no backend configured (have: %s)",
+				m.placement, words.And(slices.Sorted(maps.Keys(m.providers))))}
 		}
 	}
 	if m.timeout == 0 {
@@ -192,12 +188,6 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		m.pauseTTL = *opts.DefaultPauseTTL
 	} else {
 		m.pauseTTL = DefaultPauseTTL
-	}
-	// Checked here rather than at the first turn: a default naming a runner
-	// nobody registered fails only once an agent tries to do code work, which
-	// is hours after the config was applied.
-	if _, err := m.RunnerFor(m.codingAgent); err != nil {
-		return nil, err
 	}
 	return m, nil
 }
@@ -247,17 +237,69 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 		// the empty string".
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no cell named for this run and providers.sandbox names no "+
-				"default_run_in (configured: %v): set one, or name the cell "+
-				"on the seat's role.sandbox.run_in or the entry's run_in",
-			slices.Sorted(maps.Keys(m.providers)))}
+				"default_run_in (configured: %s): set one, or name the cell "+
+				"on the executor entry's providers.llm.<key>.run_in",
+			words.And(slices.Sorted(maps.Keys(m.providers))))}
 	}
 	provider, ok := m.providers[placement]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no sandbox backend configured for placement %q (have: %v)",
-			placement, slices.Sorted(maps.Keys(m.providers)))}
+			"no sandbox backend configured for placement %q (have: %s)",
+			placement, words.And(slices.Sorted(maps.Keys(m.providers))))}
 	}
 	return provider, nil
+}
+
+// CellOf is the cell a run's box is in: the one its row names, or — for a row
+// that names none, which only one built by hand does — this catalogue's
+// default, the cell [Manager.Provider] would reach it through.
+func (m *Manager) CellOf(run PendingRun) Placement {
+	if cell := Placement(run.Placement); cell != "" {
+		return cell
+	}
+	return m.placement
+}
+
+// OnLaunchHost reports whether a run's box is on the host of the node that
+// launched it ([Placement.OnEngineHost]): a `direct` or `container` box,
+// which that node alone can reach — see [PendingRun.LaunchNode].
+func (m *Manager) OnLaunchHost(run PendingRun) bool { return m.CellOf(run).OnEngineHost() }
+
+// runBoxLister is a backend that keeps its boxes on this node's own host and
+// can list them with the run each was made for: the local one ([Local]).
+type runBoxLister interface {
+	RunBoxes() ([]HostBox, error)
+}
+
+// HostBoxes is every box on this node's own host that records the run it was
+// made for, through every backend this manager reaches — a cell a revision
+// dropped included ([Manager.Provider]), since its boxes are still here — each
+// once, however many backends share a root.
+//
+// An error is a host that could not be listed, which says nothing about any
+// box on it: a caller reclaims nothing on it.
+func (m *Manager) HostBoxes() ([]HostBox, error) {
+	seen := map[string]bool{}
+	var out []HostBox
+	for _, providers := range []map[Placement]Provider{m.providers, m.retired} {
+		for _, placement := range slices.Sorted(maps.Keys(providers)) {
+			lister, ok := providers[placement].(runBoxLister)
+			if !ok {
+				continue
+			}
+			boxes, err := lister.RunBoxes()
+			if err != nil {
+				return nil, err
+			}
+			for _, box := range boxes {
+				if !seen[box.SandboxID] {
+					seen[box.SandboxID] = true
+					out = append(out, box)
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // DefaultPlacement is where a seat that names none runs. Empty when the
@@ -314,9 +356,6 @@ func (m *Manager) carrying(previous *Manager) *Manager {
 	return &carried
 }
 
-// DefaultCodingAgent is the effective agent for a role that names none.
-func (m *Manager) DefaultCodingAgent() string { return m.codingAgent }
-
 // DefaultSetup are the engine-wide setup steps.
 func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 
@@ -328,8 +367,8 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 	runner, ok := m.runners[codingAgent]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no coding-agent runner registered for %q (have: %v)",
-			codingAgent, slices.Sorted(maps.Keys(m.runners)))}
+			"no coding-agent runner registered for %q (have: %s)",
+			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
 }
@@ -340,9 +379,15 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 // an explicit zero means "never pause, always re-seed from git" — two
 // genuinely different instructions that a single zero value cannot carry.
 type SpecInput struct {
-	// Placement is the seat's run_in. Empty takes the provider default.
+	// Placement is the launching executor entry's run_in. Empty takes the
+	// provider default.
 	Placement Placement
 
+	// CodingAgent is the runner the box runs: the CLI of the executor-chain
+	// member the launch picked. REQUIRED, and passed through as given — a
+	// runner chosen apart from the entry whose login and model the run
+	// carries is a run that cannot read either, so there is nothing to
+	// default it to. An empty one is refused at the launch.
 	CodingAgent string
 	Timeout     time.Duration
 	PauseTTL    *time.Duration
@@ -370,9 +415,6 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	}
 	if spec.Placement == "" {
 		spec.Placement = m.placement
-	}
-	if spec.CodingAgent == "" {
-		spec.CodingAgent = m.codingAgent
 	}
 	if in.Timeout > 0 {
 		spec.TimeoutSec = in.Timeout.Seconds()
@@ -616,14 +658,13 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 	}
 }
 
-// Reconnect reattaches to an existing (possibly paused) box for reuse.
-//
-// Used when a follow-up run_sandbox call in a resumed Execute loop reuses the
-// same box and checkout: Connect auto-resumes a paused box. No re-Install and
-// no setup re-apply — the box already carries the ask shim, the work dir, and
-// the launch's provisioning. The engine's clone steps are the launch's to
-// give it ([LaunchRequest.Clone]): a repository this job was granted and the
-// box does not hold yet is not provisioning the box already carries.
+// Reconnect reattaches to an existing (possibly paused) box: Connect
+// auto-resumes a paused one. No re-Install and no setup re-apply — the box
+// already carries its bin directory, the work dir and the launch's provisioning,
+// which is why a box is only ever reattached for the CLI it was installed for.
+// The engine's clone steps are the launch's to give it ([LaunchRequest.Clone]):
+// a repository this job was granted and the box does not hold yet is not
+// provisioning the box already carries.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {

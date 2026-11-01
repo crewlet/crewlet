@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -136,6 +137,12 @@ type core struct {
 	artifactDataReader *artifactdata.Reader
 	artifactDataWriter *artifactdata.Writer
 
+	// assistantReader and assistantWriter are the Dashboard Assistant's
+	// two sides, built on every data node for the same reason
+	// ([core.openAssistant]).
+	assistantReader *assistantdomain.Reader
+	assistantWriter *assistantdomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -192,6 +199,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// THE FOOTPRINT SAMPLER'S SIGNAL, made before any applier exists to
 	// send on it ([Engine.sampleDataFootprint]).
 	e.dataFootprint = make(chan struct{}, 1)
+	e.assistantErasure = make(chan struct{}, 1)
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down once the runtime is the
 	// engine's. The state log's apply loops, its position heartbeat and its
@@ -228,6 +236,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	if err = c.openArtifactData(e, sl); err != nil {
 		return err
 	}
+	if err = c.openAssistant(e, sl); err != nil {
+		return err
+	}
 
 	// PUBLISHED, whole: every field above is written before the store, which
 	// is what lets every reader load it without a lock.
@@ -257,6 +268,13 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		defer c.done.Done()
 		vouch.run(runCtx)
 	}()
+	// AND THE ASSISTANT'S ERASURE OF A REMOVED PERSON, signalled by the
+	// identity applier and run off its loop ([Engine.runAssistantErasure]).
+	c.done.Add(1)
+	go func() {
+		defer c.done.Done()
+		e.runAssistantErasure(runCtx)
+	}()
 	// AND THE DATASTORE'S FOOTPRINT GAUGE, sampled off the apply loop each
 	// time a committed batch signals.
 	c.done.Add(1)
@@ -284,7 +302,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 //
 // THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
 // is no singleton: every data node publishes its own days, from its own event
-// log, whether or not its company keeps a native tracker or wiki. Armed with
+// log, whether or not its company keeps Worklet or Doclet. Armed with
 // the native half it used to be, a company on Jira and Confluence never
 // replicated a day of its spend, and a node handed its first company by an
 // apply published none until it restarted. A node without `data` keeps no event
@@ -365,7 +383,9 @@ func (c *core) shutdown() {
 // acting as the node is what the node itself does: redeeming an invitation
 // into a person who does not exist yet, the duty that sweeps, and the re-seal
 // a keyring rotation moves every person's values with. A person's own sign-in
-// acts as that person.
+// acts as that person. What the node writes for itself names it under its id
+// as the ENGINE ([iamdomain.NodeKind]), so the trail draws it as the system
+// rather than as a credential's login.
 func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
@@ -374,7 +394,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: sl.estate().Reader(), Log: running.reader,
+		DB:      sl.estate().Reader(),
 		Reached: running.runner.Reached,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
@@ -414,9 +434,12 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
 		// only the decide holds it. Every surface's [Writer.As] keeps it.
-		Events:    e.authEvents,
+		Events: e.authEvents,
+		// AS THE ENGINE, under the node's id: what this writer authors
+		// for itself is the engine's housekeeping, never a credential's
+		// ([iamdomain.NodeKind]).
 		Actor:     nodeID,
-		ActorKind: iam.KindMachine,
+		ActorKind: iamdomain.NodeKind,
 		// THE NODE IS THE DEPLOYMENT, so it writes as an administrator:
 		// the sweeps and evictions, the re-seal a keyring rotation moves
 		// everybody's values with, and the two writes about people with
@@ -588,15 +611,17 @@ func (e *Engine) NodeGate() *NodeGate {
 //     node whose copy of a domain that gates seats is WRONG serves no seat
 //     copy ([estate.SeatCopy], [localEstate.For]), so it is answered on a
 //     sound data node's word, like a node holding no data, while a wrong copy
-//     of any other domain withholds nothing (ADR-0049); both halves the
-//     company runs natively must be served there, since a seat's tools reach
-//     both. And the router's view must have listed the fleet at least once: a
-//     node that must ask a data node is refused by the router itself when its
-//     view cannot name one.
+//     of any other domain withholds nothing (ADR-0072); every half the company
+//     runs natively — the tracker, the knowledge base and chat — must be
+//     served there, since a seat's tools reach each of them, and a company
+//     whose only native half is chat gates on chat alone rather than admitting
+//     every seat unconditionally. And the router's view must have listed the
+//     fleet at least once: a node that must ask a data node is refused by the
+//     router itself when its view cannot name one.
 //
-// A node running no native half — no company yet, or one on Jira and
-// Confluence — has nothing for the second half to ask, and an engine with
-// neither is trivially hydrated.
+// A node running no native half — no company yet, or one on Jira, Confluence
+// and a vendor's chat — has nothing for the second half to ask, and an engine
+// with neither is trivially hydrated.
 //
 // IT TAKES A CONTEXT because where this node's copy does not serve the answer
 // is a request, and a sweep that is shutting down must not wait on it.
@@ -611,7 +636,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 		}
 	}
 	run := e.nativeHalves()
-	if (!run.tracker && !run.wiki) || e.router == nil {
+	if !run.any() || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -619,8 +644,9 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			"detail", "this node's view of the fleet has not listed it yet")
 		return false
 	}
-	trackerServed, pagesServed, err := e.router.Serves(ctx)
-	if err != nil || (run.tracker && !trackerServed) || (run.wiki && !pagesServed) {
+	served, err := e.router.Serves(ctx)
+	if err != nil || (run.tracker && !served.Tracker) || (run.wiki && !served.Pages) ||
+		(run.chat && !served.Chat) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -644,7 +670,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
 // problem and not the seats': a domain's wrong copy goes out of service for
-// that domain's operations ([localEstate.For], ADR-0049), so every call this
+// that domain's operations ([localEstate.For], ADR-0072), so every call this
 // node's seats make on that domain is answered by a data node whose copy is
 // sound, exactly as a node holding no data is answered. Moving the seats
 // instead cost each of them its processes and its memory to be served by the
@@ -672,7 +698,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // from a cached coordination fact, so no node sheds sooner than any other
 // decider stops trusting the same view — is a node that can no longer say
 // where its seats' calls go, which no copy of its own makes up for; its seats
-// go to a peer that can. A company whose halves are both on a vendor routes
+// go to a peer that can. A company whose halves are all on a vendor routes
 // nothing, and a view that has never listed sheds nothing: admission claims no
 // seat before it does.
 //
@@ -688,7 +714,7 @@ func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
-	if run := e.nativeHalves(); !run.tracker && !run.wiki {
+	if run := e.nativeHalves(); !run.any() {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked(ctx) {
@@ -702,11 +728,9 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 //
 // # Why the shape is the question and not the mechanism
 //
-// Every loop this node runs is a state-log APPLIER — the wiki's projector, the
-// one loop of another kind, went when the knowledge base became a domain — so
-// every row is a domain's ([ReplicationStatus.Kind] is always `domain`). The
-// type is still shaped by what the fleet view asks rather than by how an
-// applier works, because that is what outlived the projector.
+// Every loop this node runs is a state-log APPLIER, so every row is one
+// domain's. The type is shaped by what the fleet view asks rather than by how
+// an applier works, because the question is what an operator reads.
 //
 // What the fleet view asks is not about the mechanism. It asks "how many of
 // this node's copies of the company's state have caught up" — the question
@@ -718,10 +742,6 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 type ReplicationStatus struct {
 	// Name is the domain, which is what an operator sees.
 	Name string
-
-	// Kind is the loop's mechanism: `domain` on every row this build
-	// reports, the `projection` rows having gone with the projector.
-	Kind string
 
 	// Ready is this loop's copy being one a seat's
 	// tools may be attached to. It is NOT strict readiness — see
@@ -758,7 +778,10 @@ func (e *Engine) StateLogStatus(ctx context.Context) []ReplicationStatus {
 
 // WaitReached blocks until this node's applier for the log a position names has
 // reached it: committed every record through it that writes a row, and decoded
-// every barrier ([statelog.Runner.WaitReached]).
+// every barrier ([statelog.Runner.WaitReached]). It returns at once where this
+// node has nothing to wait on: a zero position, a node that applies no log (one
+// holding no data, whose reads are a data node's), or a log this node does not
+// run.
 //
 // THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
 // than a revision because that is what a write answers with: a bucket write

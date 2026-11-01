@@ -1,5 +1,136 @@
 {
   "$defs": {
+    "Assistant": {
+      "additionalProperties": false,
+      "properties": {
+        "deep_work": {
+          "$ref": "#/$defs/AssistantDeepWork",
+          "description": "Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
+        },
+        "enabled": {
+          "description": "Run Ask Crewlet for this company. Absent or false: off.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
+        },
+        "max_steps": {
+          "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
+          "maximum": 40,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "proposal_ttl_seconds": {
+          "description": "How long a proposed change waits for approval, 60..3600 seconds. Absent: 900.",
+          "maximum": 3600,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retention_days": {
+          "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
+          "maximum": 365,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "token_budget": {
+          "$ref": "#/$defs/TokenBudget",
+          "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
+        },
+        "turn_timeout_seconds": {
+          "description": "Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900.",
+          "maximum": 1200,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantDeepWork": {
+      "additionalProperties": false,
+      "properties": {
+        "llm": {
+          "description": "providers.llm key deep work runs on: an entry driving claude-code. Required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "max_steps": {
+          "description": "Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150.",
+          "maximum": 400,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_tokens": {
+          "description": "Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply.",
+          "maximum": 20000000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_seconds": {
+          "description": "Longest one deep-work run may take, 60..1200 seconds. Absent: 1200.",
+          "maximum": 1200,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Atlassian": {
       "additionalProperties": false,
       "properties": {
@@ -61,11 +192,12 @@
           "x-crewlet-secret": true
         },
         "mode": {
-          "description": "subscription (default), api-key, or inherit-env.",
+          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway).",
           "enum": [
             "subscription",
             "api-key",
             "inherit-env",
+            "env",
             "",
             null
           ]
@@ -79,6 +211,64 @@
             "null"
           ],
           "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "Chat": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which chat surface: chatlet, vendor, or none. Empty derives from integrations.mattermost, integrations.slack and the seats' Slack apps.",
+          "enum": [
+            "chatlet",
+            "vendor",
+            "none",
+            "",
+            null
+          ]
+        },
+        "chatlet": {
+          "$ref": "#/$defs/ChatletConfig"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ChatletConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "default_channel_private": {
+          "description": "Create channels private when the caller names no visibility. Default false: a company's rooms are readable by its seats.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "message_retention_days": {
+          "description": "How long a message lives (default 365, 30..3650). 0 keeps messages for ever.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "typing_status": {
+          "description": "When to show the working indicator (default always).",
+          "enum": [
+            "always",
+            "addressed",
+            "",
+            null
+          ]
         }
       },
       "type": [
@@ -111,7 +301,7 @@
               "const": ""
             }
           ],
-          "description": "The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@\u003cdomain\u003e, and its author's, \u003chandle\u003e@\u003cdomain\u003e, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own.",
+          "description": "The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own.",
           "type": [
             "string",
             "number",
@@ -204,7 +394,7 @@
           ]
         },
         "run_in": {
-          "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct and self are refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host, and self is a seat's own executor box, which no check has.",
+          "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host.",
           "enum": [
             "container",
             "e2b",
@@ -291,7 +481,7 @@
       "additionalProperties": false,
       "properties": {
         "max_blob_bytes": {
-          "description": "The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in tracker files.",
+          "description": "The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in Worklet's files.",
           "maximum": 1073741824,
           "minimum": 1024,
           "type": [
@@ -875,7 +1065,7 @@
           ]
         },
         "webhook_name": {
-          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet).",
           "type": [
             "string",
             "number",
@@ -924,15 +1114,6 @@
         },
         "email_domain": {
           "description": "Domain agent service-account addresses are built under.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "role": {
-          "description": "Role each agent's service account holds (default Datadog Read Only Role).",
           "type": [
             "string",
             "number",
@@ -1008,7 +1189,7 @@
           ]
         },
         "min_tokens_per_task": {
-          "description": "Floor on one worker's token share; below it the call is refused.",
+          "description": "Floor on one worker's token share; below it the call is refused (default 500; 0 = no floor).",
           "minimum": 0,
           "type": [
             "integer",
@@ -1198,8 +1379,8 @@
           ]
         },
         "exemplar_count": {
-          "description": "Originals kept raw after a cluster is compacted.",
-          "minimum": 0,
+          "description": "Originals kept raw after a cluster is compacted (at least 1).",
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -1412,30 +1593,6 @@
     "GitLabProvisioning": {
       "additionalProperties": false,
       "properties": {
-        "access_level": {
-          "description": "Default membership level.",
-          "enum": [
-            "developer",
-            "maintainer",
-            "",
-            null
-          ]
-        },
-        "access_levels": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "description": "Per-handle membership overrides.",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "admin_token": {
           "description": "Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts.",
           "type": [
@@ -1478,21 +1635,6 @@
         },
         "projects": {
           "description": "Extra projects to join and hook.",
-          "items": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "token_scopes": {
-          "description": "Scopes minted on each service-account token.",
           "items": {
             "type": [
               "string",
@@ -1726,9 +1868,9 @@
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence.",
+          "description": "Which knowledge base: doclet, confluence, or none. Empty derives from integrations.confluence.",
           "enum": [
-            "native",
+            "doclet",
             "confluence",
             "none",
             "",
@@ -1819,31 +1961,22 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Extra environment for the CLI child process.",
+          "description": "Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
           "type": [
             "object",
             "null"
           ]
         },
         "max_concurrent": {
-          "description": "Concurrent CLI processes; each costs 200-400 MB.",
+          "description": "Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
           "minimum": 0,
           "type": [
             "integer",
             "null"
           ]
         },
-        "mode": {
-          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
-          "enum": [
-            "text",
-            "agent",
-            "",
-            null
-          ]
-        },
         "model": {
-          "description": "Model id, in the CLI's own grammar (OpenCode: \u003cprovider\u003e/\u003cmodel\u003e).",
+          "description": "Model id, in the CLI's own grammar (OpenCode: <provider>/<model>).",
           "type": [
             "string",
             "number",
@@ -1860,7 +1993,7 @@
           ]
         },
         "run_in": {
-          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "description": "Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
@@ -1870,7 +2003,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory, each CLI under \u003cstate_dir\u003e/\u003cagent\u003e. Entries sharing one and a CLI share a login.",
+          "description": "Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login.",
           "type": [
             "string",
             "number",
@@ -1879,7 +2012,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one CLI invocation (default 600).",
+          "description": "Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
           "minimum": 0,
           "type": [
             "number",
@@ -1941,7 +2074,7 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Container image: with the coding-agent CLI installed for a seat's box, and git 2.40 or newer and what its checks build with for a check's. Required where a seat or a check runs in a container.",
+          "description": "Container image: with the coding-agent CLI installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container.",
           "type": [
             "string",
             "number",
@@ -2000,7 +2133,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements.",
+          "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
           "type": [
             "string",
             "number",
@@ -2102,6 +2235,16 @@
           "minimum": 0,
           "type": [
             "number",
+            "null"
+          ]
+        },
+        "seat_credentials": {
+          "description": "Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises.",
+          "items": {
+            "$ref": "#/$defs/SeatCredential"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -2390,7 +2533,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/SandboxProvider",
-          "description": "Code sandbox backend. Absent = no seat runs code."
+          "description": "Where every agent seat's executor runs. Required once the company has an agent seat and a providers.llm entry."
         }
       },
       "type": [
@@ -2476,7 +2619,7 @@
         },
         "code": {
           "$ref": "#/$defs/RoleCode",
-          "description": "This seat's access to the company's code, on the native code host and on GitHub."
+          "description": "This seat's access to the company's code on the engine's own code host (code.native)."
         },
         "contact": {
           "$ref": "#/$defs/HumanContact",
@@ -2663,29 +2806,6 @@
                     }
                   ]
                 },
-                "sandbox": {
-                  "anyOf": [
-                    {
-                      "type": [
-                        "string",
-                        "number",
-                        "boolean",
-                        "null"
-                      ]
-                    },
-                    {
-                      "items": {
-                        "type": [
-                          "string",
-                          "number",
-                          "boolean",
-                          "null"
-                        ]
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
                 "subagent": {
                   "anyOf": [
                     {
@@ -2787,30 +2907,6 @@
           ],
           "description": "Provider chain for the reviewer."
         },
-        "llm_sandbox": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number",
-                "boolean",
-                "null"
-              ]
-            },
-            {
-              "items": {
-                "type": [
-                  "string",
-                  "number",
-                  "boolean",
-                  "null"
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "Model the sandboxed coding agent runs on."
-        },
         "llm_subagent": {
           "anyOf": [
             {
@@ -2911,7 +3007,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
-          "description": "Per-seat code sandbox gate. Absent = never offered."
+          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."
         },
         "schedules": {
           "description": "Recurring work fired into this seat's inbox.",
@@ -3032,13 +3128,97 @@
       "additionalProperties": false,
       "properties": {
         "access": {
-          "description": "read_only, review or full_access. Empty means read_only.",
+          "description": "read_only, review or full_access on the engine's own code host. Empty means read_only.",
           "enum": [
             "read_only",
             "review",
             "full_access",
             "",
             null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleConfluence": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has Confluence access. Off removes its space access and its token's Confluence scopes, and keeps the account.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "operations": {
+          "description": "Confluence space permissions as operation:target, where the site has no space roles.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "space_role": {
+          "description": "Confluence space role id, where the site has role-based access; with operations also empty, product access only.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "spaces": {
+          "description": "Confluence space keys this agent holds the role in.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleDatadog": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has a Datadog service account. Off disables the account and keeps it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Datadog role id (GET /api/v2/roles), managed or custom.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
           ]
         }
       },
@@ -3066,10 +3246,34 @@
             "null"
           ]
         },
+        "enabled": {
+          "description": "Whether this agent has its own GitHub App. Off suspends the installation and keeps the app.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "installation_id": {
           "description": "Installation of this seat's app on the organization. Written by the engine.",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "permissions": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "description": "GitHub App permissions (contents, issues, pull_requests, checks, actions, deployments, workflows), each read or write; absent is No access.",
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -3114,20 +3318,125 @@
         "null"
       ]
     },
+    "RoleGitLab": {
+      "additionalProperties": false,
+      "properties": {
+        "access_level": {
+          "description": "GitLab role: 10 Guest, 15 Planner, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent has a GitLab service account. Off blocks the account and keeps it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "member_role_id": {
+          "description": "GitLab custom role id (Ultimate), instead of access_level.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "projects": {
+          "description": "Projects this agent is a member of; empty means the whole group.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "confluence": {
+          "$ref": "#/$defs/RoleConfluence",
+          "description": "This seat's Confluence access: whether it is on, its space role and its spaces."
+        },
+        "datadog": {
+          "$ref": "#/$defs/RoleDatadog",
+          "description": "This seat's Datadog service account: whether it is on and its role."
+        },
         "github": {
           "$ref": "#/$defs/RoleGitHub",
-          "description": "This seat's own GitHub App: the repositories it works in, and the identity the engine records for it. How much it may do is the seat's code.access."
+          "description": "This seat's own GitHub App: whether it is on, its permissions, and where."
+        },
+        "gitlab": {
+          "$ref": "#/$defs/RoleGitLab",
+          "description": "This seat's GitLab service account: whether it is on, its role and its projects."
+        },
+        "jira": {
+          "$ref": "#/$defs/RoleJira",
+          "description": "This seat's Jira access: whether it is on, its project role and its projects."
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
-          "description": "This seat's Mattermost bot: one token covers everything."
+          "description": "This seat's Mattermost bot: whether it is on, its roles and its channels."
         },
         "slack": {
           "$ref": "#/$defs/RoleSlack",
-          "description": "This seat's own Slack app: bot token and signing secret."
+          "description": "This seat's own Slack app: whether it is on."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleJira": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has Jira access. Off removes its project roles and its token's Jira scopes, and keeps the account.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "project_role": {
+          "description": "Jira project role id (GET /rest/api/3/role); empty is product access only.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "projects": {
+          "description": "Jira project keys this agent holds the role in.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": [
@@ -3148,12 +3457,42 @@
           ],
           "x-crewlet-secret": true
         },
-        "channel": {
-          "description": "Channel this seat's bot is added to at provisioning, on top of provisioning.channels.",
+        "channels": {
+          "description": "Channels this agent's bot is a member of.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
           "type": [
-            "string",
-            "number",
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent has a Mattermost bot. Off revokes its tokens and deactivates it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
             "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "roles": {
+          "description": "Mattermost roles: system_user, plus system_post_all_public or system_post_all, or system_admin.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -3227,24 +3566,6 @@
     "RoleSandbox": {
       "additionalProperties": false,
       "properties": {
-        "coding_agent": {
-          "description": "Override the provider default for this seat.",
-          "enum": [
-            "claude-code",
-            "opencode",
-            "",
-            null
-          ]
-        },
-        "enabled": {
-          "description": "Offer this seat the sandbox tool.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
-        },
         "env": {
           "additionalProperties": {
             "type": [
@@ -3255,14 +3576,14 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Env for this seat's sandbox run; declare external tokens here.",
+          "description": "Env for this seat's executor run; declare external tokens here.",
           "type": [
             "object",
             "null"
           ]
         },
         "max_turns": {
-          "description": "Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped.",
+          "description": "Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",
@@ -3273,7 +3594,7 @@
           "$ref": "#/$defs/RoleSandboxMCP"
         },
         "optional_keys": {
-          "description": "Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it.",
+          "description": "Keys of env whose value may resolve to nothing; such a key is left out quietly rather than logged as a gap in the run's environment.",
           "items": {
             "type": [
               "string",
@@ -3293,17 +3614,6 @@
           "type": [
             "number",
             "null"
-          ]
-        },
-        "run_in": {
-          "description": "Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in.",
-          "enum": [
-            "direct",
-            "container",
-            "e2b",
-            "self",
-            "",
-            null
           ]
         },
         "setup": {
@@ -3326,7 +3636,7 @@
       "additionalProperties": false,
       "properties": {
         "servers": {
-          "description": "MCP server names the coding agent may use.",
+          "description": "MCP server names this seat's executor box is given, beside its tool bridge.",
           "items": {
             "type": [
               "string",
@@ -3359,6 +3669,15 @@
           ],
           "x-crewlet-secret": true
         },
+        "enabled": {
+          "description": "Whether this agent has its own Slack app. Off revokes the bot token and keeps the app.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "signing_secret": {
           "description": "Verifies inbound webhooks for this seat's app.",
           "type": [
@@ -3378,17 +3697,8 @@
     "SandboxProvider": {
       "additionalProperties": false,
       "properties": {
-        "default_coding_agent": {
-          "description": "Coding agent for seats that name none.",
-          "enum": [
-            "claude-code",
-            "opencode",
-            "",
-            null
-          ]
-        },
         "default_max_turns": {
-          "description": "Agentic-round cap for coding runs on seats that name none. 0 = uncapped.",
+          "description": "Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",
@@ -3404,7 +3714,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
+          "description": "Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own.",
           "enum": [
             "direct",
             "container",
@@ -3523,7 +3833,7 @@
           ]
         },
         "optional_keys": {
-          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run.",
+          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out quietly rather than logged as a gap in the run's environment.",
           "items": {
             "type": [
               "string",
@@ -3637,8 +3947,8 @@
           ]
         },
         "catchup_min_seconds": {
-          "description": "Lower clamp on the missed-tick catchup window.",
-          "minimum": 0,
+          "description": "Lower clamp on the missed-tick catchup window (at least 1).",
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -3670,6 +3980,68 @@
           ]
         }
       },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SeatCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "as": {
+          "description": "env (stdio) or header (http); defaults to the transport's.",
+          "enum": [
+            "env",
+            "header",
+            "",
+            null
+          ]
+        },
+        "field": {
+          "description": "Which seat credential (Atlassian: TOKEN or EMAIL). Empty means the integration's credential.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Environment variable (stdio) or header (http) the server reads it under.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Integration whose per-seat credential this server reads.",
+          "enum": [
+            "atlassian",
+            "datadog",
+            "github",
+            "gitlab",
+            "mattermost",
+            "slack",
+            "",
+            null
+          ]
+        },
+        "prefix": {
+          "description": "Text before the value, e.g. \"Bearer \".",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
       "type": [
         "object",
         "null"
@@ -3900,6 +4272,16 @@
     "Slack": {
       "additionalProperties": false,
       "properties": {
+        "app_config_token": {
+          "description": "Reference to the sealed Slack app-configuration token the engine creates agents' apps with; a whole ${VAR}.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
         "status_phrases": {
           "$ref": "#/$defs/StatusPhrases"
         },
@@ -4024,9 +4406,9 @@
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Which work tracker: native, jira, or none. Empty derives from integrations.jira.",
+          "description": "Which work tracker: worklet, jira, or none. Empty derives from integrations.jira.",
           "enum": [
-            "native",
+            "worklet",
             "jira",
             "none",
             "",
@@ -4056,8 +4438,8 @@
             "null"
           ]
         },
-        "execute_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for executor rounds across extensions.",
+        "executor_min_budget_tokens": {
+          "description": "Refuse an executor launch, and park the seat, below this remaining token budget (default 25000; 0 = no floor).",
           "minimum": 0,
           "type": [
             "integer",
@@ -4065,7 +4447,7 @@
           ]
         },
         "extension_enabled": {
-          "description": "Round-cap extension judge (default on).",
+          "description": "Round-cap extension judge for the onboarding pass (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -4074,7 +4456,7 @@
           ]
         },
         "extension_round_step": {
-          "description": "Maximum rounds one extension call may grant.",
+          "description": "Maximum onboarding rounds one extension call may grant.",
           "minimum": 0,
           "type": [
             "integer",
@@ -4089,16 +4471,8 @@
             "null"
           ]
         },
-        "max_tool_rounds": {
-          "description": "Tool rounds within one executor run.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "onboarding_max_tool_rounds": {
-          "description": "Rounds for the first-turn onboarding pass; 0 disables it.",
+          "description": "Rounds for the first-turn onboarding pass (default 10); 0 disables it.",
           "minimum": 0,
           "type": [
             "integer",
@@ -4107,14 +4481,6 @@
         },
         "onboarding_max_tool_rounds_ceiling": {
           "description": "Hard ceiling for onboarding rounds across extensions.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "sandbox_min_budget_tokens": {
-          "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
           "type": [
             "integer",
@@ -4131,7 +4497,15 @@
       "additionalProperties": false,
       "properties": {
         "channel": {
-          "description": "Unit channel on the company's chat surface; inherited by child units.",
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _.",
           "type": [
             "string",
             "number",
@@ -4380,6 +4754,12 @@
     "artifacts": {
       "$ref": "#/$defs/CompanyArtifacts"
     },
+    "assistant": {
+      "$ref": "#/$defs/Assistant"
+    },
+    "chat": {
+      "$ref": "#/$defs/Chat"
+    },
     "code": {
       "$ref": "#/$defs/Code"
     },
@@ -4480,6 +4860,21 @@
     "scheduling": {
       "$ref": "#/$defs/Scheduling"
     },
+    "seat_access_migrated": {
+      "description": "Integrations whose agent seats state their access per seat. Written by the engine's migration.",
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "skill_variables": {
       "additionalProperties": {
         "type": [
@@ -4489,7 +4884,7 @@
           "null"
         ]
       },
-      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "description": "name -> value facts substituted into tool-skill text. Keys must be identifiers.",
       "type": [
         "object",
         "null"

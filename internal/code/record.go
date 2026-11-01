@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // RecordVersion is the record shape THIS BUILD can decode — never the version
@@ -96,7 +97,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0050).
+	// below a floor (ADR-0073).
 	OpTrimmed OpKind = "trimmed"
 
 	// OpCompact merges some of a repository's packs into fewer: the outputs'
@@ -415,7 +416,7 @@ const (
 
 	// OpMerge merges a change into its target ([Merge]), on the repository's
 	// own subject, decided by its committer alone through the change's merge
-	// gate from one snapshot ([Committer.ProposeMerge], ADR-0066): ONE
+	// gate from one snapshot ([Committer.ProposeMerge], ADR-0089): ONE
 	// RECORD merges the change, moves the target onto the merge's commit and
 	// lands that move as a push.
 	//
@@ -576,7 +577,7 @@ type Actor struct {
 func (a Actor) validate() error {
 	switch {
 	case !a.Kind.Valid():
-		return fmt.Errorf("%w: actor.kind: %q is not one of %v", ErrInvalid, a.Kind, ActorKinds())
+		return fmt.Errorf("%w: actor.kind: %q is not one of %s", ErrInvalid, a.Kind, words.Or(ActorKinds()))
 	case strings.TrimSpace(a.ID) == "":
 		return fmt.Errorf("%w: actor.id: a record names who decided it", ErrInvalid)
 	case a.Kind == ActorOperator && strings.TrimSpace(a.OperatorID) == "":
@@ -853,7 +854,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0050) as a record this domain's applier decodes — the barrier's split:
+// ADR-0073) as a record this domain's applier decodes — the barrier's split:
 // the framework decides when one is appended, what it removes and the floor
 // its subject names, and this domain what a record on its log looks like.
 //

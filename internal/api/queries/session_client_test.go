@@ -28,10 +28,14 @@ import (
 //
 // The set of questions that take a floor is [sessionQuestions], the table
 // [TestEveryNativeQuestionResolvesTheCallersOwnLevel] proves the behaviour
-// over. This gate holds the client's list against it per domain, and asks
-// every listed kind a bare `session` itself — refused, because a floor it
-// honours is a floor it demands — so a kind added to both lists without the
-// behaviour behind it is red here too.
+// over, and CHAT'S WHOLE FAMILY, [chatQuestions], which
+// [TestTheCallersFreshnessReachesEveryChatRead] proves it over: a chat read is
+// asked for a viewer through its own stubs, so its six live in that table
+// rather than in one whose stubs are the tracker's and the wiki's. This gate
+// holds the client's list against both per domain, and asks every listed kind
+// a bare `session` itself — refused, because a floor it honours is a floor it
+// demands — so a kind added to both lists without the behaviour behind it is
+// red here too.
 //
 // A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH, as the engine serves
 // it — the company feed under the tracker's and the knowledge base's — so a
@@ -55,6 +59,9 @@ func TestEverySessionQueryTakesAFreshnessFloor(t *testing.T) {
 			engine[domain] = append(engine[domain], q.what)
 		}
 	}
+	// THE CHAT LOG'S, every one of its reads: each takes the caller's
+	// freshness ([TestTheCallersFreshnessReachesEveryChatRead]).
+	engine["chat"] = slices.Clone(chatQuestions)
 	engineDomains := make([]string, 0, len(engine))
 	for domain := range engine {
 		engineDomains = append(engineDomains, domain)
@@ -106,6 +113,14 @@ func TestEverySessionQueryTakesAFreshnessFloor(t *testing.T) {
 // with the arguments [sessionQuestions] says it needs to answer at all.
 func askFloorless(t *testing.T, kind string) (any, error) {
 	t.Helper()
+	if slices.Contains(chatQuestions, kind) {
+		// AS A PERSON, through chat's own stubs: a chat read is refused
+		// before anything else for a caller no seat names, so asked as
+		// nobody it would answer that refusal rather than the floor's.
+		params := chatAsked(kind)
+		params["read_level"] = "session"
+		return askChat(t, chatSources(t, newStubChat(), &stubChatSearch{}, nil), kind, params)
+	}
 	i := slices.IndexFunc(sessionQuestions, func(q sessionQuestion) bool { return q.what == kind })
 	if i < 0 {
 		// Reported by the listing check; asked with no arguments so an

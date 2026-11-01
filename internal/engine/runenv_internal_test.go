@@ -2,25 +2,24 @@ package engine
 
 import (
 	"errors"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A coding run's own environment, held to the rule a tool server's values are
-// (toolcredentials.go): every reference resolves before a run_sandbox box is
-// started, or its key is declared optional and left out.
+// An executor run's own environment, held to the rule a tool server's values
+// are (toolcredentials.go): every reference resolves, or the run starts
+// without it and a line says why — unless its key is declared optional, and
+// then it is left out without a word.
 
 // runEnvDoc is a company whose engineer runs code in a fake remote cell, with
 // a code-host token nothing has sealed and a test database it may go without.
@@ -45,66 +44,54 @@ roles:
     handle: swe
     llm: zulu
     sandbox:
-      enabled: true
       env:
-        GITLAB_TOKEN: "${SWE_GITLAB_TOKEN}"
+        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
         DATABASE_URL: "${SWE_TEST_DATABASE}"
       optional_keys: [DATABASE_URL]
 `
 
-// A RUN_SANDBOX LAUNCH WHOSE ENVIRONMENT DOES NOT RESOLVE IS REFUSED, BEFORE A
-// BOX EXISTS, AND STARTS ONCE IT DOES — without what it declared it may go
-// without.
+// launchExecutor launches turnID's executor on seat through the real launcher,
+// as the runner would hand it the turn's ask.
+func launchExecutor(t *testing.T, e *Engine, c *Company, seat *org.Role, turnID string) error {
+	t.Helper()
+	l := launcherOn(e, c, seat, turnID)
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	return err
+}
+
+// AN EXECUTOR'S RUN CARRIES WHAT ITS ENVIRONMENT RESOLVES, and leaves out what
+// it declared it may go without — and once a value it lacked is sealed, the
+// next launch carries that too.
 //
-// It used to start with GITLAB_TOKEN empty: the coding agent spent a box, an
-// install and its model's tokens, then could not clone or push, and the line
-// that said why sat at info or warn beside a run that went ahead. Refused, the
-// call is one round of the turn — the tool classes it unavailable — and its
-// sentence names the variable, its remedies, and where the key could be
-// declared optional instead.
-func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
+// It started with the sealed code-host token, the seat's own optional keys
+// left out WHOLE rather than written empty: an empty DATABASE_URL is a run
+// pointed at no database where an absent one is a run that knows it has none.
+func TestAnExecutorRunCarriesWhatItsEnvironmentResolves(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, runEnvDoc)
-	e, jobs := codeWorkRig(t, c)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
 	seat := c.Org.AgentSeatByHandle("swe")
 
-	_, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t1", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"})
-	if err == nil {
-		t.Fatal("a run whose code-host token is unset was launched")
+	if err := launchExecutor(t, e, c, seat, "t1"); err != nil {
+		t.Fatalf("an executor was refused for a code-host token nothing has sealed yet: %v", err)
 	}
-	for _, said := range []string{"no box was started", "${SWE_GITLAB_TOKEN} is not set",
-		"list GITLAB_TOKEN under role.sandbox.optional_keys"} {
-		if !strings.Contains(err.Error(), said) {
-			t.Errorf("the refusal %q does not say %q", err, said)
-		}
-	}
-	if strings.Contains(err.Error(), "SWE_TEST_DATABASE") || strings.Contains(err.Error(), "NPM") {
-		t.Errorf("the refusal names what the run declared it may go without: %v", err)
-	}
-	if strings.Contains(err.Error(), "provision command") {
-		t.Errorf("a run's setting is offered an integration's provision command, which "+
-			"seals a seat's bot or account and nothing else: %v", err)
-	}
-	if started := jobs[codingagent.ClaudeCodeName].Started(); len(started) != 0 {
-		t.Errorf("%d jobs started for a refused launch", len(started))
-	}
-	if _, found, getErr := e.sandbox.Load().pending.Get(t.Context(), "t1"); getErr != nil || found {
-		t.Errorf("a run row exists for a refused launch (found %v, err %v)", found, getErr)
+	if value, present := jobs.Started()[0].Env["GITLAB_TOKEN"]; present {
+		t.Errorf("the unset GITLAB_TOKEN reached the run as %q, want it absent", value)
 	}
 
 	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
+	e.installSecrets(map[string]string{"GITLAB_TOKEN_SWE": "glpat-swe"})
 	e.secretsMu.Unlock()
-	if _, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t2", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
-		t.Fatalf("the run was refused once its token was sealed: %v", err)
+	if err := launchExecutor(t, e, c, seat, "t2"); err != nil {
+		t.Fatalf("LaunchExecutor once the token was sealed: %v", err)
 	}
-	started := jobs[codingagent.ClaudeCodeName].Started()
-	if len(started) != 1 {
-		t.Fatalf("%d jobs started, want the one launch", len(started))
+	started := jobs.Started()
+	if len(started) != 2 {
+		t.Fatalf("%d jobs started, want the two launches", len(started))
 	}
-	env := started[0].Env
+	env := started[1].Env
 	if env["GITLAB_TOKEN"] != "glpat-swe" {
 		t.Errorf("the run's GITLAB_TOKEN is %q, want the sealed token", env["GITLAB_TOKEN"])
 	}
@@ -115,27 +102,24 @@ func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
 	}
 }
 
-// A RUN WAITING FOR A CREDENTIAL A PASS IS MINTING IS REFUSED SAYING WHEN IT
-// CAN RUN, and logged at info, as a seat's child waiting for one is.
-func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T) {
+// A RUN WAITING FOR A CREDENTIAL A PASS IS MINTING SAYS WHAT IT WAITS FOR, and
+// is logged at info, as a seat's child waiting for one is — a warning only for
+// a value nothing will ever supply.
+func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c := specCompany(t, provisioningDoc(true))
 	seat := c.Org.AgentSeatByHandle("swe")
 	e := &Engine{}
 
 	run := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the gitlab integration", run.gap)
 	}
-	refusal := run.gap.runRefusal()
-	for _, said := range []string{"waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}",
-		"try again then"} {
-		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
-		}
+	if said := "waiting for the gitlab integration to mint ${GITLAB_TOKEN_SWE}"; !strings.Contains(run.gap.reason(), said) {
+		t.Errorf("the gap %q does not say %q", run.gap.reason(), said)
 	}
-	run.logGap(t.Context(), seat.Handle(), "no box is started")
+	run.logGap(t.Context(), seat.Handle(), "the run starts without them")
 	if lines := logs.records("sandbox_env_unresolved", "swe"); len(lines) != 1 ||
 		lines[0]["level"] != "INFO" {
 		t.Errorf("sandbox_env_unresolved = %v: want one line at INFO", lines)
@@ -143,7 +127,7 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 
 	nobody := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
 		Env: map[string]string{"OTHER_TOKEN": "${SWE_NOBODY_SETS}"}}, nil)
-	nobody.logGap(t.Context(), seat.Handle(), "no box is started")
+	nobody.logGap(t.Context(), seat.Handle(), "the run starts without them")
 	if lines := logs.records("sandbox_env_unresolved", "swe"); len(lines) != 2 ||
 		lines[1]["level"] != "WARN" ||
 		!strings.Contains(lines[1]["detail"].(string), "${SWE_NOBODY_SETS} is not set") {
@@ -151,8 +135,8 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 			"variable", lines)
 	}
 
-	// THE PASS THAT MINTS IT WAITING ON A PERSON is no wait at all: the run
-	// is told what the integration needs, and not to try again until then.
+	// THE PASS THAT MINTS IT WAITING ON A PERSON is no wait at all: the gap
+	// says what the integration needs.
 	blocked := &Engine{backends: &Backends{Fleet: coordmem.NewFleet()}}
 	store, err := blocked.IntegrationStore()
 	if err != nil {
@@ -164,26 +148,23 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 		t.Fatalf("save: %v", err)
 	}
 	stopped := blocked.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
 	if stopped.gap == nil || stopped.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run the blocked gitlab pass will not mint for", stopped.gap)
 	}
-	refusal = stopped.gap.runRefusal()
+	reason := stopped.gap.reason()
 	for _, said := range []string{"the gitlab integration will not mint", "until a person acts",
 		"admin token"} {
-		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
+		if !strings.Contains(reason, said) {
+			t.Errorf("the gap %q does not say %q", reason, said)
 		}
-	}
-	if strings.Contains(refusal, "try again then") {
-		t.Errorf("a run no pass will mint for is told to try again: %q", refusal)
 	}
 
 	// DECLARED OPTIONAL, IT IS STILL WAITED FOR: the declaration is for a
 	// value nothing will supply, and started without its code-host identity
 	// the run would spend its box cloning nothing.
 	declared := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env:          map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"},
+		Env:          map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"},
 		OptionalKeys: []string{"GITLAB_TOKEN"}}, nil)
 	if declared.gap == nil || !declared.gap.waiting() {
 		t.Errorf("gap = %+v: a key a pass mints, declared optional, must still wait for it",
@@ -191,11 +172,81 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	}
 }
 
+// A MINT GITHUB DID NOT ANSWER IS A WAIT, AND ONE IT REFUSED IS A PERSON'S, in
+// the sentence the run's gap is logged with and a seat's tool server is held
+// back with. The seat's GitHub App token is issued as the run's environment is
+// read, and a mint that met GitHub failing on its side, at its rate limit or
+// not reached at all is asked for again on the restart schedule, which the gap
+// says. One GitHub refused (a suspended installation, a revoked key) is
+// refused again at every ask until somebody fixes the app, and the gap says
+// that rather than a wait that ends nothing; beside a variable nobody set, the
+// gap tells both.
+//
+// Mutation: read every unissued mint as passing and the refused rows go red;
+// read every one as refused and the waiting rows do; read a 403 by its status
+// alone and the rate limit's row does.
+func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
+	t.Parallel()
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	const (
+		askedAgain = "GitHub is asked for it again on the restart schedule"
+		fixTheApp  = "until somebody fixes the agent's GitHub App"
+	)
+	for name, c := range map[string]struct {
+		// status is what the token endpoint answers, with its rate limit's
+		// header where limited is set, and url where GitHub is when it is
+		// not the fixture: one nothing listens on.
+		status  int
+		limited bool
+		url     string
+		also    map[string]string
+		says    []string
+	}{
+		"a 503":                        {status: http.StatusServiceUnavailable, says: []string{askedAgain}},
+		"a 429":                        {status: http.StatusTooManyRequests, says: []string{askedAgain}},
+		"a 403 at GitHub's rate limit": {status: http.StatusForbidden, limited: true, says: []string{askedAgain}},
+		"GitHub not reached":           {url: closed.URL, says: []string{askedAgain}},
+		"a suspended installation":     {status: http.StatusForbidden, says: []string{fixTheApp}},
+		"a revoked key":                {status: http.StatusUnauthorized, says: []string{fixTheApp}},
+		"a 503 beside a variable nobody set": {status: http.StatusServiceUnavailable,
+			also: map[string]string{"OTHER_TOKEN": "${BUILDER_NOBODY_SETS}"},
+			says: []string{"${BUILDER_NOBODY_SETS} is not set", askedAgain}},
+	} {
+		gh := newAppGitHub(t)
+		gh.status, gh.limited = c.status, c.limited
+		at := gh.url
+		if c.url != "" {
+			at = c.url
+		}
+		co := appCompany(t, at, true)
+		builder := co.Org.AgentSeatByHandle("builder")
+		env := map[string]string{"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BUILDER}"}
+		maps.Copy(env, c.also)
+		run := appEngine(t, co).runEnvironment(t.Context(), co, builder,
+			&org.RoleSandbox{Env: env}, nil)
+		if run.gap == nil {
+			t.Errorf("%s: the run was given a token GitHub did not issue", name)
+			continue
+		}
+		said := run.gap.reason()
+		if !strings.Contains(said, "${GITHUB_APP_TOKEN_BUILDER} could not be issued") {
+			t.Errorf("%s: the gap says %q, want the mint's failure", name, said)
+		}
+		for _, want := range c.says {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s: the gap says %q, want %q", name, said, want)
+			}
+		}
+	}
+}
+
 // OPTIONAL KEYS WRITTEN IN THE DOCUMENT REACH THE RUN, on a provider-wide
 // step and on a seat's own: each crosses a conversion — the config into the
 // org chart, the org chart or the config into the box's steps — and a field
-// one of them dropped would leave every declared key required and every
-// run_sandbox refused, on a document that reads as though it said otherwise.
+// one of them dropped would leave every declared key required and every run
+// started without it said as a gap, on a document that reads as though it said
+// otherwise.
 // And a seat step's gap names the seat's step as where to declare it, not a
 // provider-wide one that does not hold it.
 func TestOptionalKeysWrittenInTheDocumentReachTheRun(t *testing.T) {
@@ -221,7 +272,6 @@ roles:
     handle: swe
     llm: zulu
     sandbox:
-      enabled: true
       setup:
         - name: certs
           files:
@@ -258,18 +308,19 @@ roles:
 func TestARunStartedWithoutTheSeatsEmailSaysSo(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c := specCompany(t, runEnvDoc)
-	e, jobs := codeWorkRig(t, c)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
 	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
+	e.installSecrets(map[string]string{"GITLAB_TOKEN_SWE": "glpat-swe"})
 	e.secretsMu.Unlock()
 	seat := c.Org.AgentSeatByHandle("swe")
 	seat.Email = "${SWE_EMAIL_NOBODY_SETS}"
 
-	if _, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t1", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
+	if err := launchExecutor(t, e, c, seat, "t1"); err != nil {
 		t.Fatalf("a run whose only missing value is the seat's email was refused: %v", err)
 	}
-	started := jobs[codingagent.ClaudeCodeName].Started()
+	started := jobs.Started()
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want the one launch", len(started))
 	}
@@ -333,29 +384,21 @@ func TestARunsOptionalValuesAreLeftOutByTheLayerThatWroteThem(t *testing.T) {
 	}
 }
 
-// AN AGENT-MODE EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, where a
-// run_sandbox call is refused.
+// AN EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, AND SAYS SO.
 //
-// The executor is not a tool call a turn chose but the turn itself: refused,
-// the phase fails and the turn with it, so every message the seat could answer
-// through its bridge would fail for a token a pass may mint in a minute.
-func TestAnAgentModeExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
+// The executor is the turn itself: refused, the phase fails and the turn with
+// it, so every message the seat could answer through its bridge would fail for
+// a token a pass may mint in a minute. So it starts, and the lines say what it
+// started without.
+func TestAnExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 	logs := captureEngineLogs(t)
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "${SWE_GITHUB_TOKEN}"}}
 	seat.Email = "${SWE_EMAIL_NOBODY_SETS}"
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
-	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-			ForTurn(launcher.turn),
-	})
+	err := launchExecutor(t, e, c, seat, "t1")
 	var refused *SandboxCredentialError
 	if err != nil {
 		t.Fatalf("the executor was refused for its run environment (credential error %t): %v",

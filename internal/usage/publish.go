@@ -177,6 +177,16 @@ import (
 // is written — and derived from a ledger that has swept part of the day it
 // would shrink.
 //
+// # And every day again, after a reanchor anywhere in the fleet
+//
+// A data node that re-anchors a restored copy of this log follows it from its
+// end, so it never applies what the others published after the restore; and a
+// day this node published in that tail and has not moved since would stay at
+// its pre-restore value there. So a rise in any data node's generation of the
+// log, as the positions register states it, makes this node publish every day
+// its event log still holds again, under operation ids that cannot collapse
+// onto a copy from before the move. See republish.go.
+//
 // # A refusal no retry changes is said once
 //
 // Two refusals are not a moment's trouble: a record larger than the log takes
@@ -240,6 +250,12 @@ type Store interface {
 	UsageWatermark(ctx context.Context) (time.Time, bool, error)
 	SetUsageWatermark(ctx context.Context, since time.Time) error
 
+	// UsageRepublished and SetUsageRepublished are the usage log's
+	// generation on every data node as this publisher last republished
+	// every day under, kept across a restart (republish.go).
+	UsageRepublished(ctx context.Context) (string, bool, error)
+	SetUsageRepublished(ctx context.Context, generations string) error
+
 	// UsageDayWindow, UsageDayContaining and PinUsageDay are the cut each
 	// of this node's days was first given, which every later derivation of
 	// the day keeps whatever the company's clock does since.
@@ -300,6 +316,16 @@ type PublisherDeps struct {
 	// Zone is the company's clock, read on every tick because a config
 	// apply can move it. A day is cut on it.
 	Zone func() *time.Location
+
+	// Generations is the usage log's generation on every data node as the
+	// engine last read the positions register — this node's own taken from
+	// its runner, so its own reanchor is seen at once — and false before
+	// any reading. Read on every tick: a rise past the generations this
+	// publisher last answered makes it publish every day again
+	// (republish.go). Required: without it a peer's reanchor of a restored
+	// log leaves every day this node published after the restore stale on
+	// that peer for the life of the history.
+	Generations func() (Generations, bool)
 
 	// Handle names a seat by its id from the organisation this node is
 	// running, and false when it has none — a seat removed since, whose
@@ -393,6 +419,18 @@ type Publisher struct {
 	// process last said it would not derive, so a mark that stays put is
 	// said once rather than every tick.
 	floorSaid string
+
+	// answered is the usage generations this publisher last published every
+	// day under, as the store records them — nil when it never has — and
+	// answeredRead whether the store has been asked yet. republishing is the
+	// generations a pass in progress answers, nil when none is. See
+	// republish.go.
+	answered     Generations
+	answeredRead bool
+	republishing Generations
+
+	// nudge wakes [Publisher.Run] before its next tick ([Publisher.Nudge]).
+	nudge chan struct{}
 }
 
 // refusal is one object's content the log refused, and why.
@@ -462,6 +500,11 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 	case d.Zone == nil:
 		return nil, fmt.Errorf("usage: a publisher needs the company's clock, " +
 			"which is what a day is cut on")
+	case d.Generations == nil:
+		return nil, fmt.Errorf("usage: a publisher needs the usage log's generation " +
+			"on every data node — a rise is a peer's reanchor, which skipped what " +
+			"this node published after a restore, and only publishing every day " +
+			"again reaches it")
 	case d.Every < 0:
 		return nil, fmt.Errorf("usage: a publisher's cadence of %v is negative; "+
 			"leave it zero for %v", d.Every, FlushInterval)
@@ -482,7 +525,22 @@ func NewPublisher(d PublisherDeps) (*Publisher, error) {
 	}
 	return &Publisher{deps: d, marks: map[string]store.UsageMark{},
 		published: map[string]string{}, refused: map[string]refusal{},
-		short: map[string]bool{}, reopened: map[string]bool{}}, nil
+		short: map[string]bool{}, reopened: map[string]bool{},
+		nudge: make(chan struct{}, 1)}, nil
+}
+
+// Nudge has [Publisher.Run] tick now rather than at its next interval: the
+// engine calls it when this node's usage applier first drains after it starts
+// — at boot, and after a reanchor of the usage log relaunches it — because no
+// day is derived until then ([PublisherDeps.Caught]), and a pass over every day
+// that a reanchor owes would otherwise wait out an interval for a
+// precondition that had already ended (republish.go). It never blocks, and
+// nudges that arrive before the loop wakes are one tick.
+func (p *Publisher) Nudge() {
+	select {
+	case p.nudge <- struct{}{}:
+	default:
+	}
 }
 
 // Run flushes at once and then every [PublisherDeps.Every] — [FlushInterval]
@@ -506,6 +564,7 @@ func (p *Publisher) Run(ctx context.Context) {
 			p.finalFlush(ctx)
 			return
 		case <-ticker.C:
+		case <-p.nudge:
 		}
 	}
 }
@@ -552,6 +611,15 @@ func (p *Publisher) flush(ctx context.Context, final bool) error {
 				p.watermark = since
 				p.lower(since)
 			}
+		}
+	}
+
+	// A REANCHOR ANYWHERE IN THE FLEET, seen as a rise in some data node's
+	// generation of this log, before the bound below is read: the pass it
+	// starts lowers that bound to the floor. See republish.go.
+	if !final {
+		if err := p.observeGenerations(ctx, now, loc); err != nil {
+			failed = append(failed, err)
 		}
 	}
 
@@ -667,6 +735,14 @@ func (p *Publisher) flush(ctx context.Context, final bool) error {
 		if err := p.keepWatermark(ctx, window[0]); err != nil {
 			failed = append(failed, err)
 			watermarked = false
+		}
+	}
+	// A PASS OVER EVERY DAY IS ANSWERED once every day this tick derived
+	// settled and what the process still owes is written down, so a crash
+	// before then answers the same move again on the next start.
+	if !final && caught && olderSettled && len(unsettled) == 0 && watermarked {
+		if err := p.settleRepublish(ctx); err != nil {
+			failed = append(failed, err)
 		}
 	}
 	// THE MARKS ARE CLEARED once every day this tick derived settled — the
@@ -933,13 +1009,8 @@ func (p *Publisher) olderDays(ctx context.Context, from time.Time, yesterday per
 		// back on a clock nobody trusted — and never by cutting the days
 		// before it, which nothing will derive.
 		first := period.At(period.Day, from, loc).Label
-		if kept, err = p.dayAt(ctx, floor, loc); err != nil {
+		if kept, err = p.floorDay(ctx, now, loc); err != nil {
 			return nil, err
-		}
-		if kept.Start.Before(floor) {
-			if kept, err = p.step(ctx, kept, 1); err != nil {
-				return nil, err
-			}
 		}
 		through := kept.Shift(-1).Label
 		said := first + ".." + through
@@ -1296,7 +1367,12 @@ func (p *Publisher) publish(ctx context.Context, day string, rec Record) (bool, 
 	// every derivation, which is what lets the broker collapse a repeat,
 	// and a changed one carries a new id, which is what stops the broker
 	// collapsing a real update into the one before it.
-	opID := "usage-" + contentDigest(body)
+	//
+	// AND THE GENERATIONS IT IS PUBLISHED UNDER ([Publisher.salt]), so a
+	// pass that answers a peer's reanchor sends ids no copy before the
+	// reanchor carries: collapsed onto the copy the peer skipped, an
+	// unchanged day would land nowhere. See republish.go.
+	opID := "usage-" + saltedDigest(body, p.salt())
 	if p.refused[key].opID == opID {
 		// REFUSED FOR GOOD AT THIS CONTENT, and logged when it was: see
 		// the file's header.
@@ -1396,11 +1472,25 @@ func (p *Publisher) publish(ctx context.Context, day string, rec Record) (bool, 
 	return true, nil
 }
 
-// contentDigest is the digest a record's bytes are known by: its op id once
-// published, and what this process remembers a derivation by.
+// contentDigest is the digest a record's bytes are known by: what this process
+// remembers a derivation by.
 func contentDigest(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:16])
+}
+
+// saltedDigest is a record's operation id without its prefix: the content's
+// digest, and — under any generations at all — the generations it is
+// published under too, after a separator no encoded record contains.
+func saltedDigest(body []byte, salt string) string {
+	if salt == "" {
+		return contentDigest(body)
+	}
+	h := sha256.New()
+	h.Write(body)
+	h.Write([]byte{0})
+	h.Write([]byte(salt))
+	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 // noteShort says once, when an object's derivation first comes out SHORT of

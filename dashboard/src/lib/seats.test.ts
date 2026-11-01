@@ -19,15 +19,19 @@
 import { describe, expect, test } from "vitest";
 import {
   activityOf,
-  activityWord,
   handleLabel,
   indexOrg,
   labelOf,
+  nameOfIn,
   leadsInLine,
   liveOnItems,
   roundLabel,
   roundOf,
   stoppedLine,
+  seatWord,
+  shownStateOf,
+  stateGroupWord,
+  stateWord,
   llmChain,
   mcpEnvOf,
   seatPath,
@@ -353,7 +357,7 @@ describe("the engine's hierarchy", () => {
             type: "team",
             lead: "bo",
             lead_inherited: false,
-            channel: "#p2",
+            channel: "p2",
             channel_inherited: false,
             seats: ["bo"],
           },
@@ -363,7 +367,7 @@ describe("the engine's hierarchy", () => {
             type: "team",
             lead: "ada",
             lead_inherited: false,
-            channel: "#p1",
+            channel: "p1",
             channel_inherited: false,
             seats: ["ada"],
           },
@@ -371,8 +375,8 @@ describe("the engine's hierarchy", () => {
       },
     });
     expect(twins.units.map((u) => [u.id, u.effectiveLead?.handle, u.channel])).toEqual([
-      ["platform", "ada", "#p1"],
-      ["platform-2", "bo", "#p2"],
+      ["platform", "ada", "p1"],
+      ["platform-2", "bo", "p2"],
     ]);
     expect(twins.byHandle.get("bo")?.unit?.id).toBe("platform-2");
   });
@@ -550,7 +554,7 @@ describe("what a seat is doing", () => {
     // reserved for a stop, amber for the one state that asks for a person.
     expect(toneOf("needs")).toBe("warning");
     expect(toneOf("stopped")).toBe("danger");
-    expect(activityWord("needs")).toBe("needs you");
+    expect(stateWord("needs")).toBe("Needs you");
   });
 
   test("a label is the engine's words, with the reason and the pauser", () => {
@@ -564,7 +568,7 @@ describe("what a seat is doing", () => {
         { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
         now,
       ),
-    ).toBe("Stopped · budget");
+    ).toBe("Stopped: its token budget is spent until the window resets or the ceiling is raised");
     expect(
       labelOf(
         {
@@ -617,6 +621,82 @@ describe("what a seat is doing", () => {
     ).toBe("Stopped");
   });
 
+  // ONE STATE, ONE WORD. A paused seat read "Paused" on its own page and
+  // "Stopped" on the roster, the chart and in the Inbox; a stop for a fault
+  // read "Stopped · provider" on one screen and "Stopped" on the next.
+  test("a paused seat and a stopped seat each have one word, short and long", () => {
+    const stopped = (reason: string, extra: object = {}) =>
+      ({
+        id: "a",
+        agent_id: "a",
+        role: "QA",
+        activity: "stopped",
+        stopped_reason: reason,
+        ...extra,
+      }) as unknown as Parameters<typeof labelOf>[0];
+    const paused = stopped("paused", {
+      paused: { by_kind: "human", by: "jane", at: "2026-01-01T11:48:00Z", stop_running: false },
+    });
+    expect(shownStateOf(paused)).toBe("paused");
+    expect(seatWord(paused)).toBe("Paused");
+    expect(labelOf(paused, now)).toBe("Paused by jane · 12m");
+    expect(shownStateOf(stopped("provider"))).toBe("stopped");
+    expect(seatWord(stopped("provider"))).toBe("Stopped");
+    expect(labelOf(stopped("provider"), now)).toBe("Stopped: its models are at their usage limit");
+    expect(labelOf(stopped("unplaced"), now)).toBe("Stopped: not placed on any node");
+    // THE LONG FORM OPENS WITH THE SHORT ONE for every state the engine
+    // reports, so a pill and the line beside it never name two states.
+    const rows = [
+      paused,
+      stopped("provider"),
+      stopped("budget"),
+      stopped("unplaced"),
+      stopped("gremlins"),
+      { id: "a", agent_id: "a", role: "QA", activity: "working" },
+      { id: "a", agent_id: "a", role: "QA", activity: "needs" },
+      { id: "a", agent_id: "a", role: "QA", activity: "idle" },
+    ] as Parameters<typeof labelOf>[0][];
+    for (const row of rows) expect(labelOf(row, now).startsWith(seatWord(row))).toBe(true);
+    // A GROUP keyed on the engine's `stopped` holds both, and says so.
+    expect(stateGroupWord("stopped")).toBe("Paused or stopped");
+    expect(stateGroupWord("needs")).toBe(stateWord("needs"));
+    // A paused seat wears the stop's badge and tone: the words tell them apart.
+    expect(statusOf(shownStateOf(paused))).toBe("stopped");
+    expect(toneOf(shownStateOf(paused))).toBe(toneOf("stopped"));
+  });
+
+  // A CREDENTIAL'S SPELLING IS NOT A NAME. `paused.by` is `token:review` for a
+  // Tier A token's session, and "Paused by token:review" printed it raw.
+  test("a pauser the chart does not hold is said in plain words, never token:", () => {
+    const index = indexOrg(null);
+    const nameOf = nameOfIn(index);
+    expect(nameOf("token:review")).toBe("review (API token)");
+    expect(nameOf("jane.doe")).toBe("jane.doe");
+    const row = {
+      id: "a",
+      agent_id: "a",
+      role: "QA",
+      activity: "stopped" as const,
+      stopped_reason: "paused" as const,
+      paused: {
+        by_kind: "operator",
+        by: "token:review",
+        at: "2026-01-01T11:48:00Z",
+        stop_running: false,
+      },
+    };
+    for (const words of [
+      labelOf(row, now, nameOf),
+      labelOf(row, now),
+      stoppedLine(row, nameOf),
+      stoppedLine(row),
+      stateLine(row, { now, nameOf }),
+    ]) {
+      expect(words).toContain("review (API token)");
+      expect(words).not.toContain("token:");
+    }
+  });
+
   test("a state line describes the engine's state and never invents one", () => {
     expect(
       stateLine(
@@ -631,37 +711,12 @@ describe("what a seat is doing", () => {
         { now },
       ),
     ).toBe("Executing ENG-412");
-    // A FAN-OUT IN FLIGHT is the call the seat is waiting on: a `delegate`
-    // with three tasks is three workers, on the turn's own item.
-    const delegating = (args: string, name = "delegate") =>
-      stateLine(
-        {
-          id: "a",
-          agent_id: "a",
-          role: "Dev A",
-          activity: "working",
-          current_phase: "execute",
-          live_call: {
-            phase: "execute",
-            work_item: { backend: "native", id: "t", key: "ENG-405", project: "ENG" },
-            running_call: { round: 2, name, arguments: args, started_at: "" },
-          } as never,
-        },
-        { now },
-      );
-    const three = JSON.stringify({ tasks: [{ id: "a" }, { id: "b" }, { id: "c" }] });
-    expect(delegating(three)).toBe("3 workers on ENG-405");
-    // Any other call is the phase; arguments that are not the schema count
-    // nothing rather than a guess.
-    expect(delegating(three, "search_work_items")).toBe("Executing ENG-405");
-    expect(delegating("not json")).toBe("Executing ENG-405");
-    expect(delegating('{"tasks": "three"}')).toBe("Executing ENG-405");
     expect(
       stateLine(
         { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" },
         { now },
       ),
-    ).toBe("Not placed on any node");
+    ).toBe("Stopped: not placed on any node");
     expect(
       stateLine(
         {
@@ -734,7 +789,7 @@ describe("what a seat is doing", () => {
  */
 describe("no screen derives a seat's state", () => {
   const WORDS = new Set(["working", "idle", "needs", "stopped", "offline"]);
-  const SOURCES = /^(in_progress|live_call|sandboxes|runs|running_call|stage)$/;
+  const SOURCES = /^(in_progress|live_call|sandboxes|runs|running_calls|stage)$/;
 
   /** Whether an expression reads one of the fields a state could be folded from. */
   const reads = (node: Node | null | undefined): boolean => {
@@ -939,7 +994,7 @@ describe("llmChain", () => {
   // judge — reads as five models on the seat page.
   test("one key named by several phases is listed once", () => {
     expect(
-      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
+      llmChain({ default: "big", review: "big", judge: "tiny", subagent: ["big", "tiny"] }),
     ).toEqual(["big", "tiny"]);
   });
 

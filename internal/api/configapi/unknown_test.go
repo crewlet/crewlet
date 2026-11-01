@@ -169,7 +169,7 @@ func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
 	s := newSurface(t)
 	seedNewerPeer(t, s)
 
-	patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
+	patchOnly(t, s, `{"mission": "unrelated", "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-opus-5"}}}}`,
 		summaryHeader)
 
 	// THE LIST THE PATCH NEVER MENTIONED, with the keys a newer build wrote
@@ -328,7 +328,7 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 				providers := d["providers"].(map[string]any)
 				providers["llm"].(map[string]any)["zulu"].(map[string]any)["provider_setting"] = true
 			},
-			`{"providers": {"llm": {"zulu": {"provider_setting": null}}}}`,
+			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"provider_setting": null}}}}`,
 		},
 		"deleting one on an mcp server": {
 			func(d map[string]any) {
@@ -428,27 +428,27 @@ func TestReloadAndRevertKeepWhatThisBuildCannotRepresent(t *testing.T) {
 	assertNewerKeysKept(t, s, "revert")
 }
 
-// A QUOTED ENTITY-TAG IS AN ENTITY WRITE'S PRECONDITION TOO. The entity
-// write compared the raw expectation with the revision id, so the standard
-// spelling a caller forwards in an `If-Match` header was answered as a lost
-// race; every spelling this surface documents is held here at the route.
+// A QUOTED ENTITY-TAG IS AN ENTITY WRITE'S PRECONDITION TOO, and the tag is
+// the entity's own (the ETag its GET answers): the standard spelling a caller
+// forwards in an `If-Match` header, the bare form inside the quotes, and the
+// wildcard are each held here at the route.
 func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t, companyDoc)
 	for name, spell := range map[string]func(string) string{
-		"a bare revision id":  func(id string) string { return id },
-		"a quoted entity-tag": func(id string) string { return `"` + id + `"` },
+		"the bare tag":        func(tag string) string { return strings.Trim(tag, `"`) },
+		"a quoted entity-tag": func(tag string) string { return tag },
 		"the wildcard":        func(string) string { return "*" },
 	} {
-		current, found, err := s.configs.Active(t.Context())
-		if err != nil || !found {
-			t.Fatalf("active: %v", err)
+		read := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil)
+		if read.Code != http.StatusOK || read.Header().Get("ETag") == "" {
+			t.Fatalf("GET the entity = %d %s, with no ETag", read.Code, read.Body)
 		}
 		body := `{"model": "claude-sonnet-5",
 		  "auth": {"token": "sk-` + strings.ReplaceAll(name, " ", "-") + `"}}`
 		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu", body,
-			map[string]string{"X-Summary": "an entity", "If-Match": spell(current.ID)})
+			map[string]string{"X-Summary": "an entity", "If-Match": spell(read.Header().Get("ETag"))})
 		if res.Code != http.StatusCreated {
 			t.Errorf("an entity write with %s = %d: %s", name, res.Code, res.Body)
 		}

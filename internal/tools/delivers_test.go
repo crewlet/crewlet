@@ -26,7 +26,7 @@ func (t deliverStub) Call(context.Context, map[string]any) (tools.Result, error)
 //
 // The rule this replaced keyed on origin — server-backed and not a known read
 // — which was right for as long as every shared surface belonged to a vendor.
-// A native tracker breaks it: commenting on a work item reaches the person who
+// Worklet breaks it: commenting on a work item reaches the person who
 // asked, and it is a builtin, so a gate keyed on origin judged that turn to
 // have answered nobody and looped it to failure. Registering the write with
 // [tools.DeliversTo] is what says otherwise, one tool at a time — never an
@@ -35,7 +35,7 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 	t.Parallel()
 	r := tools.NewRegistry()
 
-	// First-party, declared: the native tracker's write.
+	// First-party, declared: Worklet's write.
 	if err := r.RegisterWith(deliverStub{"comment_on_work_item"}, tools.OriginBuiltin,
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes},
 		tools.DeliversTo("work")); err != nil {
@@ -91,10 +91,11 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 func TestAFirstPartyWriteDoesNotDeliverByAnnotationAlone(t *testing.T) {
 	t.Parallel()
 	r := tools.NewRegistry()
-	if err := r.RegisterWith(deliverStub{"run_sandbox"}, tools.OriginBuiltin,
-		// The real run_sandbox annotations: a shared write by the
-		// classifier's reading, and still not an answer anybody is
-		// waiting for — a coding run reports back to its own executor.
+	if err := r.RegisterWith(deliverStub{"a2a_ask"}, tools.OriginBuiltin,
+		// The real a2a_ask annotations: a shared write by the
+		// classifier's reading, and still not an answer the person
+		// waiting on the turn is sent — a question to a colleague seat
+		// reports back to the asking turn, not to them.
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}); err != nil {
 		t.Fatal(err)
 	}

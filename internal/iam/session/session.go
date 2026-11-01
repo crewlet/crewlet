@@ -62,6 +62,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Version prefixes every bearer, so a later format is told from this one
@@ -433,6 +434,6 @@ func errNoActiveKey(m runtoken.Material) error {
 	for _, key := range m.Keys {
 		held = append(held, key.ID)
 	}
-	return fmt.Errorf("`secrets.active_key_id` names %q and the keyring holds %v",
-		m.ActiveID, held)
+	return fmt.Errorf("`secrets.active_key_id` names %q and the keyring holds %s",
+		m.ActiveID, words.And(held))
 }

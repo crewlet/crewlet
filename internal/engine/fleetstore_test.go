@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -64,7 +65,7 @@ func readSecret(t *testing.T, b *config.Bootstrap, fleet coord.Secrets, name str
 func TestAStoppedNodesFleetStoreIsReachedAndTheEngineReadsIt(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "stream")
-	b := bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = dir })
+	b := bootstrap(t, func(b *config.Bootstrap) { brokertest.StoreIn(&b.Stream, dir) })
 
 	fs, err := engine.OpenFleetStore(t.Context(), b)
 	if err != nil {
@@ -104,7 +105,7 @@ func TestAStoppedNodesFleetStoreIsReachedAndTheEngineReadsIt(t *testing.T) {
 func TestTheFleetStoreIsRefusedWhileTheEngineHoldsItsBroker(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	back, err := openBackends(t, b)
 	if err != nil {
@@ -134,7 +135,7 @@ func TestANodeThatCannotReachTheStoreAloneIsSentToItsPeers(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]func(*config.Bootstrap){
 		"a member of a cluster": func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Stream.Cluster = config.StreamCluster{Name: "fleet",
 				Peers: []string{"nats://127.0.0.1:1"}}
 			b.Stream.Replicas = 3
@@ -184,7 +185,7 @@ func TestTheFleetStoreOpensNoLeafListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.Stream.Leaf.Port = leafPort
 		b.Stream.Leaf.Host = "127.0.0.1"
 	})

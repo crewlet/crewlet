@@ -1,0 +1,16 @@
+-- A reviewer finds the reviews they gave.
+--
+-- A review is a row on its change's own subject (0096), and a change's reviews
+-- are read in the order they were given by code_reviews_change_idx. What ONE
+-- reviewer gave, across every change of every repository — a seat's reviews,
+-- or a person's by the human seat they hold — is a question of its own: the
+-- code_reviews question's listing (code.ReadReviews), newest first. Read
+-- through the change index it would be every review of every change, so it
+-- reads this index instead: one reviewer's reviews in the order their records
+-- landed, a page from the newest, each kept only where its change's
+-- repository is one the asker may read.
+--
+-- Class: code_reviews stays reproducible (0096): an index writes no row of
+-- its own, and every data node builds it from the rows its applier wrote, so
+-- the identity claim compares what it always did.
+CREATE INDEX code_reviews_reviewer_idx ON code_reviews (reviewer, position);    -- one reviewer's reviews newest first: the reviews listing (code_reviews question)

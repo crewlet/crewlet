@@ -13,7 +13,8 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SESSION_KEEPALIVE_MS, SessionKeepAlive } from "./keepalive.ts";
 import { rest } from "./rest.ts";
-import { currentSessionNeed, sessionRestored } from "./signin.ts";
+import { READER_HEADER } from "../contract/identity.ts";
+import { currentSessionNeed, sessionRestored, setTabReader } from "./signin.ts";
 
 /** Every path the engine was asked, in order. */
 let asked: string[] = [];
@@ -105,4 +106,35 @@ test("a keepalive answered 401 notes that the session needs a sign-in", async ()
   new SessionKeepAlive({ connected: true }).tick(later());
   await settle();
   expect(currentSessionNeed()).toBe("sign_in");
+});
+
+// A TAB THAT ONLY LISTENS LEARNS THE BROWSER CHANGED HANDS HERE. Somebody
+// signed in as somebody else in another tab and this tab's socket never heard
+// the close of its session: its next keepalive names the reader it was drawn
+// for, the engine refuses it `reader_changed`, and the tab is handed over
+// within two intervals rather than drawing the last person's company for as
+// long as it stays open. Mutation: read the session for nobody, as the frame
+// does, and this tab is never told.
+test("a keepalive names the tab's reader, and a refusal for it hands the tab over", async () => {
+  let moved = 0;
+  const uninstall = setTabReader({ current: () => "p-0", moved: () => moved++ });
+  const named: (string | null)[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      named.push(new Headers(init?.headers).get(READER_HEADER));
+      return new Response(JSON.stringify({ error: "reader_changed" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  try {
+    new SessionKeepAlive({ connected: true }).tick(later());
+    await settle();
+    expect(named).toEqual(["p-0"]);
+    expect(moved).toBe(1);
+  } finally {
+    uninstall();
+  }
 });

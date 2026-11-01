@@ -14,6 +14,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { restErrorCode, useRest } from "./useRest.ts";
 import { ClientContext } from "./store-hooks.ts";
 import { LiveSocket, RestError, Store } from "~/protocol/index.ts";
+import { EVERY_QUESTION, session } from "~/protocol/session.ts";
 
 afterEach(() => {
   cleanup();
@@ -39,7 +40,7 @@ function scripted<T>() {
 
 /** A refusal, with the `Retry-After` it carried in whole seconds, or none. */
 const refused = (status: number, retryAfter: number | null = null) =>
-  new RestError(status, { error: "refused" }, retryAfter);
+  new RestError(status, { error: "refused" }, retryAfter, true);
 
 describe("an answer belongs to the read that asked for it", () => {
   test("a superseded read's answer is dropped and its request aborted", async () => {
@@ -277,5 +278,37 @@ describe("the code a refusal renders as", () => {
 
   test("no error is no code", () => {
     expect(restErrorCode(null)).toBeNull();
+  });
+});
+
+// A CHANGE THE ASSISTANT APPLIED re-reads every REST answer on screen, quietly,
+// whichever route made it: the page behind the drawer drew what it held before
+// the change until it was reloaded. A write that names its own domain moves
+// only the questions that read it, and a REST read is none of them.
+//
+// Mutation: drop the listener and the first case never reads again.
+describe("a write whose reach nobody can name", () => {
+  test("re-reads a REST answer quietly, keeping what is on screen", async () => {
+    const { read, calls } = scripted<string>();
+    const { result } = renderHook(() => useRest("/brand", read));
+    await act(async () => calls[0]!.resolve("before"));
+    act(() => {
+      session.written(null, null, [EVERY_QUESTION]);
+    });
+    expect(calls).toHaveLength(2);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data).toBe("before");
+    await act(async () => calls[1]!.resolve("after"));
+    expect(result.current.data).toBe("after");
+  });
+
+  test("a write that names its domain leaves a REST read alone", async () => {
+    const { read, calls } = scripted<string>();
+    renderHook(() => useRest("/brand", read));
+    await act(async () => calls[0]!.resolve("before"));
+    act(() => {
+      session.written("tracker", null, ["work_items"]);
+    });
+    expect(calls).toHaveLength(1);
   });
 });

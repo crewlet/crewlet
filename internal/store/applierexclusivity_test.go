@@ -38,7 +38,7 @@ import (
 // after a reanchor, a probe-flag clear and an inbox sweep — and each had to
 // state its case in terms of the rule. The version reset is gone: its case did
 // not survive the arbitration anchor moving off `version` (see
-// internal/tracker/reanchor.go), and a reanchor now writes nothing but the
+// internal/worklet/reanchor.go), and a reanchor now writes nothing but the
 // framework's own checkpoint. The two that remain are allowed below.
 //
 // # What it walks, and what it cannot see
@@ -551,19 +551,19 @@ var allowedReplicatedWriter = []allowance{
 			"it. The only write is the schema.",
 	},
 	{
-		Prefix: "internal/tracker/apply", Kind: mechanism,
+		Prefix: "internal/worklet/apply", Kind: mechanism,
 		Why: "The tracker domain's applier, across the files it is split " +
 			"over: the record, the task, the objects, the history and the " +
 			"closure walk.",
 	},
 	{
-		Prefix: "internal/tracker/fieldvalues.go", Kind: mechanism,
+		Prefix: "internal/worklet/fieldvalues.go", Kind: mechanism,
 		Why: "Applier.explodeFieldValues and the two row writers it calls. " +
 			"It is applier code in a file the apply* prefix does not cover, " +
 			"which is why it is named rather than inferred from the name.",
 	},
 	{
-		Prefix: "internal/pages/apply", Kind: mechanism,
+		Prefix: "internal/doclet/apply", Kind: mechanism,
 		Why: "The knowledge base's applier — the container half and the " +
 			"page half.",
 	},
@@ -624,7 +624,7 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/artifactdata/configure.go", Kind: mechanism,
 		Why: "The datastore applier's schema change: the collections and the " +
 			"bounded migration it rewrites are decided from the record and the " +
-			"store's own rows, in log order, identically on every node.",
+			"store's own rows, in log order, identically on every data node.",
 	},
 	{
 		Prefix: "internal/artifactdata/history.go", Kind: mechanism,
@@ -632,6 +632,15 @@ var allowedReplicatedWriter = []allowance{
 			"the hot window or the store's byte bound are chosen in one total " +
 			"order from the record's own broker instant, so every delete is a " +
 			"record's rather than a sweep.",
+	},
+	{
+		Prefix: "internal/assistantdomain/apply", Kind: mechanism,
+		Why: "The Dashboard Assistant's applier, across a conversation, its " +
+			"turns, its proposals and an owner's erasure: every row is a pure " +
+			"function of a committed record and same-log rows, every sealed " +
+			"value is the writer's envelope written through unopened, and a " +
+			"purge or an erasure removes a conversation's rows in its own " +
+			"statement list beside the marker that keeps them gone.",
 	},
 	{
 		Prefix: "internal/artifactsdomain/apply", Kind: mechanism,
@@ -646,11 +655,23 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
 		Why: "The identity estate's retention sweep, which is applier code " +
 			"in a file the apply* prefix does not cover — named rather than " +
-			"inferred, for internal/tracker/fieldvalues.go's reason. It is a " +
+			"inferred, for internal/worklet/fieldvalues.go's reason. It is a " +
 			"RECORD rather than a local delete because those rows are " +
 			"identity-claimed: two nodes sweeping on their own clocks would " +
 			"hold different bytes, and the claim that N copies are identical " +
 			"would become a claim about how synchronised they are.",
+	},
+	{
+		Prefix: "internal/chatlet/apply", Kind: mechanism,
+		Why: "The chat domain's applier, across the files it is split " +
+			"over: the record and the gate, the channel half and the " +
+			"message half and the verdict it writes for every message, the " +
+			"room events a channel record writes into its transcript, and " +
+			"the re-derivation of its derived columns from its own rows. It " +
+			"is the domain with TWO disciplines on one stream, and neither " +
+			"of them changes who writes: a message is sequenced rather than " +
+			"arbitrated, and it still reaches these tables only from a " +
+			"committed record.",
 	},
 
 	{
@@ -669,14 +690,14 @@ var allowedReplicatedWriter = []allowance{
 	// record could own what it touches. Read these before adding a fourth.
 	// -----------------------------------------------------------------
 	{
-		Prefix: "internal/tracker/duty.go", Kind: exception,
+		Prefix: "internal/worklet/duty.go", Kind: exception,
 		Why: "clearProbe clears `rank_duplicate_pending`, a column written " +
 			"by every node's own applier from its own probe and by no " +
 			"record — so a record clearing it would be a record about a " +
 			"column no record owns.",
 	},
 	{
-		Prefix: "internal/tracker/inboxsweep.go", Kind: exception,
+		Prefix: "internal/worklet/inboxsweep.go", Kind: exception,
 		Why: "purgeInbox range-deletes `tracker_notifications`, which is " +
 			"statelog.Divergent: it travels inside a snapshot but is not in " +
 			"the identity claim, because what it holds depends on the " +

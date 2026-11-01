@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The key and the version every unknownWriter result holds: what a tool that
@@ -36,88 +36,91 @@ type unknownWriter struct {
 	ops       []string
 }
 
-func (u *unknownWriter) answer(opID string) (tracker.WriteResult, error) {
+func (u *unknownWriter) answer(opID string) (worklet.WriteResult, error) {
 	u.ops = append(u.ops, opID)
-	return tracker.WriteResult{Key: receiptKey, Result: statelog.Result{
+	return worklet.WriteResult{Key: receiptKey, Result: statelog.Result{
 		Outcome: statelog.OutcomeUnknown, OpID: opID, Unvouched: u.unvouched,
 		Version: receiptVersion,
 	}}, nil
 }
 
 func (u *unknownWriter) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
-	_ tracker.TaskPatch, _ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
+	_ worklet.TaskPatch, _ worklet.ChangeKind, _ *worklet.Notify) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) MergeDuplicates(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) MoveTaskToProject(_ context.Context, opID, _, _ string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WriteView(_ context.Context, opID string,
-	_ tracker.View, _ tracker.ViewPrior) (tracker.WriteResult, error) {
+	_ worklet.View, _ worklet.ViewPrior) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
-	return tracker.ViewPrior{}, nil
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
+func (u *unknownWriter) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	return worklet.ViewPrior{Held: true,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}}, nil
 }
 
 func (u *unknownWriter) WriteTypes(_ context.Context, opID string,
-	_ []tracker.TaskType) (tracker.WriteResult, error) {
+	_ []worklet.TaskType) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WriteFields(_ context.Context, opID string,
-	_ []tracker.FieldDef) (tracker.WriteResult, error) {
+	_ []worklet.FieldDef) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WritePins(_ context.Context, opID, _ string,
-	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.PinGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) MarkInbox(_ context.Context, opID, _ string,
-	_ inbox.Gesture[tracker.Reason], _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 // PlaceTask answers both steps of a drag unknown.
-func (u *unknownWriter) PlaceTask(_ context.Context, opID string, _ tracker.Place,
-	_ *tracker.Notify) (tracker.PlaceResult, error) {
+func (u *unknownWriter) PlaceTask(_ context.Context, opID string, _ worklet.Place,
+	_ *worklet.Notify) (worklet.PlaceResult, error) {
 	lane, _ := u.answer(statelog.StepOpID(opID, "lane"))
-	return tracker.PlaceResult{Lane: lane, Version: receiptVersion,
+	return worklet.PlaceResult{Lane: lane, Version: receiptVersion,
 		Unplaced: statelog.ErrUnavailable}, nil
 }
 
 func (u *unknownWriter) WriteProject(_ context.Context, opID, _ string,
-	_ tracker.ProjectEdit, _ tracker.ProjectAuthority) (tracker.WriteResult, error) {
+	_ worklet.ProjectEdit, _ worklet.ProjectAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
 func (u *unknownWriter) WriteTags(_ context.Context, opID, _ string,
-	_ tracker.TagEdit, _ tracker.TagAuthority) (tracker.WriteResult, error) {
+	_ worklet.TagEdit, _ worklet.TagAuthority) (worklet.WriteResult, error) {
 	return u.answer(opID)
 }
 
@@ -170,25 +173,25 @@ func unknownOperatorCalls() map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.UpdateWorkItemTool: {"item": "ENG-1", "status": "done"},
 		builtin.CommentOnWorkTool:  {"item": "ENG-1", "body": "done, see the PR", "ask": "eng"},
-		tracker.MergeWorkItemTool:  {"item": "ENG-2", "into": "ENG-1"},
-		tracker.MoveWorkItemTool:   {"item": "ENG-1", "project": "OPS"},
-		tracker.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
+		worklet.MergeWorkItemTool:  {"item": "ENG-2", "into": "ENG-1"},
+		worklet.MoveWorkItemTool:   {"item": "ENG-1", "project": "OPS"},
+		worklet.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
 			"status": "in_progress", "if_match": 7},
-		tracker.RemoveWorkItemTool:     {"item": "ENG-1"},
-		tracker.RestoreWorkItemTool:    {"item": "ENG-1"},
-		tracker.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
-		tracker.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
-		tracker.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
-		tracker.MarkInboxTool:          {"primary_reasons": []any{"mention"}},
-		tracker.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}},
-		tracker.WriteProjectTool:       {"project": "ENG", "tags_add": []any{map[string]any{"slug": "regression"}}},
+		worklet.RemoveWorkItemTool:     {"item": "ENG-1"},
+		worklet.RestoreWorkItemTool:    {"item": "ENG-1"},
+		worklet.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
+		worklet.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
+		worklet.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
+		worklet.MarkInboxTool:          {"primary_reasons": []any{"mention"}},
+		worklet.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}},
+		worklet.WriteProjectTool:       {"project": "ENG", "tags_add": []any{map[string]any{"slug": "regression"}}},
 	}
 }
 
 // restatingTools are THE TWO THAT STATE A VALUE: they mint a fresh operation
 // per call, so they take no op_id and name the operation they wrote under.
 var restatingTools = map[string]bool{
-	tracker.WriteWorkCatalogueTool: true, tracker.WriteProjectTool: true,
+	worklet.WriteWorkCatalogueTool: true, worklet.WriteProjectTool: true,
 }
 
 // EVERY TRACKER WRITE WHOSE OUTCOME IS UNKNOWN IS ANSWERED AS UNKNOWN, on
@@ -246,8 +249,8 @@ func TestEveryTrackerWriteWhoseOutcomeIsUnknownIsAnsweredAsUnknown(t *testing.T)
 	seatCalls := map[string]map[string]any{
 		builtin.UpdateWorkItemTool: operatorCalls[builtin.UpdateWorkItemTool],
 		builtin.CommentOnWorkTool:  operatorCalls[builtin.CommentOnWorkTool],
-		tracker.MergeWorkItemTool:  operatorCalls[tracker.MergeWorkItemTool],
-		tracker.MoveWorkItemTool:   operatorCalls[tracker.MoveWorkItemTool],
+		worklet.MergeWorkItemTool:  operatorCalls[worklet.MergeWorkItemTool],
+		worklet.MoveWorkItemTool:   operatorCalls[worklet.MoveWorkItemTool],
 	}
 	for _, unvouched := range []bool{false, true} {
 		for name, args := range seatCalls {
@@ -489,8 +492,8 @@ func TestAnUnknownUpdateStopsBeforeItsDependencies(t *testing.T) {
 func TestADependencyOnlyUpdateReportsTheItemsOwnVersion(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.dependAnswer = &tracker.DependencyResult{
-		WriteResult: tracker.WriteResult{Result: statelog.Result{
+	trk.dependAnswer = &worklet.DependencyResult{
+		WriteResult: worklet.WriteResult{Result: statelog.Result{
 			Outcome:  statelog.OutcomeApplied,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 44},
 			Version:  44,
@@ -540,8 +543,8 @@ func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *test
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
-			trk.dependAnswer = &tracker.DependencyResult{
-				WriteResult: tracker.WriteResult{Result: statelog.Result{
+			trk.dependAnswer = &worklet.DependencyResult{
+				WriteResult: worklet.WriteResult{Result: statelog.Result{
 					Outcome:  statelog.OutcomePending,
 					Position: statelog.Position{Stream: "S", Generation: 1, Seq: 90},
 					Version:  90,
@@ -589,9 +592,9 @@ func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *test
 func TestAStoppedGestureCarriesAnUnknownOutcome(t *testing.T) {
 	t.Parallel()
 	for _, unvouched := range []bool{false, true} {
-		sentinel := tracker.ErrStepUnresolved
+		sentinel := worklet.ErrStepUnresolved
 		if unvouched {
-			sentinel = tracker.ErrStepUnvouched
+			sentinel = worklet.ErrStepUnvouched
 		}
 		for name, run := range map[string]func(*testing.T) tools.Result{
 			// A WALKING WRITE, stopped inside the tracker's own sequence.

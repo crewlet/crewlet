@@ -67,8 +67,15 @@ give a person one for each surface they are on. A person who works only
 through the dashboard is on none of them: they act as their seat through the
 [identity directory](#acting-as-your-seat-on-the-dashboard-and-the-api), and a
 seat with no `contact` block is a legitimate seat rather than a mistake. It is
-not refused. What changes is that no agent can @-mention them: a lead's roster
-tells its agents to hand that person work by assigning it in the tracker, and
+not refused. On the engine's [own chat](chatlet.md) nothing changes for them: a
+room addresses a person by their seat's handle, so an agent mentions them there
+like anybody else — a lead's roster gives each human report as `@handle` and
+tells it to mention them in the company's chat or send them a direct message,
+whatever contact identities they hold, unless the seat's holder is
+[withheld](#a-suspended-holder-is-withdrawn-with-no-configuration-change) —
+and they read it on the dashboard. On a vendor's surface no agent can
+@-mention them: a lead's roster tells its agents to hand that person work by
+assigning it in the tracker, and on a company that talks on Mattermost or Slack
 the configuration names the seat in a **warning** at its `contact` — printed by
 `crewlet validate` and carried on every `/config` write's answer — the one
 place the engine says so, and a warning because the state is legitimate. Add a
@@ -184,7 +191,7 @@ vacant):
 
 | The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
 |---|---|---|
-| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, every app ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
 | **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People, and a service account in Settings › Service accounts |
 
@@ -258,7 +265,7 @@ What the binding buys:
 - **The work the chart hands a seat reaches you.** `#/inbox` — one click
   from the dashboard's landing screen — shows your notices, the one reason of eighteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
-  work, and both are the tracker's — they need the `tracker` app. Both ask the
+  work, and both are Worklet's: they need the `worklet` app. Both ask the
   engine who is looking, and your own record is kept under
   the seat you hold — which is where an assignment, a mention and a lead's
   priority list are addressed. Your login names that
@@ -267,7 +274,7 @@ What the binding buys:
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
   you lead this" is asked about the seat you hold — so the person holding a
   unit's lead seat may re-route that unit's project's work, declare its fields
-  and set a report's priorities (each with the `tracker` app), pause, steer and
+  and set a report's priorities (each with the `worklet` app), pause, steer and
   answer for the team's agents, and read those agents' own trail — where a token
   or service account bound to no seat reaches those only through `admin`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
@@ -281,18 +288,23 @@ What the binding buys:
   field and a setting stay `admin`'s. See [A lead edits their own
   team](identity-and-access.md#a-lead-edits-their-own-team).
 
-- **Your writes are the seat's.** A write you make — through the `/work` and
-  `/pages` HTTP routes or through your assistant — is recorded under the
+- **Your writes are the seat's.** A write you make (through the `/worklet` and
+  `/doclet/pages` HTTP routes or through your assistant) is recorded under the
   seat's handle with the author kind `human`, which is what keeps you out of
   the wake your own change sends. There is still no way for a caller to name a seat to act as.
   See [who a write is attributed
   to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
+- **The company's own chat is yours to speak in.** On
+  [`chat.backend: chatlet`](chatlet.md#people) every room is read, and every message
+  written, as the seat you hold — with the `chatlet` app — because a room shows
+  each speaker by seat and its members are seats. Your messages carry the
+  seat's handle with author kind `human`, like every other write.
 - **Your git pushes are yours.** A company that hosts its repositories in the
   engine ([`code.native`](code-host.md)) is cloned, fetched and pushed to over
   HTTPS with a token as git's password — your own machine token (`crewlet iam
   token -login` mints one for you), or a Tier A token the directory binds to a
   seat. git is one more way a person acts, beside the dashboard's act route,
-  the `/work` and `/pages` routes and their assistant's MCP, and it follows the
+  the `/worklet` and `/doclet/pages` routes and their assistant's MCP, and it follows the
   same binding: a token acting as a
   human seat pushes **as that person**, while a credential bound to no seat
   fetches only, and a push with it is refused at its first request saying so.
@@ -305,7 +317,7 @@ What the binding buys:
   keep one team's seats out of another's
   ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
   is how to set it up, and
-  [ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-person-reaches-git-with-their-own-bound-token.md)
+  [ADR-0078](https://github.com/crewlet/crewlet/blob/main/adr/0078-a-person-reaches-git-with-their-own-bound-token.md)
   why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
@@ -315,20 +327,38 @@ its own all the same: its pins, its inbox marks, its priorities and its
 personal views are kept under that **login**, which is the name every write it
 makes is attributed to and the name every personal read answers for — so what
 its assistant arranges is what its screens show. What it lacks is the work the
-chart addresses to a seat, and the screens say so, naming `crewlet iam bind`:
+chart addresses to a seat, and the company's own chat, which is read and
+spoken in only as a seat (`unseated`), and the screens say so, naming
+`crewlet iam bind`:
 a service account or a token's row is bound to a human seat nobody holds. A
 **person** is never in this state: they hold a human seat for as long as they
 are here, and the directory refuses every write that would leave one without
 it.
 
-Read and snooze marks are the `mark_inbox` tool wherever they are made — the
+Read and snooze marks are the `mark_inbox` tool wherever they are made (the
 dashboard's buttons through `/operator/act`, a script through
-`PUT /work/people/{handle}/inbox`, your assistant over `/operator/mcp` — and
+`PUT /worklet/people/{handle}/inbox`, your assistant over `/operator/mcp`), and
 each is written as the principal who made it, under the same record name. The
 dashboard writes no work item, page or inbox record as itself: a button in a
 browser writes as the person signed in behind it, never as "the dashboard",
 which is nobody, so what it shows is what the engine recorded and every write
 behind it is attributed to somebody.
+
+**The tools are shared, so what they say is worded for each reader.** A person
+in the dashboard and an agent call the same tools, and a write that landed can
+come back with a caveat: the item went to triage because the project's default
+assignee has left the chart, a time was stored as its date. An agent is told
+it in words for a model, naming the tool and argument it would use next; a
+person is told it in the words of the screen, and is never shown advice that
+names an argument they have no control for. Each caveat also says whether
+somebody has to act on it, which is what decides whether its toast stays
+until dismissed or goes by itself. A refusal follows the same rule: an agent
+is told what to change in its own terms, and a person is told in the words of
+the screen, or, where nobody has worded that refusal for a person yet, in the
+plain sentence for its kind ("Somebody changed this after you read it"),
+never in the agent's words
+([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
+[What it answers](../reference/api-endpoints.md#what-it-answers)).
 
 **The binding lives in the directory**, not on the token and not in the
 company document. Tier A is the root of trust and may never read Tier B — it
@@ -442,11 +472,23 @@ Two consequences:
    by the tool where the work lives (a Jira assignment emails the
    assignee; a Slack mention pings them). A schedule never fires into a
    human seat either (see the table below). What the engine does tell a
-   person about is its OWN tracker — see
+   person about is its OWN tracker, Worklet: see
    [How a person learns they have work](#how-a-person-learns-they-have-work).
 2. **Agents must never wait.** The turn model is already asynchronous:
    the prompts and tool errors steer the LLM to leave state on the
    surface and end the turn.
+
+**On Chatlet the first consequence holds and its REASON does not, which is
+worth knowing before you choose that backend.** A human seat still has no turn
+to wake, so nothing changes about delivery. But the sentence above — "the
+person is already notified natively by the tool where the work lives" — is
+true because Jira emails its assignee and Slack pings its mentions, and with
+`chat.backend: chatlet` there is no such tool: the engine is where the
+conversation lives, and the engine has never sent anything as itself. So a
+person mentioned in Chatlet learns about it when they next open the
+dashboard, and not before. What they get there is an unread count and a mention
+feed. See [Chatlet § What is not here](chatlet.md#what-is-not-here); an agent that
+genuinely needs a person *now* escalates through a surface that does push.
 
 ---
 
@@ -459,7 +501,7 @@ on where the work lives:
   a Slack mention pings them, a GitHub review request lands in their GitHub
   inbox. The engine forwards none of it — see the loop above.
 - **The engine's own inbox.** Every change to the
-  [native tracker](task-engine.md) writes a notice to each person it concerns,
+  [Worklet](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
   `blocking`, …), and so does every record about a change on the company's
   [own code host](code-host.md) (`mention`, `review_requested`,
@@ -468,15 +510,18 @@ on where the work lives:
   notices by when each happened, and open to **every signed-in person** —
   whose inbox it is is the composed question's own rule, your own or a
   report's you lead, with no app. Each domain's notices are then read under
-  that domain's own permission: the tracker's with the `tracker` app (the
-  `work_inbox` question, which stays the tracker's own), the code host's held
+  that domain's own permission: Worklet's with the `worklet` app (the
+  `work_inbox` question, which stays Worklet's own), the code host's held
   to your grant on each change's repository — which every person holds on
-  every repository. Somebody without Tracker still sees a question a
+  every repository. Somebody without Worklet still sees a question a
   colleague put to them on a work item, among their decisions, and may open
   that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
-  agents send everything else through the tracker, which is why the
-  dashboard warns when Tracker is left unticked for a person.
+  agents send everything else through Worklet, which is why the
+  dashboard warns when Worklet is left unticked for a person. A mention in the
+  engine's own chat is not a notice here: chat keeps its own unread counts and
+  a mention feed, read in the dashboard's Chatlet with the `chatlet` app, and the
+  dashboard warns of an unticked Chatlet on a company that runs it.
 - **The dashboard, the moment that inbox moves.** For somebody with no Slack or
   Jira account — a person who works in Crewlet only — this is the delivery
   surface.
@@ -486,8 +531,8 @@ The third is a **push**, not a poll:
 ```mermaid
 sequenceDiagram
     participant W as Writer (a seat, a person)
-    participant L as Tracker log
-    participant N as Every data node's tracker applier
+    participant L as Worklet's log
+    participant N as Every data node's Worklet applier
     participant S as That node's sockets
     participant D as Sarah's dashboard
     D->>S: watch sarah-chen (on every socket open)
@@ -517,7 +562,9 @@ sequenceDiagram
   out, its applier for that domain is the one thing on it nobody vouches for,
   and the node follows the movements of a data node whose copy of THAT domain
   serves instead, relayed over the broker, and withholds its own — while
-  every other domain's movements still come from its own appliers. Each
+  every other domain's movements still come from its own appliers. Every ask and answer on that relay is signed
+  under the fleet keyring and bound to the ask it answers, so an answer the
+  fleet did not sign reaches no screen. Each
   switch — onto a peer, from one peer to another, back to its own applier —
   sends every watched inbox one frame naming the domain that switched and
   counting nothing, because what moved during the switch is not replayed: the
@@ -534,9 +581,9 @@ sequenceDiagram
   and a count — the domain, the seat, the subject, the reason — and never what
   the notice says, which is read through `inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
-  a lead may watch a seat they lead; an administrator may watch any — with no
+  a lead may watch a seat they lead; an administrator may watch any, with no
   app, since a watch is decided as the composed inbox's own read, whose frames
-  announce the code host's notices beside the tracker's. The
+  announce the code host's notices beside Worklet's. The
   frame itself asks nothing more: it reaches exactly the sockets whose watch
   of the seat was allowed. A watch
   this node cannot decide — it runs no company yet — is not installed,
@@ -621,6 +668,10 @@ colleague-surface tools** during Execute, never via the engine:
   [Tool Capabilities](tool-capabilities.md)). The human's reply lands on
   the agent's own bot identity and re-enters through the normal inbound
   pipeline, so the answer goes back to the agent that asked.
+- **The engine's own chat** — the agent opens a direct conversation with
+  `send_dm`, or names the person by handle in a room with `post_message`,
+  both first-party tools. The person's reply is a record on the chat log, and
+  the wake it derives goes back to the agent it answers like any other.
 - **Jira / Confluence / GitHub** — the agent comments / requests review
   with its own tools and the mention markup; the target is the artifact
   (issue / page / PR), the human is mentioned in the body.
@@ -639,17 +690,22 @@ When a turn only discovers it needs a human at review, the reviewer
 returns `self_iterate` with a note, and the executor's next round makes
 the mention. Once the mention has gone out the reviewer ends the turn
 `done` instead — the human's reply is what re-triggers the agent, so no
-further round of that turn can produce it. If the agent genuinely **can't reach the human** (it has no
-chat tool, or the human has no contact ID), that surfaces as a gap to
-close: give the agent the tool, or route the work through a colleague who
-has it. A human with no contact ID at all is the legitimate case of a
-person who works only through the dashboard, which the configuration warns
-about at the seat's `contact`: the roster tells a lead to hand them work by assigning
-it in the tracker, and a contact identity is what to add the day they join a
-surface the company runs. The engine never manufactures a sender to bridge
-the gap: there is no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
-colleague-tool use, so a report reaches a human exactly the way it reaches
-an agent.
+further round of that turn can produce it. If the agent genuinely **can't
+reach the human** (it has no chat tool, or the human has no contact ID on
+the vendor surface it would mention them on — the engine's own chat needs
+none), that surfaces as a gap to close: give the agent the tool, or route
+the work through a colleague who has it. A human with no contact ID at all
+is the legitimate case of a person who works only through the dashboard.
+On a company that talks on Mattermost or Slack the configuration warns
+about it at the seat's `contact` — and about a seat whose only ids are for
+other surfaces, since a GitHub login reaches nobody in a chat room: the
+roster tells a lead to hand them work by assigning it in the tracker, and
+an id on that workspace is what to add the day they join it. On the
+engine's own chat there is nothing to warn about, because the person reads
+the rooms on the dashboard as their seat. The engine never manufactures a
+sender to bridge the gap: there is no "Crewlet" DM and no engine-side
+fallback. Escalation is ordinary colleague-tool use, so a report reaches a
+human exactly the way it reaches an agent.
 
 ---
 
@@ -822,6 +878,19 @@ holds two kinds of entry:
   resolved against the live server at connect, are carried across into the
   new registry instead: they are facts about a server rather than about the
   company.
+
+The engine's **own surfaces hold no entry at all**, and need none: on its
+[work tracker](task-engine.md), its [knowledge base](knowledge-system.md) and
+its [chat](chatlet.md) the actor a record names is the seat's handle, so the id a
+wake names its sender by IS that handle. The engine declares those three
+sources to every registry it builds as namespaces whose ids are handles, and
+`ByExternalID` on one answers `ByHandle`. That is what makes a person's comment
+on a Worklet task, a remark on a Doclet page or a message in the engine's chat
+come from their seat everywhere a sender is read — the
+[learning](agent-learning.md) profile it is filed under, the
+[requester](artifacts.md#sharing) an agent's artifact tools act for,
+and the colleague a [thread block](agent-runtime.md#text-somebody-else-wrote)
+fences them as — rather than from an outside party nobody can name.
 
 ### A suspended holder is withdrawn with no configuration change
 

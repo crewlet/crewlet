@@ -2,8 +2,8 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"math"
 	"net/http"
@@ -15,11 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -32,23 +36,32 @@ import (
 // type would be test-only machinery in shipped config — a thing an operator
 // could set and a thing this suite could get right while the real backend was
 // wrong. Driving the REAL backend against a scripted CLI tests what sits
-// between the model and everything asserted here: the transcript a request is
-// flattened into, the system prompt's own channel, the process launched in a
-// seat's own home on an allowlisted environment, the response envelope and
-// the tool calls decoded from it, the usage read off the CLI's output, and the
-// fallback chain.
+// between the model and everything asserted here: the transcript a run is
+// handed, the system prompt's own channel, the process launched in a seat's
+// own home on an allowlisted environment, the seat's tools served to the CLI's
+// own loop over MCP and every call it makes through them, each model request
+// and its usage read off the CLI's record, and the fallback chain.
 //
-// The `%s` is that entry, under the key `scripted` every seat here names —
-// rendered by [goldenCompany], which is the one way to fill it.
+// The model entry is one of TWO, because the executor is not a run on this
+// host. Every
+// agent seat's executor is its coding CLI's own run in a box, and only a CLI
+// with an in-box runner can take one — which `custom` has not. So every seat
+// here names the chain `[scripted, coder]`: the scripted CLI at the head, which
+// every phase on this host takes (onboarding, the reviewer, workers, side passes), and
+// `coder`, a Claude Code entry, which the executor's launch takes, skipping the
+// head. Its run happens in a real `direct` box whose `claude` is this binary
+// again ([codingCLIEnv]), asking the SAME scripted model each round.
+//
+// The three `%s` are the box catalogue, the scripted entry and the coder entry
+// — rendered by [goldenCompany], which is the one way to fill them.
 const companyDoc = `
 name: Nimbus
 providers:
-  llm:
-%s
-roles:
+%s  llm:
+%s%sroles:
   - name: CEO
     handle: ceo
-    llm: scripted
+    llm: [scripted, coder]
   - name: Founder
     kind: human
     contact:
@@ -82,14 +95,26 @@ units:
     lead: ceo
 turn_engine:
   max_iterations: 1
-  max_tool_rounds: 3
 `
 
-// goldenCompany is the golden company document with its model entry driving
-// model's scripted CLI.
+// goldenCompany is the golden company document with its model entries driving
+// model's scripted CLI and its executor runs asking model too.
 func goldenCompany(model *scriptedModel) string {
-	return fmt.Sprintf(companyDoc, model.entry("scripted"))
+	return fmt.Sprintf(companyDoc, model.sandbox(), model.entry("scripted"), model.coder("coder"))
 }
+
+// ceoSeat is how the golden company's agent seat opens, for a fixture that
+// extends the seat by replacing it: its handle and the chain every seat here
+// names (see [companyDoc]).
+const ceoSeat = "    handle: ceo\n    llm: [scripted, coder]\n"
+
+// runPollInterval is how often a node here polls its executor runs for
+// completion ([engine.Options.SandboxPollInterval]).
+//
+// Sized in production against coding jobs that run for minutes; at that
+// cadence every turn here — each one's executor a run in a box that finishes
+// in a moment — would wait out a real tick before its review.
+const runPollInterval = 100 * time.Millisecond
 
 // tickInterval is the shared tick's cadence on a single node here. Short enough
 // that the spend rollup lands inside a test, long enough not to drown the
@@ -258,6 +283,12 @@ type node struct {
 	// nothing left to stop. Nil on a fleet member, whose teardown is the
 	// fleet's.
 	stop func()
+
+	// chat is the node's chat hub, attached to its engine as `crewlet run`
+	// attaches one ([newEngine]) — on every node, an API or none, because a
+	// seat raises its working indicator wherever its turn runs, as its
+	// member of the room's presence on that node's presence hub.
+	chat *api.EngineChatLive
 }
 
 // start stands one up.
@@ -281,11 +312,11 @@ type nodeSpec struct {
 	// company amends the golden company document.
 	company func(doc string) string
 	// boot amends the operator's half of the configuration, for the cases
-	// that need it — a bearer token a person writes with, or the paths, the
-	// coordination and the object store a restored node runs on. It runs
-	// after the fresh store and stream paths are set, so a path it names
-	// wins, and before the store is seeded, which leaves a file already
-	// there as it is.
+	// that need it — the sign-in a person's browser uses ([withSignIn]), or
+	// the paths, the coordination and the object store a restored node runs
+	// on. It runs after the fresh store and stream paths are set, so a path
+	// it names wins, and before the store is seeded, which leaves a file
+	// already there as it is.
 	boot func(*config.Bootstrap)
 	// env is what the node's `${VAR}` references resolve to beyond the
 	// harness's own ([nodeEnvironment]).
@@ -328,16 +359,22 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	}
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	withServingTierA(t, &boot)
+	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so
+	// an amendment can override a path or the credential as well as add to
+	// them — the seed then lands where the amended store opens — and nothing
+	// it sets is quietly overwritten by a default applied afterwards.
 	if spec.boot != nil {
 		spec.boot(&boot)
 	}
 	seedStore(t, &boot)
 
-	e, err := engine.New(t.Context(), engine.Options{
+	ln := bridgeListener(t, "")
+	e, chatLive, engineStops, err := newEngine(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(spec.env),
+		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
+		BoxHostURL: listenerURL(ln),
 		// THIS TEST BINARY IS THE HOOK a node hosting code execs as its
 		// proc-receive (TestMain answers it), because the binary is not
 		// `crewlet`. Handed to every node, as `crewlet run` hands its own
@@ -345,30 +382,79 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 		// host and never reads it.
 		GitHook: codetest.HookCommand(t),
 	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
 	// ONE TEARDOWN, registered before anything can fail, so a Start or an
 	// API that fails halfway still stops what came up: the API in front of
-	// the engine, then the engine. A case may call it early; the cleanup
-	// then finds it done.
+	// the engine, then the chat hub and the engine in [newEngine]'s order. A
+	// case may call it early; the cleanup then finds it done.
 	var apiStops []func()
 	stop := sync.OnceFunc(func() {
 		stopInReverse(apiStops)
-		e.Stop(context.Background())
+		stopInReverse(engineStops)
 	})
 	t.Cleanup(stop)
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv, stops, err := wireAPI(t.Context(), e, &boot, nil, nil)
+	app, srv, stops, err := wireAPI(t.Context(), e, &boot, chatLive.Hub(), ln, nil)
 	apiStops = stops
 	if err != nil {
 		t.Fatalf("api: %v", err)
 	}
 
-	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(), stop: stop}
+	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
+		chat: chatLive, stop: stop}
+}
+
+// newEngine builds a node's engine as `crewlet run` builds it: [engine.New],
+// and straight after it the process's chat hub ([api.NewEngineChatLive]) —
+// started, and attached to the engine whether or not the node will serve an
+// API. A node that serves one mounts its socket over the same hub
+// ([serveAPI]); a node that serves none still answers the fleet's presence
+// probe for the indicators its seats raise, which is what the hub exists on
+// such a node for.
+//
+// NEVER a sequence written out at each boot path. The hub used to be built by
+// the API's wiring here ([wireAPI]), which is exactly where `crewlet run` must
+// not build it (TestRunBuildsTheChatHubOnEveryNode): a node the harness stood
+// up with no API — the stateless pair's seats-only member — attached none, and
+// an indicator its seat raised was answered for by nobody.
+//
+// THE TEARDOWN IS RETURNED in the order the two came up, for the caller to run
+// in reverse ([stopInReverse]) — the hub before the engine, in `crewlet run`'s
+// shutdown order: the engine's appliers announce into the hub until it stops,
+// and its teardown closes the broker the hub's answerer is subscribed on. Both
+// on [context.WithoutCancel], because the context a boot runs under has often
+// ended by the time its teardown runs. Returned on failure too, holding
+// whatever did come up. The caller starts the engine.
+func newEngine(ctx context.Context, opts engine.Options) (
+	*engine.Engine, *api.EngineChatLive, []func(), error) {
+
+	e, err := engine.New(ctx, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stops := []func(){func() { e.Stop(context.WithoutCancel(ctx)) }}
+	chatLive := api.NewEngineChatLive(ctx, e)
+	stops = append(stops, func() { chatLive.Stop(context.WithoutCancel(ctx)) })
+	return e, chatLive, stops, nil
+}
+
+// bootEngine is [newEngine] for a node that lives as long as its test, on the
+// test's goroutine: torn down when the test ends — registered before anything
+// can fail, so an engine that never started is stopped too — and failing the
+// test when the engine is refused.
+func bootEngine(t *testing.T, opts engine.Options) (*engine.Engine, *api.EngineChatLive) {
+	t.Helper()
+	e, chatLive, stops, err := newEngine(t.Context(), opts)
+	t.Cleanup(func() { stopInReverse(stops) })
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	return e, chatLive
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a
@@ -399,41 +485,55 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 }
 
 // scriptedModel is the model behind the scripted CLI ([scriptedEntry]): every
-// call the engine makes reaches it as the one request the CLI posts, and it
-// answers by PHASE.
+// model request a CLI run makes reaches it as the one request the CLI posts
+// for it ([modelRequest]), and it answers by PHASE.
 //
-// Keyed on the tools the request offers rather than on call ORDER: a phase that
-// retries, a rescue, or an extension all send another request, and a script
-// that counted would answer the second executor call with the reviewer's
-// reply. What distinguishes the phases is what they can invoke — submit_work,
-// submit_review, or neither — which is exactly the fact the runner varies.
+// Keyed on the tools the request offers rather than on request ORDER: a phase
+// that retries, a rescue, a run the engine ended and started again, or an
+// extension all send another request, and a script that counted would answer
+// the second executor request with the reviewer's reply. What distinguishes the
+// phases is what they can invoke — submit_work, submit_review, or neither —
+// which is exactly the fact the runner varies, and the tools are the ones the
+// CLI listed from the seat's server, never a list the prompt mentions.
 type scriptedModel struct {
 	url string
 
 	// stateDir is where the entry driving this model's CLI keeps its seats'
 	// homes ([scriptedEntry]) — this model's own, so no two nodes' entries
-	// share one unless they share the model.
+	// share one unless they share the model. The coder entry keeps its own
+	// beside them ([codingEntry]; each CLI under <state_dir>/<agent>), and
+	// the boxes its runs happen in and the shim they run live under it too.
 	stateDir string
+
+	// shim is the stand-in coding CLI a box's setup installs as its
+	// `claude`, answering from this model ([codingShim]).
+	shim string
 
 	// close shuts this model's HTTP server down. See [scriptedModel.listen]
 	// for why it is a field as well as a t.Cleanup.
 	close func()
 
+	// Everything below is ONE ENTRY PER MODEL REQUEST, at one index — see
+	// [scriptedModel.sawRequest].
 	mu      sync.Mutex
 	calls   []string
 	offered []string
-	// prompts is the transcript of every call, as the CLI read it on stdin,
-	// so a test can read what came BACK from a tool as well as what went
-	// out — a tool result rides the conversation, not the system prompt.
+	// prompts is the transcript of every request's run, as the CLI read it
+	// on stdin.
 	prompts []string
+	// results is every tool result each request handed the model back —
+	// the earlier runs' the transcript carries, then the run's own — so a
+	// test can read what came BACK from a tool as well as what went out: a
+	// tool result rides the conversation, not the system prompt.
+	results [][]string
 
-	// systems is the SYSTEM prompt of every call, as the CLI read it off
+	// systems is the SYSTEM prompt of every request, as the CLI read it off
 	// its own channel, which is where the turn-start prefetch's blocks
 	// land. Captured because "the block was rendered" and "the model was
 	// shown it" are different claims and only the second one matters.
 	systems []string
-	// channels is which channel each call's system prompt came on
-	// ([cliCall.Channel]).
+	// channels is which channel each request's system prompt came on
+	// ([modelRequest.Channel]).
 	channels []string
 
 	// engages makes the executor call a tool before answering, which is
@@ -442,7 +542,7 @@ type scriptedModel struct {
 	// tool — but this document configures none, so the default turn ends
 	// having called nothing and every learning worker correctly skips it.
 	// Opt-in rather than default because the phase-count assertions
-	// elsewhere are written against a one-round Execute.
+	// elsewhere are written against a one-request Execute.
 	engages bool
 	// engaged records whether the extra call has already been made this
 	// turn, so the executor calls the tool once and then answers.
@@ -450,14 +550,22 @@ type scriptedModel struct {
 
 	// searchQuery makes the executor call search_knowledge once with that
 	// query. Opt-in for the same reason engages is: the phase-count
-	// assertions elsewhere are written against a one-round executor.
+	// assertions elsewhere are written against a one-request executor.
 	searchQuery string
 	searched    bool
 
-	// calls are tool calls the executor makes, one per round, before it
+	// calls are tool calls the executor makes, one per request, before it
 	// submits — the scripted half of a turn whose subject is what a tool
 	// did rather than what the model said.
 	scripted []scriptedCall
+
+	// chat scripts an executor that was woken in a room: which chat tool
+	// it reaches for, in what order, and how it answers the engine's own
+	// refusal of a delivery claim. Nil for every case whose subject is not
+	// the company's own chat. It lives in chat_test.go, beside the cases
+	// it serves — this field and the one branch below are all the shared
+	// endpoint has to know about it.
+	chat *chatScript
 }
 
 // scriptedCall is one tool call the executor makes.
@@ -466,8 +574,8 @@ type scriptedCall struct {
 	input map[string]any
 }
 
-// callOnExecute makes the next executor rounds call a tool, once each, in the
-// order given, before the round that submits.
+// callOnExecute makes the next executor requests call a tool, once each, in
+// the order given, before the request that submits.
 func (m *scriptedModel) callOnExecute(tool string, input map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -502,7 +610,7 @@ func (m *scriptedModel) searchOnExecute(query string) {
 	m.searchQuery, m.searched = query, false
 }
 
-// shouldSearch reports whether this executor round is the searching one, and
+// shouldSearch reports whether this executor request is the searching one, and
 // marks it spent.
 func (m *scriptedModel) shouldSearch() (string, bool) {
 	m.mu.Lock()
@@ -514,7 +622,7 @@ func (m *scriptedModel) shouldSearch() (string, bool) {
 	return m.searchQuery, true
 }
 
-// shouldEngage reports whether this Execute round is the tool-calling one,
+// shouldEngage reports whether this Execute request is the tool-calling one,
 // and marks it spent.
 func (m *scriptedModel) shouldEngage() bool {
 	m.mu.Lock()
@@ -540,7 +648,36 @@ func newScriptedModelIn(t *testing.T, stateDir string) *scriptedModel {
 	t.Helper()
 	m := &scriptedModel{stateDir: stateDir}
 	m.listen(t, m.serve)
+	m.installShim(t)
 	return m
+}
+
+// installShim writes the stand-in coding CLI answering from this model
+// ([codingShim]), for its company's boxes to install.
+//
+// ERRORF, NOT FATALF: a cluster member's model is built off the test's
+// goroutine, where Fatalf ends only that goroutine. A shim that is not there
+// fails every run's setup with the reason, and this says it first.
+func (m *scriptedModel) installShim(t *testing.T) {
+	t.Helper()
+	shim, err := writeCodingShim(filepath.Join(m.stateDir, "coding-cli"), m.url)
+	if err != nil {
+		t.Errorf("installing the stand-in coding CLI: %v", err)
+	}
+	m.shim = shim
+}
+
+// sandbox is the providers.sandbox block this model's company runs its
+// executors under: its boxes beside the model's state, each installing the
+// shim answering from this model ([codingSandbox]).
+func (m *scriptedModel) sandbox() string {
+	return codingSandbox(filepath.Join(m.stateDir, "boxes"), m.shim)
+}
+
+// coder is the providers.llm entry, under key, every seat's executor launches
+// on ([codingEntry]).
+func (m *scriptedModel) coder(key string) string {
+	return codingEntry(key, m.stateDir)
 }
 
 // listen serves handler as this model, for as long as the test runs.
@@ -564,22 +701,20 @@ func (m *scriptedModel) entry(key string) string {
 }
 
 func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
-	call, offered, ok := readCall(w, r)
+	req, ok := readRequest(w, r)
 	if !ok {
 		return
 	}
-	names := slices.Sorted(maps.Keys(offered))
-	// ONE RECORD PER CALL, WRITTEN WHERE THE PHASE IS KNOWN — see
-	// [scriptedModel.sawCall] for what pairing them separately cost.
-	saw := func(phase string) {
-		m.sawCall(phase, strings.Join(names, "+"), call)
-	}
+	offered := req.offers()
+	// ONE RECORD PER REQUEST, WRITTEN WHERE THE PHASE IS KNOWN — see
+	// [scriptedModel.sawRequest] for what pairing them separately cost.
+	saw := func(phase string) { m.sawRequest(phase, req) }
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
 	// makes each one unambiguous. submit_* first, because those name one
 	// phase each; onboarding is then the pass that offers mark_onboarded
 	// and neither submit tool.
-	var reply string
+	var reply modelReply
 	switch {
 	case offered["submit_review"]:
 		// Checked FIRST. The reviewer's system prompt embeds the
@@ -598,14 +733,34 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			reply = toolUse(call.tool, call.input)
 			break
 		}
+		if answer, hold, ok := m.chatAnswer(req); ok {
+			// A SEAT WOKEN IN A ROOM. Recorded as execute like every
+			// other request of this phase — what differs is that the
+			// script reads what the request hands back, because the
+			// request it has to get right is the one after the engine
+			// refused a delivery claim. See [chatScript].
+			saw("execute")
+			// HELD, if the case asked, until it has seen the seat at
+			// work — or until the engine stops waiting for this answer,
+			// so a case that failed first cannot leave a request open
+			// for the server's close to wait on.
+			if hold != nil {
+				select {
+				case <-hold:
+				case <-r.Context().Done():
+				}
+			}
+			reply = answer
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
 			break
 		}
 		if m.shouldEngage() {
-			// The round that CALLS something. Recorded as execute like
-			// the submitting round, because it is the same phase — what
+			// The request that CALLS something. Recorded as execute like
+			// the submitting one, because it is the same phase — what
 			// differs is that this turn leaves an observable trace, which
 			// is the condition every learning worker is gated on.
 			saw("execute")
@@ -614,10 +769,15 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		saw("execute")
 		reply = toolUse("submit_work", map[string]any{
-			// `delivered` with no cited call, which is honest here: this
-			// company registers no delivery tool and nobody is waiting on
-			// the turn, so the answer IS the artifact and the engine
-			// demands a citation only where a tool was the way to deliver.
+			// `delivered` with no cited call, which is honest for the
+			// wakes this default serves: an unaddressed notification
+			// ([node.wake]) owes nobody a tool reply, so the answer IS
+			// the artifact and the engine demands a citation only where a
+			// tool was the way to deliver. A turn somebody IS waiting on —
+			// a task assignment, a message addressed to the seat — is
+			// scripted by its case ([scriptedModel.callOnExecute],
+			// [chatScript]), because this claim is refused there until the
+			// rounds run out and the engine writes the outcome itself.
 			"outcome": "delivered",
 			"summary": "Three PRs merged, one incident, zero regressions.",
 		})
@@ -630,20 +790,20 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
-	case auxiliaryPass(call.System) != "":
+	case auxiliaryPass(req.System) != "":
 		// AN AUXILIARY PASS, not a phase. The prefetch's memory filter,
 		// knowledge query and episode summary all reach this same
 		// model with no tools offered, and counting them as Execute
 		// made the phase list report work that never happened — and made
 		// "the first execute call" name a prompt the executor never saw.
-		pass := auxiliaryPass(call.System)
+		pass := auxiliaryPass(req.System)
 		saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
 	default:
 		saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
 	}
-	_, _ = io.WriteString(w, reply)
+	answer(w, reply)
 }
 
 // auxiliaryPass names which prefetch pass a request is, or "" for a phase.
@@ -698,21 +858,21 @@ func auxiliaryAnswer(pass string) string {
 	}
 }
 
-// sawCall records everything ONE model call is known by, in ONE critical
-// section: the phase it was, the tools it was offered, the system prompt it
-// was shown and its whole transcript.
+// sawRequest records everything ONE model request is known by, in ONE
+// critical section: the phase it was, the tools it was offered, the system
+// prompt it was shown, its run's transcript and the tool results it carried.
 //
 // # Why they cannot be appended separately
 //
 // Because every reader PAIRS THEM BY INDEX — [executorPrompt] finds "execute"
 // in calls and reads systems at the same position — and that only holds if one
-// call appends to all of them without another getting in between. It did not.
-// serve appended the prompt, the tools and the body before the switch (it has
-// to: the phase is not known until the request is read), released the lock,
-// and saw appended the phase after. Two requests in flight — two seats, or a
-// seat and one of the prefetch's auxiliary passes, which is the ordinary case
-// — interleave between those two sections, and from then on calls[i] and
-// systems[i] are different calls.
+// request appends to all of them without another getting in between. It did
+// not. serve appended the prompt, the tools and the body before the switch (it
+// has to: the phase is not known until the request is read), released the
+// lock, and saw appended the phase after. Two requests in flight — two seats,
+// or a seat and one of the prefetch's auxiliary passes, which is the ordinary
+// case — interleave between those two sections, and from then on calls[i] and
+// systems[i] are different requests.
 //
 // Measured: the end-to-end skills case read a prompt with no "## Tool skills"
 // section and failed on a section that was there all along, having been handed
@@ -723,18 +883,21 @@ func auxiliaryAnswer(pass string) string {
 // So the phase is what the record is BUILT WITH rather than appended
 // alongside, which is the same rule the engine's own write authority states:
 // take one snapshot and decide inside it.
-func (m *scriptedModel) sawCall(phase, tools string, call cliCall) {
+func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
+	tools := strings.Join(slices.Sorted(slices.Values(req.Tools)), "+")
+	results := req.toolResults()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, phase)
 	m.offered = append(m.offered, tools)
-	m.systems = append(m.systems, call.System)
-	m.channels = append(m.channels, call.Channel)
-	m.prompts = append(m.prompts, call.Prompt)
+	m.systems = append(m.systems, req.System)
+	m.channels = append(m.channels, req.Channel)
+	m.prompts = append(m.prompts, req.Prompt)
+	m.results = append(m.results, results)
 }
 
-// misrouted names every call whose system prompt came on the wrong channel: a
-// seat's round — one offering a tool only the tool loop offers — anywhere but
+// misrouted names every request whose system prompt came on the wrong channel:
+// a seat's phase — one offering a tool only the tool loop offers — anywhere but
 // the append channel, which keeps the CLI's own prompt, and an auxiliary pass
 // anywhere but the replace channel, which has no use for it.
 func (m *scriptedModel) misrouted() []string {
@@ -756,18 +919,10 @@ func (m *scriptedModel) misrouted() []string {
 			want = channelAppend
 		}
 		if want != "" && m.channels[i] != want {
-			bad = append(bad, fmt.Sprintf("call %d (%s) on %q, want %q", i, phase, m.channels[i], want))
+			bad = append(bad, fmt.Sprintf("request %d (%s) on %q, want %q", i, phase, m.channels[i], want))
 		}
 	}
 	return bad
-}
-
-// saw records a phase alone, for a scripted model that keeps no prompts —
-// see [newSandboxModel], whose handler never recorded them.
-func (m *scriptedModel) saw(phase string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, phase)
 }
 
 func (m *scriptedModel) seen() []string {
@@ -776,7 +931,21 @@ func (m *scriptedModel) seen() []string {
 	return append([]string(nil), m.calls...)
 }
 
-// systemPrompts is what the model was actually shown, per call.
+// promptsOf is the transcript every request of phase ran on, as the CLI read
+// it on stdin — where a note the turn read before the phase opens it.
+func (m *scriptedModel) promptsOf(phase string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for i, seen := range m.calls {
+		if seen == phase {
+			out = append(out, m.prompts[i])
+		}
+	}
+	return out
+}
+
+// systemPrompts is what the model was actually shown, per request.
 func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -785,18 +954,16 @@ func (m *scriptedModel) systemPrompts() []string {
 
 // toolResults is every tool result the model was handed back, flattened.
 //
-// What a tool ANSWERED is only visible here: it rides the conversation as a
-// section of the transcript ([toolResultsIn]), never the system prompt, so a
-// test asserting that a tool's output reached the model has nowhere else to
-// read it.
+// What a tool ANSWERED is only visible here: it rides the conversation — the
+// CLI's own run, or the transcript a later run is started with
+// ([modelRequest.toolResults]) — never the system prompt, so a test asserting
+// that a tool's output reached the model has nowhere else to read it.
 func (m *scriptedModel) toolResults() []string {
 	m.mu.Lock()
-	prompts := append([]string(nil), m.prompts...)
-	m.mu.Unlock()
-
+	defer m.mu.Unlock()
 	var out []string
-	for _, prompt := range prompts {
-		out = append(out, toolResultsIn(prompt)...)
+	for _, results := range m.results {
+		out = append(out, results...)
 	}
 	return out
 }
@@ -858,4 +1025,67 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 func hydrated(t *testing.T, e *engine.Engine) func() bool {
 	t.Helper()
 	return func() bool { return e.StateLogHydrated(t.Context()) }
+}
+
+// turnRecordCalling is the executor's record of the turn on this node that
+// called tool successfully, as this node's own event store holds it, or nil
+// while it holds none.
+//
+// WHAT SAYS THE TURN DELIVERED rather than only acted. A script that served
+// its citing submission ([chatScript.submitted], or the last call a capture
+// queued with [scriptedModel.callOnExecute]) knows what it SENT, and the
+// engine may still have refused it — after which the turn ends on the rescue
+// path, with an outcome the engine wrote rather than one the model chose
+// ([types.AgentPhaseCompleted.RescueFired]). Only the phase record says which.
+//
+// n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it,
+// whose publish listener stores what it publishes — or, for a node that holds
+// no data, the data member its audit trail lands on.
+func turnRecordCalling(t *testing.T, n *node, tool string) *types.AgentPhaseCompleted {
+	t.Helper()
+	stored := n.engine.Backends().Store.Events()
+	rows, err := stored.List(t.Context(), store.ListQuery{Type: "agent_phase_completed", Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for _, row := range rows {
+		full, err := stored.ByID(t.Context(), row.ID, time.Now())
+		if err != nil {
+			continue
+		}
+		var ev events.Event
+		if json.Unmarshal(full.Payload, &ev) != nil {
+			continue
+		}
+		record, ok := events.DataAs[*types.AgentPhaseCompleted](&ev)
+		if !ok || record.Phase != types.PhaseExecute {
+			continue
+		}
+		if slices.ContainsFunc(record.ToolExecutions, func(call types.ToolExecution) bool {
+			succeeded, _ := call["success"].(bool)
+			return call["name"] == tool && succeeded
+		}) {
+			return record
+		}
+	}
+	return nil
+}
+
+// deliveredThrough fails the case unless the turn whose records n holds that
+// delivered with tool — a post in a room, a comment on a work item — ended on
+// the model's own `delivered` rather than on the rescue path
+// ([turnRecordCalling]).
+func deliveredThrough(t *testing.T, n *node, tool string) {
+	t.Helper()
+	var record *types.AgentPhaseCompleted
+	waitFor(t, n.id+"'s record of the turn that delivered with "+tool, func() bool {
+		record = turnRecordCalling(t, n, tool)
+		return record != nil
+	})
+	if record.RescueFired || record.Decision != string(turn.OutcomeDelivered) {
+		t.Errorf("the turn that delivered with %s ended %q (rescued: %v) after "+
+			"%d rounds — its submission citing that call never landed, so the "+
+			"engine wrote the outcome rather than the turn", tool, record.Decision,
+			record.RescueFired, record.RoundsUsed)
+	}
 }

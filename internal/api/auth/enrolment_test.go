@@ -45,7 +45,7 @@ func TestASessionThatMayOnlyEnrolReachesOnlyTheRoutesThatLetItIn(t *testing.T) {
 		{http.MethodPost, "/auth/token", false},
 		{http.MethodGet, "/auth/totp", false},
 		{http.MethodGet, "/iam/people", false},
-		{http.MethodPost, "/work/items", false},
+		{http.MethodPost, "/worklet/items", false},
 		{http.MethodGet, "/agents", false},
 		{http.MethodGet, auth.SocketPath, false},
 	}

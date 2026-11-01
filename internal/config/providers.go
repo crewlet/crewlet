@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -13,10 +14,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
-// at, what embeds its memories, and where its code work runs.
+// at, what embeds its memories, and where its executor runs.
 //
 // The Tier A infrastructure — store, stream, coordination — is deliberately
 // not here: it cannot be changed without a restart, and mixing the two
@@ -56,21 +58,26 @@ type Providers struct {
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers every vector this engine computes: the semantic half
-	// of a native knowledge search and the similarity halves of diary and
+	// of a Doclet knowledge search and the similarity halves of diary and
 	// episode recall. Nil disables them — a search is keyword only, and
 	// episodes are still written, but nothing searches them by similarity.
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
 
-	// Sandbox is the code-runtime backend. Nil (or type none) means no
-	// seat can run a sandboxed coding run, whatever its own gate says.
-	Sandbox *SandboxProvider `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Code sandbox backend. Absent = no seat runs code."`
+	// Sandbox is the catalogue of cells every agent seat's executor runs
+	// in: each executor is its coding CLI's own run, in a box. Required as
+	// soon as the company has an agent seat AND a providers.llm entry to
+	// run it on ([Company.validateSandboxPlacement]); nil only while the
+	// company has no agent seat or no model — an org chart written before
+	// its credentials runs no executor, so it needs no cell either.
+	Sandbox *SandboxProvider `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Where every agent seat's executor runs. Required once the company has an agent seat and a providers.llm entry."`
 }
 
 // DefaultProviders is the empty provider surface: no models, no
 // embeddings, no sandbox. A company with no LLM provider parses, validates
 // and runs, which is what lets an org chart be authored before the
 // credentials exist: its seats are placed and hold their work until a
-// revision adds a provider.
+// revision adds a provider — and, with it, the sandbox catalogue its
+// executors run in.
 func DefaultProviders() Providers { return Providers{} }
 
 // llmKeyOrder reads the declaration order of providers.llm off the document
@@ -237,9 +244,21 @@ func (p *Providers) validate(path Path) error {
 // included.
 //
 // The entry is therefore the CLI's own settings and nothing else: which CLI,
-// which model in that CLI's grammar, whether it runs as a text model behind
-// the engine's tool loop or as the executor itself, where its login and
-// per-seat homes live, and how it signs in.
+// which model in that CLI's grammar, where its runs are placed, where its
+// login and per-seat homes live, and how it signs in.
+//
+// # One entry, two uses
+//
+// A seat's EXECUTOR is its coding CLI's own agentic run in a box: the CLI's
+// loop drives the model, its own shell and editor are enabled, and the seat's
+// tools reach it over the MCP bridge (internal/api/mcpbridge). Only a CLI
+// with an in-box runner can be that run ([CodingAgents]). Every OTHER phase —
+// the reviewer, a delegated worker, the onboarding pass, the side passes —
+// runs the CLI's own loop on this host, with its own shell and editor denied
+// and the phase's tools reached as the `crewlet` MCP server
+// ([ToolServerName]), and any CLI can serve one. So the same entry may be
+// both: the executor of the seats whose `llm` names it, and the reviewer of
+// the seats whose `llm_review` does.
 type LLMProvider struct {
 	// Agent is which CLI to drive. Empty drives Claude Code.
 	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
@@ -249,10 +268,7 @@ type LLMProvider struct {
 	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
 	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the CLI's own grammar (OpenCode: <provider>/<model>)."`
 
-	// Mode is text (the default) or agent. See [CLIAgentMode].
-	Mode CLIAgentMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=text|agent" desc:"text (a model behind the engine's tool loop) or agent (the CLI runs the executor)."`
-
-	// RunIn is WHERE an agent-mode run happens, naming a cell of
+	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
 	// On the entry rather than on the seat, because it is a property of
@@ -262,9 +278,16 @@ type LLMProvider struct {
 	// two entries and points seats at whichever one is right for them —
 	// which is also how they already choose between two models.
 	//
-	// Read only in agent mode; a value here in text mode configures
-	// nothing and is refused.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where an agent-mode run happens. Empty = providers.sandbox.default_run_in."`
+	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY, which is any agent
+	// seat's executor chain it is a member of: a launch takes the chain's
+	// first member that can run and is not sitting out, so a fallback member
+	// is placed by its own run_in. An entry no executor chain reaches never
+	// launches a run, and its run_in is read the day a seat points at it.
+	//
+	// REFUSED ON A CLI THAT CANNOT LAUNCH ONE ([CodingAgents]): an entry on
+	// any other CLI serves text phases only, so a launch passes over it in
+	// every chain and nothing would ever read the field.
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// its per-seat homes, under a subdirectory named for the CLI it drives
@@ -282,13 +305,30 @@ type LLMProvider struct {
 	// directory of its own, and moving back finds the old one intact.
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login."`
 
-	// TimeoutSeconds caps one CLI invocation, wall clock: a process launch
-	// (a Node runtime costs seconds before its first byte), the model's
-	// answer, and the CLI's own internal retry and backoff. See
-	// [defaultCLITimeoutSeconds] for where the default comes from.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one CLI invocation (default 600)."`
+	// TimeoutSeconds caps one STRETCH of the CLI's own work, wall clock:
+	// from its launch, or from the end of the tool call it last waited on,
+	// to the start of its next tool call or its exit — a process launch (a
+	// Node runtime costs seconds before its first byte), its model's
+	// answers, and its own internal retry and backoff. The engine's tools
+	// are not on the clock: they hold their own bounds, and a CLI run that
+	// drives a phase through many requests and calls is never cut for its
+	// length, only for a stretch in which it made no progress the engine
+	// could see. See [defaultCLITimeoutSeconds] for where the default comes
+	// from.
+	//
+	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
+	// pass, a side pass. An executor run is the CLI's own detached run in a
+	// box, and it is bounded by its round cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns) rather
+	// than by a clock.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
 
-	// MaxConcurrent is how many CLI processes this provider runs at once.
+	// MaxConcurrent is how many CLI processes this provider runs at once on
+	// the engine's own host. A process lives for a whole run of a phase, its
+	// requests and tool calls included; a model call made from INSIDE one of
+	// its tool calls on this same entry — a delegated worker, an auxiliary
+	// rewrite — runs in the caller's slot rather than waiting for one, which
+	// a run holding the last slot could never free.
 	//
 	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
 	// so an unbounded fleet of seats starting a turn together can exhaust
@@ -296,13 +336,25 @@ type LLMProvider struct {
 	// smallest realistic host while still overlapping the calls' long I/O
 	// waits. Subscription plans also throttle concurrency well below what
 	// an API key allows, so a higher number mostly buys rate-limit errors.
-	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes; each costs 200-400 MB."`
+	//
+	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run
+	// is a process in its own box, and each seat runs at most one at a time.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
 	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
 	// for OpenCode, the key of the provider its model names.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
+	//
+	// EVERY INVOCATION INCLUDES A SEAT'S EXECUTOR RUN, in whichever cell its
+	// box is: the whole map is exported into the box with the entry's
+	// sign-in, beneath the seat's role.sandbox.env, which wins a name — so a
+	// gateway's base URL and bearer token, or a cloud provider's switch and
+	// region, reach the run as they reach every other phase. A seat that signs
+	// Claude Code in itself replaces the entry's sign-in whole, its
+	// credential-named variables and cloud toggles included, and keeps the
+	// rest.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env)."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
 
@@ -319,10 +371,10 @@ type LLMProvider struct {
 //
 // A NAMED TYPE over a closed set, like every other closed set in this
 // package. Two things followed from a bare string. The generated schema
-// emitted `"type":"string"` while its sibling RoleSandbox.CodingAgent emitted
-// an enum, so an editor blessed `agent: claud-code` — which [names]'s own doc
-// calls worse than no schema — and with no `js:` tag the field could not join
-// schema_test.go's enum table, so nothing noticed.
+// emitted `"type":"string"` where a closed set emits an enum, so an editor
+// blessed `agent: claud-code` — which [names]'s own doc calls worse than no
+// schema — and with no `js:` tag the field could not join schema_test.go's
+// enum table, so nothing noticed.
 type CLIAgentName string
 
 // The coding CLIs the engine knows how to drive. `custom` ships no defaults
@@ -357,41 +409,20 @@ var CLIAgentNames = []CLIAgentName{
 // than meaning "any".
 func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 
-// CLIAgentMode is HOW the engine uses a coding CLI.
+// CodingAgents is the closed set of CLIs that can run a seat's EXECUTOR: the
+// ones with an in-box runner (internal/sandbox/codingagent), which launches
+// the CLI as its own agentic run, renders its tools and limits, and reads
+// back what it did.
 //
-// # Two genuinely different things wearing one entry
+// Every other CLI drives the text phases only. A seat's executor chain is
+// walked at launch for its first member in this set that is not sitting out,
+// so a chain with no member here can never run its seat's turn, and config
+// refuses it ([Company.validateExecutors]).
 //
-// A coding CLI is an agent. Driving it as a text model — one prompt in, one
-// answer out, its own tools denied — spends a whole agentic runtime to get a
-// completion, and it is the right trade only because Crewlet's own tool loop
-// is doing the agency: the tools ride the prompt envelope, the engine executes
-// them, and everything an operator reads about a turn comes from that loop.
-//
-// AGENT MODE gives the agency back. The CLI runs the executor itself: its loop
-// drives the model, its own shell and editor are enabled, and the seat's tools
-// reach it over the MCP bridge (internal/api/mcpbridge) so a bridged call is
-// the same frame a native loop would call. The engine's job becomes handing
-// that loop a brief and collecting what it did.
-//
-// The mode is NOT inferred, and the reason is that both are defensible for the
-// same CLI on the same seat. Text mode is predictable, its tool log is the
-// engine's own, and it needs no sandbox. Agent mode is faster on real code
-// work and gets the vendor's own harness, at the cost of a run that outlives
-// its turn and a tool surface reached over the network.
-type CLIAgentMode string
-
-const (
-	// CLIModeText drives the CLI as a text model behind the engine's own
-	// tool loop. The default.
-	CLIModeText CLIAgentMode = "text"
-
-	// CLIModeAgent runs the seat's executor AS the CLI's own agentic run,
-	// detached, with the seat's tools bridged in over MCP.
-	CLIModeAgent CLIAgentMode = "agent"
-)
-
-// CLIAgentModes is the closed set.
-var CLIAgentModes = []CLIAgentMode{CLIModeText, CLIModeAgent}
+// HELD TO THE RUNNERS THAT EXIST by a test against codingagent.Names(): a
+// runner added there and not here refuses entries that would run, and one
+// listed here with no runner admits entries every launch then refuses.
+var CodingAgents = []CLIAgentName{CLIClaudeCode, CLIOpenCode}
 
 // CLIAgentAuthMode is how a providers.llm entry's CLI authenticates.
 type CLIAgentAuthMode string
@@ -411,6 +442,21 @@ const (
 	// own environment has — an escape hatch for an unusual CLI, and the
 	// only mode that lets a host credential reach the child.
 	AuthInheritEnv CLIAgentAuthMode = "inherit-env"
+	// AuthEnv signs the CLI in with the entry's own env: a cloud
+	// provider's switch and credentials (Claude Code's
+	// CLAUDE_CODE_USE_BEDROCK with the AWS pair), or a gateway's address
+	// and token (ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN). The CLI is
+	// handed neither the profile's token variable nor its key variable,
+	// and runs in a home no login is seeded into.
+	//
+	// A MODE OF ITS OWN rather than an env the default mode reads beside
+	// its token: under subscription the convention resolves the plan
+	// token for every entry, and it reached a Bedrock entry's CLI and its
+	// box, where the cloud switch outranks it and it was never used. Such
+	// an entry also read as signed in to nothing, since only an
+	// env_sign_in profile counted its env. Admitted only where the env
+	// does sign the CLI in ([LLMProvider.validateCredentials]).
+	AuthEnv CLIAgentAuthMode = "env"
 )
 
 // CLIAgentAuthModes is the closed set.
@@ -418,12 +464,12 @@ const (
 // The default is deliberately NOT inherit-env: a subscription entry that
 // silently picked up a stray ANTHROPIC_API_KEY would bill the metered
 // account while the operator believed they were on a flat-rate plan.
-var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv}
+var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv, AuthEnv}
 
 // CLIAgentAuth is how a providers.llm entry's CLI authenticates. The login
 // itself is performed by `crewlet llm login`, never by the engine.
 type CLIAgentAuth struct {
-	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env" desc:"subscription (default), api-key, or inherit-env."`
+	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env|env" desc:"subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway)."`
 
 	// Token is a ${VAR} reference to a long-lived subscription token.
 	// Empty falls back to the profile's own token variable. This is the
@@ -449,11 +495,14 @@ type CLIAgentAuth struct {
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
 	// `crewlet llm export` — the CLI's login (its credential files, or the
-	// document its export printed) as one blob, restored into an empty
-	// credential directory whenever the engine builds a company to run (boot
-	// and every apply it publishes), so a fresh container comes up already
-	// logged in — and withheld after `crewlet llm logout` until a login is
-	// written into the credential directory again (`crewlet llm login`,
+	// document its export printed) as one blob, restored whenever the engine
+	// builds a company to run (boot and every apply it publishes) into a
+	// credential directory holding no login, or over one installed before the
+	// bundle's login (the newest login wins, by the install record the bundle
+	// carries), so a fresh container comes up already logged in and a
+	// re-login exported to the store reaches every node. It is withheld
+	// after `crewlet llm logout` until a login is written into the
+	// credential directory again (`crewlet llm login`,
 	// `-from-host` or `crewlet llm import`; a headless token does not end it).
 	// It holds ONE CLI's files and names that CLI, though it is keyed by the
 	// entry: after the entry's agent changes, the new CLI refuses it — by the
@@ -465,14 +514,15 @@ type CLIAgentAuth struct {
 // Default entry knobs. See the field comments for where the numbers come
 // from.
 const (
-	// defaultCLITimeoutSeconds is ten minutes. A text call is one model
-	// answer at the CLI's own effort, and on the current Claude models that
-	// is adaptive thinking against a 128K-token output cap: ten minutes is
-	// Anthropic's documented ceiling for such an answer in one call, and
+	// defaultCLITimeoutSeconds is ten minutes. A stretch is at least one
+	// model answer at the CLI's own effort, and on the current Claude models
+	// that is adaptive thinking against a 128K-token output cap: ten minutes
+	// is Anthropic's documented ceiling for such an answer in one call, and
 	// two minutes was measured cutting off exactly the calls doing the most
 	// work when the engine still made them itself. A CLI adds its process
-	// launch on top. A hung child holds its seat for no longer than this,
-	// and a timeout is retryable, so the seat's fallback chain moves on.
+	// launch to the first stretch. A hung child holds its seat for no longer
+	// than this, and a timeout is retryable, so the seat's fallback chain
+	// moves on.
 	defaultCLITimeoutSeconds = 600.0
 	defaultCLIMaxConcurrent  = 4
 	defaultCLIAgentName      = CLIClaudeCode
@@ -491,11 +541,14 @@ func (l *LLMProvider) AgentName() string {
 	return string(l.Agent)
 }
 
-// AgentMode reports whether this entry runs the executor as the CLI's own
-// agentic run.
-func (l *LLMProvider) AgentMode() bool { return l.Mode == CLIModeAgent }
+// runsExecutor reports whether this entry's CLI can run a seat's executor:
+// whether it has an in-box runner ([CodingAgents]).
+func (l *LLMProvider) runsExecutor() bool {
+	return slices.Contains(CodingAgents, CLIAgentName(l.AgentName()))
+}
 
-// Timeout is the invocation cap, applying the default.
+// Timeout is the cap on one stretch of the CLI's own work, applying the
+// default.
 func (l *LLMProvider) Timeout() float64 {
 	if l.TimeoutSeconds <= 0 {
 		return defaultCLITimeoutSeconds
@@ -585,9 +638,10 @@ type CredentialSources struct {
 //
 // PER AUTH MODE, as the CLI is handed them: a token only under subscription,
 // an API key only under api-key, and the bundle under every mode, since it is
-// restored into an empty credential directory whatever signs the calls in.
+// restored into the credential directory whatever signs the calls in.
 // inherit-env reads nothing through here: it forwards the engine's own
-// environment, which the secret store is not part of.
+// environment, which the secret store is not part of. Nor does env: the
+// entry's own env is its sign-in, and the CLI is handed no token and no key.
 func (l *LLMProvider) CredentialSources(key string) CredentialSources {
 	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
 	if err != nil {
@@ -622,7 +676,7 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Agent != "" && !l.Agent.Valid() {
 		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-			l.Agent, names(CLIAgentNames))
+			l.Agent, words.Or(CLIAgentNames))
 	}
 	// Left unbounded, a timeout of 0 or a negative one passes validation
 	// and reaches a process supervisor that reads it as "expire
@@ -640,28 +694,28 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, l.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
-			l.Auth.Mode, names(CLIAgentAuthModes))
+			l.Auth.Mode, words.Or(CLIAgentAuthModes))
 	}
+	// THE SPELLING, and that the entry can be placed at all. Whether the
+	// cell is configured is a question about providers.sandbox, and whether
+	// a seat's executor reaches this entry is one about the seats; both are
+	// asked by the company ([Company.validateSandboxPlacement]). Whether its
+	// CLI launches a run anywhere is the entry's own: a CLI with no in-box
+	// runner serves text phases only, so a launch passes over it in every
+	// chain it is in, and a run_in on it is a placement nothing ever reads —
+	// refused as a value that means nothing where it is written, rather than
+	// admitted and silently ignored, the cell it names unchecked.
 	switch {
-	case l.Mode != "" && !slices.Contains(CLIAgentModes, l.Mode):
-		p.add(at(path, "mode"), ErrUnknownValue, "%q (want %s)",
-			l.Mode, names(CLIAgentModes))
-	case l.RunIn != "" && !l.AgentMode():
-		// A value that means nothing where it is written. In text mode
-		// the CLI is a subprocess of this engine and there is no cell to
-		// choose — an operator who wrote one meant to switch modes.
-		p.add(at(path, "run_in"), ErrConflict,
-			"only agent mode runs somewhere: a text-mode CLI is a subprocess of "+
-				"this engine. Set `mode: agent`, or remove the field")
-	case l.RunIn != "" && !slices.Contains(BackendPlacements(), l.RunIn):
-		// BACKEND CELLS ONLY. `self` is a seat's answer — "my code work
-		// rides my executor's run" — and an agent-mode entry IS that
-		// run, so it has no executor of its own to ride and no backend
-		// resolves it. Accepted here it validated cleanly and failed at
-		// the seat's first turn, every turn, with the manager's "no
-		// backend for self".
+	case l.RunIn == "":
+	case !slices.Contains(Placements, l.RunIn):
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			l.RunIn, names(BackendPlacements()))
+			l.RunIn, words.Or(Placements))
+	case (l.Agent == "" || l.Agent.Valid()) && !l.runsExecutor():
+		p.add(at(path, "run_in"), ErrConflict,
+			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
+				"reads where it would be placed: only %s launch an executor run. Remove the "+
+				"field, or move the entry to one of those CLIs",
+			l.AgentName(), words.And(CodingAgents))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -705,6 +759,88 @@ func (l *LLMProvider) validateProfile(path Path) error {
 	return p.err()
 }
 
+// ProviderKeyPattern is the grammar of a providers.llm key: a lowercase
+// letter or digit, then up to 62 more of those, `.`, `_` and `-`, which is a
+// DNS label with the two separators a model's name already uses.
+//
+// A GRAMMAR, because a key is not only the name seats select an entry by. It
+// names a directory: the default state_dir joins it under the CLI home
+// ([LLMProvider.ResolvedStateDir]), so a key with a `/` nested one entry's
+// login inside another's, and `..` left the home altogether. And it names a
+// variable: the entry's credential bundle is read from
+// [cliprofile.BundleVarName], which upper-cases the key and maps every other
+// character to `_`. Lowercase only, so the one key a person reads in the
+// document, a URL path and a Kubernetes resource name (crewlet-operator's,
+// which are DNS labels already) is the same string.
+var ProviderKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// validateLLMKeys holds every providers.llm key to [ProviderKeyPattern], and
+// no two keys to one credential bundle variable.
+//
+// ONE BUNDLE PER ENTRY. [cliprofile.BundleVarName] maps `.`, `_` and `-` to
+// one character, so `gpt-5`, `gpt_5` and `gpt.5` all read
+// CREWLET_LLM_CLI_GPT_5_CREDENTIALS: the second entry was restored the first
+// one's login, silently, and `crewlet llm export -secret-store` from either
+// overwrote the other's. Each key after the first, in sorted order, is
+// reported naming the one it collides with.
+//
+// ADMISSION rather than runnable: an entry under such a key still builds and
+// runs, and a refusal at apply would take a node off the fleet's epoch over a
+// revision written before the rule. A write that keeps one is refused. (An
+// empty key is the runnable rule [Providers.validate] holds: no seat can
+// select it.)
+func (c *Company) validateLLMKeys() error {
+	var p problems
+	bundles := make(map[string]string, len(c.Providers.LLM))
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		path := entryPath(key)
+		if !ProviderKeyPattern.MatchString(key) {
+			p.add(path, ErrShape,
+				"%q is not a provider key: a key is lowercase letters, digits, '.', '_' and "+
+					"'-', starting with a letter or a digit, at most 63 characters (%s). It "+
+					"names the entry's state directory and its credential bundle variable, "+
+					"so rename it, and every seat's llm that names it, e.g. %q",
+				key, ProviderKeyPattern, suggestProviderKey(key))
+			continue
+		}
+		bundle := cliprofile.BundleVarName(key)
+		if first, ok := bundles[bundle]; ok {
+			p.add(path, ErrConflict,
+				"%q and %q read one credential bundle, %s, since the variable maps '.', '_' and "+
+					"'-' alike: the two entries would restore and export one login. Rename one "+
+					"so the two differ in a letter or a digit", key, first, bundle)
+			continue
+		}
+		bundles[bundle] = key
+	}
+	return p.err()
+}
+
+// suggestProviderKey is key in [ProviderKeyPattern]'s grammar, for the
+// refusal's example: lowercased, every other character a `-`, cut to length.
+func suggestProviderKey(key string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(key) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.TrimLeft(b.String(), "._-")
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	if out == "" {
+		return "default"
+	}
+	return out
+}
+
 // entryPath is where provider key sits in the document.
 func entryPath(key string) Path { return entry(field("providers.llm"), key) }
 
@@ -735,9 +871,9 @@ func (c *Company) validateLLMModels() error {
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
-// makes — the text calls and an agent-mode run alike, which are handed the
-// same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
-// reference".
+// makes — its runs on this host and an executor run alike, which are handed
+// the same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid
+// model reference".
 //
 // JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag
@@ -781,7 +917,7 @@ func (l *LLMProvider) validateModel(path Path) error {
 	}
 	p.add(at(path, "model"), ErrConflict,
 		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
-			"slash, so %q %s: every call this entry makes, an agent-mode run included, "+
+			"slash, so %q %s: every call this entry makes, an executor run included, "+
 			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
 			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
 			"provider's key in env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
@@ -791,8 +927,9 @@ func (l *LLMProvider) validateModel(path Path) error {
 }
 
 // validateCredentials holds an entry's credentials to the variables its
-// merged profile names, and the profile itself to keeping every credential
-// behind auth ([cliprofile.Profile.ValidateCredentials]).
+// merged profile names, those variables to the reference grammar, and the
+// profile itself to keeping every credential behind auth
+// ([cliprofile.Profile.ValidateCredentials]).
 //
 // The rules exist because the backend's applyAuth (in
 // internal/providers/llm/cliagent) places a credential only where the profile
@@ -831,6 +968,31 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		p.add(at(path, "overrides"), ErrConflict, "%v", err)
 	}
 
+	// THE TWO VARIABLES A CREDENTIAL IS HANDED OVER IN ARE NAMES OF THE
+	// REFERENCE GRAMMAR, because nothing that keeps a credential can hold
+	// any other: the secret store refuses the name, so `crewlet llm login
+	// -capture-token` cannot write the token there and a `${VAR}` cannot
+	// spell it; no shell exports one for auth.mode inherit-env to forward;
+	// and a name carrying `=` sets a different variable in the CLI's
+	// environment. Only overrides can name one — every shipped profile's
+	// names are in the grammar — and the CLI still starts with it, signed in
+	// by whatever it does read, so this is an admission rule like the rest.
+	// Here rather than in the profile's own rules because the grammar is
+	// envref's, which that leaf does not import.
+	for _, variable := range []struct{ field, name string }{
+		{"token_env", profile.TokenEnv}, {"api_key_env", profile.APIKeyEnv},
+	} {
+		if variable.name != "" && !envref.ValidName(variable.name) {
+			p.add(at(path, "overrides."+variable.field), ErrShape,
+				"%q is not an environment variable name (letters, digits and "+
+					"underscores, not starting with a digit): the CLI is handed its "+
+					"credential under it, and no secret store, ${VAR} or `crewlet llm "+
+					"login` can hold a name outside that grammar, nor a shell export "+
+					"one for auth.mode inherit-env to forward. Name the variable your "+
+					"build of the CLI reads", variable.name)
+		}
+	}
+
 	// The mode-dependent rules each state what a mode does with a
 	// credential, and an unknown mode does nothing this file can describe:
 	// judged as one, a typo drew refusals naming a mode that does not exist.
@@ -855,14 +1017,14 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"%q profile names none (api_key_env): this CLI reads each model "+
 					"provider's key from that provider's own variable. Leave auth.mode "+
 					"at subscription, drop auth.api_key, and set the key in env under "+
-					"the variable of the provider its model names, as a ${VAR} — e.g. "+
+					"the variable of the provider its model names, as a ${VAR}, e.g. "+
 					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
 		case profile.APIKeyEnv == "":
 			p.add(at(path, "auth.mode"), ErrConflict,
 				"api-key puts the entry's key in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from %s, so put it there — "+
-					"`crewlet llm login`, or a credential bundle — or, if your build of "+
+					"nothing: this CLI reads a key only from %s, so put it there "+
+					"(`crewlet llm login`, or a credential bundle), or, if your build of "+
 					"the CLI does read a key variable, name it with "+
 					"overrides.api_key_env",
 				agent, profile.LoginLocation())
@@ -875,7 +1037,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
 					"%s, a variable other vendors' keys are kept under too, so the "+
 					"engine does not read it from its own environment or secret store "+
-					`in this entry's place — e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+					`in this entry's place (for example api_key: "${DASHSCOPE_API_KEY}")`,
 				agent, profile.APIKeyEnv)
 		}
 	}
@@ -889,8 +1051,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		!profile.EnvSignIn && profile.APIKeyEnv != "" {
 		p.add(at(path, "auth.mode"), ErrConflict,
 			"subscription signs the CLI in with a login it keeps or a headless token, and "+
-				"the %q profile names neither — no credential_paths, credential_store or "+
-				"token_env — so the entry would sign in to nothing: this CLI signs in with "+
+				"the %q profile names neither (no credential_paths, credential_store or "+
+				"token_env), so the entry would sign in to nothing. This CLI signs in with "+
 				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
 				"CLI reads it from %s)", agent, profile.APIKeyEnv)
 	}
@@ -899,8 +1061,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		switch {
 		case profile.TokenEnv == "":
 			p.add(at(path, "auth.token"), ErrConflict,
-				"the %q profile names no token_env — this CLI mints no headless "+
-					"token — so the token would reach nothing: remove it, or name the "+
+				"the %q profile names no token_env (this CLI mints no headless "+
+					"token), so the token would reach nothing: remove it, or name the "+
 					"variable your build of the CLI reads with overrides.token_env", agent)
 		case mode != AuthSubscription:
 			p.add(at(path, "auth.token"), ErrConflict,
@@ -935,6 +1097,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			agent, remedy)
 	}
 
+	p.wrap(l.validateEnvSignIn(path, profile, mode))
+
 	// The two variables auth owns. It is layered over env, and whether it
 	// then replaces, removes or leaves a value written here turns on the
 	// mode and on whether the secret store or the engine's own environment
@@ -951,6 +1115,16 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
 					"the token as auth.token", name)
+		case cliprofile.ZoneVariable:
+			// The engine pins the zone of every CLI it starts, and reads a
+			// reset the CLI names with no zone in it; a value here would be
+			// replaced without a word, or, honoured, would have the engine
+			// read the CLI's reset in the wrong zone.
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is the zone the engine hands every CLI it starts (its own TZ, else "+
+					"UTC), and reads the CLI's limit resets in; it is not set per entry. "+
+					"Drop it, and set TZ in the engine's own environment to move every "+
+					"CLI's zone", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this CLI's key variable, which auth owns: whether a value "+
@@ -964,7 +1138,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				p.add(entry(at(path, "env"), name), ErrConflict,
 					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
 						"choose the login the seat's home holds; a value here is replaced on "+
-						"every call, so drop it — a different value is set with "+
+						"every call, so drop it. A different value is set with "+
 						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
 				continue
 			}
@@ -981,10 +1155,83 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"%s is a variable the engine sets for every call of this CLI to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
-						"drop it — %s", name, strings.Join(isolation, ", "),
+						"drop it: %s", name, strings.Join(isolation, ", "),
 					isolationRemedy(name, layer, profile))
 			}
 		}
+	}
+	return p.err()
+}
+
+// validateEnvSignIn holds an entry to the rule that its env is its sign-in
+// exactly when auth.mode says so ([AuthEnv]).
+//
+// UNDER env, THE ENV MUST SIGN THE CLI IN. The mode hands the CLI no token
+// and no key and seeds no login, so an env that sets none of the names the
+// profile signs in by ([cliprofile.Profile.SignInEnv]), or on a CLI that reads
+// its model provider's key from its environment ([cliprofile.Profile.EnvSignIn])
+// no credential-named variable, is an entry signed in to nothing. A profile
+// that declares neither has no env that signs it in, and cannot take the mode.
+//
+// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE CLI IN IS REFUSED in env. The
+// mode hands the CLI its own credential beside it: subscription the plan
+// token the convention resolves for every entry, api-key the metered key. The
+// CLI then ranks the two by rules of its own (Claude Code routes a cloud
+// switch away from the vendor's API whatever token it holds), so one of them
+// is a credential handed to a process that never uses it, and which one is
+// the CLI's choice rather than the document's.
+//
+// ADMISSION, like the rest of [LLMProvider.validateCredentials]: the CLI
+// starts and signs in from whatever it reads.
+func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, mode CLIAgentAuthMode) error {
+	var p problems
+	agent := l.AgentName()
+	if mode != AuthEnv {
+		for _, name := range profile.SignsInWithEnv(l.Env) {
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s signs the %q CLI in from its env, and auth.mode %s hands it a credential of "+
+					"its own beside it, which the CLI then ranks by rules of its own: set "+
+					"auth.mode: env, so the entry's env is its one sign-in", name, agent, mode)
+		}
+		return p.err()
+	}
+	if l.Auth.CredentialBundle != "" {
+		// A bundle is a login, and an env entry seeds none, on this host or in
+		// a box: one named here would be stored, restored and never read.
+		p.add(at(path, "auth.credential_bundle"), ErrConflict,
+			"auth.mode env signs the %q CLI in with the entry's env alone and seeds no "+
+				"login, so a credential bundle reaches nothing. Drop auth.credential_bundle, "+
+				"or set auth.mode: subscription to sign in with that login", agent)
+	}
+	switch {
+	case len(profile.SignInEnv) > 0:
+		if len(profile.SignsInWithEnv(l.Env)) == 0 {
+			p.add(at(path, "env"), ErrMissing,
+				"auth.mode env signs the CLI in with the entry's env, and env sets none of the "+
+					"names the %q CLI signs in by (%s), so the entry would sign in to nothing: set "+
+					"the one your cloud provider or gateway uses, its credentials as ${VAR}s, "+
+					"e.g. CLAUDE_CODE_USE_BEDROCK: \"1\" with AWS_REGION, or "+
+					"ANTHROPIC_AUTH_TOKEN: \"${GATEWAY_TOKEN}\" with ANTHROPIC_BASE_URL",
+				agent, strings.Join(profile.SignInEnv, ", "))
+		}
+	case profile.EnvSignIn:
+		signed := slices.ContainsFunc(slices.Collect(maps.Keys(l.Env)), func(name string) bool {
+			return cliprofile.IsCredentialName(name) && strings.TrimSpace(l.Env[name]) != ""
+		})
+		if !signed {
+			p.add(at(path, "env"), ErrMissing,
+				"auth.mode env signs the CLI in with the entry's env, and env holds no "+
+					"credential: the %q CLI reads the key of the provider its model names from "+
+					"that provider's own variable, so set it there as a ${VAR}, e.g. "+
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+		}
+	default:
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"env signs the CLI in with the entry's env, and the %q profile names no variable "+
+				"that does (sign_in_env) and does not read its provider's key from its "+
+				"environment (env_sign_in), so the entry would sign in to nothing: use "+
+				"subscription or api-key, or name the variables your build of the CLI signs in "+
+				"by with overrides.sign_in_env", agent)
 	}
 	return p.err()
 }
@@ -1044,13 +1291,19 @@ func relocationRemedy(field, root, dir string, kept []string) string {
 	if len(kept) == 0 {
 		return remedy + "; a different directory is set with overrides." + field
 	}
-	fields := strings.Join(kept, ", ")
-	if n := len(kept); n > 1 {
-		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
-	}
 	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
 		"%s kept under %s beneath it in the same override, since the CLI finds them "+
-		"through this variable", remedy, field, fields, dir)
+		"through this variable", remedy, field, fieldNames(kept), dir)
+}
+
+// fieldNames is a profile's field names as a sentence about the file says
+// them, bare beside the overrides paths it names: "a", "a and b".
+func fieldNames(fields []string) string {
+	said := make([]words.Said, len(fields))
+	for i, f := range fields {
+		said[i] = words.Said(f)
+	}
+	return words.And(said)
 }
 
 // ---- embeddings ------------------------------------------------------ //
@@ -1070,7 +1323,7 @@ var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingO
 
 // EmbeddingProvider is the vector backend, and it has four callers: the
 // fleet-singleton duty that embeds the company's own pages and work items for
-// the semantic half of a native knowledge search, each such search's query
+// the semantic half of a Doclet knowledge search, each such search's query
 // vector, and the similarity halves of diary and episode recall.
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`
@@ -1364,8 +1617,8 @@ var EmbeddingModels = map[string]EmbeddingModel{
 		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
 		Undocumented: "Cohere's Compatibility API " +
 			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
-			"inputs or the tokens one request may carry — the native Embed " +
-			"API's 96 texts a call is a different endpoint's",
+			"inputs or the tokens one request may carry (the native Embed " +
+			"API's 96 texts a call is a different endpoint's)",
 	},
 }
 
@@ -1560,7 +1813,7 @@ func (e *EmbeddingProvider) ResolvedKey(r *Resolver) string {
 func (e *EmbeddingProvider) validate(path Path) error {
 	var p problems
 	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, words.Or(EmbeddingProviderTypes))
 	}
 	if strings.TrimSpace(e.Model) == "" {
 		p.add(at(path, "model"), ErrMissing, "name the embedding model")
@@ -1578,7 +1831,7 @@ func (e *EmbeddingProvider) validate(path Path) error {
 			MinEmbeddingWidth, MaxEmbeddingWidth, e.Dimensions)
 	case e.Dimensions > 0 && e.Dimensions < MinEmbeddingWidth:
 		p.add(at(path, "dimensions"), ErrOutOfRange,
-			"%d is below the %d floor — leave it unset to take %q's own width, "+
+			"%d is below the %d floor: leave it unset to take %q's own width, "+
 				"or state a width of at least %d",
 			e.Dimensions, MinEmbeddingWidth, strings.TrimSpace(e.Model), MinEmbeddingWidth)
 	case e.Dimensions > MaxEmbeddingWidth:
@@ -1662,7 +1915,7 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 			p.add(at(path, limit.field), ErrOutOfRange,
 				"%d is above the %d %s for %q as its vendor documents it; this "+
 					"field may only lower a documented limit (for a gateway or a "+
-					"proxy that accepts less) — leave it unset to take %d",
+					"proxy that accepts less): leave it unset to take %d",
 				limit.stated, documented, limit.what, name, documented)
 		case limit.stated == 0 && documented == 0 && known:
 			p.add(at(path, limit.field), ErrMissing,

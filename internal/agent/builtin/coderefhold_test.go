@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE REF HOLD (M3-decisions M3-O61, M3-O65): a seat's turn holds every seat's
@@ -698,7 +698,7 @@ func TestAnIdleScratchRepositoryIsRecordedOncePerTurn(t *testing.T) {
 	}
 
 	repo := host.detail.RepoRef
-	actor := builtin.Actor{Kind: tracker.AuthorAgent, Handle: "agent-cto"}
+	actor := builtin.Actor{Kind: worklet.AuthorAgent, Handle: "agent-cto"}
 	again := writerTurn(t)
 	for range 2 {
 		if err := builtin.HoldRepo(t.Context(), again, writer, actor, repo, nil); err != nil {

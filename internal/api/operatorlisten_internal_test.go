@@ -16,13 +16,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AN ASSISTANT IS TOLD AFTER THE LAST NODE'S MOVE, wherever its listing lands.
@@ -115,6 +119,24 @@ func (m fleetMember) applyPages() {
 	m.halves.Store(&next)
 }
 
+// listenerSeatControls is opts with the seat controls [operator.New] requires
+// and no case here calls: listing a catalogue answers no run, pauses no seat
+// and steers no turn, so each is a value nobody reaches, and the steer channel
+// signs under a key no node of any case holds.
+func listenerSeatControls(opts operator.Options) operator.Options {
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
+		statelog.OneKey("k1", "the listener cases' seat-control key material"))
+	if err != nil {
+		panic(err)
+	}
+	opts.Runs = builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}}
+	opts.Pauses = builtin.SeatPauseDeps{Pauses: struct{ builtin.SeatPauseStore }{},
+		Announce: struct{ builtin.Announcer }{}, Org: func() *org.Organization { return nil }}
+	opts.Steer = builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Wire: wire,
+		Runs: struct{ builtin.RunSteers }{}}
+	return opts
+}
+
 // fleetNode starts one ingress node named id on broker.
 func fleetNode(t *testing.T, broker *queuememory.Broker, id string) fleetMember {
 	t.Helper()
@@ -124,12 +146,12 @@ func fleetNode(t *testing.T, broker *queuememory.Broker, id string) fleetMember 
 		Work: builtin.WorkDeps{Reader: struct{ builtin.WorkReader }{}},
 	})
 	listeners := operator.NewListeners()
-	server, err := operator.New(operator.Options{
+	server, err := operator.New(listenerSeatControls(operator.Options{
 		Halves:    func() (operator.Halves, bool) { return *halves.Load(), true },
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     discardAudit{},
 		Listeners: listeners,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}

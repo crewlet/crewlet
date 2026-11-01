@@ -66,7 +66,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {
 				b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
 			},
-			"stream.tracker_retention.backup_floor", "never trimmed",
+			"stream.tracker_retention.backup_floor", "a backup of that log has been acknowledged",
 		},
 		"nobody owns the backup": {
 			func(b *config.Bootstrap) {},
@@ -337,6 +337,10 @@ func TestAVerboseBrokerIsToldOnlyTheRemediesThatWork(t *testing.T) {
 // one mistake in front of an operator twice.
 func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	t.Parallel()
+	// THE CHANNEL IS HERE SO THIS CASE STAYS ABOUT THE ID. A Chatlet
+	// company whose units declare no channel raises an advisory of its own,
+	// and a fixture that collected it would assert two warnings while
+	// naming one rule.
 	c := &config.Company{
 		Name: "Acme",
 		// A REACHABLE PERSON'S SEAT, so the one warning counted is the
@@ -344,8 +348,9 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 		// own ([config.Company.AdvisoryWarnings]).
 		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{{
-			Name:  "Platform",
-			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
+			Name:    "Platform",
+			Channel: "platform",
+			Roles:   []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
 	// A SUBMITTED DOCUMENT IS REFUSED, and a running one is not: the key
@@ -392,8 +397,8 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 
 // founderSeat is a human seat somebody can be reached at: what a fixture
 // counting warnings declares, so the count is its subject's alone — a company
-// with no human seat is advised that nobody can join it, and a human seat with
-// no contact identity that nobody can be mentioned at.
+// with no human seat is advised that nobody can join it, and on a vendor chat
+// surface a human seat with no account there that nobody can be mentioned at.
 func founderSeat() config.Role {
 	return config.Role{Name: "Founder", Handle: "founder", Kind: org.KindHuman,
 		Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}}
@@ -408,9 +413,14 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	c := &config.Company{
 		Name:  "Acme",
 		Roles: []config.Role{founderSeat()},
+		// The channels keep this case about the id, as above — and the
+		// child deliberately declares none, which is inheritance working
+		// rather than an omission: a unit that takes its parent's channel
+		// raises nothing.
 		Units: []config.Unit{
-			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
-			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
+			{Name: "Product", ID: "product", Channel: "product",
+				Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+			{Name: "Engineering", ID: "engineering", Channel: "engineering", Children: []config.Unit{
 				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
 			}},
 		},
@@ -427,14 +437,14 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// VECTORS NEED A CORPUS, AND A NATIVE TRACKER IS ONE.
+// VECTORS NEED A CORPUS, AND WORKLET IS ONE.
 //
 // The rule this narrows refused vectors whenever `knowledge.backend` was
 // `none` — which was right when the knowledge base was the only thing there
 // was to embed, and wrong once the engine held the work items too. A company
 // that keeps its documents somewhere the engine cannot search and its work
 // here is entitled to semantic recall over the work.
-func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
+func TestVectorsNeedAKnowledgeBaseOrWorklet(t *testing.T) {
 	t.Parallel()
 	on := true
 	for name, tc := range map[string]struct {
@@ -442,10 +452,10 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 		tracker   config.TrackerBackend
 		accept    bool
 	}{
-		"a knowledge base and a native tracker": {config.KnowledgeNative, config.TrackerNative, true},
-		"no knowledge base, native tracker":     {config.KnowledgeNone, config.TrackerNative, true},
-		"a knowledge base, no tracker":          {config.KnowledgeNative, config.TrackerNone, true},
-		"neither":                               {config.KnowledgeNone, config.TrackerNone, false},
+		"a knowledge base and Worklet": {config.KnowledgeDoclet, config.TrackerWorklet, true},
+		"no knowledge base, Worklet":   {config.KnowledgeNone, config.TrackerWorklet, true},
+		"a knowledge base, no tracker": {config.KnowledgeDoclet, config.TrackerNone, true},
+		"neither":                      {config.KnowledgeNone, config.TrackerNone, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := config.DefaultCompany()
@@ -465,11 +475,83 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 				if !refused {
 					t.Fatal("vectors with no corpus at all were accepted")
 				}
-				if !strings.Contains(err.Error(), "native tracker") {
+				if !strings.Contains(err.Error(), "Worklet") {
 					t.Errorf("refusal = %q, want it to name the other corpus", err)
 				}
 			}
 		})
+	}
+}
+
+// AN OPERATOR FLOOR NAMES EVERY CEILING THAT WILL REFUSE, not the mutation
+// log's alone.
+//
+// Until somebody acknowledges a backup of it nothing trims any of the
+// ordered logs, and none carries an age bound, so each grows until its own
+// ceiling refuses an append. Which one fills first depends on the volume and
+// the company rather than on the configuration this advisory reads, so a
+// message naming one field sends the operator to the wrong ceiling whenever
+// another log won.
+//
+// AND THE ACKNOWLEDGEMENT IS PER LOG — every log. It names one stream, and the
+// backup term blocks every log the counted point does not cover, so a message
+// saying the first acknowledgement unblocks the trim told an operator who
+// acknowledged the mutation log that the knowledge base's would trim as well;
+// and the two compacted logs, which never refuse a write, raise their
+// `backup_age` alarm without one, so a message naming only the ordered logs
+// left two alarms firing for ever.
+//
+// THE CEILINGS ARE READ OFF [config.Stream] rather than listed here: every
+// `*_max_bytes` field but the broker's own limit is one state log's, so a log
+// added with its ceiling and left out of the advisory fails this case.
+//
+// Mutation: drop any one field from the advisory, or put "first
+// acknowledgement" back, and this fails.
+func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
+	t.Parallel()
+	b := config.RunnableBootstrap()
+	b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	var message string
+	for _, w := range b.Warnings() {
+		if w.Path == "stream.tracker_retention.backup_floor" {
+			message = w.Message
+		}
+	}
+	if message == "" {
+		t.Fatalf("no warning about the operator floor: %v", b.Warnings())
+	}
+	var ceilings []string
+	stream := reflect.TypeFor[config.Stream]()
+	for i := range stream.NumField() {
+		name, _, _ := strings.Cut(stream.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasSuffix(name, "_max_bytes") && name != "store_max_bytes" {
+			ceilings = append(ceilings, "`stream."+name+"`")
+		}
+	}
+	// A FLOOR: nine logs' ceilings today, the Dashboard Assistant's and
+	// chat's among them, and a reflection that matched nothing would let any
+	// message pass.
+	if len(ceilings) < 9 {
+		t.Fatalf("config.Stream declares %v, fewer than the nine state logs' "+
+			"ceilings, so this compares nothing", ceilings)
+	}
+	for _, want := range append(ceilings, "`backup_age`") {
+		if !strings.Contains(message, want) {
+			t.Errorf("warning = %q, want it to name %s", message, want)
+		}
+	}
+	for _, perLog := range []string{"once per log", "-stream <log>"} {
+		if !strings.Contains(message, perLog) {
+			t.Errorf("warning = %q, want it to say the acknowledgement is per "+
+				"log (%q)", message, perLog)
+		}
+	}
+	if strings.Contains(message, "first acknowledgement") {
+		t.Errorf("warning = %q reads as though one acknowledgement unblocks "+
+			"every log", message)
 	}
 }
 
@@ -576,7 +658,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 // go quiet; walk only the top-level roles and the unit's seat is missed.
 func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	t.Parallel()
-	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
+	const agents = "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +
 		"      model: claude-sonnet-5\n"
 	for name, tc := range map[string]struct {
 		doc     string

@@ -71,7 +71,7 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
 		Seat:   rig.vacantSeat("dana-okafor"),
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 		OpID:   "op-enrol", Reason: "a hire", LinkExpiresAt: firstLinkExpiry,
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -84,7 +84,7 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 		t.Fatalf("the enrolment announced %d grant changes, want 1", len(rows))
 	}
 	if got := rows[0]; got.Person != person || got.By != "ana.admin" ||
-		!slices.Equal(got.Added, []string{"tracker"}) ||
+		!slices.Equal(got.Added, []string{"worklet"}) ||
 		len(got.Removed) != 0 || got.Version == 0 {
 		t.Errorf("the enrolment announced %+v", got)
 	}
@@ -106,7 +106,7 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	admin := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
 		[]iam.Grant{iam.GrantAdmin}))
 	if err := update(admin, "op-swap", func(p iamdomain.Person) iamdomain.Person {
-		p.Grants = []iam.Grant{iam.GrantKnowledge}
+		p.Grants = []iam.Grant{iam.GrantDoclet}
 		return p
 	}); err != nil {
 		t.Fatalf("swap: %v", err)
@@ -115,10 +115,10 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("the swap announced %d grant changes, want 1", len(rows))
 	}
-	if got := rows[0]; !slices.Equal(got.Added, []string{"knowledge"}) ||
-		!slices.Equal(got.Removed, []string{"tracker"}) || got.By != "ana.admin" {
-		t.Errorf("the swap announced %+v, want knowledge added and "+
-			"tracker removed", got)
+	if got := rows[0]; !slices.Equal(got.Added, []string{"doclet"}) ||
+		!slices.Equal(got.Removed, []string{"worklet"}) || got.By != "ana.admin" {
+		t.Errorf("the swap announced %+v, want doclet added and "+
+			"worklet removed", got)
 	}
 
 	// A WRITE THAT MOVED NO PERMISSION announces nothing: admin granted,
@@ -131,7 +131,7 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	}
 	rig.events.take()
 	if err := update(admin, "op-spell", func(p iamdomain.Person) iamdomain.Person {
-		p.Grants = []iam.Grant{iam.GrantAdmin, iam.GrantKnowledge, iam.GrantTracker}
+		p.Grants = []iam.Grant{iam.GrantAdmin, iam.GrantDoclet, iam.GrantWorklet}
 		return p
 	}); err != nil {
 		t.Fatalf("spell out: %v", err)
@@ -276,7 +276,7 @@ func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
 		_, err := redeemer.Redeem(t.Context(), iamdomain.Redemption{
 			PersonID: person.String(), Stage: iam.StageActive,
 			Name: "Sam Joiner", Email: "sam@example.com", Login: "sam.joiner",
-			Password: aPassword(), Grants: []iam.Grant{iam.GrantTracker},
+			Password: aPassword(), Grants: []iam.Grant{iam.GrantWorklet},
 			Seat: seat, Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: op, Reason: "redeemed an invitation",
 		})
@@ -291,8 +291,8 @@ func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
 		t.Fatalf("the redemption announced %d grant changes, want 1", len(rows))
 	}
 	if got := rows[0]; got.Person != person.String() || got.By != "ana.admin" ||
-		got.OperatorID != "" || !slices.Equal(got.Added, []string{"tracker"}) {
-		t.Errorf("the redemption announced %+v, want the tracker added by the "+
+		got.OperatorID != "" || !slices.Equal(got.Added, []string{"worklet"}) {
+		t.Errorf("the redemption announced %+v, want worklet added by the "+
 			"invitation's issuer, ana.admin, through no credential", got)
 	}
 	if got := rig.column(`SELECT actor FROM iam_history

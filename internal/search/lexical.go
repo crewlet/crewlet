@@ -128,8 +128,8 @@ type Indexer struct {
 	// SQL is theirs and the walk is this type's.
 	sources []LexicalSource
 
-	// links reads the page ids a body links to — `pages.Links`, handed in
-	// by [Indexer.WithLinks] because `pages` imports this package and the
+	// links reads the page ids a body links to (`doclet.Links`), handed in
+	// by [Indexer.WithLinks] because `doclet` imports this package and the
 	// grammar is theirs. Nil derives no backlinks, which is what an index
 	// built for one question about RANKING is; the engine always wires it.
 	links func(body string) []string
@@ -148,7 +148,7 @@ type Indexer struct {
 const IndexDerivation = 1
 
 // WithLinks has this index derive the backlinks from every body it indexes,
-// through the grammar given — `pages.Links`. Called once, at construction,
+// through the grammar given (`doclet.Links`). Called once, at construction,
 // before [Indexer.Run]: the field is read by the one loop that writes.
 func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 	x.links = links
@@ -264,8 +264,7 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 	if err := x.writeLinks(ctx, tx, doc, id, maxVariables); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM kb_postings WHERE doc_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, lexicalClearPostingsStatement, id); err != nil {
 		return fmt.Errorf("search: clear postings for %s: %w", id, err)
 	}
 	// ONE STATEMENT PER CHUNK, not one per term. This was the hottest
@@ -326,6 +325,33 @@ func (x *Indexer) writeLinks(ctx context.Context, tx *sql.Tx, doc Doc, id string
 	return nil
 }
 
+// The index's own maintenance statements over kb_docs and kb_postings, named
+// for the plan gate's reason ([lexicalCorpusStatement]).
+const (
+	// lexicalClearPostingsStatement clears one document's list before it is
+	// written again.
+	lexicalClearPostingsStatement = `DELETE FROM kb_postings WHERE doc_id = ?`
+
+	// lexicalRemoveDocStatement drops one document; its postings cascade.
+	lexicalRemoveDocStatement = `DELETE FROM kb_docs WHERE source = ? AND source_id = ?`
+
+	// lexicalOrphanWalkStatement is the next batch of one source's index
+	// rows past the orphan walk's cursor, in the order the walk resumes in.
+	lexicalOrphanWalkStatement = `SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
+		  ORDER BY source_id LIMIT ?`
+
+	// lexicalIndexedCountStatement is how many of one source's documents
+	// the index holds.
+	lexicalIndexedCountStatement = `SELECT COUNT(*) FROM kb_docs WHERE source = ?`
+)
+
+// lexicalHeldStatement reads what the index holds for n documents by their
+// keys: the version and the derivation each was indexed at.
+func lexicalHeldStatement(n int) string {
+	return `SELECT source_id, source_rev, derivation FROM kb_docs WHERE id IN (` +
+		binds(n) + `)`
+}
+
 // posting is one row of the inverted list, held while a document's terms are
 // turned from a map into something a multi-row insert can index into.
 type posting struct {
@@ -363,12 +389,12 @@ func excerptOf(body string) string {
 func (x *Indexer) Remove(ctx context.Context, source, id string) error {
 	return x.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The postings cascade on kb_docs, so one delete is the whole
-		// removal — and it is the reason kb_docs has no foreign key back
-		// to the source tables: the projector deletes a source row and the
-		// indexer deletes the index row, in that order, and a cascade from
-		// the source would delete a posting list mid-write.
-		_, err := tx.ExecContext(ctx,
-			`DELETE FROM kb_docs WHERE source = ? AND source_id = ?`, source, id)
+		// removal. kb_docs has no foreign key back to the source tables,
+		// and could not: it is in this node's own estate and the sources
+		// are in the replicated one, which no statement joins across. The
+		// applier deletes a source row, and the indexer's orphan pass
+		// removes the index row after it.
+		_, err := tx.ExecContext(ctx, lexicalRemoveDocStatement, source, id)
 		return err
 	})
 }
@@ -557,9 +583,7 @@ func (x *Indexer) versions(ctx context.Context, source string,
 	for _, at := range scan {
 		ids = append(ids, docKey(source, at.ID))
 	}
-	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id, source_rev, derivation FROM kb_docs WHERE id IN (`+
-			binds(len(ids))+`)`, ids...)
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalHeldStatement(len(ids)), ids...)
 	if err != nil {
 		return nil, fmt.Errorf("search: read what the index holds: %w", err)
 	}
@@ -613,9 +637,7 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 	// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same answer: a
 	// batch of index rows read here, and their sources checked against the
 	// replicated estate in a second read.
-	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
-		  ORDER BY source_id LIMIT ?`,
+	rows, err := x.db.SQL().QueryContext(ctx, lexicalOrphanWalkStatement,
 		source.Source(), x.orphanCursor[source.Source()], limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
@@ -675,7 +697,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	var published, indexed int
 	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
 	// seat whose company has pages indexed and items not is one that would
-	// be told its own tracker holds nothing.
+	// be told its own Worklet holds nothing.
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
 	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {
@@ -692,8 +714,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	}
 	for _, source := range x.sources {
 		var n int
-		if err := x.db.SQL().QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM kb_docs WHERE source = ?`,
+		if err := x.db.SQL().QueryRowContext(ctx, lexicalIndexedCountStatement,
 			source.Source()).Scan(&n); err != nil {
 			return 0, fmt.Errorf("search: count the indexed %s documents: %w",
 				source.Source(), err)

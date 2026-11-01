@@ -16,9 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -403,7 +403,7 @@ func bootDirectoryNodeWith(t *testing.T, roles []string,
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	b.Node.Roles = roles
 	if amend != nil {
 		amend(&b)
@@ -429,6 +429,7 @@ func directoryConfig(t *testing.T) *config.Company {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -475,12 +476,7 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
-	log, err := statelogtest.LocalReader(iamdomain.Domain{}, db.Replicated(),
-		statelog.Position{})
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
-	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db.Replicated().Reader(), Log: log})
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: db.Replicated().Reader()})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}

@@ -8,10 +8,17 @@
  * reads the step's place and folds the preview.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BrandSetup } from "./BrandSetup.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import {
+  applyPageAction,
+  pageActionPreview,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -47,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   Object.assign(URL, { createObjectURL, revokeObjectURL });
   Object.defineProperty(globalThis, "matchMedia", {
@@ -189,6 +197,10 @@ test("a fresh setup opens on Identity with the company's name, and its first Con
   // NO BACK ON THE FIRST STEP, and Identity is never skipped.
   expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull();
+  // Continue is the wizard's primary action, the slot that keeps one width on every step.
+  expect(
+    screen.getByRole("button", { name: "Continue" }).closest(".crewlet-setup-wizard__primary"),
+  ).not.toBeNull();
   fireEvent.change(screen.getByDisplayValue("FairSplit"), { target: { value: "FairSplit Labs" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await stepHeading("Logos")).toBeTruthy();
@@ -240,7 +252,7 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
   engine(draft({ colors: { primary: "#0f7b5f", text: "#9aa3ad" } }));
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Colours")).toBeTruthy();
-  expect(screen.getByText("Blocks adoption")).toBeTruthy();
+  expect(screen.getByText("Blocks publishing")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() =>
     expect(
@@ -249,21 +261,26 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
   );
   expect(screen.getByRole("heading", { name: "Colours", level: 3 })).toBeTruthy();
   fireEvent.click(screen.getAllByRole("button", { name: /^#[0-9a-f]{6}/ })[0]!);
-  await waitFor(() => expect(screen.queryByText("Blocks adoption")).toBeNull());
+  await waitFor(() => expect(screen.queryByText("Blocks publishing")).toBeNull());
 });
 
 test("an administrator adopts from Review once every contrast warning is acknowledged", async () => {
   const sent = engine(whole({ colors: { primary: "#00baba" } }));
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Review")).toBeTruthy();
-  const adopt = screen.getByRole("button", { name: "Adopt as the company brand" });
+  const adopt = screen.getByRole("button", { name: "Publish as the company brand" });
+  // THE FINISH IS THE WIZARD'S PRIMARY ACTION, by name: on a phone that slot takes the footer's second row.
+  expect(adopt.closest(".crewlet-setup-wizard__primary")).not.toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Save as draft" }).closest(".crewlet-setup-wizard__primary"),
+  ).toBeNull();
   // NOTHING IS SAID BEFORE A FINISH IS TRIED.
   expect(screen.queryByRole("alert")).toBeNull();
   fireEvent.click(adopt);
   // WHAT HOLDS IT IS SAID AT THE FIELD, and focus moves to the box to tick.
   const warnings = screen.getByRole("group", { name: "Confirm low contrast" });
   const alert = await within(warnings).findByRole("alert");
-  expect(alert.textContent).toBe("Confirm the pair to adopt.");
+  expect(alert.textContent).toBe("Confirm the pair to publish.");
   const [box] = within(warnings).getAllByRole("checkbox");
   await waitFor(() => expect(document.activeElement).toBe(box));
   expect(box!.getAttribute("aria-invalid")).toBe("true");
@@ -287,7 +304,7 @@ test("an editor of the kit finishes with Save for review, and never adopts", asy
   const sent = engine(whole());
   mount([], [brandKitRow({ role: "editor" })]);
   expect(await stepHeading("Review")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Adopt as the company brand" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Publish as the company brand" })).toBeNull();
   expect(screen.getByRole("region", { name: "Before you save for review" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save for review" }));
   await waitFor(() => expect(location.hash).toBe("#/company/brand"));
@@ -344,7 +361,7 @@ test("a change made on the way to Review is saved as a version of the draft, and
   expect(await stepHeading("Review")).toBeTruthy();
   const [publish] = writes(sent, /\/artifacts\/01DRAFT\/versions$/);
   expect(JSON.parse(publish!.body)).toMatchObject({ mode: "whole", entry: "brand.json" });
-  fireEvent.click(screen.getByRole("button", { name: "Adopt as the company brand" }));
+  fireEvent.click(screen.getByRole("button", { name: "Publish as the company brand" }));
   await waitFor(() => expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(1));
   expect(JSON.parse(writes(sent, /\/brand\/adoptions$/)[0]!.body)).toEqual({
     kit: KIT,
@@ -410,8 +427,8 @@ test("Review shows each part's values and status in one summary, beside the prev
   );
   expect(await stepHeading("Review")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Preview of your draft" })).toBeTruthy();
-  const before = screen.getByRole("region", { name: "Before you adopt" });
-  expect(within(before).getByRole("heading", { name: "When you adopt" })).toBeTruthy();
+  const before = screen.getByRole("region", { name: "Before you publish" });
+  expect(within(before).getByRole("heading", { name: "When you publish" })).toBeTruthy();
   expect(within(before).getByText("Docs and dashboards switch to it right away.")).toBeTruthy();
   const boxes = within(before).getAllByRole("checkbox");
   for (const box of boxes) fireEvent.click(box);
@@ -443,4 +460,67 @@ test("a low pair says what it needs and why in one line, and offers shades and d
       .getAttribute("aria-pressed"),
   ).toBe("true");
   expect(screen.getAllByDisplayValue(/00baba/).length).toBeGreaterThan(0);
+});
+
+test("the open draft is the assistant's to read, and a change it proposes previews and applies through the setup", async () => {
+  engine(draft());
+  setFramePage({
+    screen: "company-brand-setup",
+    title: "Brand › Set up",
+    path: ["company", "brand", "setup"],
+    params: {},
+    query: {},
+  });
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Typography")).toBeTruthy();
+  const open = () => pageSnapshot()!.context;
+  const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+  // WHAT IS OPEN: the kit and version it was opened on, the step, the values,
+  // and the logos as metadata the assistant reads and never sets.
+  expect(open().draft).toMatchObject({ kind: "client", id: KIT, revision: "2", step: "type" });
+  expect(open().draft!.help).toMatch(/no images/);
+  expect(open().accepts).toContain("draft.set");
+  expect(field("colors.primary")).toMatchObject({ value: "#0f7b5f", editable: true });
+  expect(field("type.heading")).toMatchObject({ value: "geist", editable: true });
+  expect(field("logos.primary")).toEqual({
+    path: "logos.primary",
+    label: "Primary logo",
+    kind: "file",
+    value: "logos/primary.svg",
+    hint: expect.stringContaining("image/svg+xml"),
+    editable: true,
+  });
+  const payload = { values: { "colors.primary": "#5B21B6", "voice.summary": "Plain and warm." } };
+  // THE CARD SHOWS EACH FIELD'S VALUE NOW beside the proposed one, in the
+  // setup's own words.
+  expect(pageActionPreview("draft.set", payload)).toEqual({
+    rows: [
+      { field: "Primary colour", next: "#5b21b6", current: "#0f7b5f" },
+      { field: "Voice summary", next: "Plain and warm.", current: "(empty)" },
+    ],
+    blocked: null,
+  });
+  let result: ReturnType<typeof applyPageAction> | undefined;
+  act(() => {
+    result = applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload,
+      source_revision: open().source_revision,
+    });
+  });
+  expect(result).toMatchObject({ outcome: "applied" });
+  await waitFor(() => expect(field("colors.primary")?.value).toBe("#5b21b6"));
+  expect(field("voice.summary")?.value).toBe("Plain and warm.");
+  // NOTHING IS SAVED: the change is the person's draft until they continue.
+  expect(screen.getByRole("heading", { name: "Typography", level: 3 })).toBeTruthy();
+  // A LOGO IS A FILE OF THE CONVERSATION, never markup or a name.
+  expect(
+    applyPageAction({
+      correlation_id: "c2",
+      action: "draft.set",
+      payload: { values: { "logos.primary": "<svg/>" } },
+      source_revision: open().source_revision,
+    }),
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/takes one of your files/) });
 });

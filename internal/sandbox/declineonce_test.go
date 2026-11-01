@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // LETTING AN ANSWER GO IS EXACTLY ONCE, ACROSS A CRASH AT EACH STEP.
@@ -40,17 +41,29 @@ func owedAnAnswerItCannotResume(t *testing.T, rig *coordRig) *events.Event {
 	return r1
 }
 
-// handedBack is every message published to the seat's inbox, by id.
+// handedBack is every reply handed back to the seat, by id: a chat reply on
+// its inbox, an answer by turn on its control topic.
 func (r *coordRig) handedBack() []string {
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
 	var out []string
 	for _, p := range r.queue.published {
-		if p.topic == sweInbox() {
+		if handedBackPublication(p) {
 			out = append(out, p.event.ID.String())
 		}
 	}
 	return out
+}
+
+// handedBackPublication is whether p is a reply handed back to the seat: on its
+// inbox, or an answer by turn on its control topic, which also carries the
+// seat's completions.
+func handedBackPublication(p publication) bool {
+	if p.topic == sweInbox() {
+		return true
+	}
+	_, answer := events.DataAs[*types.SandboxAnswerGiven](p.event)
+	return answer && p.topic == sweControl()
 }
 
 // successorOf is the seat's next holder: a fresh coordinator over the same
@@ -121,7 +134,7 @@ func TestADeclineStoppedBeforeItsWriteHandsNothingBack(t *testing.T) {
 
 	rig.coordinator.Stop()
 	next := successorOf(t, rig, rig.pending)
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("the next holder resumed %+v, want the recorded answer once", calls)
 	}
 	if got := rig.handedBack(); len(got) != 0 {

@@ -16,10 +16,9 @@ import (
 // The pointer publishes an instant later than the activation it replaces
 // (coord.ActivationAt), so a write made on a node whose clock runs behind the
 // node that activated last is published later than this node's clock says.
-// The local copy's `activated_at` is what this node's config history shows and
-// what its reconciler holds the pointer against: left at the instant it asked
-// for, the reconciler reads the fleet's own activation as one this node has
-// not applied, and the history names an instant the fleet never ran.
+// The copy this node keeps is what its config history shows: noted at the
+// instant the write asked for, the history names an instant the fleet never
+// ran, and two nodes' histories disagree about when one activation happened.
 func TestAWriteKeepsThePointersInstant(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -27,7 +26,7 @@ func TestAWriteKeepsThePointersInstant(t *testing.T) {
 		map[string]string{"X-Summary": "create"}); res.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", res.Code, res.Body)
 	}
-	base, found, err := s.configs.Active(t.Context())
+	base, found, err := s.active(t.Context())
 	if err != nil || !found {
 		t.Fatalf("active revision: %v (found=%v)", err, found)
 	}
@@ -54,7 +53,7 @@ func TestAWriteKeepsThePointersInstant(t *testing.T) {
 		t.Fatalf("the premise: the rename is published at %s, not after the %s "+
 			"it replaced", target.At, ahead)
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatalf("active revision: %v", err)
 	}

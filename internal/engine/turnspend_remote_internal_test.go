@@ -9,16 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A TURN ON A NODE WITHOUT `data` CHARGES THE TASK THAT WOKE IT, ON A DATA
@@ -29,32 +31,47 @@ import (
 //
 // The per-segment arithmetic of a charge is turnspend_internal_test.go's; this
 // is the one thing only a stateless node can show: that the charge is not left
-// behind on a node that keeps no tracker.
+// behind on a node that keeps no tracker. And the executor's share of it is its
+// run's, collected from the box — the cached share included, which a CLI
+// reports beside its tokens and the charge carries like every phase's.
+//
+// Mutation: leave the job's cached share out of the resumed segment's charge,
+// and CacheRead is the reviewer's alone.
 func TestAStatelessNodesTurnChargesItsTaskOnADataNode(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
-	if _, err := e.runTurn(t.Context(), Request{
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
+	// ONE CHARGE PER SEGMENT: the dispatch that parked on the launch, and
+	// the resume that collected the run and reviewed it (ADR-0022).
 	turns, ops := served.recorded()
-	if len(turns) != 1 {
-		t.Fatalf("the turn recorded %d charge(s) on the data node, want one", len(turns))
+	if len(turns) != 2 {
+		t.Fatalf("the turn recorded %d charge(s) on the data node, want its two segments': %+v",
+			len(turns), turns)
 	}
-	got := turns[0]
-	if got.Task != "task-9" || got.Seat != "swe" || got.TurnID != "run-1" {
-		t.Fatalf("the charge arrived as %+v, want task-9 by swe in run-1", got)
+	var whole worklet.TurnSpend
+	for _, got := range turns {
+		if got.Task != "task-9" || got.Seat != "swe" || got.TurnID != "run-1" {
+			t.Fatalf("a charge arrived as %+v, want task-9 by swe in run-1", got)
+		}
+		whole.Turns += got.Spend.Turns
+		whole.Input += got.Spend.Input
+		whole.Output += got.Spend.Output
+		whole.CacheRead += got.Spend.CacheRead
 	}
-	if got.Spend.Turns != 1 || got.Spend.Input != 2*billedInput ||
-		got.Spend.Output != 2*billedOutput || got.Spend.CacheRead != 2*billedCached {
-		t.Fatalf("the charge is %+v, want one turn and the two phases' tokens (%d in, "+
-			"%d out, %d of them cached)", got.Spend, 2*billedInput, 2*billedOutput, 2*billedCached)
+	if whole.Turns != 1 || whole.Input != 2*billedInput ||
+		whole.Output != 2*billedOutput || whole.CacheRead != 2*billedCached {
+		t.Fatalf("the segments charged %+v between them, want one turn and the run's and the "+
+			"review's tokens (%d in, %d out, %d of them cached)", whole,
+			2*billedInput, 2*billedOutput, 2*billedCached)
 	}
-	if ops[0] == "" {
-		t.Fatal("the charge crossed with no operation id, so a repeat would count it twice")
+	if ops[0] == "" || ops[1] == "" || ops[0] == ops[1] {
+		t.Fatalf("the charges crossed under operation ids %q: each segment needs its own, or a "+
+			"repeat would count it twice and the second segment would collapse into the first", ops)
 	}
 }
 
@@ -67,12 +84,11 @@ func TestAStatelessNodesUnattributedTurnChargesNothing(t *testing.T) {
 		NotificationSource: "slack", SourceEventType: "message",
 		Sender: "ana", Subject: "a message", Body: "can you look at this",
 	}, events.TraceContext{})
-	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-2", Events: []*events.Event{chat},
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	runToItsEnd(t, e, rig, Request{
+		Handle: "swe", WorkKey: "wk-2", RunID: "run-2", Events: []*events.Event{chat},
 		WorkSince: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 	if turns, _ := served.recorded(); len(turns) != 0 {
 		t.Fatalf("a chat turn charged %+v", turns)
 	}
@@ -84,48 +100,47 @@ const (
 	billedCached = 800
 )
 
-// billingModel answers each phase with its own submission and bills it.
-type billingModel struct{}
+// billingModel answers each phase with its own submission and bills it: a
+// coding CLI on the real session whose one request calls the phase's
+// terminator — submit_review where the phase offers it, submit_work otherwise.
+func billingModel() phasedCLI {
+	return phasedCLI{model: "billing", pick: billingRun}
+}
 
-func (billingModel) Model() string { return "billing" }
-
-func (billingModel) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+// billingRun is billingModel's run for a phase offering offered.
+func billingRun(offered []string) llmtest.Run {
 	name, args := runner.SubmitWorkTool, map[string]any{
 		"outcome": "blocked", "summary": "nothing to do here",
 		"evidence": "this seat holds no write tool",
 	}
-	for _, tool := range req.Tools {
-		if tool.Name == runner.SubmitReviewTool {
-			name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
-		}
+	if offers(offered, runner.SubmitReviewTool) {
+		name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
 	}
-	return &llm.Completion{
-		Model:       "billing",
-		ToolCalls:   []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
-		InputTokens: billedInput, OutputTokens: billedOutput, CacheRead: billedCached,
-	}, nil
+	return calling(name, args, llm.Usage{
+		Input: billedInput, Output: billedOutput, CacheRead: billedCached,
+	})
 }
 
 // servedWriter is a data node's tracker, recording every turn it was handed.
 type servedWriter struct {
 	estate.TrackerWriter
 	mu    sync.Mutex
-	turns []tracker.TurnRecord
+	turns []worklet.TurnRecord
 	ops   []string
 }
 
 func (w *servedWriter) RecordTurn(_ context.Context, opID string,
-	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	turn worklet.TurnRecord) (worklet.WriteResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.turns, w.ops = append(w.turns, turn), append(w.ops, opID)
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-func (w *servedWriter) recorded() ([]tracker.TurnRecord, []string) {
+func (w *servedWriter) recorded() ([]worklet.TurnRecord, []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]tracker.TurnRecord(nil), w.turns...), append([]string(nil), w.ops...)
+	return append([]worklet.TurnRecord(nil), w.turns...), append([]string(nil), w.ops...)
 }
 
 // staticRoster names one data node.
@@ -144,7 +159,8 @@ func (s *servedEstate) For(context.Context, string) (estate.Backend, bool) {
 }
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the
-// native tracker, whose writes are served by one data node over the estate.
+// Worklet, whose writes are served by one data node over the estate. Its seat's
+// executor launches on [runnerKey]; the case rigs what plays the run.
 func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	t.Helper()
 	broker := memory.NewBroker()
@@ -182,19 +198,17 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: billingModel{}}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
+	models := runnable(t, []phase.Entry{{Key: "only", Provider: billingModel()}}, seat)
 	// IN NORMAL MODE, as [New] starts a node unless told otherwise: the mode
 	// is what decides whether this node hands out a writer at all, a routed
 	// one included ([Engine.writers]), and the charge is a write.
-	e := &Engine{backends: &Backends{Queue: q}, router: router, mode: statelog.ModeNormal}
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()},
+		router: router, mode: statelog.ModeNormal})
 	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	e.notify.registry = notify.NewRegistry(organization, nil)
@@ -205,14 +219,14 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 // stamps it.
 func taskWake(id, key string) *events.Event {
 	ev := events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "assigned",
+		NotificationSource: worklet.Source, SourceEventType: "assigned",
 		Sender: "lead", Subject: key + " assigned: a task",
 		Metadata: map[string]string{
-			tracker.MetaTaskID: id, tracker.MetaTaskKey: key,
-			tracker.MetaObject: string(tracker.KindTask), tracker.MetaObjectID: id,
-			tracker.MetaVia: "assignee",
+			worklet.MetaTaskID: id, worklet.MetaTaskKey: key,
+			worklet.MetaObject: string(worklet.KindTask), worklet.MetaObjectID: id,
+			worklet.MetaVia: "assignee",
 		},
 	}, events.TraceContext{})
-	ev.Source = "notify." + tracker.Source
+	ev.Source = "notify." + worklet.Source
 	return ev
 }

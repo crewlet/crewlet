@@ -22,6 +22,8 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
+import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
@@ -45,11 +47,13 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { AssistantViewerAssistant } from "../contract/assistant.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
 import type {
   IntegrationsAnswer,
+  LinkHostsAnswer,
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
@@ -85,11 +89,11 @@ import type {
   DATA_VERDICTS,
   FIELD_CONDITIONS,
   ORIGIN_MODES,
-  PRESENCE_ACTIVITIES,
   READ_RULES,
   SHAREABLE_ROLES,
 } from "../contract/artifacts.ts";
-import type { WorkViewShape } from "../contract/work.ts";
+import { PRESENCE_ACTIVITIES, PRESENCE_ROOMS } from "../contract/presence.ts";
+import type { InformSurface, WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
   RetentionIdentityCause,
@@ -181,6 +185,14 @@ export interface EventRecord {
    * sub-agent).
    */
   work_key?: string;
+  /**
+   * The node that PUBLISHED this event — where the work it describes ran —
+   * read off the row server-side (store.EventRecord.Node). Not the node that
+   * answered with it: a data node keeps the events of a node without `data`
+   * in custody and holds rows it never published. Absent only on a row no node
+   * published.
+   */
+  node?: string;
 }
 
 export interface EventsPage {
@@ -213,8 +225,13 @@ export interface TraceAnswer {
 
 /** Why a seat stopped. One shape for every kind of stop. */
 export interface ErrorInfo {
+  /** The classifier's kind, which a screen words for a person
+   *  (`failureWords`). */
   kind: string;
-  message: string;
+  /** The failure in its own words: sent only to an admin, since it names
+   *  the company's model entries and carries what a vendor or a tool wrote
+   *  (`livestate.Reach.Config`). */
+  detail?: string;
   phase: string;
   turn_id: string;
   at: string;
@@ -233,6 +250,12 @@ export interface ToolExecution {
   success: boolean;
   /** Present only on a failed call, repeating its `result`. */
   error?: string;
+  /**
+   * The call's own id — what tells two calls of one response apart, and what
+   * a running call (`running_calls[].id`) is matched to once it answers.
+   * Absent where nothing named the call.
+   */
+  call_id?: string;
   /** When the call was handed to the tool (RFC 3339, UTC), and how long it
    *  took. Both absent on a row nothing timed. */
   started_at?: string;
@@ -315,15 +338,60 @@ export interface PhaseRound {
   cache_write_tokens: number;
   tool_calls: number;
   /**
-   * Why the model stopped writing this round's response: `end` or
-   * `tool_use` (see `contract/stops.ts`). Absent where its backend reported
+   * Why the model stopped writing this round's response: `end`, `tool_use`
+   * or `cap` (see `contract/stops.ts`). Absent where its backend reported
    * none — "not reported", never "ended normally".
    */
   stop_reason?: StopReason;
 }
 
-/** The tool call a phase is running right now (`types.RunningCall`). */
+/**
+ * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * own loop over the phase's tools, from launch to exit — the unit the engine
+ * observes for every CLI, where a round is one model request that a CLI's
+ * record shows for most CLIs and not for all.
+ */
+export interface PhaseInvocation {
+  started_at: string;
+  duration_ms: number;
+  /** The `providers.llm` entry and the model that served the run. */
+  provider_key?: string;
+  model?: string;
+  /**
+   * How the run ended: `end` (its model stopped), `cap` (its CLI's own turn
+   * cap), `stopped` (the engine ended it) or `failed`. A string rather than a
+   * union, so an outcome a newer engine records arrives as itself.
+   */
+  outcome: string;
+  /**
+   * The rounds the run made, both inclusive, on the scale `rounds[].round`,
+   * `tool_executions[].round` and `round_narration[].round` share — what a
+   * round is filed under its run by. Both 0 on a run that made no request.
+   */
+  first_round: number;
+  last_round: number;
+  /**
+   * False for a run whose CLI's record showed no model requests: the whole
+   * run is then ONE round, which nothing timed on its own — its span is the
+   * run's.
+   */
+  requests_observed: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  /** How many of the phase's tools the run called. */
+  tool_calls: number;
+}
+
+/**
+ * One tool call a phase is running right now (`types.RunningCall`) — one entry
+ * of `running_calls`, since a coding CLI may run a response's calls at once.
+ */
 export interface RunningCall {
+  /** The call's own id: what its `tool_executions` row carries as `call_id`
+   *  once it answers. Absent where nothing named the call. */
+  id?: string;
   round: number;
   name: string;
   /** What the call was handed — part of the seat's BODY, so absent on a call
@@ -338,6 +406,10 @@ export interface RunningCall {
 export interface PhaseSteer {
   round: number;
   note_id: string;
+  /** The kind of step that read it (`types.SteerBoundary`, one of
+   *  `STEER_BOUNDARIES`): a round of the engine's loop, or a step of the
+   *  phase's coding run. */
+  boundary: string;
 }
 
 /** The one work item a turn is charged to (`types.WorkItem`). */
@@ -377,8 +449,33 @@ export interface Paused {
   operator_id?: string;
   at: string;
   reason?: string;
-  /** Whether the pause also ended the turn the seat was on. */
+  /** Whether the pause also ended the seat's running work: the turn it was
+   *  on, at its next round, and any coding run it had out, at once. */
   stop_running: boolean;
+}
+
+/**
+ * A seat's models at their usage limit (`livestate.ProviderLimit`): ONE steady
+ * condition for as long as the limit lasts, moved only by what says it began
+ * or ended, never by the turns and probes in between.
+ *
+ * It reaches every reader, so it names no `providers.llm` entry: which are
+ * spent and which carries a seat is the company's configuration, an admin's to
+ * read on Settings, Models.
+ */
+export interface ProviderLimit {
+  /** Whether the seat waits for the limit (every model refused) rather than
+   *  running on a fallback, which is not named. */
+  parked: boolean;
+  /** When the vendor said the limit lifts, in UTC; null where unknown. */
+  resets_at: string | null;
+  /** When the condition began, in UTC. */
+  since: string;
+  /** The CLI the limited entry drives (`claude-code`), a key of
+   *  `CLI_PRODUCTS`; empty where the report did not say. */
+  cli: string;
+  /** Whether that CLI signs in on a plan rather than a metered key. */
+  subscription: boolean;
 }
 
 /** The newest turn a seat ended (`livestate.LastTurn`). */
@@ -386,7 +483,8 @@ export interface LastTurn {
   turn_id: string;
   /** The turn's newest event: its completion, or the reflection after it. */
   ended_at: string;
-  outcome: "completed" | "failed";
+  /** `stopped` when a person ended it with a pause — never a failure. */
+  outcome: "completed" | "failed" | "stopped";
 }
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
@@ -409,7 +507,7 @@ export interface LiveCall {
   model: string;
   /**
    * THE BODY — `trigger`, `prompt`, `prompt_messages`, `response`,
-   * `tool_executions`, `round_narration`, `partial_round` and a running
+   * `tool_executions`, `round_narration`, `partial_round` and every running
    * call's `arguments` — is the seat's TRAIL, and the engine sends it only to
    * a reader who may read that seat's trail: an admin, or the seat's lead.
    * Everybody else is sent the call's STATUS with every one of these keys
@@ -450,6 +548,13 @@ export interface LiveCall {
   rounds_used: number;
   /** Each round's own timing and tokens, as the loop recorded it. */
   rounds?: PhaseRound[] | null;
+  /**
+   * The phase's CLI runs that have ENDED, in order. The run in flight is not
+   * on it until it ends: its rounds are the ones past every entry's
+   * `last_round`. Status, like `rounds`: a reader withheld the body is sent
+   * it.
+   */
+  invocations?: PhaseInvocation[] | null;
   /** The round cap currently GRANTED, which an extension raises mid-phase. */
   max_rounds?: number;
   /** The most any extension may raise that cap to. */
@@ -461,8 +566,17 @@ export interface LiveCall {
    * case is a model call in flight — see `lib/waterfall.ts`.
    */
   round_started_at?: string;
-  /** The tool call running RIGHT NOW; absent between calls. */
-  running_call?: RunningCall | null;
+  /**
+   * When the CLI run in flight was launched — the run whose rounds are past
+   * every entry in `invocations`, which lists only the runs that have ended.
+   * Absent between runs.
+   */
+  run_started_at?: string;
+  /**
+   * Every tool call running RIGHT NOW, in the order they arrived — a coding
+   * CLI may run a response's calls at once. Absent between calls.
+   */
+  running_calls?: RunningCall[] | null;
   /**
    * Every person's note the phase has read so far, with the round whose
    * provider call first saw it. What the note said and who sent it are on the
@@ -589,6 +703,9 @@ export interface Overlay {
   /** Who paused the seat, or null while nobody has. Always present, for
    *  `stopped_reason`'s reason: an omitted key would leave a resumed seat paused. */
   paused?: Paused | null;
+  /** The seat's models at their usage limit, or null while they are not.
+   *  Always present, so a limit that lifted is shed. */
+  provider_limit?: ProviderLimit | null;
 }
 
 /**
@@ -628,6 +745,12 @@ export interface SandboxEntry {
   agent_handle: string;
   agent_id: string;
   coding_agent: string;
+  /** The executor-chain member the run was launched on, and its model — which
+   *  a fallback at launch makes other than the chain's head. The member is the
+   *  company's configuration and is sent to an admin alone; the model goes to
+   *  every reader. */
+  provider_key?: string;
+  model?: string;
   sandbox_id: string;
   /**
    * What the run was asked to do — the seat's TRAIL, sent only to an admin
@@ -643,6 +766,12 @@ export interface SandboxEntry {
    * trail AND to the people it is put to, who answer it.
    */
   question?: string;
+  /** What the question says beside its title, as Markdown. Always sent, ""
+   *  where there is none. */
+  question_context: string;
+  /** The options the question offers, where it asks to choose. Absent,
+   *  never null, on an open question. */
+  decision?: WorkDecision;
   audience?: string;
   /** The item the launching turn is charged to, when it is on one. */
   work_item?: WorkItemRef | null;
@@ -661,8 +790,8 @@ export interface SandboxEntry {
  * than an omission: a run's record is DELETED once the run settles and its box
  * is reclaimed, so `sandbox.Active` is every status a record can carry and the
  * terminal pair can never reach a client. How a run ended is on the event
- * stream — the resumed turn's own events, or a `sandbox_run_failed` naming the
- * reason — never on this row.
+ * stream — the resumed turn's own events, a `sandbox_run_failed` naming the
+ * reason, or a `sandbox_run_stopped` naming who stopped it — never on this row.
  */
 export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
@@ -673,8 +802,9 @@ export interface SandboxRun {
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
-   *  before its durable row is read. */
+   *  `sandbox_tail` is asked by. On a parked run it names the question the
+   *  run waits on, which `answer_run` answers by. Empty on a run the live
+   *  projection knows of before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a turn with no ledgerable
    *  trigger, and on a live entry whose durable row has not been read yet. */
@@ -683,16 +813,33 @@ export interface SandboxRun {
   role: string;
   status: SandboxStatus;
   coding_agent: string;
+  /** The executor-chain member the job was launched on, and its model. Absent
+   *  on a live entry that named none; the member is also absent for every
+   *  reader but an admin, since it is the company's configuration. */
+  provider_key?: string;
+  model?: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
   /**
-   * THE RUN'S BODY — `task_description`, `question`, `reply` and
-   * `bridge_calls` — is the launching seat's trail: sent to an admin and the
-   * seat's lead, and the `question` also to the people it is put to. Absent
-   * for everybody else, who are told so by [body_withheld].
+   * THE RUN'S BODY (`task_description`, `question`, `question_context`,
+   * `decision`, `reply` and `bridge_calls`) is the launching seat's trail:
+   * sent to an admin and the seat's lead, and the question with its context
+   * and decision also to the people it is put to. Absent for everybody else,
+   * who are told so by [body_withheld].
    */
   task_description?: string;
+  /** The question: the title of what the run asks (body). A row from an older
+   *  build may carry a free-text question past the title's cap, which a reader
+   *  draws clamped rather than split. */
   question?: string;
+  /** What the question says beside its title, as Markdown (body). Always
+   *  sent, "" where there is none, on the durable row and the live entry
+   *  alike. */
+  question_context: string;
+  /** The options the run asks a person to choose between, in a work item's
+   *  ask's shape, never with an `inform` (body). Absent, never null, on an
+   *  open question, which is answered in words. */
+  decision?: WorkDecision;
   /** What reached the waiting party, where something did — body. */
   reply?: string;
   audience: string;
@@ -711,17 +858,33 @@ export interface SandboxRun {
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+  /**
+   * The answers the run's question let go of, by the id of the delivery each
+   * arrived in (`answer_run` answers it as `answer_id`): an answer here was
+   * not used, and the run waits on its question again. Absent on a row from an
+   * engine that does not say.
+   */
+  declined_answers?: string[];
+  /**
+   * The answer recorded on the run, by the deliveries it arrived in, who gave
+   * it and when. The first recorded answer wins: an answer whose id is not
+   * here was not used. Empty on a run with no recorded answer.
+   */
+  answer_ids?: string[];
+  answered_by?: string;
+  answered_at?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
 
   /**
    * What this run called through the MCP bridge, in order.
    *
-   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. A native tool loop keeps
-   * its calls in memory and the turn writes them when it ends; a bridged run's
-   * are made by a process outside the engine, minutes or hours apart and
-   * possibly across a restart. Absent on every run that is not bridged, which
-   * is every ordinary coding run.
+   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
+   * made by its coding CLI, a process outside the engine, over the MCP bridge
+   * — minutes or hours apart and possibly across a restart. ALWAYS AN ARRAY on
+   * a row the store answered, empty for a run that has called nothing yet;
+   * absent where it is not known — a live entry whose row is not read yet, or
+   * a body withheld from this reader.
    */
   bridge_calls?: BridgeCall[];
 
@@ -745,7 +908,19 @@ export interface BridgeCall {
   args?: string;
   output?: string;
   failed?: boolean;
+  /** When the row recorded the call, on the store's clock. Always present. */
   at: string;
+  /**
+   * The bridge's own measurement of the call: when it was handed to the
+   * seat's tools (RFC 3339, UTC) and how long they took to answer. Both
+   * absent on a call nobody measured — "not recorded", never "instant".
+   */
+  started_at?: string;
+  duration_ms?: number;
+  /** `builtin` or `mcp:<server>` for the tool that answered, and the bare
+   *  server name for an `mcp:` one. Absent on a call no tool answered. */
+  origin?: string;
+  server?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -864,6 +1039,9 @@ export interface Rollup {
   by_phase: PhaseRow[];
   by_model: ModelRow[];
   by_provider?: ProviderSpendRow[];
+  /** True where `by_provider` was left out because the reader is not an
+   *  admin: the company's model entries are its configuration. */
+  entries_withheld?: boolean;
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
   /** The tail of recent turns — the LIVE window's only. A company day holds no
@@ -1026,6 +1204,14 @@ export interface BudgetsAnswer {
     handle: string;
     windows: BudgetWindow[];
   }[];
+  /**
+   * The ceiling every person's Dashboard Assistant spend is held to
+   * (`assistant.token_budget`): all three windows, `limit` where capped.
+   * `used` is the VIEWER's own spend only where `counted` is true (a person,
+   * under a company that caps a person's spend); elsewhere it is a zero
+   * nobody measured, and a screen draws no figure.
+   */
+  assistant: { counted: boolean; windows: BudgetWindow[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,7 +1279,6 @@ export interface ConfigRole {
   llm_subagent?: ProviderKeys;
   llm_auxiliary?: ProviderKeys;
   llm_judge?: ProviderKeys;
-  llm_sandbox?: ProviderKeys;
   /** Unset means the company default, so this is three-valued. */
   learning_enabled?: boolean | null;
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
@@ -1294,7 +1479,6 @@ export type PhaseLLM =
       subagent?: ProviderKeys;
       auxiliary?: ProviderKeys;
       judge?: ProviderKeys;
-      sandbox?: ProviderKeys;
     };
 
 /**
@@ -1555,7 +1739,7 @@ export interface ToolRow {
    * WHERE calling this puts something in front of somebody outside the turn,
    * empty for a tool that reaches nobody. The registry's own predicate — not
    * "was this served by MCP": a proven read-only MCP tool delivers nowhere,
-   * and the native tracker's comment tool delivers although it is a builtin.
+   * and Worklet's comment tool delivers although it is a builtin.
    */
   delivers: string;
   /**
@@ -1674,22 +1858,72 @@ export interface FleetNode {
   seats: number;
   /** Seconds until this node's own lease expires. */
   expires_in?: number;
+  /**
+   * The epoch this node last ATTEMPTED, with `config_status` saying how that
+   * went and `config_error` why it failed — never, by itself, the epoch it
+   * runs: a node that refused the fleet's revision reports that revision's
+   * epoch beside `error`, and goes on serving the one before it. Which revision
+   * it runs is `config_serving_revision_id`; whether that is the fleet's is
+   * `configStanding`'s question (`lib/configStanding.ts`).
+   */
   config_epoch?: number;
   config_status?: string;
   config_error?: string;
   /**
-   * WHICH revision this node is on, which the epoch does not say.
+   * WHICH revision this node last attempted, at `config_epoch` — which the
+   * epoch does not say.
    *
    * Carried on the apply record for exactly this reason: a fleet view is read
    * while nodes are mid-transition, and a node still on the previous revision
-   * is what an operator is looking for. `internal/api/queries/fleet.go` has
-   * written it on every row since it was added; this type simply never
-   * declared it, so the one screen that compares them read it through a cast.
+   * is what an operator is looking for. Whether the attempt took is
+   * `config_status`; what the node runs is `config_serving_revision_id`.
    */
   config_revision_id?: string;
+  /**
+   * The revision this node's engine RUNS: the one its last successful apply
+   * installed, or the one it booted on; empty while it runs none. A node that
+   * refused the fleet's revision goes on serving the one before, and this is
+   * the field an operator reads to see which.
+   *
+   * NOT "IT DIFFERS FROM `config_revision_id`" AS THE TEST FOR A REFUSAL: a
+   * refused re-activation of the revision a node already runs — the
+   * credential-rotation gesture — names one revision in both, and read that
+   * way a refused rotation is a node that converged. `config_status` (`error`
+   * or `degraded`) is what says the attempt was refused; this says what runs
+   * regardless (`coord.NodeApply.Serving`).
+   */
+  config_serving_revision_id?: string;
+  /**
+   * The revision this node would COME BACK ON if it restarted now: its boot
+   * row's, as its reconciler last read or wrote it. Absent from a node that
+   * boots on nothing — one whose own database is discarded at every start, one
+   * that has never applied a revision and holds no offline choice, and a build
+   * older than the field — and never absent because the row could not be read.
+   *
+   * A THIRD FACT, not a reading of `config_serving_revision_id`: what a node
+   * boots on moves only once an apply has SUCCEEDED, and that write is local
+   * and best effort, so while a failed one is retried the node runs a revision
+   * it would not start on and the two names differ (`coord.NodeApply.Boots`).
+   */
+  config_boot_revision_id?: string;
+  /**
+   * The epoch this node last APPLIED — its reconciler's own progress, the
+   * fleet view's copy of the `applied_epoch` its health push carries — beside
+   * `config_epoch`, the one it last ATTEMPTED. The two differ exactly when
+   * `config_status` says that attempt failed: a node that applied 5 and
+   * refused 6 reports `config_epoch` 6 and this 5, and only this says the
+   * epoch it runs. A save is judged on a node by comparing the saved epoch
+   * with this, as the node's own push is judged (`coord.NodeApply.Applied`).
+   *
+   * ABSENT, never 0, from a node that has applied nothing since it started —
+   * it runs what it booted on, or nothing — and from a build older than the
+   * field: a 0 is an epoch a comparison would read.
+   */
+  config_applied_epoch?: number;
   config_reported_at?: string;
   /**
-   * How far this node's own derived copies have come up — `ready` of `total`.
+   * How far this node's state-log appliers have come up — `ready` of `total`,
+   * one per registered domain.
    *
    * A DIFFERENT QUESTION FROM THE EPOCH: a node can hold the current revision
    * and still be replaying the log the state is derived from, and only one of
@@ -1703,11 +1937,29 @@ export interface FleetNode {
    * non-zero, so absent is "this node is not saying", never "nothing is
    * ready" — the same rule `in_flight` follows.
    */
-  projections_ready?: number;
-  projections_total?: number;
+  appliers_ready?: number;
+  appliers_total?: number;
+  /**
+   * How many turns are running on this node, off its presence heartbeat.
+   * ABSENT, never 0, when its last heartbeat carried no status, and present on
+   * every heartbeat that carried one: a published status always states it,
+   * beside `draining`. So it also says whether a status was published at all,
+   * which is how an absent `posture` is read.
+   */
   in_flight?: number;
   draining?: boolean;
   started_at?: string;
+  /**
+   * The node's config posture, its control plane's own word: `serve`, `wait`,
+   * `shed`, `isolated` or `stuck`.
+   *
+   * ABSENT FOR ONE OF TWO REASONS, which `in_flight` tells apart. With it
+   * present, the node could not read its control plane on its last heartbeat
+   * and published the rest of its status without a posture, rather than
+   * broadcast the `serve` its readiness probe falls back to
+   * (`coord.NodeStatus.Posture`). With it absent too, that heartbeat carried
+   * no status at all.
+   */
   posture?: string;
 }
 
@@ -1813,7 +2065,7 @@ export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | Report
 
 /**
  * The state log's retention document, as `crewlet retention status --json` and
- * `GET /work/retention` both serve it.
+ * `GET /worklet/retention` both serve it.
  *
  * MIRRORS `statelog.Report` FIELD FOR FIELD, deliberately. It is one wire
  * contract with three readers — a CLI, a script and this screen — and a shape
@@ -1848,13 +2100,21 @@ export interface RetentionReport {
   replica: RetentionReplica;
   alarms: RetentionAlarm[];
   /**
-   * The capacity operation currently holding the fleet, ABSENT when there is
-   * none. Maintenance stops every publisher on every node — no seats, no
-   * duties, no scheduler, no write routes — and it was visible on no screen
-   * at all: an operator watching a company go quiet had nothing to look at
-   * that said why.
+   * Every capacity operation currently holding the fleet, the oldest first,
+   * ABSENT when there is none. Maintenance stops every publisher on every
+   * node — no seats, no duties, no scheduler, no write routes — and it was
+   * visible on no screen at all: an operator watching a company go quiet had
+   * nothing to look at that said why. EVERY ONE, because a window is per log
+   * and two can be open at once, each waiting on its own nodes.
    */
-  maintenance?: RetentionMaintenance;
+  maintenance?: RetentionMaintenance[];
+  /**
+   * Every log whose capacity window this node couldn't read, ABSENT when it
+   * read every one. Not a log with no window: the read that fails is the
+   * coordination read, and that outage is when somebody opens this screen to
+   * ask why the company has gone quiet.
+   */
+  maintenance_unread?: string[];
 }
 
 /** One open capacity operation. */
@@ -1867,15 +2127,40 @@ export interface RetentionMaintenance {
   target_max_bytes: number;
   original_max_bytes: number;
   since: string;
+  /** Who opened it, and the credential they opened it through. */
   by?: string;
+  operator_id?: string;
   /**
-   * The nodes whose acknowledgement the seal is still waiting for. EMPTY IS
-   * NOT UNKNOWN: an operation with nobody outstanding is one waiting on its
-   * operator, which is the state somebody finding this most needs to see.
+   * The nodes the window's next step is still waiting for: at `opened`, those
+   * with no restart into a maintenance mode recorded; from the baseline to the
+   * seal, those whose acknowledgement the seal is still waiting for; and once
+   * it has sealed, none, since nothing after it waits on a node. EMPTY IS NOT
+   * UNKNOWN: an
+   * operation with nobody outstanding is one waiting on its operator, which is
+   * the state somebody finding this most needs to see.
    */
   participants_missing?: string[];
-  /** Why it cannot proceed without a person, empty while it can. */
+  /**
+   * The nodes whose admission keeps a window at `opened` from sending
+   * anything. Empty past `opened`, where nothing reads one.
+   */
+  admissions_blocking?: string[];
+  /**
+   * The registers `participants_missing` and `admissions_blocking` are read
+   * from couldn't be read. Either list is then absent, and NEITHER IS EMPTY:
+   * drawn as an empty list, an unread register read as nobody owing anything.
+   */
+  acks_unread?: boolean;
+  admissions_unread?: boolean;
+  /**
+   * Why it cannot proceed without a person, empty while it can: a CODE for
+   * scripts, never drawn. `blocked_detail` is the same in the node's words,
+   * who blocked it and what clears it, and it is what the banner shows.
+   */
   blocked?: string;
+  blocked_detail?: string;
+  /** Who abandoned it, and the credential they used, once somebody has. */
+  abandoned_by?: { by: string; operator_id?: string };
 }
 
 /** One registered domain's row. */
@@ -1938,6 +2223,14 @@ export interface RetentionDomain {
    * proof that a node was readmitted. ABSENT when they were read.
    */
   evictions_unreadable?: boolean;
+  /**
+   * When the backup this log's trim counts was taken: the newest verified
+   * point the `backup_floor` policy counts that covers this log's stream — a
+   * node's copy, or the operator's acknowledgement of this log. ABSENT where
+   * none covers it, which is the state the backup term blocks on and
+   * `backup_age` names, per log.
+   */
+  backup_at?: string;
 }
 
 /** Why the answering node refuses a domain. */
@@ -2047,19 +2340,29 @@ export interface RetentionAlarm {
   detail: string;
   remedy: string;
   /**
-   * Every log the alarm stands on, each with its own measurement. Under
-   * `backup_age` these are the logs the missing or stale backup has held past
-   * their replay window, which raise no `trim_blocked` of their own; a younger
-   * hold is listed nowhere. Absent for a node-wide condition.
+   * Every measurement the alarm stands on, each naming the logs it was taken
+   * on. Under `backup_age` these are the logs whose own counted backup is
+   * missing or older than the policy — each log is acknowledged and aged on
+   * its own — and one of them the backup term has held past its replay window
+   * carries the term there, raising no `trim_blocked` of its own. Absent for a
+   * node-wide condition.
    */
   domains?: RetentionAlarmDomain[];
 }
 
-/** One log an alarm stands on: `statelog.AlarmDomain`. */
+/**
+ * One measurement an alarm stands on, and the logs it was taken on:
+ * `statelog.AlarmDomain`. ONE LOG where a term is set, since a held trim's
+ * instant and count are its own; EVERY LOG MEASURED IN THE SAME WORDS
+ * otherwise, so a young fleet's missing backup arrives once, naming every log,
+ * and is drawn once.
+ */
 export interface RetentionAlarmDomain {
-  domain: string;
+  /** The logs, in the report's own order: never empty. */
+  domains: string[];
   detail: string;
-  /** The trim term holding this log, where the alarm is about its trim. */
+  /** The trim term holding this log, where the alarm is about its trim: under
+   *  `trim_blocked`, and under `backup_age` for a hold folded there. */
   term?: RetentionTermName;
   /** When this log's trim stopped advancing. */
   since?: string;
@@ -2142,6 +2445,15 @@ export interface FleetDutyLease {
   expires_in?: number;
 }
 
+/** The fleet's activation pointer as the fleet answer renders it. */
+export interface FleetActivation {
+  epoch: number;
+  revision_id: string;
+  /** RFC 3339, or empty where the pointer carried no instant. */
+  at: string;
+  summary: string;
+}
+
 export interface FleetAnswer {
   nodes: FleetNode[];
   seats: FleetSeatLease[];
@@ -2149,8 +2461,20 @@ export interface FleetAnswer {
   unplaceable: { handle: string; placement?: string; reason?: string }[];
   unmanned_roles: string[];
   this_node: string;
-  /** The epoch every node is meant to converge on. A number, not an id. */
+  /**
+   * The epoch every node is meant to converge on. A number, not an id: which
+   * revision it stands for is `activation`. 0 when there is no activation or
+   * it could not be read.
+   */
   target_epoch: number;
+  /**
+   * The activation `target_epoch` is — which revision, activated when, with
+   * the summary whoever activated it wrote. Read in the same read as the
+   * epoch, so the two never describe different activations. NULL when nothing
+   * has been activated or the pointer could not be read: there is then no
+   * target, and no node is behind one.
+   */
+  activation?: FleetActivation | null;
   /** Where the company's files are kept; absent where the node reads no record. */
   objects?: FleetObjects;
 }
@@ -2252,10 +2576,11 @@ export type KnowledgeReason =
    *  the whole first index build, and rendering it as "nothing found" tells a
    *  reader the company has written nothing down. */
   | "building"
-  /** The caller holds Tracker and not Knowledge: the knowledge base is not
-   *  theirs to search, so nothing was searched — never "nothing matched". The
-   *  dashboard asks the question only with Knowledge (`lib/useSearchQuery.ts`),
-   *  and draws this for an answer that raced an access change. */
+  /** The caller holds Worklet and not Doclet: the knowledge base is not
+   *  theirs to search, so nothing was searched, which is never "nothing
+   *  matched". The dashboard asks the question only with Doclet access
+   *  (`lib/useSearchQuery.ts`), and draws this for an answer that raced an
+   *  access change. */
   | "no_access"
   | (string & {});
 
@@ -2314,14 +2639,15 @@ export interface KnowledgeAnswer extends SearchOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// The native tracker and knowledge base
+// Worklet and Doclet
 // ---------------------------------------------------------------------------
 //
-// These are the engine's OWN backends — a company on Jira or Confluence has
+// These are the engine's OWN backends. A company on Jira or Confluence has
 // none of these questions registered at all, and the screens say so rather
 // than drawing an empty board. Every field here is the Go type's own JSON
-// tag; the wire shape is [work.Summary], [work.Detail], [pages.Summary] and
-// [pages.Detail], serialised as they stand.
+// tag; the wire shape is the `worklet` and `doclet` packages' own types (for
+// example [worklet.TaskDetail], [doclet.Summary] and [doclet.Detail]),
+// serialised as they stand.
 
 /** The tracker's SIX statuses. `blocked` is deliberately not among them: a
  *  blocker is DATA a badge and a filter read, carried beside the status on
@@ -2431,7 +2757,7 @@ export interface WorkRowSpend {
 /** Where `around=` placed one task in an answer's DRAWING order — the list's
  *  own sort, or a board read column by column and lane by lane — over the
  *  whole answer rather than the page. `prev`/`next` are ADDRESSES
- *  (`tracker.ItemAddress`), null at the ends: a neighbour's key, or its id
+ *  (`worklet.ItemAddress`), null at the ends: a neighbour's key, or its id
  *  where another task claimed that key first — stepping to the key would open
  *  the claimant, which is not on this board. `position` is null past the
  *  count's ceiling. On a label board the
@@ -2986,7 +3312,7 @@ export interface WorkCommentsAnswer {
   incomplete?: WorkIncomplete;
 }
 
-/** Another task as a reader names it (`tracker.TaskRef`). */
+/** Another task as a reader names it (`worklet.TaskRef`). */
 export interface WorkTaskRef {
   id: string;
   key: string;
@@ -2997,13 +3323,13 @@ export interface WorkTaskRef {
   status: WorkStatus;
 }
 
-/** One tool a turn called, and how many times (`tracker.TurnTool`). */
+/** One tool a turn called, and how many times (`worklet.TurnTool`). */
 export interface WorkTurnTool {
   name: string;
   calls: number;
 }
 
-/** One turn charged to a task, its segments folded (`tracker.TaskTurn`). */
+/** One turn charged to a task, its segments folded (`worklet.TaskTurn`). */
 export interface WorkItemTurn {
   /** The run the segments share — what the trace link carries. */
   turn_id: string;
@@ -3022,8 +3348,9 @@ export interface WorkItemTurn {
   wall_ms: number;
   workers?: number;
   sent_back?: number;
-  /** How the turn ended, off its newest segment: its decision, `failed`, or
-   *  `suspended` while a coding run is still out. */
+  /** How the turn ended, off its newest segment: its decision, `failed`,
+   *  `stopped` where a person's pause ended it, or `suspended` while a coding
+   *  run is still out. */
   outcome: string;
   phases: string[];
   /** The phase that failed, when `outcome` is `failed` because one did.
@@ -3070,7 +3397,8 @@ export interface WorkChange {
   turn_id?: string;
   fields?: Record<string, unknown>;
   /** A commit that woke nobody — a fact about the change rather than about
-   *  its importance, since a bulk edit is quiet by construction. */
+   *  its importance, since every subtask a merge re-parents is quiet by
+   *  construction. */
   quiet?: boolean;
   /** The item's hand-off counter AS THIS COMMIT LEFT IT — the "3" of "hand-off
    *  3 of 8" on a row that moved the assignee. Absent on a row the answering
@@ -3260,7 +3588,7 @@ export interface WorkItemDetail {
    *
    *  A relation, parent or cascade delta names the other end by its ID,
    *  because a key belongs to that task's own row and a history row is written
-   *  once by every node and repaired by nothing. Neither side can fix
+   *  once by every data node and repaired by nothing. Neither side can fix
    *  "Parent: — → 1d573f85-…" alone: the engine may not put a key on the
    *  record, and this build holds no map to resolve one with. It is what
    *  `LabelContext.taskKey` is threaded from.
@@ -3502,6 +3830,922 @@ export interface PageDetail {
 }
 
 // ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+/**
+ * A point on one of the engine's state logs, as an answer reports it —
+ * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
+ * off a write's answer: a position this file declared again would be a second
+ * shape for one value, and the floor and a chat cursor would be free to come
+ * to mean different things by it.
+ *
+ * Chatlet needs the shape by name for a reason the other answers do not: a READ
+ * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client
+ * has to carry a whole position from a message to the flush rather than a
+ * number it read off a field.
+ *
+ * Several answers above spell the same shape inline with every field optional,
+ * and they are left as they are deliberately: those are answers that may omit
+ * the position entirely, and widening this type to match would make a cursor
+ * built from one a compile-time promise the engine does not keep.
+ */
+export type { LogPosition };
+
+/** What every chat answer carries beside its rows — `chatlet.Served`. */
+export interface ChatServed {
+  /** What the read was SERVED at, never what was asked for. */
+  read_level: ReadLevel;
+  /** False when a deferred record's scope met this read: rows may be missing. */
+  complete: boolean;
+  /** The point on the chat log these rows were derived through. */
+  position: LogPosition;
+  /** ABSENT rather than zero when the broker could not be reached. */
+  log_lag?: number;
+}
+
+/** A room's kind. OPEN, because a newer peer may write one this build does not
+ *  know — and a room whose kind this build cannot classify is one the engine
+ *  refuses every write on, so the screen renders it read-only rather than
+ *  guessing it is public. */
+export type ChatKind = "public" | "private" | "unit" | "dm" | "group" | (string & {});
+
+/** Who said something, as `iam.ActorFor` names a principal: a person — or a
+ *  machine the identity directory binds to them — writes as `human`, under
+ *  the seat they hold; a seat's own turn as `agent`; and `system` is the
+ *  engine speaking as itself. `operator` is a credential acting as itself,
+ *  which no chat gesture admits, and is here only because a row a newer peer
+ *  wrote may carry it — a screen draws it as a person, never as an agent.
+ *  Open for the reason [ChatKind] is. */
+export type ChatAuthorKind = "agent" | "human" | "operator" | "system" | (string & {});
+
+/** The record op a live frame carries — `chatlet.OpKind`, the same word the event
+ *  store's own column holds. Open for the reason [ChatKind] is. */
+export type ChatOp =
+  | "create"
+  | "patch"
+  | "members"
+  | "post"
+  | "edit"
+  | "delete"
+  | "react"
+  | "erase"
+  | "prune"
+  | (string & {});
+
+/** A room. The NAME IS IMMUTABLE — there is no rename in the value layer — so
+ *  an address built from a room's id is stable and its name is safe to cache. */
+export interface ChatChannel {
+  v: number;
+  id: string;
+  kind: ChatKind;
+  /** Empty for a direct conversation, which has no name and is titled by who
+   *  is in it. */
+  name?: string;
+  topic?: string;
+  purpose?: string;
+  /** The unit whose room this is, for `kind: unit`. */
+  unit?: string;
+  /** This room's own horizon in days, overriding the company's. 0 is "for
+   *  ever" and absent is "the company's answer", which is why it is nullable
+   *  rather than a number defaulting to zero. */
+  retention_days?: number | null;
+  created_at: string;
+  created_by?: string;
+  created_by_kind?: ChatAuthorKind;
+  /** Present on an archived room, which is readable for ever and writable by
+   *  nobody. */
+  archived_at?: string;
+  /** Every seat that joins the company from now on, agent or person, is put
+   *  in this room by the engine, with a `joined` event authored by `system`.
+   *  Set by an administrator alone (`update_channel`'s `auto_join`); turning
+   *  it on adds nobody already in the company. Absent is off. */
+  auto_join?: boolean;
+}
+
+/** One message, whole. */
+export interface ChatMessage {
+  v: number;
+  id: string;
+  channel_id: string;
+  /** The message this hangs off, empty for a room post. A thread is ONE LEVEL
+   *  DEEP: a reply to a reply carries the same root. */
+  thread_root?: string;
+  author: string;
+  author_kind: ChatAuthorKind;
+  /** Empty on a tombstone: a delete blanks the body and keeps the row, so a
+   *  thread does not lose the message it hangs off. */
+  body?: string;
+  links?: string[];
+  /** The handles this message named, already resolved by whichever surface
+   *  read what somebody typed. */
+  mentions?: string[];
+  /** `@channel` — the room as a whole. */
+  collective?: boolean;
+  created_at: string;
+  edited_at?: string;
+  edited_by?: string;
+  edited_by_kind?: ChatAuthorKind;
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_by_kind?: ChatAuthorKind;
+  /** Present on a ROOM EVENT rather than words somebody wrote: the row is the
+   *  room's own change, drawn as a quiet line in the transcript. Its author is
+   *  who made the change (`system` for the org chart's own membership), its
+   *  body, links and mentions are empty, it is never in a thread, and it takes
+   *  no reply, reaction, edit or delete. It counts toward no unread or mention
+   *  badge, is never a rail preview, and is never a search hit. */
+  event?: ChatRoomEvent;
+}
+
+/** What a room event says happened. OPEN, for the reason [ChatKind] is: a
+ *  line a newer peer wrote renders as a plain room event.
+ *
+ *  - `joined`: `handles` came into the room themselves, or were its founding
+ *    members, or the org chart put them in a unit's room.
+ *  - `added`: the author put `handles` in the room.
+ *  - `left`: `handles` took themselves out, or the org chart took them out of
+ *    a unit's room.
+ *  - `removed`: the author took `handles` out of the room.
+ *  - `description` and `topic`: the author set the room's purpose or topic to
+ *    `text`; an empty `text` cleared it.
+ *  - `template`: the author set the room up from the template named `text`,
+ *    one line in place of a `topic` and a `description` line. */
+export type ChatEventKind =
+  "joined" | "added" | "left" | "removed" | "description" | "topic" | "template" | (string & {});
+
+/** A room's own change, as its transcript row carries it. */
+export interface ChatRoomEvent {
+  kind: ChatEventKind;
+  /** Who joined, was added, left or was taken out, sorted. Absent for the
+   *  three kinds about the room's words. */
+  handles?: string[];
+  /** The new description or topic (empty when it was cleared), or the
+   *  template's name. Words somebody wrote, drawn as text. */
+  text?: string;
+}
+
+/** A root's replies, as the transcript shows them under it. Present only on
+ *  a room post that has at least one reply. */
+export interface ChatThreadSummary {
+  /** Every reply, a deleted one included: its tombstone still sits in the
+   *  thread. */
+  replies: number;
+  /** The newest reply's broker instant. */
+  last_reply_at: string;
+  /** The newest reply's record, PACKED the way a read cursor is, so a screen
+   *  can tell whether the thread moved past what this reader has read. */
+  last_reply_position: LogPosition;
+  /** The first few people and agents who replied, in the order of their first
+   *  reply, at most `chatlet.MaxThreadRepliers` (3). */
+  repliers: string[];
+  /** How many different people and agents replied, for the "+N" past
+   *  `repliers`. */
+  replier_count: number;
+}
+
+/** One emoji on one message, with whether this viewer is among the reactors. */
+export interface ChatReaction {
+  emoji: string;
+  count: number;
+  mine?: boolean;
+}
+
+/** One message as a transcript draws it: the message, where it sits in the
+ *  room, and where the record that wrote it sits on the log. */
+export interface ChatMessageView {
+  message: ChatMessage;
+  /** The room's own per-message number, minted by the applier from log order.
+   *  It is what a transcript cursor is built from and what a live frame's
+   *  contiguity is checked on. */
+  channel_seq: number;
+  /** The record's point on the log. Its PACKED form is what a read cursor
+   *  stores, which is why the position travels rather than the sequence. */
+  position: LogPosition;
+  reactions?: ChatReaction[];
+  /** The replies under a room post, on a transcript page and on a thread's
+   *  root. Absent on a reply, a room event and a post nobody answered. */
+  thread?: ChatThreadSummary;
+}
+
+/** The newest message in a room, as the rail previews it. */
+export interface ChatMessagePreview {
+  message_id: string;
+  author?: string;
+  author_kind?: ChatAuthorKind;
+  /** Bounded by the engine (`chatlet.MaxExcerpt`), and a cut one ends in an
+   *  ellipsis — so a preview never has to claim to be the whole message. */
+  excerpt?: string;
+  channel_seq: number;
+  at: string;
+  /** The newest message is a tombstone. The room still moved, and the row
+   *  still sorts by it. */
+  deleted?: boolean;
+  position: LogPosition;
+}
+
+/** One of the viewer's rooms, as the rail renders it. */
+export interface ChatChannelSummary {
+  channel: ChatChannel;
+  /** The room's own log revision, which a later edit states as its
+   *  expectation. */
+  revision: number;
+  /** THIS VIEWER'S membership flag: every message in the room reaches them. */
+  follow_all?: boolean;
+  /** Room posts above this viewer's cursor, counted to `chatlet.UnreadLimit`
+   *  (100). Their own messages, the tombstones, room events and replies in a
+   *  thread do not count: a reply is read in its thread. */
+  unread: number;
+  /** The count stopped at the limit — the "99+" case, stated rather than
+   *  inferred from the number. */
+  unread_capped?: boolean;
+  /** Of `unread`, the room posts that name this viewer or the whole room
+   *  (`@channel`): the accent badge. Counted over the same messages, so it is
+   *  never more than `unread` and it stopped where `unread_capped` says that
+   *  did. A direct conversation is counted the same way; a screen that treats
+   *  every unread message there as addressed to the reader reads `unread`. A
+   *  muted room is counted too: the mute is the screen's to apply. */
+  mentions: number;
+  last?: ChatMessagePreview;
+  /** Who is in a direct conversation, which is how one is titled. */
+  participants?: string[];
+  /** This viewer silenced the room. It suppresses NOTICE and never delivery. */
+  muted?: boolean;
+}
+
+/** The viewer's own rooms, newest activity first — `chat_channels`. */
+export interface ChatChannelsAnswer extends ChatServed {
+  channels: ChatChannelSummary[];
+  /**
+   * Rooms were left out: this person is in more rooms than
+   * `chatlet.MaxRailChannels` (256), or more matched than the `limit` the
+   * read asked for (this screen asks for none, and so for all of them).
+   */
+  truncated?: boolean;
+  /** Rooms this build could not present — one a newer peer wrote. */
+  unreadable?: number;
+  /**
+   * What a room created WITHOUT a stated visibility will be, from
+   * `chat.chatlet.default_channel_private`.
+   *
+   * IT IS FOR THE FORM TO BE HONEST WITH, not for the form to enforce. The
+   * server resolves an omitted kind itself, so this only decides what the
+   * visibility selector OPENS on — and it has to, because a form showing
+   * "public" while the company default is private misleads a person about a
+   * privacy control at the one moment they are deciding it.
+   *
+   * Absent means public, which is the field's own default.
+   */
+  default_private?: boolean;
+  /**
+   * The badges on these rows are a MEASUREMENT.
+   *
+   * False means the coordination record could not be read: the counts are
+   * then zero, the mutes absent and `read` with them, which is not "you have
+   * read everything" but "nobody could look". A screen that renders a zero
+   * without reading this says the first when the engine said the second.
+   */
+  read_state: boolean;
+  /**
+   * This person's WHOLE read state, as the badges were counted against it —
+   * every room they muted (the rows mark only the rooms listed), when their
+   * do-not-disturb ends, and the `revision` that orders it against every
+   * later `chat_cursor_moved`. It is how a tab opened a moment ago knows the
+   * state before anything moves it. Absent when `read_state` is false.
+   */
+  read?: ChatReadState;
+}
+
+/** One member of a room. */
+export interface ChatMember {
+  handle: string;
+  role?: string;
+  /**
+   * Who decides this membership, derived from the ROOM'S KIND: `org` for
+   * every member of a unit room, whose membership the org chart restates
+   * WHOLE at every activation and no gesture can change (a join, a leave and
+   * a members edit are each refused on a unit room); `explicit` for every
+   * member of every other room. A screen must never offer to remove an `org`
+   * member: the next apply would put them straight back.
+   */
+  source?: string;
+  follow_all?: boolean;
+  joined_at: string;
+}
+
+/** One room, its membership and what it is true as of — `chat_channel`. */
+export interface ChatChannelDetail extends ChatServed {
+  channel: ChatChannel;
+  revision: number;
+  /** The room's high-water mark: the number the next message will take, minus
+   *  one. NOT a count — a prune removes rows and deliberately does not move
+   *  it. */
+  message_seq: number;
+  members?: ChatMember[];
+  /** Whether the VIEWER is in the room, which a public room answers no to
+   *  without that meaning they cannot read it. */
+  member: boolean;
+}
+
+/** A page of one room, newest first — `chat_messages`. */
+export interface ChatMessagesAnswer extends ChatServed {
+  channel_id: string;
+  messages: ChatMessageView[];
+  /** Where the next OLDER page starts, empty at the start of the room. Pass it
+   *  back unchanged: it is the room's own per-message number, never an offset
+   *  and never an instant. */
+  next_cursor?: string;
+  /** Rows on this page this build could not decode. */
+  unreadable?: number;
+}
+
+/** One thread, its root and its replies, oldest first — `chat_thread`. */
+export interface ChatThreadAnswer extends ChatServed {
+  channel_id: string;
+  /** Read even when it is a tombstone, which is what the tombstone is for. */
+  root: ChatMessageView;
+  replies?: ChatMessageView[];
+  /** Who has spoken here, derived by the applier. It is not a follow. */
+  participants?: string[];
+  /** Where the next page of replies starts — this one pages FORWARD. */
+  next_cursor?: string;
+  unreadable?: number;
+}
+
+/** One room the viewer may read, as prose names it. */
+export interface ChatRoomName {
+  id: string;
+  /** The address a sentence writes as `#launch`: lower case, never renamed. */
+  name: string;
+  kind: ChatKind;
+  archived?: boolean;
+}
+
+/**
+ * The name of every room the viewer may READ, joined or not, the archived
+ * ones included — `chat_room_names`. A room's name may be spelled exactly as a
+ * colour (`#e2e`) or an issue's number (`#2026`), so prose is read by it
+ * (`lib/roomNames.ts`); the room finder offers the same rooms.
+ */
+export interface ChatRoomNamesAnswer extends ChatServed {
+  /** The live rooms in name order, then the archived ones, the most recently
+   *  archived first. */
+  rooms: ChatRoomName[];
+  /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
+   *  ones first: a name this answer lacks may still be a room. */
+  truncated?: boolean;
+}
+
+/** One room as Browse lists it (`chat_rooms`). */
+export interface ChatDirectoryRoom {
+  channel: ChatChannel;
+  /** How many people and agents are in it. */
+  members: number;
+  /** The reader is in it. A public room and a unit's room are readable
+   *  without it; joining is what Browse offers. */
+  member?: boolean;
+  /** The newest message's broker instant, room events excluded. Absent for a
+   *  room nobody has spoken in. */
+  last_at?: string;
+}
+
+/**
+ * Every NAMED room the reader may read, joined or not, the archived ones
+ * included (`chat_rooms`): what Browse lists, sorts and filters on the client.
+ * A private room is listed to its members alone, and a direct conversation is
+ * never listed. Live rooms in name order, then the archived ones, the most
+ * recently archived first.
+ */
+export interface ChatRoomsAnswer extends ChatServed {
+  rooms: ChatDirectoryRoom[];
+  /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
+   *  ones first. */
+  truncated?: boolean;
+  /** Rooms this build could not present, one a newer peer wrote. */
+  unreadable?: number;
+}
+
+/** One matched message. */
+export interface ChatHit {
+  message_id: string;
+  channel_id: string;
+  /** The thread the match was said in, empty on a room post — which is what
+   *  lets a result open the thread rather than the room. */
+  thread_root?: string;
+  author?: string;
+  /** What the message says around the words that matched, bounded by the
+   *  index itself and marked where it was cut. */
+  snippet?: string;
+  at: string;
+  score: number;
+}
+
+/** A ranked search over the rooms this viewer may read — `chat_search`.
+ *
+ *  It does NOT extend [ChatServed]: the ranking is a read of this node's own
+ *  index, which is not on the log at all, so the only half that can be behind
+ *  is the visible-room set — which is what `read_level` and `position` here
+ *  describe. */
+export interface ChatSearchAnswer {
+  hits: ChatHit[];
+  /**
+   * How many rooms this query actually ran over — the DENOMINATOR a reader
+   * needs. "Nothing matched" over three rooms and over three hundred are
+   * different answers.
+   */
+  searched: number;
+  /**
+   * The answering node's index had not caught up with its transcript while
+   * it searched, so the hits are drawn from part of it: "the index is still
+   * building", which a screen must say rather than "nobody said that".
+   */
+  building?: boolean;
+  /** What the VISIBLE SET was resolved at. */
+  read_level: ReadLevel;
+  /** This node's applied position, read BEFORE the visible set was resolved,
+   *  so it is at or below the read's rather than above it. */
+  position: LogPosition;
+}
+
+/**
+ * One committed chat record, as the socket announces it.
+ *
+ * EVIDENCE THAT SOMETHING LANDED, NEVER A COPY OF THE MESSAGE. There is no
+ * body here on purpose: a frame carrying one would be a second rendering path
+ * for a conversation, and the two would disagree the first time an edit raced
+ * a reload. What it carries is enough to decide what to do — the room, the
+ * message and the CONTIGUOUS per-room sequence.
+ *
+ * A FRAME NAMING NO ROOM IS A GAP, and carries nothing else: the engine's word
+ * that this socket may have missed frames in any room — the node's live relay
+ * switched source, or the hub could not hand it a batch — so every screen
+ * reads what it holds again (`Store.applyChatChange`).
+ */
+export interface ChatChange {
+  /** The room. Empty ONLY on a gap. */
+  channel_id: string;
+  /** The record's own word for what happened. Absent on a gap. */
+  op?: ChatOp;
+  /** The record's idempotency key, so a client recognises its own effect
+   *  coming back and renders it once. Absent on a gap. */
+  op_id?: string;
+  message_id?: string;
+  /** The room's own per-message number. Contiguous, so a client holding 41 and
+   *  handed 43 knows it missed one. */
+  channel_seq?: number;
+  thread_root?: string;
+  author?: string;
+  author_kind?: ChatAuthorKind;
+  /** The BROKER'S own instant, which is what every node renders. Absent on a
+   *  gap. */
+  at?: string;
+  /** Where the record sits on the log — what a read cursor stores. Absent on
+   *  a gap. */
+  position?: LogPosition;
+  /** At most `chatlet.MaxExcerpt` bytes of what a card shows, from the record's
+   *  routing snapshot — carried by every post and edit an author made, even
+   *  one that woke nobody, and ABSENT on a record that carries none (a system
+   *  line, a delete, a reaction, a room record). Never a substitute for
+   *  reading the room. */
+  excerpt?: string;
+  /** The handles the message names, from the same snapshot and absent
+   *  wherever `excerpt` is — so a system line's post, which writes mention
+   *  rows, carries none. */
+  mentions?: string[];
+  /** For a toast about a room the tab is not looking at. Empty for a direct
+   *  conversation, which has no name. */
+  channel_name?: string;
+  channel_kind?: ChatKind;
+}
+
+/** One seat running a turn against a message in a room. */
+export interface ChatWorking {
+  handle: string;
+  /** The message the work will be answered under, which is what puts the
+   *  indicator where the reply will land. */
+  thread?: string;
+  /** The phrase to render, and an empty one renders the bare indicator. The
+   *  engine's hub declares it renders words, so every frame it sends carries
+   *  one. */
+  status?: string;
+}
+
+/** Who is in one room right now, as the room's screen draws it — derived from
+ *  the room's members (`chatRoomPresence`, routes/chatlet/live.ts). None of it is
+ *  durable and none of it is on the log. */
+export interface ChatRoomPresence {
+  /** The people with this room open. Handles, because a person in chat IS a
+   *  seat. */
+  viewing?: string[];
+  /** Composing in it — a subset of `viewing` that lapses on its own. */
+  typing?: string[];
+  working?: ChatWorking[];
+}
+
+/**
+ * A `chat_presence` push (`stream.ChatPresence`): one chat room's presence,
+ * as the presence hub fans it out (ADR-0038). With `roster` set it is the
+ * room WHOLE — what the socket is handed as it joins, and a roster naming
+ * nobody when it is taken out — so what was held is replaced; otherwise it is
+ * a change, the members now presented that are new or changed and the
+ * sessions no longer presented.
+ */
+export interface ChatPresencePush {
+  channel_id: string;
+  roster?: boolean;
+  upsert: RoomMember[] | null;
+  leave: string[] | null;
+  counts?: { human: number; agent: number };
+  truncated: boolean;
+}
+
+/** What this tab holds of the chat rooms' presence: per room, its members by
+ *  session, as the pushes left them. */
+export interface ChatPresenceState {
+  rooms: Record<string, RoomRoster>;
+}
+
+/**
+ * Where one person's eye has reached — `coord.PersonChatRead`.
+ *
+ * It is NOT on the log: a cursor is a fact about one reader's attention that
+ * nobody replays. It is kept under the SEAT the person holds, so whoever holds
+ * the seat next inherits it, as they inherit its inbox. It reaches a tab three
+ * ways, in this one form: the rail's `read`, the answer to a read-state write
+ * the tab made itself ([ChatReadReceipt]), and the `chat_cursor_moved` push,
+ * derived from the coordination record and sent to every socket reading as
+ * that seat — the one that made the write included — and nobody else's.
+ */
+export interface ChatReadState {
+  /**
+   * WHOSE STATE THIS IS — the seat the engine read it for, on every state it
+   * sends a client. The `revision` orders two states of ONE seat and nothing
+   * else, so a state naming another seat than the one a tab holds — the seat
+   * its session is bound to moved — replaces it rather than being compared
+   * with it.
+   */
+  handle: string;
+  /** Channel id to the PACKED log position that person has read through.
+   *  Packed because it is only ever compared, never decomposed. */
+  cursors?: Record<string, number>;
+  /** The rooms that raise no badge. A mute suppresses NOTICE, never
+   *  delivery. */
+  muted?: string[];
+  /** When do-not-disturb ends. Absent is not in it. */
+  dnd_until?: string;
+  /** Thread root id to the PACKED log position read through in that thread,
+   *  flushed by the thread pane. A reply is new to the reader when it is
+   *  above both this and the room's own cursor. */
+  thread_cursors?: Record<string, number>;
+  /** The rooms this reader set to every message (`notify: "all"`), sorted.
+   *  A room is in at most one of this and `muted`; in neither, it notifies
+   *  the reader of mentions only, the default. */
+  every?: string[];
+  /** The rooms this reader starred, sorted. A star is the reader's own and
+   *  changes nothing for anybody else. */
+  starred?: string[];
+  /** The messages this reader saved for later, the newest save first. */
+  saved?: ChatSavedMark[];
+  /** The threads this reader followed or unfollowed by hand, the newest mark
+   *  first. A thread they started, replied in or were named in is followed
+   *  without one. */
+  threads?: ChatThreadMark[];
+  updated_at?: string;
+  /** The record's own revision, which ORDERS two states of one seat: its
+   *  flushes are taken in one order and their pushes can arrive in another,
+   *  so a screen keeps the state with the highest. Absent is a seat with no
+   *  record. */
+  revision?: number;
+}
+
+/**
+ * What a chat gesture's tool answered: the `receipt` of
+ * `POST /operator/act/{tool}` (`protocol/act.ts`), which is the tool's own
+ * JSON. The outcome and the position are lifted out of it by the act
+ * transport; what is left is what the screen does next.
+ *
+ * EVERY ONE NAMES ITS ROOM, by id: the room `create_channel` made, the
+ * conversation `open_dm` opened or reached, the room a message was said in or
+ * a membership moved. A screen goes there only on an outcome that landed — an
+ * id echoed by an answer nobody can vouch for may name nothing.
+ */
+export interface ChatReceipt {
+  channel: string;
+  /** A post's or a reply's message, by the id the engine derived from the
+   *  press's operation key (its `Idempotency-Key`) — which is why a retry
+   *  under that key is the same message. */
+  message_id?: string;
+  /**
+   * `open_dm` only: whether this call made the conversation or reached the
+   * one already open. A direct conversation's id is derived from the sorted
+   * handles of the people in it, so two people opening one from two nodes
+   * converge on one room and the loser of the race is handed the winner's.
+   *
+   * IT IS NOT AN ERROR FLAG. `created: false` beside a landed outcome is the
+   * ordinary answer — the conversation is open, and it is that one.
+   */
+  created?: boolean;
+  /**
+   * `add_channel_members` only: who this call put in the room, sorted. The
+   * people named who were already in it are left out, and an empty list
+   * beside a landed outcome is everybody named already being a member.
+   */
+  added?: string[];
+}
+
+/**
+ * What `mark_chat_read` answered: the `receipt` of its press, which names no
+ * room — a read state is the seat's, across every room.
+ */
+export interface ChatReadReceipt {
+  /**
+   * The seat's whole read state as the write left it, in the form the push
+   * and the rail carry. The tab that wrote applies it, and the push the same
+   * write raises reaches that tab too: the record's revision makes the two one
+   * state, whichever arrives first.
+   */
+  read: ChatReadState;
+}
+
+// ---------------------------------------------------------------------------
+// Chat: the reader's own marks and views. What waits for them (Activity), the
+// threads they follow, what they saved, what they sent, a room's shared links,
+// and the marks behind them, kept in the reader's read state
+// (`internal/coord`'s chat read record) and written through `mark_chat_read`.
+// Each answer is the JSON of its `internal/chatlet` type (`reader.go`).
+// ---------------------------------------------------------------------------
+
+/** How a room reaches this reader: every message, mentions only (the
+ *  default), or nothing. A reader's own choice; it wakes nobody and changes
+ *  nothing for anybody else. */
+export type ChatNotifyLevel = "all" | "mentions" | "muted";
+
+/** One message the reader saved for later. */
+export interface ChatSavedMark {
+  channel_id: string;
+  message_id: string;
+  /** When it was saved. */
+  at: string;
+}
+
+/**
+ * One thread the reader followed or unfollowed BY HAND.
+ *
+ * A thread the reader started, replied in or was named in is followed
+ * without a mark. A mark DECIDES: `following: false` keeps a thread they
+ * spoke in out of Threads and Activity, and `following: true` follows one they
+ * never spoke in. Replying again does not undo an unfollow by itself: a screen
+ * that replies in a thread the reader unfollowed sends `follow` with the reply.
+ */
+export interface ChatThreadMark {
+  channel_id: string;
+  root_id: string;
+  following: boolean;
+  /** When the mark was made, which is what the cap drops by. */
+  at: string;
+}
+
+/** A message, as `save` and `unsave` name one. */
+export interface ChatMessageRef {
+  channel_id: string;
+  message_id: string;
+}
+
+/** A thread, as `follow` and `unfollow` name one: its root message. */
+export interface ChatThreadRef {
+  channel_id: string;
+  root_id: string;
+}
+
+/**
+ * Why an Activity row is there. `mention`: a message named the reader, or the
+ * whole room. `reply`: a reply in a thread the reader follows that did not
+ * name them. `reaction`: somebody else reacted to the reader's message.
+ */
+export type ChatActivityKind = "mention" | "reply" | "reaction";
+
+/** One row of the reader's Activity, newest first. */
+export interface ChatActivityItem {
+  /** Unique in the feed and stable across reads: the list's key. */
+  key: string;
+  kind: ChatActivityKind;
+  /** The message the row is about: the one that named the reader, the reply,
+   *  or the reader's own message somebody reacted to. */
+  message_id: string;
+  channel_id: string;
+  /** Absent for a direct conversation, which is titled by its people. */
+  channel_name?: string;
+  channel_kind: ChatKind;
+  /** The thread the message is in, absent on a room post. */
+  thread_root?: string;
+  /** Who did it: the author of a mention or a reply, the reactor of a
+   *  reaction. */
+  actor: string;
+  /** Absent on a reaction, which records only who reacted. */
+  actor_kind?: ChatAuthorKind;
+  /** A mention of the whole room (`@channel`) rather than of the reader. */
+  collective?: boolean;
+  /** What the message says NOW, cut at `chatlet.MaxExcerpt` bytes as a
+   *  mention's excerpt is: the message's own words, which a screen draws as
+   *  plain text with the transcript's own helper. */
+  excerpt?: string;
+  /** A reaction's emoji. */
+  emoji?: string;
+  /** When the reader was named, the reply was said, or the reaction made. */
+  at: string;
+  /** A mention or a reply above the reader's cursor for the room (which
+   *  counts thread replies, as the rail does). ABSENT on a reaction, which
+   *  asks nothing of anybody, and on every row when `read_state` is false. */
+  unread?: boolean;
+  /** The PACKED log position that, sent as the room's cursor through
+   *  `mark_chat_read`, marks this row read. A cursor only moves forward, so
+   *  it also marks what was said before it in that room read, which is what
+   *  the room's own badge means. Absent on a reaction. */
+  read_through?: number;
+}
+
+/** What waits in Activity, for the badges: unread mentions and unread
+ *  replies, each counted over its newest `chatlet.UnreadLimit` (100) rows. */
+export interface ChatActivityCounts {
+  mention: number;
+  reply: number;
+  /** A count stopped at the limit: the "99+" case. */
+  capped?: boolean;
+}
+
+/**
+ * The reader's Activity, newest first: `chat_activity`, asked with
+ * `{ kind?: ChatActivityKind, unread?: true, cursor?, limit? }`. It reads only
+ * rooms the reader may read. `unread` counts are the answer's whatever
+ * `kind`, `unread` and `cursor` asked, so the Rooms panel's badge asks
+ * `{ limit: 1 }`.
+ */
+export interface ChatActivityAnswer extends ChatServed {
+  items: ChatActivityItem[];
+  /** Pass back unchanged for the next older page; absent at the end. */
+  next_cursor?: string;
+  unread: ChatActivityCounts;
+  /** False when the read state could not be read: no row says `unread`,
+   *  the counts are zero and `unread: true` is refused, which is "nobody could
+   *  look", never "all read". */
+  read_state: boolean;
+}
+
+/** Why the reader follows a thread, the strongest reason first. */
+export type ChatFollowReason = "marked" | "started" | "replied" | "named";
+
+/** One thread the reader follows. */
+export interface ChatFollowedThread {
+  channel_id: string;
+  channel_name?: string;
+  channel_kind: ChatKind;
+  reason: ChatFollowReason;
+  /** The root, which carries the thread line (`thread`). */
+  root: ChatMessageView;
+  /** The newest replies, at most two, oldest first. */
+  latest: ChatMessageView[];
+}
+
+/**
+ * The threads the reader follows, newest reply first: `chat_threads`, asked
+ * with `{ cursor?, limit? }` (20 by default, 50 at most).
+ */
+export interface ChatThreadsAnswer extends ChatServed {
+  threads: ChatFollowedThread[];
+  next_cursor?: string;
+  /** False when the read state could not be read: the threads marked by
+   *  hand are then unknown, so one the reader unfollowed may be listed and one
+   *  they followed by hand may not. */
+  read_state: boolean;
+}
+
+/** One saved message as the Saved view lists it. */
+export interface ChatSavedEntry {
+  mark: ChatSavedMark;
+  channel_name?: string;
+  channel_kind?: ChatKind;
+  /** The message, absent when it is gone. */
+  view?: ChatMessageView;
+  /** The message is not there to show: taken back, erased, pruned by the
+   *  room's horizon, or in a room the reader may no longer read (answered
+   *  exactly as one that is gone). The mark stays until `unsave`. */
+  gone?: boolean;
+}
+
+/**
+ * The reader's saved messages, the newest save first: `chat_saved`, asked with
+ * `{ cursor?, limit? }`.
+ */
+export interface ChatSavedAnswer extends ChatServed {
+  saved: ChatSavedEntry[];
+  next_cursor?: string;
+  /** False when the read state could not be read: nothing can be listed. */
+  read_state: boolean;
+}
+
+/** One of the reader's own messages, where it was said. */
+export interface ChatSentMessage {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+}
+
+/**
+ * What the reader said in every room, newest first: `chat_sent`, asked with
+ * `{ cursor?, limit? }`. Taken-back messages are left out.
+ */
+export interface ChatSentAnswer extends ChatServed {
+  messages: ChatSentMessage[];
+  next_cursor?: string;
+}
+
+/**
+ * One link a room shared: each link of each message that carried one, a
+ * taken-back message's left out. The address exactly as it was sent; what it
+ * points at (a task, a page, an artifact, a pull request) is the screen's to
+ * resolve, by the link rules and the reads it already uses for a message's
+ * links.
+ */
+export interface ChatSharedLink {
+  url: string;
+  message_id: string;
+  thread_root?: string;
+  author: string;
+  author_kind: ChatAuthorKind;
+  at: string;
+  /** The message's own number in the room, which a jump opens it at. */
+  channel_seq: number;
+}
+
+/**
+ * One message by its id, with what reading it in place needs: `chat_message`,
+ * asked with `{ channel_id, message_id }`. A room the reader may not read, or
+ * a message that is gone, is not found.
+ */
+export interface ChatMessageAnswer extends ChatServed {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+  /** The thread's root, when the message is a reply. */
+  root?: ChatMessageView;
+  /** Up to two replies said just before it in its thread, oldest first. */
+  before?: ChatMessageView[];
+}
+
+/** What a link points at, as `chat_unfurls` resolved it. */
+export type ChatUnfurlKind = "task" | "page" | "artifact" | "pull_request";
+
+/**
+ * One link resolved for its preview. Only what the reader may read is
+ * resolved: a link to something they may not open, or that is not there, is
+ * absent from the answer and drawn by the link rules alone.
+ */
+export interface ChatUnfurl {
+  /** The address exactly as the message carries it: the key to match the
+   *  preview to the link it is for. */
+  url: string;
+  kind: ChatUnfurlKind;
+  /** Where the preview opens, BUILT by the engine from the record and never
+   *  echoed from the message: the dashboard's own route for a task, a page or
+   *  an artifact, opened in place, or a pull request's canonical address on
+   *  the configured code host, opened in a new tab. */
+  href: string;
+  /** The object's own code: a task's key, a pull request's `owner/repo#14`. */
+  code?: string;
+  title: string;
+  /** The object's status in its own words ("In progress", "Merged"). */
+  status?: string;
+  /** The status's tone, for its dot. */
+  tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  /** Who owns it, as a seat's HANDLE (an assignee, an author, an owner), which
+   *  the screen names and draws through the org chart. Absent when nobody, or
+   *  nobody the company holds a seat for (a pull request's outside author). */
+  owner?: string;
+  /** One quiet line of details ("+120 -14", "Updated 2 days ago"). */
+  meta?: string;
+}
+
+/**
+ * The previews for a message's links, in one read: `chat_unfurls`, asked with
+ * `{ urls: string[] }` (at most `chatlet.MaxLinks`, eight). Resolved as the
+ * reader, by the reads their own screens use.
+ */
+export interface ChatUnfurlsAnswer {
+  unfurls: ChatUnfurl[];
+}
+
+/**
+ * The links one room shared, newest first: `chat_links`, asked with
+ * `{ channel_id, cursor?, limit? }`. A room the reader may not read is not
+ * found.
+ */
+export interface ChatLinksAnswer extends ChatServed {
+  channel_id: string;
+  links: ChatSharedLink[];
+  next_cursor?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Turn
 // ---------------------------------------------------------------------------
 
@@ -3556,12 +4800,14 @@ export interface TurnAnswer {
    * answer", never "this turn touched no trace".
    */
   trace_ids?: string[];
-  /** Which nodes the turn was assembled from — a turn resumed on another node
-   *  has rows on both, and a node that did not answer may hold the missing
-   *  part. */
+  /** Which data nodes the turn was assembled from — a turn resumed on another
+   *  node can have rows on two of them, and one that did not answer may hold
+   *  the missing part. */
   coverage?: Coverage;
-  /** Which of them RAN it: the nodes whose own store held any of its events,
-   *  sorted — empty when no answering node held them yet. */
+  /** Where it RAN: the nodes that PUBLISHED its events, read off the rows,
+   *  sorted. Not the nodes in `coverage`: a turn run on a node without `data`
+   *  is held by the data node keeping its events in custody, which never ran
+   *  it. Empty when no answering node held any of its events yet. */
   nodes: string[];
 }
 
@@ -3605,13 +4851,19 @@ export interface SandboxOutput {
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
- * read), or the owning node NAMED where it did not answer (`owner_silent`).
+ * read), `box_gone` for one whose box its backend says is gone for good, or
+ * the node that reads its box NAMED where it did not answer
+ * (`owner_silent`).
  */
 export interface SandboxTailAnswer {
   outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
-  /** The node that owns the run — the one that answered, or did not. */
+  /**
+   * The node that reads the run's box — its owner, or the node that launched a
+   * `direct` or `container` box, whoever holds the seat — the one that
+   * answered, or did not. Absent only for an `e2b` run no node holds.
+   */
   node?: string;
   /** Why the job is not running: the record's status, `replaced`, or absent
    *  where no record is left. */
@@ -3639,8 +4891,10 @@ export interface AgentAnswer {
   body_withheld?: boolean;
   /** Pass back as `before` to page further into the record. */
   next: string;
-  /** Which nodes the history came from — a seat's history is on every node
-   *  that ever held it — or null when it could not be read at all. */
+  /** Which data nodes the history came from — a seat's history is kept by
+   *  every data node it ran on, or that kept its events in custody while it
+   *  ran on a node without `data` — or null when it could not be read at
+   *  all. */
   coverage?: Coverage | null;
 }
 
@@ -3806,6 +5060,15 @@ export interface SetupRequirement {
    * test it would have to fake.
    */
   check_note?: string;
+  /**
+   * The other fields of this list a check of this credential is made with,
+   * for an app that proves several values in one check (Datadog's API key
+   * and application key, against their region). The form offers one Test
+   * control after this field, enabled once this field and every one named
+   * here holds a value, and a result about all of them. Absent, the field
+   * is checked on its own.
+   */
+  check_with?: string[];
   mintable?: boolean;
   /**
    * Written without being asked for.
@@ -3934,8 +5197,8 @@ export interface SetupSeatState {
    * anything yet.
    *
    * Separate from `present`, and the gap between them is a real state: a
-   * GitHub seat with a `github` block — its repositories named, or an app
-   * begun — and no working app yet has opted in with its acts still to do.
+   * GitHub seat that is on and has no app yet has opted in with both of its
+   * two acts still to do.
    */
   enrolled?: boolean;
   satisfied: boolean;
@@ -3964,22 +5227,6 @@ export interface SetupSeatState {
    * every other app's roster has this and no path.
    */
   detail?: string;
-  /**
-   * How much this agent may do at the app, where the app has tiers. Empty
-   * where it has none, which is every app but the two code hosts.
-   */
-  tier?: string;
-  /**
-   * That tier written for a person: its name, and the one line saying what
-   * it grants.
-   *
-   * SENT RATHER THAN DERIVED HERE. The vocabulary belongs to the package
-   * that builds the manifest and mints the tokens, and a screen prettifying
-   * the raw id would be a second, silent statement of what `read_only`
-   * means, free to drift from the permissions actually asked for.
-   */
-  tier_label?: string;
-  tier_hint?: string;
   /** What is outstanding for this seat. Empty means nothing is. */
   step?: SetupSeatStep;
   /**
@@ -4130,11 +5377,13 @@ export interface Frame {
    *  names its seat. */
   refusal?: string;
   /**
-   * The refusal's own words, on two error frames and nowhere else: a query's
-   * `unavailable` (what the state log's refusal is about and what changes it)
-   * and a `bad_params` (the parameter to change and what it accepts). Both are
-   * written FOR the caller; every other failure's text stays in the node's
-   * log, so this is never a path or a driver's message.
+   * A sentence for the person, on two error frames and nowhere else: a query's
+   * `unavailable` (the state log's sentence for its refusal, what happened and
+   * what to do, whose advice agrees with `retry_after`) and a `bad_params` (the
+   * parameter to change and what it accepts). Both are written FOR the caller;
+   * every other failure's text stays in the node's log, and so does a
+   * refusal's own detail, so this is never a path, a position, a setting or a
+   * driver's message.
    */
   detail?: string;
   /** On an `unavailable` error frame, a query's or a watch's: seconds before
@@ -4155,9 +5404,10 @@ export interface Frame {
  * same keys the REST envelope does.
  *
  * `grants` are the capabilities any ONE of which would have admitted the
- * caller; an empty list means no capability would, and what is missing is a
- * relation the org chart does not hold (leading the person, owning the record).
- * `reason` is the deciding rule's own word (`not_self`, `no_grant`, …).
+ * caller; an empty list means no capability would, and what the rule asks is
+ * something else — a relation the org chart does not hold, an agent's own
+ * seat, a seat to act as — which `reason`, the deciding rule's own word
+ * (`not_self`, `unseated`, …), names and `contract/authority.ts` says.
  */
 export interface QueryRefusal {
   reason: string;
@@ -4185,7 +5435,12 @@ export interface LogRefusal {
    *  `config_apply_failed`, …) for a code question — the code a REST 503
    *  carries for it, or null where none is behind the answer. */
   code: string | null;
-  /** The refusal's own words: what it is about and what changes it. */
+  /** The engine's sentence for the condition, written for a person: what
+   *  happened and what to do, in step with `retryAfter`. Every condition has
+   *  one, a state-log refusal's and a coordination store that did not answer
+   *  alike, and `QueryState` draws it as it stands. Never the refusal's own
+   *  detail, which names positions and settings for whoever runs the node and
+   *  stays in its log. */
   detail: string | null;
   /** Seconds before asking THIS node again; zero when waiting will not
    *  change the answer, and then nothing re-asks on a timer. Read through
@@ -4198,7 +5453,7 @@ export interface LogRefusal {
  *  "todo → in_progress", and the typed value is on the row for anything that
  *  needs it. A SET (watchers, an edge kind, tags) carries what it gained and
  *  lost instead, each sorted and each member whole, with `from` and `to`
- *  empty (`tracker.Delta`). */
+ *  empty (`worklet.Delta`). */
 export interface WorkDelta {
   from: string;
   to: string;
@@ -4233,7 +5488,6 @@ export interface WorkActivityRecord {
   excerpt?: string;
   fields?: Record<string, WorkDelta>;
   comment_id?: string;
-  batch_id?: string;
   turn_id?: string;
   /** The question this commit asked or answered, as it stands NOW. */
   ask?: WorkAskView;
@@ -4289,7 +5543,7 @@ export interface WorkDecision {
    *  to a decision somebody else makes. */
   role: "approver" | "contributor";
   /** Where the asker will report what was decided. */
-  inform?: { surface: "mattermost" | "slack"; channel: string };
+  inform?: { surface: InformSurface; channel: string };
 }
 
 export interface WorkDecisionOption {
@@ -4318,8 +5572,9 @@ export interface WorkAskRow extends WorkSummary {
   open?: boolean;
   /** The literal call that answers it. A model handed a comment id still has
    *  to compose the call, and every one it composes differently is a round
-   *  spent being refused. */
-  answer_with: string;
+   *  spent being refused. Absent on an answered ask, which nothing answers
+   *  again. */
+  answer_with?: string;
 }
 
 /** One sub-item claimed by somebody. It lives on ANOTHER person's task, which
@@ -4380,7 +5635,7 @@ export interface WorkMyWork {
   incomplete?: WorkIncomplete;
 }
 
-/** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
+/** One notice in a person's inbox, as `worklet.InboxNotice` serialises it.
  *
  *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
  *  WHY this change found this person, as one of eighteen, in the precedence
@@ -4705,6 +5960,15 @@ export interface TurnRow {
    *  question from its outcome: a turn can recover from a failed provider
    *  call and still end well. */
   failed: boolean;
+  /** Why it failed: the message and class of the record that ended it (the
+   *  turn's own completion first, then a failed phase or a failure event).
+   *  Absent for a turn that carried no failure. */
+  error?: string;
+  error_kind?: string;
+  /** Whether a PERSON ended the turn — a pause with `stop_running` reached it
+   *  at a round, or ended the coding run it was parked on. Never a failure:
+   *  a stopped completion carries no `failed`. Absent when nobody stopped it. */
+  stopped?: boolean;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -4725,7 +5989,9 @@ export interface TurnRow {
 
 /** The work item a turn is charged to — `work_item` on the turn events. The
  *  `id` is the identity and `key` the label a person reads; `<backend>:<id>`
- *  is unique across trackers, the bare id is not. */
+ *  is unique across trackers, the bare id is not. `native` is Worklet, the
+ *  spelling every stored record keeps, and no screen shows it
+ *  (`lib/work.ts`'s `WORKLET_ITEM_BACKEND`). */
 export interface TurnWorkItem {
   backend: "native" | "jira" | "github" | "gitlab" | (string & {});
   id: string;
@@ -4790,6 +6056,16 @@ export interface Viewer {
    *  who manages it — and EMPTY when it is not managed. An anonymous caller
    *  is told none. */
   config_managed_by: string[];
+  /** Whether this caller may ask the Dashboard Assistant, and if not, why:
+   *  the first failing condition (`internal/assistant/wire.ViewerAssistant`).
+   *  Absent from an engine that does not serve the assistant, which the
+   *  client reads as off (`assistantUnavailable`). */
+  assistant?: AssistantViewerAssistant;
+  /** On a company whose chat is a vendor's (`services.chat` is `vendor` on
+   *  the org projection), the vendor surfaces it declares (`mattermost`,
+   *  `slack`), in that order: told to a caller holding the Chatlet app, and
+   *  empty for anybody else and everywhere else. */
+  chat_vendors: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -5061,7 +6337,97 @@ export interface DecisionsAnswer {
   complete?: boolean;
 }
 
-/** One company day of one seat's turns, summed across every node. */
+/** What closed one ask (`worklet.AskAnswer`): an answer, by the person asked
+ *  or by somebody else, or a resolution without one. */
+export interface WorkAskAnswer {
+  /** Whoever closed it, by record name: not always the person asked. */
+  by: string;
+  by_kind?: string;
+  at: string;
+  /** The answer's own comment id; absent for an ask resolved without one. */
+  comment?: string;
+  /** The option chosen, by id. */
+  choice?: string;
+  /** The answer's words: the option's label where nothing else was written. */
+  body: string;
+  /** Closed without an answer. */
+  resolved?: boolean;
+}
+
+/** The asker's first record on the task after the ask closed
+ *  (`worklet.AskFollowUp`), in the activity feed's terms. */
+export interface WorkAskFollowUp {
+  at: string;
+  kind: string;
+  excerpt?: string;
+  fields?: Record<string, WorkDelta>;
+  comment_id?: string;
+}
+
+/** One ask on a work item put to a person and closed lately
+ *  (`worklet.AnsweredAsk`). */
+export interface AnsweredWorkAsk {
+  /** When it closed: `answer.at`. */
+  at: string;
+  ask: WorkAskRow;
+  answer: WorkAskAnswer;
+  /** Absent while the asker has written nothing on the task since, and for a
+   *  reader the tracker shows no task to. */
+  followed_up?: WorkAskFollowUp;
+}
+
+/** A coding run's question as the record of its answer states it
+ *  (`queries.RunAsked`), asked in a work item's ask's shape (ADR-0068). */
+export interface AnsweredRunAsk {
+  turn_id: string;
+  /** The launch that asked: a turn's run asks again under a new one. */
+  launch_id: string;
+  /** The seat whose coding run asked. */
+  agent_handle: string;
+  /** The question: the title of what the run asked. */
+  question: string;
+  /** What the question says beside its title, as Markdown. Always sent, ""
+   *  where the run gave none. */
+  question_context: string;
+  /** The options the run asked a person to choose between. Absent, never
+   *  null, on an open question, which was answered in words. */
+  decision?: WorkDecision;
+  asked_at: string;
+  /** The task the run was on, where it was on one. */
+  work_item?: WorkItemRef;
+}
+
+/** One coding run's question a person answered lately and the run took
+ *  (`queries.AnsweredRunAsk`). A run's question has no thread, so it carries
+ *  no `followed_up`, and `answer.by` is always the person it is listed for. */
+export interface AnsweredRun {
+  /** When it was answered: `answer.at`. */
+  at: string;
+  run: AnsweredRunAsk;
+  /** `body` is the person's words, or the chosen option's label where nothing
+   *  else was written, as a work item's answer is. */
+  answer: WorkAskAnswer;
+}
+
+/** One question put to a person and closed lately: a work item's ask, or a
+ *  coding run's question, which is the one that carries `run`. */
+export type AnsweredDecision = AnsweredWorkAsk | AnsweredRun;
+
+/** `answered_decisions`: the asks put to a person and closed in the last
+ *  week and the coding runs' questions they answered in it, newest closing
+ *  first, together at most 50. */
+export interface AnsweredDecisionsAnswer {
+  handle: string;
+  items: AnsweredDecision[];
+  /** The start of the window. */
+  since?: string;
+  /** The window held more than the page. */
+  truncated?: boolean;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
+/** One company day of one seat's turns, summed across every data node. */
 export interface SeatActivityDay {
   /** A company date label, `2026-09-23`. */
   day: string;
@@ -5085,7 +6451,7 @@ export interface SeatActivityTotals {
 
 /**
  * One seat's turns over a window of company days, from the replicated usage
- * domain — every node's days summed (`seat_activity`).
+ * domain — every data node's days summed (`seat_activity`).
  */
 export interface SeatActivityRow {
   handle: string;
@@ -5146,6 +6512,8 @@ export type AudienceKind = (typeof AUDIENCE_KINDS)[number];
 export type OriginMode = (typeof ORIGIN_MODES)[number];
 /** What a present member is doing. */
 export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
+/** The kind of room a `presence` frame names (`presence.RoomKind`). */
+export type PresenceRoomKind = (typeof PRESENCE_ROOMS)[number];
 /** What a listing is about. */
 export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
 /** How a listing is ordered. */
@@ -5180,13 +6548,6 @@ export interface ArtifactActor {
   name: string;
   kind: string;
   operator_id?: string;
-}
-
-/** A state-log position (`statelog.Position`). */
-export interface LogPosition {
-  stream: string;
-  generation: number;
-  seq: number;
 }
 
 /** The principal set one share names (`artifacts.Audience`). `id` is empty for the company. */
@@ -5290,7 +6651,7 @@ export interface ArtifactCommonPrefix {
  * without it, everything beneath the prefix. `folder` (an id) names the
  * folder in place of `prefix`, which the answer then echoes as the resolved
  * path: a path may name two folders a reader sees (a company "Drafts" and
- * their own private one, `409 folder_ambiguous`), and an id never does.
+ * their own private one, `422 folder_ambiguous`), and an id never does.
  */
 export interface ArtifactListAnswer {
   /** The query's prefix, echoed; empty for the top level. */
@@ -5493,7 +6854,7 @@ export interface BrandAnswer {
     adopted_at: string;
     /**
      * The newest version of the adopted kit, when it is newer than the
-     * adopted one: the "Review and adopt" banner. Answered only to a reader
+     * adopted one: the Brand page's draft notice. Answered only to a reader
      * who can see the kit or is an administrator.
      */
     newer_version?: number;
@@ -6169,14 +7530,6 @@ export interface DesignOutline {
   notes: number;
 }
 
-/** One finding of the publish linter (`lint.Finding`). */
-export interface ArtifactLintFinding {
-  path: string;
-  line?: number;
-  code: string;
-  message: string;
-}
-
 /** A create's or a publish's answer (`artifactsapi.publishedAnswer`). */
 export interface ArtifactPublished {
   artifact: string;
@@ -6397,17 +7750,22 @@ export interface DataWriteAnswer {
   conflict?: DataDoc[];
 }
 
-/** Where in an artifact a member is looking (`artifacts.Focus`). */
+/**
+ * Where in a room a member is looking (`presence.Focus`). An artifact's room
+ * names a version, a region, a record or a field; a chat room names the
+ * thread a member is typing under, or an agent will answer in.
+ */
 export interface PresenceFocus {
   version?: number;
   region?: string;
   collection?: string;
   doc?: string;
   field?: string;
+  thread?: string;
 }
 
-/** One open viewer of one artifact (`artifacts.PresenceMember`). */
-export interface ArtifactPresenceMember {
+/** One open viewer of one room, an artifact's or a chat room's (`presence.Member`). */
+export interface RoomMember {
   session: string;
   /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
   seat: string;
@@ -6415,14 +7773,15 @@ export interface ArtifactPresenceMember {
   activity: PresenceActivity;
   focus: PresenceFocus;
   at: string;
-  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  /** For an agent, the run of the turn that last put it in the room. */
   turn?: string;
+  /** For an agent at work in a chat room, the line shown beside its name; empty for the bare indicator. */
+  status?: string;
 }
 
-/** Who is in one artifact's room (`artifacts.PresenceRoster`). */
-export interface ArtifactPresenceRoster {
-  artifact: string;
-  members: ArtifactPresenceMember[] | null;
+/** Who is in one room (`presence.Roster`). */
+export interface RoomRoster {
+  members: RoomMember[] | null;
   counts?: { human: number; agent: number };
   truncated?: boolean;
 }
@@ -6432,7 +7791,7 @@ export interface ArtifactJoined {
   artifact: string;
   session: string;
   role: ArtifactRole;
-  roster: ArtifactPresenceRoster;
+  roster: RoomRoster;
   through: number;
   resync: boolean;
 }
@@ -6476,10 +7835,10 @@ export interface ArtifactDataPush {
   through?: number;
 }
 
-/** An `artifact_presence` push (`presence.Change`). */
+/** An `artifact_presence` push (`stream.ArtifactPresence`). */
 export interface ArtifactPresencePush {
   artifact: string;
-  upsert: ArtifactPresenceMember[] | null;
+  upsert: RoomMember[] | null;
   leave: string[] | null;
   counts?: { human: number; agent: number };
   truncated: boolean;
@@ -6512,6 +7871,7 @@ export interface QueryMap {
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
+  link_hosts: LinkHostsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
   sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;
@@ -6537,6 +7897,38 @@ export interface QueryMap {
   work_flow: WorkFlowAnswer;
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
+  answered_decisions: AnsweredDecisionsAnswer;
+  /* THE CHAT FAMILY IS THE CHATLET APP'S, ALL OF IT, and asked for the seat the
+     caller acts as and nobody else: none of these takes a handle — there is
+     nowhere to write one. A caller without the app is refused `unauthorized`
+     naming it; a credential acting as no seat (a deployment's own token, a
+     service account bound to nobody) is refused `unauthorized` naming no
+     grant, since no grant would cure it — a binding in the identity
+     directory (`crewlet iam bind`) would. */
+  chat_channels: ChatChannelsAnswer;
+  chat_channel: ChatChannelDetail;
+  chat_messages: ChatMessagesAnswer;
+  /* A THREAD IS ITS OWN QUESTION, not a filter on the room: it is opened
+     beside the transcript and paged in the opposite direction, because a
+     conversation is read forwards. */
+  chat_thread: ChatThreadAnswer;
+  /* THE READER'S OWN VIEWS, each answered for the seat the caller acts as:
+     what waits for them, the threads they follow, what they saved, what they
+     sent, and a room's shared links. */
+  chat_activity: ChatActivityAnswer;
+  chat_threads: ChatThreadsAnswer;
+  chat_saved: ChatSavedAnswer;
+  chat_sent: ChatSentAnswer;
+  chat_links: ChatLinksAnswer;
+  chat_message: ChatMessageAnswer;
+  chat_unfurls: ChatUnfurlsAnswer;
+  /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
+     written in prose is told from a colour or an issue's number by. */
+  chat_room_names: ChatRoomNamesAnswer;
+  chat_rooms: ChatRoomsAnswer;
+  /* REGISTERED ONLY WHERE THE INDEX EXISTS, so a node with rooms and no index
+     answers `unknown_query` rather than a ranking that finds nothing. */
+  chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };
@@ -6570,6 +7962,14 @@ export interface QueryMap {
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
   brand: BrandAnswer;
+  /** Every model, in an admin's reading or a member's (Settings › Models). */
+  llm_entries: ModelEntriesAnswer;
+  /** Where a model's coding runs can happen, on each node. Admin. */
+  llm_runners: RunnersAnswer;
+  /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
+  llm_models: ModelsAnswer;
+  /** One device sign-in (`id`). Admin. */
+  llm_device_sign_in: ModelDevice;
 }
 
 export type QueryName = keyof QueryMap;

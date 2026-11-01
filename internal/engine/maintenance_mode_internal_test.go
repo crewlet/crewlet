@@ -12,6 +12,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -119,7 +120,7 @@ func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*En
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	PinGitLanes(&b)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(doc))

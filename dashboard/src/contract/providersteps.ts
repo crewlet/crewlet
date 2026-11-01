@@ -1,9 +1,9 @@
 /**
  * The terminal steps that give a company its first model, as the builder
- * shows them: on the card after a create, and under the caution a company
- * with no `providers.llm` raises. No dashboard screen adds a model, and every
- * model runs through a coding CLI that is signed in on the node's host, so
- * this is the one part of starting a company the dashboard hands back.
+ * shows them beside Settings › Models: on the card after a create, and under
+ * the caution a company with no `providers.llm` raises. Models adds a model
+ * from the dashboard; these are the same thing done at the node's host, for a
+ * reader who works there.
  *
  * THEY START FROM THE STORE, because that is where a company the builder made
  * is: `PUT /config` wrote it, and no file holds it. `crewlet llm` reads the
@@ -38,11 +38,15 @@ export const PROVIDER_STEPS = `# Stop crewlet run first (Ctrl+C), and run these 
 # 1. Write the running company to a file
 crewlet config export > company.yaml
 
-# 2. Add the model to it
+# 2. Add the model to it, and the sandbox every seat's executor
+#    runs in: here this machine, as your user
 providers:
   llm:
     default:
       model: sonnet
+  sandbox:
+    local: {}
+    default_run_in: direct
 
 # 3. Sign its CLI in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL

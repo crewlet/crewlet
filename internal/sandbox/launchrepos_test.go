@@ -365,7 +365,7 @@ func TestAFailedCloneAbandonsTheLaunch(t *testing.T) {
 
 		second := withRepos(t, launchReq("t1"), granted("web", webRepoID), granted("api", apiRepoID))
 		second.Setup = first.Setup
-		second.ReuseBox = res.SandboxID
+		resumeInItsBox(t, rig)
 		if _, err := rig.launchVia(t.Context(), rig.manager, second); err != nil {
 			t.Fatalf("the second launch: %v", err)
 		}
@@ -388,6 +388,7 @@ func TestAFailedCloneAbandonsTheLaunch(t *testing.T) {
 		}
 		third := second
 		third.Clone = slices.Clone(second.Clone)
+		resumeInItsBox(t, rig)
 		_, err = rig.launchVia(t.Context(), rig.manager, third)
 		var setup *SetupError
 		if !errors.As(err, &setup) || setup.Step != "clone api" || setup.Exit != 128 {
@@ -419,4 +420,16 @@ func (p *scriptedBoxes) Create(ctx context.Context, spec Spec) (Sandbox, error) 
 		return p.exec(cmd), nil
 	}
 	return box, nil
+}
+
+// resumeInItsBox puts the rig's run t1 where a job that CONTINUES in the box
+// the job before it left is launched: that job over and its turn resumed, the row
+// still naming its box ([PriorBox.ContinuesIn]) — what a reviewer's send-back
+// and an answered question both relaunch from. The next launch of t1 in the
+// same cell, on the same CLI, is given that box back.
+func resumeInItsBox(t *testing.T, rig *waiterRig) {
+	t.Helper()
+	if err := rig.pending.SetStatus(t.Context(), "t1", StatusResumed, Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
 }

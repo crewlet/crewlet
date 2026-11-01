@@ -86,7 +86,8 @@ type Writer struct {
 
 	// Actor and ActorKind are who this writer acts as. ActorKind is the
 	// PRINCIPAL's kind — person, machine, engine — because that is what
-	// this domain's own records carry.
+	// this domain's own records carry; the node's own writer is
+	// [NodeKind].
 	Actor     string
 	ActorKind iam.Kind
 
@@ -149,8 +150,8 @@ type Writer struct {
 // the surface that asked, and is announced there.
 //
 // ONLY ON A DEFINITE OUTCOME. An applied or a pending write is durable at its
-// position and every node will apply it; an `unknown` one may or may not have
-// landed, and the durable half of the trail — the `iam_history` row the
+// position and every data node will apply it; an `unknown` one may or may not
+// have landed, and the durable half of the trail — the `iam_history` row the
 // applier writes — is what answers that. A live row claiming a change that did
 // not happen would be the one false line in the feed.
 //
@@ -173,6 +174,20 @@ type SeatLookup interface {
 	Seat(ctx context.Context, handle string) (session.Seat, bool, error)
 }
 
+// NodeKind is the principal kind the node's own writer authors as: the sweeps,
+// a re-seal, a password re-hashed at this build's cost, a company-wide
+// invalidation — everything the engine decides for itself — and the kind a
+// generation record that names nobody records the node under.
+//
+// THE ENGINE, NEVER A MACHINE. A machine is a token with nobody behind it, and
+// a row authored by one is drawn as that credential's login; written as one,
+// every row the engine wrote for itself read in the trail as a service account
+// named after the node id, a login no machine grammar admits
+// ([iam.Principal.Validate]). [iam.KindEngine] is the kind that exists so the
+// engine's housekeeping is never mistaken for somebody's decision, and the
+// tracker's node writer is its `system` already.
+const NodeKind = iam.KindEngine
+
 // WriterDeps is what a writer is built from.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
@@ -191,6 +206,9 @@ type WriterDeps struct {
 	// seat, is a writer that can create no person and invite nobody.
 	Seats SeatLookup
 
+	// Actor and ActorKind are who the writer acts as, until [Writer.As]
+	// or [Writer.For] derives another: the node's own writer is its id and
+	// [NodeKind].
 	Actor     string
 	ActorKind iam.Kind
 	Grants    []iam.Grant
@@ -356,7 +374,7 @@ var errNothingToPublish = errors.New("iamdomain: nothing to publish")
 // COMPARED THROUGH [iam.Expand] ON BOTH SIDES, as every comparison of
 // permissions is: an app an administrator already held through admin is not
 // "added" by a save that spells it out, so saving `[admin]` as `[admin,
-// tracker, knowledge]` announces no change and revokes no reset link, while
+// worklet, doclet]` announces no change and revokes no reset link, while
 // taking admin away from `[admin]` removes admin and every app it carried.
 // What is reported is still the row's own names — a name this build does not
 // know included — because the trail records what the rows said.
@@ -390,7 +408,81 @@ func (w *Writer) Can(g iam.Grant) bool { return iam.Principal{Grants: w.Grants}.
 // DISTINCT FROM A CONFLICT AND FROM AN OUTAGE, which is the three-valued rule
 // applied to authority: "you may not", "somebody else won" and "this node
 // could not tell" are three answers a surface renders as 403, 409 and 503.
+//
+// EVERY ONE IS A [Refusal], which says whether a permission would lift it, and
+// nothing in this package builds it any other way — a gate in this package's
+// tests holds that. Compare it with errors.Is; read what lifts it with
+// errors.As.
 var ErrRefused = errors.New("not allowed")
+
+// Refusal is a record this writer's party may not publish, and whether a
+// permission would lift it.
+//
+// TWO KINDS OF "MAY NOT", and a surface answers them differently. One a
+// permission lifts — a record only an administrator publishes, a permission
+// the party cannot confer because it does not hold it — names that permission,
+// so a caller knows what to ask for. One the record's own rule refuses
+// whatever the party holds — a person's token minted by anybody but them, an
+// owner who may not act, an invitation already spent, a name this build does
+// not know — names none, because asking for a permission would change
+// nothing. Both were one sentinel wrapped in a sentence, so every refusal was
+// answered as the first kind, naming every permission there is.
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told, and the wire rebuilds an error type from its exported
+// fields. Only this package builds one ([needs], [forbidden]).
+type Refusal struct {
+	// Grants are the permissions any ONE of which, held by the party, would
+	// have admitted the record — internal/authz's minimal cover: an app for
+	// an app, admin for admin. EMPTY where the record's own rule refused it,
+	// whatever the party holds.
+	Grants []iam.Grant
+
+	// Err is the refusal's sentence and its %w chain — [ErrTokenRefused]
+	// among it for a record asked through a machine token. THE SENTENCE A
+	// PERSON READS ([Sentence]), so it names what it refuses as they know
+	// it — "this invitation", "that session", "their account" — and never by
+	// an id they did not choose.
+	Err error
+
+	// About is what the refusal was about, by the ids an operator reading
+	// the log needs and the person refused never chose: an invitation's id,
+	// a session's lineage, the access token a request came through. EMPTY
+	// where the sentence says it all. [Refusal.Error] carries it, which is
+	// what every log line prints; [Sentence] does not. It used to be written
+	// into the sentence, so a person was told "invitation 0192f… has
+	// already been used" and "session 4c1e… belongs to person 0192a…".
+	About string
+}
+
+func (e *Refusal) Error() string {
+	text := ErrRefused.Error() + ": " + e.Err.Error()
+	if e.About != "" {
+		text += " (" + e.About + ")"
+	}
+	return text
+}
+func (e *Refusal) Unwrap() []error { return []error{ErrRefused, e.Err} }
+
+// about sets what e was about for the log ([Refusal.About]), worded as
+// fmt.Sprintf words format and args, and returns e.
+func (e *Refusal) about(format string, args ...any) *Refusal {
+	e.About = fmt.Sprintf(format, args...)
+	return e
+}
+
+// needs is a refusal any one of grants would have lifted, worded as
+// fmt.Errorf words format and args.
+func needs(grants []iam.Grant, format string, args ...any) *Refusal {
+	return &Refusal{Grants: slices.Clone(grants), Err: fmt.Errorf(format, args...)}
+}
+
+// forbidden is a refusal no permission lifts, worded as fmt.Errorf words
+// format and args.
+func forbidden(format string, args ...any) *Refusal {
+	return &Refusal{Grants: []iam.Grant{}, Err: fmt.Errorf(format, args...)}
+}
 
 // mayAdminister refuses a record only an administrator may publish, and every
 // administrative record written through a machine token.
@@ -427,25 +519,66 @@ var ErrRefused = errors.New("not allowed")
 // than that it lacks a permission it plainly has. The CLASS decides, never the
 // spelling of an id: an operator id naming the machine-token class is a token,
 // whether or not this build can parse what follows.
+//
+// # Through the Dashboard Assistant, only an approved edit
+//
+// A request the assistant makes is its person's own, composed from their rows,
+// so an administrator's assistant carries admin, and a write it makes is one
+// the administrator approved from a server-rendered preview (ADR-0051): an
+// edit of somebody's row, a move of their login or seat, a stage, a removal,
+// an invitation withdrawn. Those land as the administrator's own, with the
+// grant named as the credential.
+//
+// THE SIGN-IN CEREMONIES DO NOT ([assistRefusedOps]): an enrolment carries a
+// first password link or spends an invitation, an invitation is a link, and
+// ending every session is a session ceremony. The authority table keeps their
+// verbs from the assistant (internal/authz's human-only list, ADR-0052); this
+// refuses the RECORD for the token's reason, so no surface the table does not
+// guard can be the way a model is handed a credential. Checked first beside
+// the token, on the class as well.
+//
+// # Which refusal it is
+//
+// A party without admin is refused NAMING admin, which lifts it; a machine
+// token is refused naming nothing, since no permission on a token would — a
+// person signs in — and so is the Dashboard Assistant on a sign-in ceremony,
+// which its person takes themselves.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return fmt.Errorf("%w: %w. Sign in and do it yourself (%s, token %s)",
-			ErrRefused, ErrTokenRefused, op,
-			w.OperatorID)
+		return forbidden("%w. Sign in and do it yourself", ErrTokenRefused).
+			about("%s, through %s", op, w.OperatorID)
+	}
+	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) && slices.Contains(assistRefusedOps, op) {
+		return forbidden("%w. Do it yourself from People & access (%s, %s)",
+			ErrAssistRefused, op, w.OperatorID)
 	}
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
-		op, iam.GrantAdmin, w.Grants)
+	return needs([]iam.Grant{iam.GrantAdmin}, "only an admin can do that").
+		about("%s, by a party holding %s", op, grantWords(w.Grants))
 }
 
-// ErrTokenRefused reports an administrative identity record asked through a
-// machine token ([Writer.mayAdminister]). Every error carrying it also wraps
-// [ErrRefused], so a surface that only knows "may not" still refuses; one that
-// tells the two apart answers that a person must be present rather than that
-// a permission is missing.
+// assistRefusedOps are the administrative records the Dashboard Assistant
+// never writes, whoever approved what: each hands somebody a way to sign in
+// or ends sessions ([Writer.mayAdminister]).
+var assistRefusedOps = []OpKind{OpEnrol, OpInvite, OpInvalidate}
+
+// ErrTokenRefused reports an identity record asked through a machine token that
+// needs a person present: an administrative one ([Writer.mayAdminister]), and a
+// token's mint ([Writer.mayMintFor]). Every error carrying it is a [Refusal]
+// naming no permission, so a surface that only knows "may not" still refuses;
+// one that tells the two apart answers that a person must be present rather
+// than that a permission is missing.
 var ErrTokenRefused = errors.New("access tokens can't change people or access")
+
+// ErrAssistRefused reports an administrative identity record, or a token mint,
+// asked through the Dashboard Assistant ([Writer.mayAdminister],
+// [Writer.mayMintFor]). Every error carrying it is a [Refusal] naming no
+// permission, for [ErrTokenRefused]'s reason, and a surface that tells them
+// apart answers that the person takes the gesture themselves rather than that
+// a permission is missing.
+var ErrAssistRefused = errors.New("only the person can issue sign-in links, invitations or tokens, or end sessions, never Ask Crewlet")
 
 // publish runs one decide through the framework's own write authority.
 //
@@ -592,9 +725,9 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 		return MutationRecord{}, err
 	}
 	if len(reason) > MaxReason {
-		return MutationRecord{}, fmt.Errorf("%w: the reason on this %s is %d "+
-			"bytes, and the limit is %d. Keep it to a short label",
-			ErrInvalid, op, len(reason), MaxReason)
+		return MutationRecord{}, fmt.Errorf("%w: the reason is %d bytes, and "+
+			"the limit is %d. Keep it to a short label",
+			ErrInvalid, len(reason), MaxReason)
 	}
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
@@ -625,7 +758,7 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 // the framework may run a decide AGAIN against a fresh snapshot, so the
 // mutation the encode below reads has to be the one the last run produced.
 // Taken by value, every one of those wrote into a copy nothing encoded and
-// published an empty payload that every node then failed to decode.
+// published an empty payload that every data node then failed to decode.
 func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 	pattern statelog.Pattern, decide func(*sql.Tx) error) statelog.Request {
 
@@ -683,7 +816,7 @@ func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 // gate decodes — and which the publisher-side reader reads too only for the
 // body it is handed ([markedPerson]): a record this node appended and a removal
 // raced is named `deleted` there, but a person removed BEFORE the snapshot
-// would have had the record appended only to be dropped by every node — a
+// would have had the record appended only to be dropped by every data node — a
 // second removal of somebody already removed among them. Refused here, it is
 // refused as what it is before anything is appended, with the reason the
 // resolution would have given for a person's own subject.

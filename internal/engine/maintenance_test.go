@@ -7,13 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -66,6 +70,23 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// applier, the trash through the trash reaper) rather than a local
 		// delete.
 		"artifacts_ops",
+		// THE ASSISTANT LOG'S TWO, for the same reason. Its conversations
+		// are NOT here: they are Replicated, so their retention rides a
+		// record (the trash reaper's retention purge) rather than a local
+		// delete.
+		"assistant_anchors",
+		"assistant_ops",
+		// THE CHAT LOG'S anchor table and operation ledger, per node, for
+		// the reason every registered domain's pair is (see pages_ops
+		// below).
+		"chat_anchors",
+		"chat_ops",
+		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
+		// no age: without this entry the cursors, mutes and
+		// do-not-disturb of every seat anybody ever read a room as were
+		// kept for the life of the deployment, long after the company
+		// stopped having the seat.
+		"chat_read_state",
 		// THE CODE LOG'S NOTICES, a person's and a seat's, each kind its
 		// own horizon: per node, because the table is divergent.
 		"code_notifications",
@@ -98,10 +119,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
-		// THE IDENTITY ESTATE'S, which sorts here, swept on every node by
-		// the same per-node job every other domain's is: every node runs
-		// every domain in the register, whatever its roles, so every node
-		// holds rows in it to sweep.
+		// THE IDENTITY ESTATE'S, which sorts here, swept on every data
+		// node by the same per-node job every other domain's is: every data
+		// node runs every domain in the register, whatever its other roles,
+		// so every data node holds rows in it to sweep.
 		//
 		// The estate's OTHER retention — the authentication trail's two
 		// horizons — is deliberately NOT here: it is a record on the
@@ -131,7 +152,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// floor each node read for itself would be a second writer of
 		// rows every copy must hold alike (ADR-0002). The trim removes
 		// them with a trimmed record every applier takes at one
-		// position (ADR-0050), and a `<domain>_anchors` job here would
+		// position (ADR-0073), and a `<domain>_anchors` job here would
 		// be that second writer back.
 		//
 		// NOR THE CODE HOST'S RETIRED PACKS, `code_packs_retired`, for the
@@ -161,7 +182,6 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// stopped between the end's two removals. Their bucket is
 		// ageless, so without this entry such a part stayed for the life
 		// of the deployment, a conversation's megabytes among them.
-		"sandbox_run_parts",
 		"scheduled_runs",
 		// The one job that deletes BROKER state rather than rows: a
 		// removed seat's mailbox, retired after its grace period. Named
@@ -291,7 +311,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)
@@ -349,6 +369,37 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	}
 }
 
+// AN IDLE ASK OUTLASTS THE LONGEST SILENCE OF ONE THAT IS STILL OWED.
+//
+// The idle sweep spares every channel whose ask waits somewhere the engine can
+// see it — a coding run's record, an inbox held by a run, a pause or a spent
+// budget window — and closes the rest once they have been quiet for
+// [maintenance.ChannelIdleTimeout]. What it cannot see is an ask in flight: a
+// delivery a node that died held unacknowledged, invisible for the broker's
+// ack wait, redelivered once the seat's next holder takes its lease, and then
+// up to two dispatch segments — one ahead of it, and its own — before a launch
+// writes a run's record, each bounded by a first turn's onboarding pass. A
+// timeout shorter than that closes the channel of an ask that is about to be
+// answered, and the answer is refused when it comes.
+//
+// FOUR CONSTANTS IN FOUR PACKAGES, and nothing else connects them: the broker's
+// ack wait is sized to the queue, the lease to the seat host, the onboarding
+// claim to its pass. Only the ORDER is asserted, for the reason
+// TestARevisionOutlivesTheAuditRowThatNamesIt gives: a demanded multiple would
+// fail a sound change and be edited to say so.
+func TestAnIdleAskOutlastsTheSilenceOfOneStillOwed(t *testing.T) {
+	t.Parallel()
+	silence := jetstream.DefaultAckWait + seat.SeatLeaseTTL + 2*runner.ClaimTTL
+	if maintenance.ChannelIdleTimeout <= silence {
+		t.Errorf("an idle A2A channel is closed after %v, and an ask still owed its answer can "+
+			"be silent for %v (the broker's ack wait %v, a seat lease %v, two onboarding claims "+
+			"of %v).\nThe sweep would close the channel of an ask about to be answered, and the "+
+			"answer would be refused. Raise ChannelIdleTimeout, or shorten what it outlasts.",
+			maintenance.ChannelIdleTimeout, silence, jetstream.DefaultAckWait, seat.SeatLeaseTTL,
+			runner.ClaimTTL)
+	}
+}
+
 // The tick must stay shorter than every horizon, or a table sits past its
 // own horizon for the difference and the horizon stops describing the table.
 // [maintenance.New] enforces this at runtime by raising a short horizon; this
@@ -368,13 +419,15 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
-		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
-		// absence is the point rather than an omission. Both are
-		// state-log domains: their records are a log the retention gate
-		// trims, and their durable rows are written by an applier — so
-		// there is no per-node sweep of ROWS to give a horizon to, and
-		// a delete on one node's own authority is what the identity
-		// claim forbids.
+		"chat_read_state":       maintenance.ChatReadForgetGrace,
+		// NO NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the absence is
+		// the point rather than an omission. Every one is a state-log
+		// domain: its records are a log the retention gate trims, and
+		// its durable rows are written by an applier — so there is no
+		// per-node sweep of ROWS to give a horizon to, and a delete on
+		// one node's own authority is what the identity claim forbids.
+		// Chat's message horizon is no exception: it is a prune RECORD
+		// a fleet duty publishes to the log, applied on every node.
 		//
 		// Their OPERATION LEDGERS are the exception, and they are here
 		// under one entry because every domain takes the same horizon:

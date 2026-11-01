@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TRIM'S TRIMMED RECORD ON THE ARTIFACTS LOG (ADR-0050): every artifact,
+// THE TRIM'S TRIMMED RECORD ON THE ARTIFACTS LOG (ADR-0073): every artifact,
 // asset, reader and source subject the log carries writes an anchor on every
 // data node, and this record is what removes them once the log no longer holds
 // what they name. The certification drives it end to end

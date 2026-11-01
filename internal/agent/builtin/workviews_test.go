@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SAVED VIEW'S PARAMETERS ARE THE GRAMMAR'S, AND save_work_view SAYS SO.
 //
-// The stored map is what [tracker.ParseQuery] validates and what the expansion
+// The stored map is what [worklet.ParseQuery] validates and what the expansion
 // reads back, so it is the GRAMMAR's vocabulary — while list_work_items'
 // arguments are the model's. The description said the opposite, so a model
 // saving the query it had just run wrote this surface's four renamed
@@ -42,7 +42,7 @@ func TestEveryRenamedArgumentIsTheTranslationTheToolPerforms(t *testing.T) {
 					"%q — a model told the wrong vocabulary writes a view "+
 					"every save refuses", tc.arg, tc.key, sentence)
 			}
-			if !slices.Contains(tracker.QueryKeys, tc.key) {
+			if !slices.Contains(worklet.QueryKeys, tc.key) {
 				t.Errorf("%q is not a query parameter, so a view storing it "+
 					"is refused at the write", tc.key)
 			}
@@ -99,7 +99,7 @@ func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 	for _, raw := range []string{"", "ENG", "project:", "workspace:ENG", "team:eng"} {
 		t.Run("refused/"+raw, func(t *testing.T) {
 			t.Parallel()
-			got := callPlain(t, reg, tracker.ListWorkViewsTool,
+			got := callPlain(t, reg, worklet.ListWorkViewsTool,
 				map[string]any{"container": raw})
 			if !got.Failed {
 				t.Fatalf("%q was accepted as a container — the strip it "+
@@ -118,7 +118,7 @@ func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 	}
 	t.Run("accepted", func(t *testing.T) {
 		t.Parallel()
-		if got := callPlain(t, reg, tracker.ListWorkViewsTool,
+		if got := callPlain(t, reg, worklet.ListWorkViewsTool,
 			map[string]any{"container": "project:eng"}); got.Failed {
 			t.Fatalf("project:eng was refused: %s", got.Output)
 		}
@@ -127,7 +127,7 @@ func TestARefusedContainerNamesTheSpellingsItAccepts(t *testing.T) {
 
 // THE SHAPES THE TOOL OFFERS ARE THE SHAPES THE ENGINE TAKES.
 //
-// `save_work_view`'s `type` enum and [tracker.ViewType.Valid] are two lists of
+// `save_work_view`'s `type` enum and [worklet.ViewType.Valid] are two lists of
 // the same set, written in two files, with nothing holding them together. They
 // had already drifted: the enum offered three where the validator accepts
 // four, so a seat could not save a `timeline` view although the write would
@@ -160,7 +160,7 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
-		if tool.Name() != tracker.SaveWorkViewTool {
+		if tool.Name() != worklet.SaveWorkViewTool {
 			continue
 		}
 		props, _ := tool.Parameters()["properties"].(map[string]any)
@@ -172,7 +172,7 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 	}
 
 	for _, name := range offered {
-		if !tracker.ViewType(name).Valid() {
+		if !worklet.ViewType(name).Valid() {
 			t.Errorf("the tool offers the shape %q and the engine refuses it at "+
 				"the write — a model is told to send something that cannot land", name)
 		}
@@ -180,9 +180,9 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 	// AND EVERY SHAPE THE ENGINE TAKES IS OFFERED. This is the direction the
 	// drift actually went — and this half was itself a literal naming four
 	// shapes, so it could only ever catch a shape LEAVING the enum. Read from
-	// [tracker.ViewTypes], the two halves are the same list and a rendering
+	// [worklet.ViewTypes], the two halves are the same list and a rendering
 	// added to the engine is asserted the moment it exists.
-	for _, want := range tracker.ViewTypes {
+	for _, want := range worklet.ViewTypes {
 		if !slices.Contains(offered, string(want)) {
 			t.Errorf("the engine accepts the shape %q and the tool does not offer it — "+
 				"an enum is a closed set to the model reading it, so this shape is "+

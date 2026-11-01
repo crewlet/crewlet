@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -92,6 +94,15 @@ func (f *fakeArtifacts) seed(owner string, ownerKind iam.ActorKind, author iam.A
 	f.heads[id] = h
 	f.versions[id] = map[int]artifactsdomain.Version{1: f.version(id, 1, author, files)}
 	return h
+}
+
+// retitle gives a seeded artifact a title and a description.
+func (f *fakeArtifacts) retitle(id artifacts.ID, title, description string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.heads[id]
+	h.Title, h.Description = title, description
+	f.heads[id] = h
 }
 
 // setKind makes a seeded artifact one of kind.
@@ -441,9 +452,27 @@ func founderPrincipal(grants ...iam.Grant) iam.Principal {
 type fakeBox struct {
 	files  map[string]string
 	listed []string // overrides the listing, for a box that lies
+	err    error    // every read's answer, for a box that cannot be read
+	// listErr is the listing's answer alone, for a directory the box does
+	// not hold as one.
+	listErr error
+
+	// midErr fails a read part way through a file its open found: a
+	// stream that stopped after its first bytes. laterErr fails every open
+	// after the first, which is the transfer's second read of a file whose
+	// digest the first took.
+	midErr, laterErr error
+	mu               sync.Mutex
+	opens            int
 }
 
 func (b *fakeBox) Files(_ context.Context, dir string, max int) ([]string, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	if b.listErr != nil {
+		return nil, b.listErr
+	}
 	if b.listed != nil {
 		return b.listed, nil
 	}
@@ -460,18 +489,46 @@ func (b *fakeBox) Files(_ context.Context, dir string, max int) ([]string, error
 	return out, nil
 }
 
+// Open streams a file, and refuses a path that names none as the engine's box
+// does: as one that is no regular file.
 func (b *fakeBox) Open(_ context.Context, p string) (io.ReadCloser, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	b.mu.Lock()
+	b.opens++
+	later := b.opens > 1
+	b.mu.Unlock()
+	if later && b.laterErr != nil {
+		return nil, b.laterErr
+	}
 	data, ok := b.files[p]
 	if !ok {
-		return nil, fmt.Errorf("no file %q", p)
+		return nil, fmt.Errorf("no file %q: %w", p, sandbox.ErrNotRegularFile)
 	}
-	return io.NopCloser(strings.NewReader(data)), nil
+	return io.NopCloser(b.stream(data)), nil
 }
 
-// boxes hands every turn the one box, or none.
-type boxes struct{ box *fakeBox }
+// stream is what an open of data reads: the whole of it, or its first half
+// and then midErr, a stream cut part way as a provider's can be.
+func (b *fakeBox) stream(data string) io.Reader {
+	if b.midErr == nil {
+		return strings.NewReader(data)
+	}
+	return io.MultiReader(strings.NewReader(data[:len(data)/2]), iotest.ErrReader(b.midErr))
+}
+
+// boxes hands every turn the one box, or none, or the error reattaching it
+// met.
+type boxes struct {
+	box *fakeBox
+	err error
+}
 
 func (b boxes) Box(context.Context, *turnctx.Turn) (builtin.ArtifactBox, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
 	if b.box == nil {
 		return nil, builtin.ErrNoBox
 	}

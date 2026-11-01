@@ -332,8 +332,10 @@ func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []erro
 	if !found {
 		return []error{errors.New("a run just created read back as absent")}
 	}
-	removed := landed(f.DeleteSandboxRun(ctx, turn, rec.Version))
-	if errs := removed.as("the run's delete"); len(errs) > 0 {
+	_, removed, err := f.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
+		return coord.SandboxRunChange{Delete: current.Version == rec.Version}, nil
+	})
+	if errs := landed(removed, err).as("the run's delete"); len(errs) > 0 {
 		return errs
 	}
 	won, errs := race(func() (bool, error) {

@@ -200,7 +200,8 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// a handler deciding what to do with ONE of these events has to
 		// ask what THAT message has left. See [queue.DeliveriesLeft] and
 		// [queue.DeliveriesLeftFor].
-		res := runBatchHandler(a.withHeadroom(ctx, part.Items...), a.log, evs, h)
+		res := runBatchHandler(a.withProgress(a.withHeadroom(ctx, part.Items...), part.Items...),
+			a.log, evs, h)
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)

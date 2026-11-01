@@ -2,6 +2,17 @@
  * The Inbox's list: Needs you, then Updates, then the two quiet links to what
  * was snoozed and what was read already.
  *
+ * AN ANSWER IS SAID, NEVER STRUCK. A row answered here leaves Needs you, its
+ * height closing so the rows under it slide up (the kit's group draws it on
+ * its way out), and lands at the head of the closed, counted Answered group,
+ * whose heading takes a brief wash as it arrives. There it is marked Answered
+ * in its head, with what was chosen or written under the question, every word
+ * legible. Needs you's count is what is still open, and the group goes with
+ * its last row once that row has closed, so the empty state shows in its place
+ * rather than a heading over nothing. Answers from before this visit (the
+ * last week's, from `answered_decisions`) wait in the same Answered group,
+ * each saying who answered and how.
+ *
  * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (whoever the
  * record names, `iam.ActorFor`: the seat a person or a bound credential writes
  * as, or the login of a credential bound to none), WHAT, in up to three lines
@@ -10,10 +21,11 @@
  * kind in a different shape would make a reader learn four lists to read one.
  */
 
-import type { ReactNode } from "react";
+import { memo, useCallback, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
+  Tag,
   InboxGroup,
   InboxList,
   InboxMore,
@@ -22,13 +34,21 @@ import {
   Skeleton,
   Text,
 } from "@crewlethq/ui";
+import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { firstLine } from "~/lib/format.ts";
+import { TokenScope } from "~/components/InlineToken.tsx";
+import { renderTokens } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
 import {
+  answerWords,
+  answeredQuestion,
+  answeredTexts,
   askQuestion,
+  askTexts,
   budgetLine,
   changeWords,
   isNoticeRow,
@@ -40,11 +60,37 @@ import {
   rowName,
   rowWho,
   shortWhen,
+  type AnswerWords,
   type InboxRow,
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { runAskTexts } from "~/lib/runs.ts";
+
+/** A row dealt with here: how ("Answered"), and the answer that was given. */
+export interface Settled {
+  label: string;
+  answer?: AskAnswer;
+  /**
+   * Settled for good and moved into Answered: on its way out of Needs you,
+   * or gone from it. Absent for an answer held where it stands.
+   */
+  moved?: boolean;
+}
+
+/** The closed group of what was answered, here and before this visit. */
+export interface AnsweredGroup {
+  rows: readonly InboxRow[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /**
+   * The key of the row that has just arrived here, which washes the group's
+   * heading (and the row, when the group is open). Absent on a first draw,
+   * and once the arrival has been seen.
+   */
+  arrived?: string | undefined;
+}
 
 /** What the list holds beyond its two groups, read only when opened. */
 export interface Later {
@@ -64,6 +110,8 @@ export function InboxColumn({
   earlier,
   onEarlierMore,
   settled,
+  answered,
+  reader,
   selected,
   onOpen,
   titles,
@@ -84,8 +132,15 @@ export function InboxColumn({
   earlier: Later;
   /** Read the page of earlier updates after the ones shown. */
   onEarlierMore: () => void;
-  /** The rows answered or resolved here, kept in place as done until the list is left. */
-  settled: ReadonlyMap<string, string>;
+  /**
+   * The rows dealt with here: an answer held where it stands until the engine
+   * settles it, and a settled one, now under Answered.
+   */
+  settled: ReadonlyMap<string, Settled>;
+  /** What was answered before this visit, in its closed group. */
+  answered: AnsweredGroup;
+  /** The reader's own record name, so their answers read "You". */
+  reader: string;
   selected: string;
   onOpen: (key: string) => void;
   /** Task titles by id and by unclaimed key ([titleOf]), for a row that carries none. */
@@ -103,13 +158,23 @@ export function InboxColumn({
   /** A read's refusal, drawn where its rows would be. */
   refusal?: ReactNode;
   /**
-   * Where the company runs no Crewlet Works: the line saying where asks and
+   * Where the company runs no Worklet: the line saying where asks and
    * mentions go instead, drawn in place of every tracker pane. Null where it
    * runs it.
    */
   elsewhere?: string | null;
 }) {
-  const item = (row: InboxRow) => (
+  const [closing, closed] = useClosing(settled);
+  // AN ARRIVAL IS WASHED WHERE IT IS SEEN TO LAND. One the list is first
+  // drawn with landed before it was there (in one pane, while the open row
+  // stood in its place), and is in Answered's count rather than washed again
+  // on every way back to the list.
+  const [landedBefore] = useState(answered.arrived);
+  const arrived = answered.arrived === landedBefore ? undefined : answered.arrived;
+  const item = (
+    row: InboxRow,
+    how: { arrived?: boolean; onClosed?: (key: string) => void } = {},
+  ) => (
     <InboxItem
       key={row.key}
       row={row}
@@ -117,8 +182,10 @@ export function InboxColumn({
       now={now}
       title={titleOf(titles, rowItem(row))}
       settled={settled.get(row.key)}
+      reader={reader}
       selected={row.key === selected}
-      onOpen={() => onOpen(row.key)}
+      onOpen={onOpen}
+      {...how}
     />
   );
   const snoozedLabel = snoozedCount
@@ -127,15 +194,41 @@ export function InboxColumn({
   return (
     <InboxList label="Inbox" className="inbox-list">
       {refusal}
-      {needs.length > 0 && <InboxGroup label="Needs you">{needs.map(item)}</InboxGroup>}
+      {(needs.length > 0 || closing) && (
+        // THE COUNT IS WHAT IS STILL OPEN: an answer held where it stands
+        // until the engine settles it is not waiting on the reader. THE GROUP
+        // OUTLIVES ITS LAST ROW only while that row closes, then goes.
+        <InboxGroup label="Needs you" count={needs.filter((r) => !settled.has(r.key)).length}>
+          {needs.map((row) => item(row, { onClosed: closed }))}
+        </InboxGroup>
+      )}
       {elsewhere && (
         <Text as="p" variant="caption" className="inbox-note">
           {elsewhere}
         </Text>
       )}
-      {updates.length > 0 && <InboxGroup label="Updates">{updates.map(item)}</InboxGroup>}
+      {updates.length > 0 && (
+        <InboxGroup label="Updates">{updates.map((row) => item(row))}</InboxGroup>
+      )}
+      {answered.rows.length > 0 && (
+        // CLOSED UNTIL OPENED, and counted: what a reader decided is there to
+        // look back at, never in the way of what still waits on them.
+        <InboxGroup
+          label="Answered"
+          count={answered.rows.length}
+          collapsible
+          open={answered.open}
+          onOpenChange={answered.onOpenChange}
+          arrived={arrived}
+        >
+          {answered.rows.map((row) => item(row, { arrived: row.key === arrived }))}
+        </InboxGroup>
+      )}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
-      {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}
+      {quiet && !closing && (
+        // AFTER THE LAST ROW HAS CLOSED, never under it as it closes.
+        <EmptyState size="compact" title={quiet.title} description={quiet.hint} />
+      )}
       {more && (
         <Text as="p" variant="caption" className="inbox-note">
           More unread below. Read these to see them.
@@ -174,6 +267,32 @@ export function InboxColumn({
   );
 }
 
+/**
+ * Whether a row an answer moved out of Needs you is still closing in it, and
+ * what to call as each one closes. A moved row ([Settled.moved]) leaves Needs
+ * you in the commit that settles it; the kit's group keeps drawing it on its
+ * way out until its height has closed, then says so through the row's
+ * `onLeft`. What moved is the screen's own record, and what has closed is
+ * all this keeps, so nothing is worked out again from the rows' comings and
+ * goings, and nothing is set while drawing.
+ *
+ * NEVER LEFT OPEN. A row moved before the list was drawn has gone already (in
+ * one pane, while the open row stood in the list's place), so it counts as
+ * closed from the start. The kit lets a row it holds go without its `onLeft`
+ * only when the row comes back, which a moved row never does, and its wait
+ * for the motion is bounded by the motion's own length, so every row it
+ * holds is told closed.
+ */
+function useClosing(settled: ReadonlyMap<string, Settled>): [boolean, (key: string) => void] {
+  const moved = [...settled].flatMap(([key, s]) => (s.moved ? [key] : []));
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set(moved));
+  const close = useCallback(
+    (key: string) => setClosed((was) => (was.has(key) ? was : new Set(was).add(key))),
+    [],
+  );
+  return [moved.some((key) => !closed.has(key)), close];
+}
+
 /** The rows a quiet link opened, named for a screen reader by the link's own words. */
 function LaterRows({
   label,
@@ -193,7 +312,7 @@ function LaterRows({
     <>
       {later.rows.length > 0 ? (
         <InboxGroup label={label} hideLabel>
-          {later.rows.map(item)}
+          {later.rows.map((row) => item(row))}
         </InboxGroup>
       ) : (
         !later.more && (
@@ -215,6 +334,15 @@ function LaterRows({
   );
 }
 
+/**
+ * A row as a sentence says it, from the words it is drawn with: who, then
+ * what ("Rui Santos: Ship the release on Friday?"), for an announcement that
+ * names the row opening.
+ */
+export function rowSpoken(row: InboxRow, index: OrgIndex): string {
+  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text}`;
+}
+
 /** What a row says under the name, and the quieter words after it. */
 function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: string } {
   switch (row.kind) {
@@ -224,8 +352,9 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
           return { text: askQuestion(row.subject.ask) };
         case "run":
           return {
+            // THE QUESTION WHOLE: the row's own clamp cuts a long one.
             text:
-              firstLine(row.subject.run.question ?? "") ||
+              (row.subject.run.question ?? "").trim() ||
               (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
           };
         case "seat":
@@ -234,6 +363,8 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
       break;
     case "condition":
       return { text: row.item.title };
+    case "answered":
+      return { text: answeredQuestion(row.answered) };
     case "notice": {
       const said = noticeText(row.notice, index);
       return said
@@ -263,52 +394,180 @@ function whenOf(row: InboxRow, now: number): string {
   return shortWhen(row.at, now);
 }
 
-function InboxItem({
+/**
+ * One row, drawn again only when what it shows can have changed: its row, its
+ * selection, its settlement, the clock its age is read on. MEMOISED because the
+ * list around it is redrawn for every live push the Inbox reads, and a row
+ * whose props are the ones it was drawn with has nothing new to say
+ * ([useStableList] keeps them so).
+ */
+const InboxItem = memo(function InboxItem({
   row,
   index,
   now,
   title,
   settled,
+  reader,
   selected,
   onOpen,
+  arrived = false,
+  leaving,
+  onLeft,
+  onClosed,
 }: {
   row: InboxRow;
   index: OrgIndex;
   now: number;
   title: string | undefined;
-  /** How the row was settled here ("Answered"), or undefined. */
-  settled: string | undefined;
+  /** How the row was settled here, and with what, or undefined. */
+  settled: Settled | undefined;
+  /** The reader's own record name, so their answers read "You". */
+  reader: string;
   selected: boolean;
-  onOpen: () => void;
+  /** Opens a row by its key: one function for every row, so a row's props
+   *  are the same from one draw to the next. */
+  onOpen: (key: string) => void;
+  /** Just arrived in its group: the kit's brief wash. */
+  arrived?: boolean;
+  /**
+   * On its way out of its group, and what to run once it has closed: the
+   * kit's group sets both on the row it keeps drawing, and they reach the
+   * row through this one.
+   */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
+  /**
+   * Told the row's key once it has closed on its way out: one function for
+   * every row, like `onOpen`, so a row's props hold from one draw to the next.
+   */
+  onClosed?: ((key: string) => void) | undefined;
 }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
   const words = rowWords(row, index);
-  const qualifier = settled ? null : qualifierOf(row);
+  const answered = row.kind === "answered" ? answerWords(row.answered, reader, index) : null;
+  const done = settled !== undefined || answered !== null;
+  const qualifier = done ? null : qualifierOf(row);
   const unread = isNoticeRow(row) && !row.notice.read && !row.notice.snoozed;
-  return (
+  // WHAT WAS SAID: the answer this visit gave, or the one the engine recorded.
+  const said = answered ?? (settled?.answer ? givenWords(settled.answer) : null);
+  const texts = rowTexts(row);
+  const drawn = (
     <Row
       title={rowName(row, who)}
       qualifier={qualifier?.word}
       qualifierTone={qualifier?.danger ? "danger" : "default"}
-      meta={whenOf(row, now) || undefined}
+      // ANSWERED HERE, the head says so in place of the time; an answer
+      // from before this visit keeps the time it was given.
+      meta={settled ? undefined : whenOf(row, now) || undefined}
+      status={
+        settled ? (
+          <Tag size="xs" variant="success" appearance="soft" leadingIcon={<CheckGlyph size="sm" />}>
+            {settled.label}
+          </Tag>
+        ) : undefined
+      }
       leading={<Badge row={row} who={who} />}
-      excerpt={words.excerpt}
+      // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
+      // swatches and never a link of its own (`renderTokens`).
+      excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}
+      outcome={said ? <AnswerLine words={said} /> : undefined}
+      outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
+      outcomeTone="success"
       unread={unread}
-      actionable={!isNoticeRow(row) && !settled}
-      done={settled !== undefined}
-      doneLabel={settled}
+      actionable={!isNoticeRow(row) && !done}
+      done={done}
+      doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
       selected={selected}
-      onClick={onOpen}
+      arrived={arrived}
+      leaving={leaving}
+      onLeft={() => {
+        onLeft?.();
+        onClosed?.(row.key);
+      }}
+      onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
+          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
         ) : undefined
       }
     >
-      {words.text}
+      {renderTokens(words.text, "words", "text", true)}
     </Row>
   );
+  // A ROW'S WORDS ARE ITS QUESTION'S: a bare `#11` in it is placed by what
+  // the question's context names, as in the reading pane.
+  return texts ? <TokenScope texts={texts}>{drawn}</TokenScope> : drawn;
+});
+
+/**
+ * Every text of the question a row is about, open or answered, an ask's or a
+ * coding run's, or undefined for a row that is not a question.
+ */
+function rowTexts(row: InboxRow): string[] | undefined {
+  if (row.kind === "answered") return answeredTexts(row.answered);
+  if (row.kind !== "decision") return undefined;
+  if (row.subject.kind === "ask") return askTexts(row.subject.ask);
+  return row.subject.kind === "run" ? runAskTexts(row.subject.run) : undefined;
+}
+
+/** The answer this visit gave, in the words an answered row says it with. */
+function givenWords(answer: AskAnswer): AnswerWords {
+  return answer.kind === "choice"
+    ? {
+        who: "You",
+        verb: "chose",
+        said: answer.label,
+        note: "",
+        kind: "choice",
+        recommended: answer.recommended,
+      }
+    : {
+        who: "You",
+        verb: "replied",
+        said: answer.text,
+        note: "",
+        kind: "reply",
+        recommended: false,
+      };
+}
+
+/**
+ * The most of an answer in words a row carries: its first line, cut at a
+ * word near ninety characters. The pane and the thread carry it whole.
+ */
+const SAID_MAX = 90;
+
+function shortSaid(text: string): string {
+  const line = firstLine(text);
+  if (line.length <= SAID_MAX) return line;
+  const cut = line.slice(0, SAID_MAX);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), SAID_MAX / 2)).trimEnd()}…`;
+}
+
+/**
+ * "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**",
+ * "You chose **Hold release** and wrote **“Tell support first.”**".
+ */
+function AnswerLine({ words }: { words: AnswerWords }) {
+  if (words.kind === "resolved") return <>{`${words.who} ${words.verb}`}</>;
+  return (
+    <>
+      {`${words.who} ${words.verb} `}
+      <strong>{words.kind === "reply" ? `“${shortSaid(words.said)}”` : words.said}</strong>
+      {words.note && (
+        <>
+          {" and wrote "}
+          <strong>{`“${shortSaid(words.note)}”`}</strong>
+        </>
+      )}
+    </>
+  );
+}
+
+/** The mark before an answer: a check for a choice or a resolution, a speech mark for words. */
+function AnswerMark({ words }: { words: AnswerWords }) {
+  return words.kind === "reply" ? <MessageSquareGlyph size="sm" /> : <CheckGlyph size="sm" />;
 }
 
 /**
@@ -330,6 +589,8 @@ export function titleOf(
 
 /** The title a row carries for its own task, where it carries one. */
 export function taskTitleOf(row: InboxRow): string | undefined {
+  // A RUN'S QUESTION CARRIES NO TITLE for its task, which the screen reads.
+  if (row.kind === "answered") return "run" in row.answered ? undefined : row.answered.ask.title;
   return row.kind === "decision" && row.subject.kind === "ask" ? row.subject.ask.title : undefined;
 }
 

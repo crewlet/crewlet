@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"regexp"
@@ -40,6 +41,36 @@ func TestSchemaGenerates(t *testing.T) {
 	}
 	if _, err := Schema("nonsense"); err == nil {
 		t.Fatal("an unknown tier should be refused")
+	}
+}
+
+// THE SCHEMA SPELLS ITS TEXT AS WRITTEN. It is read by an editor showing a
+// field's description on hover, by a person reading the published file and by
+// a model authoring a document against it, and none of them embeds it in an
+// HTML page — the one place json.MarshalIndent's escaping protects anything —
+// so `token:<id>` was published as `token:\u003cid\u003e`. Each tier carries
+// descriptions with markup in them, read here as written. Mutation:
+// json.MarshalIndent back in Schema is red.
+func TestTheSchemaSpellsItsTextAsWritten(t *testing.T) {
+	t.Parallel()
+	for tier, says := range map[Tier][]string{
+		TierBootstrap: {"token:<id>", "<dir of path>", "stream.replicas > 1"},
+		TierCompany:   {"@webhook-<name>", "name -> value"},
+	} {
+		data, err := Schema(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		for _, want := range says {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("the %s schema does not carry %q as written", tier, want)
+			}
+		}
+		for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+			if strings.Contains(string(data), escape) {
+				t.Errorf("the %s schema carries the escape %s", tier, escape)
+			}
+		}
 	}
 }
 
@@ -113,24 +144,24 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		want       []string
 	}{
 		{"LLMProvider", "agent", strs(CLIAgentNames)},
-		{"LLMProvider", "mode", strs(CLIAgentModes)},
 		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
-		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`
-		// — code work inside its own agent-mode executor run — and a
-		// company default may not, because it would silently turn code
-		// work off for every seat that is not in agent mode.
-		{"SandboxProvider", "default_run_in", strs(BackendPlacements())},
-		{"LLMProvider", "run_in", strs(BackendPlacements())},
-		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
-		{"RoleSandbox", "run_in", strs(Placements)},
+		{"SandboxProvider", "default_run_in", strs(Placements)},
+		{"LLMProvider", "run_in", strs(Placements)},
 		{"RoleAvatar", "character", strs(AvatarCharacters)},
 		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
+		{"Chat", "backend", strs(ChatBackends)},
+		// THE SAME CLOSED SET ON ALL THREE CHAT SURFACES, which is why it
+		// is one type — and why all three rows are here: "is somebody
+		// waiting on this seat" is a property of the message rather than of
+		// the product carrying it, and a rename that updated two of these
+		// tags and not the third would leave enums that agree today and
+		// drift on the next value.
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
-		{"GitLabProvisioning", "access_level", strs(GitLabAccessLevels)},
+		{"ChatletConfig", "typing_status", strs(WorkingStatuses)},
 		{"GitLabProvisioning", "group_webhook", strs(ContainerWebhookModes)},
 		// The same closed set on both code hosts, which is why it is one
 		// type — and why both rows are here: a rename that updated one
@@ -334,6 +365,29 @@ func TestTheRepoNamePatternIsGitrefs(t *testing.T) {
 	}
 }
 
+// A UNIT'S CHANNEL PATTERN IS ONE RULE: the validator's unitChannel and the
+// js tag on Unit.channel, which is a second spelling of the same regexp for
+// the reason the node id's is. Drift one way red-underlines a channel the
+// engine opens a room under; the other lets an editor pass a name the engine
+// refuses on apply. The single parity case for a `#` catches only the one
+// character it names.
+func TestUnitChannelPatternIsOneRule(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, ok := defs["Unit"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's $defs has no Unit")
+	}
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["channel"].(map[string]any)
+	if !ok {
+		t.Fatal("Unit has no channel")
+	}
+	if got, want := ownPattern(t, field), unitChannel.String(); got != want {
+		t.Fatalf("Unit.channel pattern = %v, the validator's unitChannel is %q", got, want)
+	}
+}
+
 // closedSet reads a text field's closed set back out of its fragment: the
 // STRING members of its enum, wherever the fragment puts it, less the empty
 // string that spells "unset".
@@ -472,7 +526,7 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 }
 
 func parityCases() []parityCase {
-	return []parityCase{
+	return append([]parityCase{
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
@@ -568,12 +622,13 @@ providers:
     oc:
       agent: opencode
       model: anthropic/claude-sonnet-5
+      run_in: direct
       env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}
   embeddings: {type: openai, model: text-embedding-3-small, api_key: "${OPENAI_API_KEY}", dimensions: 1536}
   sandbox:
     local: {image: acme/box, runtime: auto}
     default_run_in: container
-    default_coding_agent: opencode
+    default_max_turns: 120
     setup:
       - name: git-auth
         commands: ["git config --global user.name \"$CREWLET_AGENT_HANDLE\""]
@@ -582,6 +637,8 @@ providers:
 turn_engine:
   max_iterations: 3
   extension_enabled: true
+  onboarding_max_tool_rounds: 12
+  executor_min_budget_tokens: 30000
 learning:
   enabled: true
   skill_synthesis: {scheduler_enabled: true}
@@ -597,7 +654,7 @@ integrations:
     enabled: true
     url: https://gitlab.com
     signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning: {group: acme, access_level: maintainer, group_webhook: auto}
+    provisioning: {group: acme, group_webhook: auto}
 mcp_servers:
   - name: gitlab
     shared: false
@@ -624,15 +681,16 @@ units:
   - name: Core
     id: core
     lead: cto
-    mcp_env: {gitlab: {GITLAB_TOKEN: "${GL_SHARED}"}}
+    mcp_env: {gitlab: {GITLAB_HOST: gitlab.com}}
     project: ENG
     roles:
       - name: CTO
         handle: cto
-        llm_sandbox: oc
-        integrations: {mattermost: {bot_token: "${MM_CTO}", username: cto-bot}}
+        llm: [oc, default]
+        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}}
         sandbox:
-          enabled: true
+          max_turns: 0
+          pause_ttl_seconds: 600
           env: {GITHUB_TOKEN: "${GH_CTO}"}
           mcp: {servers: [gitlab]}
 `,
@@ -938,7 +996,7 @@ units:
 		{
 			name: "a Mattermost username named by a reference", tier: TierCompany,
 			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: " +
-				"{bot_token: \"${MM_CTO}\", username: \"${MM_CTO_USERNAME}\"}}}\n",
+				"{enabled: false, bot_token: \"${MM_CTO}\", username: \"${MM_CTO_USERNAME}\"}}}\n",
 		},
 		{
 			name: "a Mattermost username with a reference inside it", tier: TierCompany, editorCatches: true,
@@ -954,7 +1012,7 @@ units:
 		// same refusal on a bot token is the validator's alone.
 		{
 			name: "a Mattermost bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: {bot_token: \"tok-${MM_CTO}\"}}}\n",
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: {enabled: false, bot_token: \"tok-${MM_CTO}\"}}}\n",
 		},
 		{
 			name: "a Slack bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
@@ -1084,18 +1142,17 @@ units:
 			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
 		},
-		// The per-seat half: an app with BOTH credentials is a working
-		// config, and one with a single half is a validator rule a JSON
-		// Schema cannot express (a required pair inside an optional
-		// object).
+		// The per-seat half: the engine names a seat's Slack credentials
+		// (D4), so a block naming both, one or neither is a working config.
 		{
 			name: "a per-seat Slack app", tier: TierCompany,
-			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {enabled: false, bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
 		},
 		{
-			name: "a per-seat Slack app with half its credentials",
-			tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\"}}}\n",
+			// D4: the engine names a seat's Slack credentials, so a block
+			// naming only one, or neither, is a working config.
+			name: "a per-seat Slack app naming one credential", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {enabled: false, bot_token: \"${T}\"}}}\n",
 		},
 		{
 			// validatorOnly, and for one reason: the schema cannot express
@@ -1104,11 +1161,54 @@ units:
 			// underline configs the engine runs.
 			//
 			// A scope with no backend NAMED is deliberately not this case
-			// any more: it derives the native backend, where a curated
+			// any more: it derives Doclet, where a curated
 			// floor over the company's own pages is ordinary.
 			name: "a read scope for a knowledge base that is switched off",
 			tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nknowledge:\n  backend: none\n  scope: [HANDBOOK]\n",
+		},
+		// Chatlet's policy, every knob written — including
+		// `message_retention_days: 0`, which is the setting that is its own
+		// type's zero value ("keep messages for ever") and must survive
+		// BOTH layers: a schema or a validator reading it as "unset" would
+		// delete a company's history a year after somebody asked for it to
+		// be kept.
+		{
+			name: "a Chatlet policy", tier: TierCompany,
+			yaml: "name: Acme\nchat:\n  chatlet:\n    message_retention_days: 0\n" +
+				"    default_channel_private: true\n    typing_status: addressed\n",
+		},
+		{
+			name: "a chat backend that is a product name", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nchat: {backend: mattermost}\n",
+		},
+		// A UNIT CHANNEL IS AN ADDRESS, and the pattern is on the field, so
+		// an editor catches the `#` an author renders it with before the
+		// engine does.
+		{
+			name: "a unit channel written as a mention", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nunits:\n  - {name: Core, channel: \"#core\"}\n",
+		},
+		// A HORIZON BELOW THE FLOOR: the field's real set is "0, or
+		// 30..3650", which a minimum/maximum pair cannot state — the schema
+		// would have to carve a hole out of its own range. So it carries
+		// the outer bounds, lets 14 through, and the validator is the only
+		// layer that refuses it.
+		{
+			name: "a message horizon below the floor", tier: TierCompany,
+			validatorOnly: true,
+			yaml:          "name: Acme\nchat:\n  chatlet: {message_retention_days: 14}\n",
+		},
+		// CHATLET BESIDE THE VENDOR IT WOULD DUPLICATE, which turns on
+		// a block's mere presence — the same shape of rule the knowledge
+		// and tracker axes leave to the validator alone.
+		{
+			name: "Chatlet beside a mattermost workspace", tier: TierCompany,
+			validatorOnly: true,
+			yaml: "name: Acme\nchat: {backend: chatlet}\nintegrations:\n" +
+				"  mattermost: {enabled: true, url: \"https://chat.example.com\", team: acme}\n",
 		},
 		{
 			name: "unknown bootstrap key", tier: TierBootstrap, editorCatches: true,
@@ -1215,7 +1315,7 @@ units:
 		// holds and what an exported chart carries back.
 		{name: "shared names on distinct addresses", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\nunits:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"},
 		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
-		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
+		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {onboarding_max_tool_rounds: 20, onboarding_max_tool_rounds_ceiling: 10}\n"},
 		// A TIER A TOKEN'S ID AT ITS BOUND AND ONE PAST IT. The bound is
 		// the validator's — the id composes `token:<id>`, a login held to
 		// iam.MaxLogin — and an editor has to say it too, or a config the
@@ -1224,7 +1324,7 @@ units:
 			yaml: tokenDoc(strings.Repeat("a", tokenIDBound))},
 		{name: "a token id past its bound", tier: TierBootstrap, editorCatches: true,
 			yaml: tokenDoc(strings.Repeat("a", tokenIDBound+1))},
-	}
+	}, byteBoundCases()...)
 }
 
 // tokenIDBound is how long a Tier A token's id may be: the width of a login,
@@ -1289,8 +1389,8 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
 	// full-stack one every integration block, the subscription one a
-	// signed-in CLI, agent mode, its sandbox cell and the seat-level
-	// `run_in`.
+	// signed-in CLI, the cell its entry's `run_in` places executor runs in
+	// and the company-wide round cap.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1367,4 +1467,92 @@ func schemaDoc(t *testing.T, tier Tier) map[string]any {
 		t.Fatal(err)
 	}
 	return doc
+}
+
+// byteBoundCases holds every byte ceiling's schema bounds to the validator's,
+// on both sides of both edges.
+//
+// THE TWO ARE WRITTEN APART — a js tag on the field and a constant in
+// retention.go — and nothing else compares them. A floor raised without its
+// tag leaves an editor accepting a limit the engine refuses; a tag raised
+// without its floor red-underlines a working file. StoreMaxBytesFloor moved
+// as state logs joined the broker, once per domain, and the identity and
+// usage logs took floors of their own, which is exactly how the two drift.
+// The bounds come from the CONSTANTS, so a case here cannot agree with a
+// stale tag by having been written from it.
+//
+// EVERY CASE STATES A STORE DIRECTORY, because a `stream:` block the case
+// writes is one [Runnable] leaves as written, and an embedded member with no
+// store directory is refused for that before its ceilings are read.
+func byteBoundCases() []parityCase {
+	bounds := byteBounds()
+	var out []parityCase
+	for _, field := range slices.Sorted(maps.Keys(bounds)) {
+		lo, hi := bounds[field][0], bounds[field][1]
+		doc := func(v int64) string {
+			return fmt.Sprintf("stream:\n  store_dir: %s\n  %s: %d\n", TestStoreDir, field, v)
+		}
+		out = append(out,
+			parityCase{name: field + " below its floor", tier: TierBootstrap,
+				editorCatches: true, yaml: doc(lo - 1)},
+			parityCase{name: field + " at its floor", tier: TierBootstrap,
+				yaml: doc(lo)},
+			parityCase{name: field + " at its ceiling", tier: TierBootstrap,
+				yaml: doc(hi)},
+			parityCase{name: field + " past its ceiling", tier: TierBootstrap,
+				editorCatches: true, yaml: doc(hi + 1)},
+		)
+	}
+	return out
+}
+
+// byteBounds is each byte ceiling's floor and ceiling as the validator holds
+// them, keyed by the field's yaml name under `stream`.
+func byteBounds() map[string][2]int64 {
+	return map[string][2]int64{
+		"tracker_log_max_bytes":       {TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling},
+		"tracker_vectors_max_bytes":   {TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling},
+		"pages_log_max_bytes":         {PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling},
+		"iam_log_max_bytes":           {IamLogMaxBytesFloor, IamLogMaxBytesCeiling},
+		"usage_log_max_bytes":         {UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling},
+		"code_log_max_bytes":          {CodeLogMaxBytesFloor, CodeLogMaxBytesCeiling},
+		"artifacts_log_max_bytes":     {ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling},
+		"artifact_data_log_max_bytes": {ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling},
+		"assistant_log_max_bytes":     {AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling},
+		"chat_log_max_bytes":          {ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling},
+		"store_max_bytes":             {StoreMaxBytesFloor, StoreMaxBytesCeiling},
+	}
+}
+
+// EVERY BYTE CEILING TIER A DECLARES HAS ITS BOUNDS HELD, and the table above
+// cannot fall behind the struct it describes.
+//
+// The table is written by hand, because a bound is a constant and nothing
+// reflectable names which one belongs to which field. What that leaves open
+// is a ceiling nobody added a row for: a log that joins the broker as the
+// chat log did gets a `*_max_bytes` field, a js tag and a constant, and the
+// one comparison between the last two silently skips it. So the field set is
+// READ from config.Stream and the two sets must be equal — a field with no row
+// is a bound nothing holds, and a row with no field certifies a field that is
+// gone.
+func TestEveryByteCeilingHasItsBoundsHeld(t *testing.T) {
+	t.Parallel()
+	var declared []string
+	stream := reflect.TypeFor[Stream]()
+	for i := range stream.NumField() {
+		name, _, _ := strings.Cut(stream.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasSuffix(name, "_max_bytes") {
+			declared = append(declared, name)
+		}
+	}
+	slices.Sort(declared)
+	held := slices.Sorted(maps.Keys(byteBounds()))
+	if len(declared) == 0 {
+		t.Fatal("config.Stream declares no *_max_bytes field, so this case is measuring nothing")
+	}
+	if !slices.Equal(declared, held) {
+		t.Errorf("config.Stream declares the byte ceilings %v, and byteBounds "+
+			"holds %v — every *_max_bytes field needs a row there, and every "+
+			"row a field", declared, held)
+	}
 }

@@ -467,7 +467,7 @@
 // grants), so the scan over the waiting principals stays a scan: under a
 // grant's 100 µs budget, where a heap would be owed past it.
 //
-// # Two floors, one pin (ADR-0057)
+// # Two floors, one pin (ADR-0080)
 //
 // A git node runs git 2.55 or newer ([NodeMinVersion], the node floor),
 // checked where a pool is built — [New], and nowhere else, since every git a

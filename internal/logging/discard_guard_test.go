@@ -19,8 +19,8 @@ import (
 // # Why this is a rule and not a review comment
 //
 // Nine constructors read an absent logger as `slog.New(slog.DiscardHandler)`
-// — six in internal/statelog, two in internal/tracker and one in
-// internal/search — and the engine handed a logger to fewer than half of the
+// (six in internal/statelog, two in internal/worklet and one in
+// internal/search), and the engine handed a logger to fewer than half of the
 // ones it built. So the state log's applier, its write authority and its
 // re-anchor, and the tracker's housekeeping duty, logged into nothing on every
 // production node: `statelog_apply_faulted`, `statelog_record_gated`,

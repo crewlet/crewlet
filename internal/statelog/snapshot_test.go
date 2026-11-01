@@ -679,7 +679,7 @@ func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 			t.Fatalf("the snapshot directory holds %q beside the artefact", n)
 		}
 	}
-	digest, err := store.FileDigest(copyPath)
+	digest, err := store.FileDigest(t.Context(), copyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

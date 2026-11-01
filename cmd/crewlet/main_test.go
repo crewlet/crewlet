@@ -32,7 +32,9 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -43,6 +45,7 @@ import (
 const companyYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -74,7 +77,7 @@ func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
 		bootstrapYAML = "store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
-			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n" + fixtureKeyring
+			fixtureStream(dir) + fixtureKeyring
 	}
 	if err := os.WriteFile(boot, []byte(bootstrapYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -270,7 +273,7 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	dir := t.TempDir()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
 	// A COMPLETE SERVING POSTURE. Once a port is set, Tier A must carry an
@@ -321,7 +324,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	// assertion's record went.
 	//
 	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
-	// name ingress has been told at WARN already, by the `api.port`
+	// name ingress or seats has been told at WARN already, by the `api.port`
 	// advisory its start logs, which leaves an undeclared node.roles out —
 	// so that node is the one this line warns, and every other is told at
 	// info. Mutation: warn on every ingress node and the declared-ingress
@@ -344,11 +347,11 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 
 			// NOTHING BOUND before the boot, asked of the one path every
 			// listener is opened through.
-			listeners, err := bindListeners(t.Context(), boot, "node-0", false, bindNothing(t), log)
+			listeners, err := bindListeners(t.Context(), boot, "node-0", bindNothing(t), log)
 			if err != nil || listeners != nil {
 				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 			}
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -453,103 +456,73 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	}
 }
 
-// A SEATS NODE WITHOUT INGRESS ALSO SERVES ITS OWN TOOL BRIDGE, beside its
-// probes. A bridged session lives in the process that opened it, so the box of
-// an agent-mode seat can reach only the node running that seat; gating the
-// bridge on ingress with the rest of the API launched boxes whose every tool
-// call found nothing listening. The listener carries the bridge's own refusal
-// for a bad token, the probes, and no dashboard or REST route.
-func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
+// A NODE WITHOUT INGRESS SERVES ITS PROBES, AND ITS OWN BOXES' ROUTES ONLY
+// WHERE IT LAUNCHES BOXES. A box off the host reaches its tools through the
+// nodes that serve the API, which relay its call to the node holding the seat
+// over the broker, so no dashboard or REST route is here; a box on the host is
+// a seats node's own, which serves it the bridge on loopback (internal/api's
+// Probes). A node that runs no seats launches none, so whatever its
+// environment says about a bridge, the bridge's prefix is absent there.
+//
+// Mutation: hand the probe surface the bridge on every node and the data
+// node's row answers the bridge's 401.
+func TestANodeWithoutIngressServesItsProbesAlone(t *testing.T) {
 	t.Parallel()
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	for _, tc := range []struct {
+		roles  []string
+		bridge int // what the bridge's prefix answers a caller on this host
+	}{
+		{[]string{"seats"}, http.StatusUnauthorized},
+		{[]string{"data", "workers"}, http.StatusNotFound},
+	} {
+		roles := tc.roles
+		var logged bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := reservePort(t)
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
-	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"seats"}
+		port := reservePort(t)
+		bridge := bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+		})
+		e := testEngineWithBridge(t, bridge)
+		boot := bootstrapFor(t, port)
+		boot.Node.Roles = roles
 
-	surface, err := serveNodeLogged(t, boot, e, log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface == nil {
-		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
-			"agent-mode boxes can reach no tools:\n%s", logged.String())
-	}
-	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
-		t.Error("a node without the ingress role built the whole API")
-	}
-	if !bridge.Mounted() {
-		t.Error("the listener did not mount the bridge, so no session can open")
-	}
-	if !strings.Contains(logged.String(), "tool_bridge=true") {
-		t.Errorf("the node did not say its listener serves the bridge:\n%s", logged.String())
-	}
-
-	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
-		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
-	}
-	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
-		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
-	}
-	// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets it
-	// through to a mux that has nothing there.
-	for _, path := range []string{"/dashboard"} {
-		if got := statusOf(t, http.MethodGet, base+path); got != http.StatusNotFound {
-			t.Errorf("GET %s = %d on a probe listener, want 404", path, got)
+		surface, err := serveNodeLogged(t, boot, e, log)
+		if err != nil {
+			t.Fatalf("%v: serveAPI: %v", roles, err)
 		}
-	}
-	// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly what
-	// the full surface answers now that every guarded route needs a
-	// credential: the guard runs before routing, so it cannot know the
-	// route is absent, and a 404 here would have disclosed that.
-	if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
-		t.Errorf("GET /agents = %d on a probe listener, want the guard's 401", got)
-	}
-}
+		if surface == nil {
+			t.Fatalf("%v: a node without ingress bound no listener for its probes:\n%s", roles, logged.String())
+		}
+		t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+		// Nor its git: a node without ingress serves no git request, so it
+		// has none for its shutdown to wait out.
+		if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
+			t.Errorf("%v: a node without the ingress role built the whole API", roles)
+		}
 
-// A NODE THAT RUNS NO SEATS SERVES NO BRIDGE, whatever its environment says.
-// It opens no session, so the route there could only answer every box with
-// 401: its listener carries its probes alone, and the bridge route is absent.
-func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
-	t.Parallel()
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	port := reservePort(t)
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
-	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"data", "workers"}
-
-	surface, err := serveNodeLogged(t, boot, e, log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface == nil {
-		t.Fatalf("a workers node bound no listener for its probes:\n%s", logged.String())
-	}
-	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if bridge.Mounted() {
-		t.Error("a node that runs no seats mounted a tool bridge it never uses")
-	}
-	if !strings.Contains(logged.String(), "tool_bridge=false") {
-		t.Errorf("the node did not say its listener serves no bridge:\n%s", logged.String())
-	}
-	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusNotFound {
-		t.Errorf("POST %snot-a-token = %d on a node running no seats, want 404", mcpbridge.PathPrefix, got)
-	}
-	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
-		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+		base := "http://127.0.0.1:" + strconv.Itoa(port)
+		if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+			t.Errorf("%v: GET /health = %d, want the liveness probe's 200", roles, got)
+		}
+		// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets
+		// it through to a mux that has nothing there. The bridge's prefix is
+		// exempt too, and mounted — to this host — only on the seats node,
+		// where a token the fleet did not sign meets the bridge's 401.
+		if got := statusOf(t, http.MethodPost, base+"/dashboard"); got != http.StatusNotFound {
+			t.Errorf("%v: POST /dashboard = %d on a probe listener, want 404", roles, got)
+		}
+		if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != tc.bridge {
+			t.Errorf("%v: POST %snot-a-token = %d on a probe listener, want %d", roles,
+				mcpbridge.PathPrefix, got, tc.bridge)
+		}
+		// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly
+		// what the full surface answers now that every guarded route needs
+		// a credential: the guard runs before routing, so it cannot know
+		// the route is absent, and a 404 here would have disclosed that.
+		if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
+			t.Errorf("%v: GET /agents = %d on a probe listener, want the guard's 401", roles, got)
+		}
 	}
 }
 
@@ -780,9 +753,10 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	}
 }
 
-// serveNode builds the API half of a node the way runEngine does: the config
-// surface first (a node with api.port 0 still needs a config WRITER), the
-// reconciler that owns the posture, then the listener.
+// serveNode builds the API half of a node the way runEngine does: the
+// process's chat hub beside the engine, the reconciler that owns the posture,
+// the listener, then the config surface (a node with api.port 0 still needs a
+// config WRITER) and the rest of what the listener serves.
 func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
 	t.Helper()
 	return serveNodeLogged(t, boot, e, logging.Get("test"))
@@ -805,6 +779,58 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	log *slog.Logger,
 ) (*httpSurface, *engine.Reconciler, error) {
 	t.Helper()
+	// THE PROCESS'S CHAT HUB, as `crewlet run` attaches it beside the engine.
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+	return serveNodeOver(t, boot, e, chatLive, log)
+}
+
+// serveNodeOver is [serveNodeWith] over a chat hub the case built.
+func serveNodeOver(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	chatLive *api.EngineChatLive, log *slog.Logger,
+) (*httpSurface, *engine.Reconciler, error) {
+	t.Helper()
+	reconciler := reconcilerFor(t, boot, e)
+	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
+	// it configured rather than a second bind of a port it let go (see
+	// [reservePort]) — and here after the engine has booted, which is the
+	// one difference from a running node: the boot surface's own answers are
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindReserved, log)
+	if err != nil {
+		return nil, reconciler, err
+	}
+	surface, err := serveBound(t, boot, e, reconciler, chatLive, listeners, log)
+	return surface, reconciler, err
+}
+
+// reconcilerFor is the reconciler that owns e's config posture, as runEngine
+// builds it, under the node id boot names.
+func reconcilerFor(t *testing.T, boot *config.Bootstrap, e *engine.Engine) *engine.Reconciler {
+	t.Helper()
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		t.Fatalf("node identity: %v", err)
+	}
+	reconciler, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
+		Queue: e.Backends().Queue, NodeID: nodeID,
+	})
+	if err != nil {
+		t.Fatalf("reconciler: %v", err)
+	}
+	return reconciler
+}
+
+// serveBound hands listeners a case bound itself the node's surface, over the
+// chat hub the case attached beside e, as [serveNodeOver] does after its own
+// bind: for a case whose engine has to be built from what the bind derived, as
+// runEngine builds it ([bootEngine]).
+func serveBound(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	reconciler *engine.Reconciler, chatLive *api.EngineChatLive,
+	listeners *nodeListeners, log *slog.Logger,
+) (*httpSurface, error) {
+	t.Helper()
 	cipher := e.Cipher()
 	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
 	// config surface exactly where a running one would — and none on a node
@@ -813,34 +839,51 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("config surface: %v", err)
 	}
-	nodeID, err := config.ResolveNodeID(boot, nil)
-	if err != nil {
-		t.Fatalf("node identity: %v", err)
-	}
-	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
-		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
-		Queue: e.Backends().Queue, NodeID: nodeID,
-	})
-	if err != nil {
-		t.Fatalf("reconciler: %v", err)
-	}
-	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
-	// it configured rather than a second bind of a port it let go (see
-	// [reservePort]) — and here after the engine has booted, which is the
-	// one difference from a running node: the boot surface's own answers are
-	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s. The bridge is the
-	// engine's own, since a case hands it one rather than the environment.
-	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), e.Bridge() != nil,
-		bindReserved, log)
-	if err != nil {
-		return nil, reconciler, err
-	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), nil, listeners, engine.DeepHost{}, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)
 	}
-	return surface, reconciler, err
+	return surface, err
+}
+
+// THE CHAT HUB IS THE PROCESS'S, AND IT SERVES SOCKETS ONLY WHERE THE API IS
+// MOUNTED OVER IT.
+//
+// It is attached beside the engine on every node, a node that serves no API
+// included — a seat raises its working indicator wherever its turn runs — and
+// what it says to the engine's live relay is whether this node shows anybody
+// what it hears: false where no socket surface was built over it, which is
+// what stops a node with no listener following a peer's batches for nobody,
+// and true once the API is.
+func TestTheChatHubServesSocketsOnlyWhereTheAPIIsMountedOverIt(t *testing.T) {
+	t.Parallel()
+	log := logging.Get("test")
+	e := testEngine(t)
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), e, nil, nil, nil,
+		chatLive.Hub(), nil, nil, engine.DeepHost{}, log)
+	if err != nil || surface != nil {
+		t.Fatalf("a node with api.port 0 served %v (%v)", surface, err)
+	}
+	if chatLive.Hub().ServesSockets() {
+		t.Fatal("a node that serves no API says its hub shows somebody what it hears")
+	}
+
+	surface, _, err = serveNodeOver(t, bootstrapFor(t, reservePort(t)), e, chatLive, log)
+	if err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.WithoutCancel(t.Context()), log) })
+	if !chatLive.Hub().ServesSockets() {
+		t.Error("the API was mounted over the hub and the hub does not know it")
+	}
+	// AND IT IS STOPPED ONCE, whichever teardown reaches it first.
+	chatLive.Stop(t.Context())
+	chatLive.Stop(t.Context())
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.
@@ -1504,7 +1547,7 @@ func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
 		{"a company under any name", companyYAML, "company"},
 		{"a bootstrap under any name",
 			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
-				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n" + fixtureKeyring,
+				fixtureStream(dir) + fixtureKeyring,
 			"bootstrap"},
 	}
 	for _, tc := range cases {
@@ -1570,7 +1613,7 @@ func TestValidateRefusesAnUnknownTier(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown tier ran")
 	}
-	if !strings.Contains(err.Error(), "auto, company, bootstrap") {
+	if !strings.Contains(err.Error(), `-tier "middle" is not one of "auto", "company" or "bootstrap"`) {
 		t.Errorf("the error does not name the set: %v", err)
 	}
 }
@@ -1669,7 +1712,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1) +
-		"units:\n  - name: Platform\n    lead: ghost\n"
+		"units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1704,7 +1747,11 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // right for a company its agents run alone and worth knowing for any other.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A Chatlet
+	// company whose units declare none raises a third advisory of its own,
+	// and a fixture collecting it would assert a warning set rather than
+	// the pair this case names.
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1748,7 +1795,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1829,7 +1876,7 @@ func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1962,9 +2009,10 @@ func TestAMissingDefaultNamesTheFileSittingBesideIt(t *testing.T) {
 
 // THE TWO TIER B FLAGS MEAN OPPOSITE THINGS, so naming both is refused.
 //
-// -company bootstraps an empty store; -import-company replaces what the fleet
-// is running. Any precedence between them is a silent guess about which the
-// operator meant, made about the flag that overwrites a live company.
+// -company bootstraps a company that does not exist yet; -import-company
+// replaces what the fleet is running. Any precedence between them is a silent
+// guess about which the operator meant, made about the flag that overwrites a
+// live company.
 func TestNamingBothTierBFlagsIsRefused(t *testing.T) {
 	t.Parallel()
 	var out, errOut bytes.Buffer
@@ -2046,12 +2094,12 @@ func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	if _, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1", "-token", "typed"},
+	if _, err := nodeClientFor(config.EnvSource{}, []string{"-api", "http://127.0.0.1:1", "-token", "typed"},
 		"budgets show", &stderr, nil); err == nil {
 		t.Error("-token was accepted: a credential typed on the command line " +
 			"is in the shell history and in ps")
 	}
-	client, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1"},
+	client, err := nodeClientFor(config.EnvSource{}, []string{"-api", "http://127.0.0.1:1"},
 		"budgets show", &stderr, nil)
 	if err != nil {
 		t.Fatalf("nodeClientFor: %v", err)
@@ -2324,7 +2372,7 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      model: m\n" + tc.entry
+			doc := "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n      model: m\n" + tc.entry
 			path := writeYAML(t, "company.yaml", doc)
 			var out, errOut bytes.Buffer
 			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {
@@ -2342,5 +2390,50 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
 			}
 		})
+	}
+}
+
+// THE RELAY IS DISPATCHED UNDER THE NAME A CLI IS HANDED. The argv the engine
+// writes into a CLI's MCP configuration is built from [mcprelay.Command], and the
+// switch names its cases as literals (which is how this suite reads the
+// binary's command list) — so a rename on one side would leave every CLI
+// starting a command the binary answers `unknown command` to, and every seat
+// without its tools.
+//
+// And run as itself: the bytes the engine's end sends reach stdout and
+// nothing else does, with no logging set up in front of it.
+func TestTheRelayIsDispatchedUnderItsOwnName(t *testing.T) {
+	t.Parallel()
+	if !slices.Contains(dispatchedCommands(t), mcprelay.Command) {
+		t.Fatalf("runIn() dispatches no %q, the command every CLI is told to start",
+			mcprelay.Command)
+	}
+
+	dir, err := os.MkdirTemp("", "relay") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("from the engine\n"))
+		_ = conn.Close()
+	}()
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{mcprelay.Command, path}, &stdout, &stderr); err != nil {
+		t.Fatalf("the relay failed: %v (stderr %q)", err, stderr.String())
+	}
+	if got := stdout.String(); got != "from the engine\n" {
+		t.Errorf("stdout = %q, want exactly what the engine sent", got)
 	}
 }

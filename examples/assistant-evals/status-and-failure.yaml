@@ -1,0 +1,57 @@
+# A two-part question asked on Home: what the agents are doing, and why one
+# of them failed. The answer states both in words: the roster's states and
+# the failed turn's reason, which the turn's own row carries. A link or a
+# card is never the whole answer.
+person:
+  apps: [admin]
+page:
+  screen: home
+  title: Home
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:7a1c2b3d
+  accepts: [home.range.set, home.feed.set]
+question: What are my agents doing right now, and why did the QA Engineer's last turn fail?
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: engineer, name: Software Engineer, kind: agent}
+        - {handle: pm, name: Product Manager, kind: agent}
+        - {handle: qa, name: QA Engineer, kind: agent}
+  - route: GET /agents
+    body:
+      - {handle: engineer, role: Software Engineer, activity: working, current_phase: execute, turn: {work_item: {key: FAIR-3}}, last_turn: {outcome: completed}}
+      - {handle: pm, role: Product Manager, activity: idle, last_turn: {outcome: completed}}
+      - {handle: qa, role: QA Engineer, activity: idle, last_turn: {outcome: failed, ended_at: "2026-10-24T09:20:00Z"}}
+  - route: GET /turns
+    body:
+      turns:
+        - turn_id: 01a175e0-6ced-770f-b6d7-a746e95556e4
+          role: QA Engineer
+          started_at: "2026-10-24T09:19:00Z"
+          duration_ms: 4200
+          total_tokens: 18000
+          failed: true
+          error: "the claude-code CLI never reached the seat's tools: it did not list the crewlet server's tools"
+          error_kind: server
+          work_item: {key: FAIR-2}
+script:
+  - call: list_agents
+  - call: list_turns
+    args: {handle: QA Engineer, failed: true, limit: 1}
+  - say: >-
+      The Software Engineer is working on FAIR-3, and the Product Manager and the
+      QA Engineer are idle. The QA Engineer's last turn, on FAIR-2, failed because
+      its coding CLI never reached the seat's tools, so it could not act.
+expect:
+  calls: [list_agents, list_turns]
+  never: [open_in_app]
+  proposals: 0
+  state: completed
+  says: [never reached the seat's tools, idle]
+  never_says: [link above]
+  shows: ["never reached the seat's tools", Why it failed]

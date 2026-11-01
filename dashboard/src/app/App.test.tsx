@@ -8,7 +8,16 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  waitForElementToBeRemoved,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
@@ -37,12 +46,13 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** An admin's `viewer` answer: every screen is theirs to read. */
+/** An admin's `viewer` answer: every screen is theirs to read. EXPANDED, as
+ *  the engine reports an admin's grants: every app with it. */
 const ADMIN_VIEWER = {
   login: "founder",
   owner: "jane",
   handle: "jane",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet", "chatlet"],
 };
 
 /**
@@ -142,24 +152,15 @@ describe("the shell", () => {
 
   test("every workspace is in the sidebar, Settings included", async () => {
     // A SECTION THAT VANISHES without its grant is indistinguishable from one
-    // that does not exist, so Settings is always a row.
+    // that does not exist, so Settings is always a row. DERIVED FROM THE
+    // TABLE: a list written here was one workspace short the day Chatlet
+    // arrived, and passed.
     mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
-    for (const label of [
-      "Home",
-      "Inbox",
-      "My work",
-      "Principles",
-      "Org chart",
-      "Schedules",
-      "Integrations",
-      "Budgets",
-      "Work",
-      "Knowledge",
-      "Artifacts",
-      "Live",
-    ]) {
-      expect(nav.textContent, label).toContain(label);
+    const rows = WORKSPACES.filter((ws) => ws.place !== "foot" && ws.place !== "menu");
+    expect(rows.map((ws) => ws.key)).toContain("chatlet");
+    for (const ws of rows) {
+      expect(nav.textContent, ws.label).toContain(ws.label);
     }
     // AT THE FOOT, AS ITS GLYPH beside the reader's own row: a link named in words.
     const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
@@ -221,7 +222,7 @@ describe("the overlays the frame opens", () => {
 
   test("the palette opened from the sidebar's search is portalled to the body too", async () => {
     mountAs(Promise.resolve(person));
-    fireEvent.click(await screen.findByRole("button", { name: /Ask or jump to/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Search everything" }));
     const palette = await screen.findByRole("dialog", { name: "Search" });
     expect(palette.closest(".crewlet-layer-host")).toBeNull();
     expect(palette.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
@@ -230,7 +231,7 @@ describe("the overlays the frame opens", () => {
 
 // A KEYCAP IS A HINT FOR A KEYBOARD. On a phone the drawer's search drew
 // "Ctrl + K", a key nobody there has, and the keycap cut the trigger's own
-// label to "Ask or jump t…". Where the reader's primary input is touch
+// label short. Where the reader's primary input is touch
 // (`TOUCH_MEDIA`) the frame draws none; everywhere else it does. Mutation:
 // draw the keycap whatever the input and the touch case goes red.
 describe("the drawer's search", () => {
@@ -263,7 +264,7 @@ describe("the drawer's search", () => {
     try {
       mount();
       const search = document.querySelector(".crewlet-app-shell__rail-search")!;
-      expect(search.textContent).toContain("Ask or jump to…");
+      expect(search.textContent).toContain("Search everything");
       expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
     } finally {
       restore();
@@ -283,9 +284,9 @@ describe("routing", () => {
   test("the working chip is in Home's page bar and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/", true],
-      ["#/work", false],
+      ["#/worklet", false],
       ["#/company/org", false],
-      ["#/work/ENG", false],
+      ["#/worklet/ENG", false],
       ["#/company/org/seats/agent-swe", false],
     ] as const) {
       location.hash = hash;
@@ -308,7 +309,7 @@ describe("routing", () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
-    expect(visited).toContain(buildHash(["work", "views"]));
+    expect(visited).toContain(buildHash(["worklet", "views"]));
     expect(visited).toContain(buildHash(["live", "turns"]));
     for (const hash of visited) {
       location.hash = hash;
@@ -345,8 +346,9 @@ describe("routing", () => {
       ["company", "schedules", "role", "ceo", "standup"],
       ["company", "org", "seats", "ada"],
       ["company", "org", "teams", "platform"],
-      ["work", "ENG-42"],
-      ["knowledge", "pages", "66666666-6666-4666-8666-666666666666"],
+      ["worklet", "ENG-42"],
+      ["doclet", "pages", "66666666-6666-4666-8666-666666666666"],
+      ["chatlet", "88888888-8888-4888-8888-888888888888"],
       ["settings", "nodes", "node-a"],
       ["company", "integrations", "slack"],
       ["settings", "secrets", "SLACK_SIGNING_SECRET"],
@@ -481,6 +483,12 @@ describe("a section, for a reader holding none of its grants", () => {
   /** Signed in, and holding nothing. */
   const reader = { login: "reader", owner: "reader", grants: [] };
 
+  /** What a screen's banner says of a read refused on no access it can name. */
+  const REFUSED_UNNAMED = "You don’t have access to this.";
+
+  /** What only a reader nobody signed in for is told. */
+  const SIGN_IN = "Sign in to see this.";
+
   test("the table still names a grant for the sections it guarded", () => {
     expect(guarded.map((s) => s.key)).toEqual(
       expect.arrayContaining([
@@ -490,7 +498,6 @@ describe("a section, for a reader holding none of its grants", () => {
         "mcp-tools",
         "limits",
         "storage",
-        "models",
         "secrets",
         "nodes",
         "config",
@@ -575,6 +582,14 @@ describe("a section, for a reader holding none of its grants", () => {
   // until the next poll — so the screen mounts, and ITS refused reads are its
   // to say. They say it without a figure: a refused read is not "0 nodes",
   // "0 credentials held" or "0 of 6 configured".
+  //
+  // EACH STEP IS WAITED FOR AS THE EVENT IT IS, never as a number of ticks.
+  // React commits what a settled read changed on a scheduler task of its own,
+  // and its scheduler yields to the event loop once five milliseconds of its
+  // clock have passed, so on a loaded runner the frame's commit landed a task
+  // behind a fixed `setTimeout(0)` and the case read the frame still
+  // checking: "Checking your access to File storage", on a run whose screen
+  // mounted a moment later.
   test.each(guarded)(
     "$key mounts for a viewer read that failed, and counts nothing it was refused",
     async (section) => {
@@ -586,24 +601,34 @@ describe("a section, for a reader holding none of its grants", () => {
       );
       location.hash = buildHash(section.path);
       const { view } = mountAs(Promise.reject(new QueryError("timeout")));
-      const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      // THE SCREEN'S OWN REFUSAL IS WAITED FOR, and only then is anything
-      // counted. This counted eight turns of `act` instead, which is a guess
-      // at how many hops the chain takes: the viewer's failure re-renders the
-      // frame, the screen it mounts asks its reads from an effect, and each
-      // stubbed refusal is read off its response body and re-renders the
-      // screen again. A hop added anywhere in that chain — the transport
-      // reading one more promise, a screen asking one read after another —
-      // left the count short, and the checks below then ran against a screen
-      // still Loading, which could not have drawn a figure and so could not
-      // fail on one. Every section draws its refused read in one of two
-      // sentences: no access, or — for an answer naming no access — sign in.
+      const content = () =>
+        view.container.querySelector<HTMLElement>(".crewlet-app-shell__content")!;
+      // THE FRAME CHECKS FIRST AND THEN GIVES WAY: the read is still out at
+      // the first render, so the skeleton is there to be removed, and its
+      // removal is the commit that decided what replaces it.
+      await waitForElementToBeRemoved(
+        () => screen.queryByText(`Checking your access to ${section.label}`),
+        { onTimeout: (e) => new Error(`${section.key}: ${e.message}`) },
+      );
+      // WHAT REPLACED IT IS THE SCREEN, and not the frame's refusal, which
+      // that same commit would have drawn.
       expect(
-        (await screen.findAllByText(/You don’t have access to this\.|Sign in to see this\./))
-          .length,
-      ).toBeGreaterThan(0);
-      expect(screen.queryByText(`You need ${accessNames(section.grants!)} access`)).toBeNull();
-      expect(screen.queryByText(`Checking your access to ${section.label}`)).toBeNull();
+        screen.queryByText(`You need ${accessNames(section.grants!)} access`),
+        section.key,
+      ).toBeNull();
+      // AND THE SCREEN HAS SAID WHAT IT WAS REFUSED before anything below
+      // looks for a figure: looked for sooner, nothing had answered that
+      // could have drawn one, and the case passed having watched nothing.
+      // Every read here is a 403 naming no access, which every screen says
+      // as no access, and NEVER AS A SIGN-IN: this reader is signed in, and
+      // Audit told them to sign in where every other screen did not.
+      await waitFor(() =>
+        expect(
+          within(content()).queryAllByText(REFUSED_UNNAMED),
+          `${section.key} said nothing of what it was refused`,
+        ).not.toEqual([]),
+      );
+      expect(within(content()).queryByText(SIGN_IN), section.key).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
       // Tools' figures are the registry the socket pushes every reader — no
@@ -653,7 +678,7 @@ describe("a section, for a reader holding none of its grants", () => {
     await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/Needs Admin/));
     expect(row("#/settings/mcp-tools")?.textContent).toMatch(/Needs Admin access/);
     expect(row("#/settings/limits")?.textContent).toMatch(/Needs Admin access/);
-    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Tracker access/);
+    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/Needs Worklet access/);
     expect(row("#/settings/spend")?.textContent).toBe("Token spend");
   });
 
@@ -663,28 +688,172 @@ describe("a section, for a reader holding none of its grants", () => {
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       }),
     );
     expect(await screen.findByRole("navigation", { name: "Related" })).toBeDefined();
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 
+  // AN APP'S WORKSPACE IS CLOSED WHOLE, its every page included — a chat
+  // ROOM too, which is the page a chat reader lives on and sits under no
+  // section's address of its own (`sectionOf` files it under the landing's).
+  // The frame draws its one refusal naming the app in place of the screen,
+  // and the screen mounts nothing: no rail, no room.
+  test("a chat room draws the one refusal naming Chatlet, and not the room", async () => {
+    location.hash = buildHash(["chatlet", "88888888-8888-4888-8888-888888888888"]);
+    const { view } = mountAs(Promise.resolve({ ...reader, grants: ["worklet", "doclet"] }));
+    expect(await screen.findByText("You need Chatlet access")).toBeDefined();
+    expect(view.container.querySelector(".chat-frame")).toBeNull();
+    expect(view.container.querySelector('nav[aria-label="Your rooms"]')).toBeNull();
+  });
+
   // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
   // seat may call is how the company is run.
-  test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
+  //
+  // PRINCIPLES ARE JUDGED ON THE ANSWER, so the case waits for the frame to
+  // have applied it: the sidebar locking Worklet is that answer drawn. Judged
+  // any sooner, the frame has not been told who is reading, and the page is
+  // open to them whatever its rule says.
+  test("the company's Principles are open to anybody, and MCP Tools is Admin's", async () => {
     location.hash = buildHash(["company"]);
-    const overview = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
-    // The viewer's answer and the frame's decision on it are microtasks and
-    // the renders they cause, all run by the boundary.
-    await afterMicrotasks();
-    expect(overview.view.container.textContent).not.toMatch(/Company needs /);
-    overview.view.unmount();
+    const principles = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
+    const sidebar = await screen.findByRole("navigation", { name: "Navigation" });
+    await waitFor(() =>
+      expect(
+        within(sidebar)
+          .getByRole("link", { name: /^Worklet/ })
+          .querySelector("[title='Needs Worklet access']"),
+      ).not.toBeNull(),
+    );
+    expect(screen.queryByText(/^You need .* access$/)).toBeNull();
+    // THE PAGE'S OWN CARDS: `#/company` opens Principles, whose cards hold
+    // the company's charter, which every signed-in reader reads.
+    expect(screen.getByRole("heading", { name: "Standing policies" })).toBeDefined();
+    principles.view.unmount();
     cleanup();
     location.hash = buildHash(["settings", "mcp-tools"]);
-    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["tracker"] }));
+    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["worklet"] }));
     expect(await screen.findByText("You need Admin access")).toBeDefined();
   });
+});
+
+// CHATLET, AS A PERSON. Each of its places is one screen told which view to
+// draw, so a dispatch that swapped two of them draws the wrong view under a
+// correct trail and title, and "rendered something" passes that. Its sections
+// are drawn by ONE renderer, the screen's Rooms panel: a frame strip beside it
+// would be a second set of links to the same places.
+describe("chat, for a person", () => {
+  const served = {
+    read_level: "session",
+    complete: true,
+    position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 3 },
+  };
+
+  /** The frame, as a person bound to `ada` holding Chatlet, recording every question asked. */
+  function mountChat(hash: string) {
+    location.hash = hash;
+    const asked: string[] = [];
+    const store = new Store();
+    store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+    // A COMPANY RUNNING CHATLET, as the projection says before a chat
+    // page is drawn at all.
+    store.applyOrg(
+      withDerived({
+        name: "Acme",
+        roles: [],
+        services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
+      }),
+    );
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
+      asked.push(what);
+      switch (what) {
+        case "viewer":
+          return {
+            login: "ada.lovelace",
+            owner: "ada",
+            handle: "ada",
+            name: "Ada",
+            kind: "human",
+            grants: ["chatlet"],
+            acts: [],
+            chat_vendors: [],
+          };
+        case "chat_channels":
+          return { ...served, read_state: true, channels: [] };
+        case "chat_activity":
+          return {
+            ...served,
+            items: [],
+            unread: { mention: 0, reply: 0 },
+            read_state: true,
+          };
+        default:
+          // EVERYTHING ELSE IS A QUESTION THIS NODE DOES NOT SERVE: the frame
+          // reads what it is asking for, and an empty object is no answer.
+          throw new QueryError("unknown_query");
+      }
+    };
+    const view = render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    return { asked, view };
+  }
+
+  /**
+   * The links on the page to `path`, wherever they are drawn, except the
+   * frame's ways to the workspace itself: the sidebar's row and the trail's
+   * first crumb both lead to Chatlet's landing, Activity, on every chat page.
+   */
+  function linksTo(view: ReturnType<typeof render>, path: string[]): number {
+    return [...view.container.querySelectorAll(`a[href="${buildHash(path)}"]`)].filter(
+      (a) =>
+        !a.closest('nav[aria-label="Navigation"]') && !a.closest('nav[aria-label="Breadcrumb"]'),
+    ).length;
+  }
+
+  /** The chat row's views the Rooms panel draws, by the row's own table. */
+  const panelViews = () =>
+    (WORKSPACES.find((ws) => ws.key === "chatlet")?.sections ?? []).filter(
+      (s) => s.tab !== false && s.path.length > 1,
+    );
+
+  test.each(["#/chatlet", "#/chatlet/activity", "#/chatlet/search"])(
+    "%s draws each chat view once, in the Rooms panel, and no section strip",
+    async (hash) => {
+      const { view } = mountChat(hash);
+      fireEvent.click(await screen.findByRole("button", { name: /^Menu/ }));
+      const panel = await screen.findByRole("dialog", { name: "Rooms" });
+      // NOT VACUOUS: the row declares the views the panel draws.
+      expect(panelViews().length).toBeGreaterThan(0);
+      for (const section of panelViews()) {
+        expect(linksTo(view, section.path), `links to ${section.label}`).toBe(1);
+        expect(within(panel).getByRole("link", { name: section.label })).toBeDefined();
+      }
+      expect(view.container.querySelector(".section-tabs")).toBeNull();
+      expect(view.container.querySelector(".crewlet-section-frame__nav")).toBeNull();
+    },
+  );
+
+  // EVERY VIEW IS ITS ROW'S SECTION, named in the trail as the row names it:
+  // a dispatch that drew another view under it would be named wrong.
+  test.each(["activity", "threads", "drafts", "saved", "search", "browse", "new"])(
+    "#/chatlet/%s is the row's section of that name",
+    async (view) => {
+      mountChat(`#/chatlet/${view}`);
+      const section = WORKSPACES.find((ws) => ws.key === "chatlet")?.sections.find(
+        (s) => s.key === view,
+      );
+      expect(section, view).toBeDefined();
+      const trail = await screen.findByRole("navigation", { name: "Breadcrumb" });
+      expect(within(trail).getByText(section!.label)).toBeDefined();
+    },
+  );
 });
 
 describe("live state reaches the screen", () => {
@@ -1002,7 +1171,7 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       }),
     );
   // Every read is a settled stub, so the viewer's answer, the frame's
@@ -1045,7 +1214,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
   // A STAR IS KEPT FOR THE TAB'S READER (`lib/starred.ts`).
   noteReader("p-1");
   resetStarsForTest();
-  location.hash = "#/work/ENG";
+  location.hash = "#/worklet/ENG";
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   store.applyOrg(withDerived({ name: "Acme", roles: [] }));
@@ -1067,7 +1236,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
     if (what === "viewer") {
       return Promise.resolve({
         login: "U0FOUNDER",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1097,7 +1266,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
 
   // A TASK'S OWN "MORE" JOINS IT rather than standing as a second ellipsis
   // beside the frame's, and its entry still goes where the inline one does.
-  location.hash = "#/work/ENG-42";
+  location.hash = "#/worklet/ENG-42";
   const task = {
     task: { id: "t-1", key: "ENG-42", project: "ENG", title: "Fix it", status: "todo", version: 3 },
     reassignment_budget: 8,
@@ -1108,7 +1277,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       return Promise.resolve({
         login: "U0FOUNDER",
         owner: "U0FOUNDER",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
       });
     if (what === "work_item") return Promise.resolve(task);
     if (what === "work_project") return Promise.resolve(project);
@@ -1128,17 +1297,56 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
     "Keep in Starred",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
-  expect(location.hash).toContain("#/work/ENG");
+  expect(location.hash).toContain("#/worklet/ENG");
   expect(location.hash).toContain("peek=");
 });
 
+// AN ADDRESS UNDER CHATLET, ON A COMPANY TALKING ON A VENDOR'S, draws where the
+// company talks in place of the screen, and the screen asks nothing: no rail,
+// no room. Mutation: drop Chatlet's `service` and the rooms are asked.
+test("a chat address on a company not running Chatlet says where it talks", async () => {
+  location.hash = "#/chatlet";
+  const asked: string[] = [];
+  const reader = {
+    login: "ana",
+    owner: "ana",
+    handle: "ana",
+    grants: ["chatlet"],
+    acts: [],
+    chat_vendors: ["mattermost"],
+  };
+  const store = new Store();
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [],
+      services: { tracker: "worklet", knowledge: "doclet", chat: "vendor", code: "native" },
+    }),
+  );
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return what === "viewer" ? Promise.resolve(reader) : new Promise(() => {});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  expect(await screen.findByText("This company talks on Mattermost")).toBeTruthy();
+  expect(asked.filter((w) => w.startsWith("chat_"))).toEqual([]);
+  expect(screen.queryByRole("navigation", { name: "Your rooms" })).toBeNull();
+});
+
 // A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION: mounted on the
-// guess, Knowledge asked its spaces, its pages and its activity on a company
+// guess, Doclet asked its spaces, its pages and its activity on a company
 // running none, was refused all three, then gave way to the notice. It waits,
 // asks nothing, and says what the company runs once it knows. Mutation: mount
 // the screen before the org and `containers` is asked.
 test("a cold load of a service's page asks nothing until the company says what it runs", async () => {
-  location.hash = "#/knowledge";
+  location.hash = "#/doclet";
   const asked: string[] = [];
   const reader = { login: "ana", owner: "ana", handle: "ana", grants: ["admin"], acts: [] };
   const store = new Store();
@@ -1161,7 +1369,7 @@ test("a cold load of a service's page asks nothing until the company says what i
       withDerived({
         name: "Acme",
         roles: [],
-        services: { tracker: "native", knowledge: "none", code: "none" },
+        services: { tracker: "worklet", knowledge: "none", chat: "chatlet", code: "none" },
       }),
     ),
   );

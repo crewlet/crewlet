@@ -15,7 +15,7 @@ import (
 // there, and the person an OPEN ask on the item names may post the answer to it
 // and nothing else — and which ask is open is only known once the item is read.
 // Decided at the route as `comment_on_work_item` on the bare kind, a person
-// asked a question without the tracker was refused at the door to the one
+// asked a question without Worklet was refused at the door to the one
 // thread they were asked to answer on. So the route admits everybody and the
 // tool decides, in the same words as everywhere else: the asked person's answer
 // lands, the same person's remark on an item nobody asked them on is the
@@ -24,9 +24,9 @@ func TestTheCommentRouteLetsTheToolDecide(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
 	r.reader.asks = map[string]map[string]string{"t-1": {"legal": "c-ask"}}
-	legal := person("legal", iam.GrantKnowledge)
+	legal := person("legal", iam.GrantDoclet)
 
-	got := r.do(as(legal), http.MethodPost, "/work/items/ENG-1/comments",
+	got := r.do(as(legal), http.MethodPost, "/worklet/items/ENG-1/comments",
 		map[string]any{"body": "Yes — the clause stands."})
 	if got.status != http.StatusOK {
 		t.Fatalf("the person asked on ENG-1 could not answer it: %d %v", got.status, got.body)
@@ -37,15 +37,15 @@ func TestTheCommentRouteLetsTheToolDecide(t *testing.T) {
 		t.Fatalf("the answer wrote %+v, want one comment answering c-ask", r.writes.updates)
 	}
 
-	got = r.do(as(legal), http.MethodPost, "/work/items/ENG-2/comments",
+	got = r.do(as(legal), http.MethodPost, "/worklet/items/ENG-2/comments",
 		map[string]any{"body": "fyi"})
 	grants, _ := got.body["grants"].([]any)
 	if got.status != http.StatusForbidden ||
-		!slices.Equal(grants, []any{string(iam.GrantTracker)}) {
+		!slices.Equal(grants, []any{string(iam.GrantWorklet)}) {
 		t.Errorf("a remark on an item nobody asked them on answered %d %v, want "+
 			"403 naming the tracker", got.status, got.body)
 	}
-	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-2/comments",
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/worklet/items/ENG-2/comments",
 		map[string]any{"body": "fyi"}); got.status != http.StatusOK {
 		t.Errorf("a tracker holder's comment answered %d %v", got.status, got.body)
 	}
@@ -69,12 +69,12 @@ func TestTheTidyRoutesPassTheAuthor(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a page's rename", http.MethodPost, "/pages/p-1/rename",
+		{"a page's rename", http.MethodPost, "/doclet/pages/p-1/rename",
 			map[string]any{"title": "Runbook v2"}},
-		{"a page's trash", http.MethodDelete, "/pages/p-1", nil},
-		{"a page's restore", http.MethodPost, "/pages/p-1/restore", nil},
-		{"an item's removal", http.MethodDelete, "/work/items/ENG-1", nil},
-		{"an item's restore", http.MethodPost, "/work/items/ENG-1/restore", nil},
+		{"a page's trash", http.MethodDelete, "/doclet/pages/p-1", nil},
+		{"a page's restore", http.MethodPost, "/doclet/pages/p-1/restore", nil},
+		{"an item's removal", http.MethodDelete, "/worklet/items/ENG-1", nil},
+		{"an item's restore", http.MethodPost, "/worklet/items/ENG-1/restore", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -97,16 +97,16 @@ func TestTheTidyRoutesPassTheAuthor(t *testing.T) {
 
 // A PURGE ASKS FOR A RECENT SIGN-IN.
 //
-// A purge destroys a row on every node and nothing undoes it, so beside admin
-// it asks for the step-up every other irreversible gesture asks for: an
+// A purge destroys a row on every data node and nothing undoes it, so beside
+// admin it asks for the step-up every other irreversible gesture asks for: an
 // administrator whose proof is older than the window is refused
 // `step_up_required` naming it, with nothing destroyed, and the same
 // administrator a moment after proving who they are is served.
 func TestAPurgeAsksForAStepUp(t *testing.T) {
 	t.Parallel()
 	for _, target := range []string{
-		"/work/items/ENG-1/purge?confirm=ENG-1&reason=why",
-		"/pages/p-1/purge?confirm=runbook&reason=why",
+		"/worklet/items/ENG-1/purge?confirm=ENG-1&reason=why",
+		"/doclet/pages/p-1/purge?confirm=runbook&reason=why",
 	} {
 		r := newRig(t, chart{})
 		stale := admin("root")

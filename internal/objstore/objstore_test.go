@@ -164,7 +164,7 @@ func TestADeclarationIsReadOnlyWhenItIsSafeToWrite(t *testing.T) {
 	}
 }
 
-// A DECLARATION STATES ITS STANDING, AND NONE IS A DEFAULT (ADR-0051): a live
+// A DECLARATION STATES ITS STANDING, AND NONE IS A DEFAULT (ADR-0074): a live
 // table read as retired or derived is audited by nobody and accounted for by
 // no backup, and a retired or derived one read as live pages somebody about
 // bytes nobody needs. So the zero value — a declaration that forgot the field —
@@ -214,7 +214,7 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 	}
 }
 
-// A WALK READS ONLY THE STANDINGS ITS PASS IS OWED (ADR-0051). A retired or
+// A WALK READS ONLY THE STANDINGS ITS PASS IS OWED (ADR-0074). A retired or
 // derived row keeps its object from the collector exactly as a live one does
 // — so the collector's batch question is the same statement whatever the
 // standing — and names nothing the company is owed: a retired one a replaced
@@ -572,7 +572,7 @@ func TestTheDecodersReadTheStatementsColumns(t *testing.T) {
 	}
 }
 
-// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0052): the stream, the
+// A REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0075): the stream, the
 // table its domain defers records into, and the domain's reader of one record
 // — each refused by name when missing, since a backup cannot carry what a
 // log it was not told about names. A retired or derived table, which no backup

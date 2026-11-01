@@ -10,12 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // seamClass is what a field a SERVING data node reads is, with respect to the
@@ -99,7 +99,7 @@ func (c seamClass) valid() bool {
 // builds a seat's engine write, from its own epoch's chart, which is the same
 // question a serving decide's grant is.
 var servingSeams = []reflect.Type{
-	reflect.TypeFor[tracker.WriterDeps](),
+	reflect.TypeFor[worklet.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
 	reflect.TypeFor[estate.ServerSeams](),
 	reflect.TypeFor[code.CommitterOptions](),
@@ -109,9 +109,9 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[code.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
 	reflect.TypeFor[host.Options](),
-	reflect.TypeFor[pages.SearcherOptions](),
-	reflect.TypeFor[pages.ReaderOptions](),
-	reflect.TypeFor[pages.Options](),
+	reflect.TypeFor[doclet.SearcherOptions](),
+	reflect.TypeFor[doclet.ReaderOptions](),
+	reflect.TypeFor[doclet.Options](),
 	reflect.TypeFor[iamdomain.ReaderOptions](),
 	reflect.TypeFor[artifactsdomain.ReaderOptions](),
 	reflect.TypeFor[artifactsdomain.WriterDeps](),
@@ -127,30 +127,30 @@ var classified = map[string]struct {
 	class seamClass
 	why   string
 }{
-	"tracker.WriterDeps.Publisher": {seamNone, "the tracker log's write authority"},
-	"tracker.WriterDeps.DB":        {seamNone, "the replicated rows a write decides from"},
-	"tracker.WriterDeps.Claims":    {seamNone, "the fleet's leases, for the key counters"},
-	"tracker.WriterDeps.NodeID":    {seamNone, "the deciding node"},
-	"tracker.WriterDeps.World": {seamValue, "a people field resolved to a handle, and a " +
+	"worklet.WriterDeps.Publisher": {seamNone, "the tracker log's write authority"},
+	"worklet.WriterDeps.DB":        {seamNone, "the replicated rows a write decides from"},
+	"worklet.WriterDeps.Claims":    {seamNone, "the fleet's leases, for the key counters"},
+	"worklet.WriterDeps.NodeID":    {seamNone, "the deciding node"},
+	"worklet.WriterDeps.World": {seamValue, "a people field resolved to a handle, and a " +
 		"project's default assignee checked, against the epoch's roster"},
-	"tracker.WriterDeps.Metrics":   {seamNone, "the node's instruments"},
-	"tracker.WriterDeps.Drain":     {seamNone, "the applier's measured rate"},
-	"tracker.WriterDeps.Actor":     {seamNone, "who writes, which the asker's credential states"},
-	"tracker.WriterDeps.ActorKind": {seamNone, "what kind of party writes"},
-	"tracker.WriterDeps.Leads": {seamValue, "the leads a create's, a purge's and a " +
+	"worklet.WriterDeps.Metrics":   {seamNone, "the node's instruments"},
+	"worklet.WriterDeps.Drain":     {seamNone, "the applier's measured rate"},
+	"worklet.WriterDeps.Actor":     {seamNone, "who writes, which the asker's credential states"},
+	"worklet.WriterDeps.ActorKind": {seamNone, "what kind of party writes"},
+	"worklet.WriterDeps.Leads": {seamValue, "the leads a create's, a purge's and a " +
 		"dependency's wakes fall back to"},
-	"tracker.WriterDeps.Now":  {seamNone, "the clock"},
-	"tracker.WriterDeps.Zone": {seamValue, "the company's clock a date given as an instant is cut to a day by"},
+	"worklet.WriterDeps.Now":  {seamNone, "the clock"},
+	"worklet.WriterDeps.Zone": {seamValue, "the company's clock a date given as an instant is cut to a day by"},
 
 	"estate.Backend.Tracker": {seamNone, "the copy's reader, over its rows and its log's read " +
 		"authority alone; the units it renders are ServerSeams.Units"},
-	"estate.Backend.Writer": {seamNone, "a tracker writer per actor, built over tracker.WriterDeps"},
+	"estate.Backend.Writer": {seamNone, "a tracker writer per actor, built over worklet.WriterDeps"},
 	"estate.Backend.WorkSearch": {seamNone, "the item search over the copy's rows, ranked by " +
 		"engine.itemRanker through a search.FanOut, whose reads are classified there"},
-	"estate.Backend.Pages":      {seamNone, "the copy's page reader, built over pages.ReaderOptions"},
-	"estate.Backend.PageWriter": {seamNone, "the pages store, built over pages.Options"},
+	"estate.Backend.Pages":      {seamNone, "the copy's page reader, built over doclet.ReaderOptions"},
+	"estate.Backend.PageWriter": {seamNone, "the pages store, built over doclet.Options"},
 	"estate.Backend.Knowledge": {seamNone, "the knowledge searcher, built over " +
-		"pages.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
+		"doclet.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
 	"estate.Backend.Backlinks": {seamNone, "the node's link index"},
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
 	"estate.Backend.Code": {seamNone, "the committer, the change writer, the checks writer, the reader " +
@@ -296,25 +296,25 @@ var classified = map[string]struct {
 	"host.Options.Metrics": {seamNone, "the node's instruments"},
 	"host.Options.Now":     {seamNone, "the clock"},
 
-	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
-	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},
-	"pages.SearcherOptions.Peers":  {seamNone, "the fleet half of the fan-out"},
-	"pages.SearcherOptions.Roster": {seamNone, "the live data nodes"},
-	"pages.SearcherOptions.Report": {seamNone, "the node's instruments"},
-	"pages.SearcherOptions.Enter":  {seamNone, "the count of scans in flight"},
-	"pages.SearcherOptions.Vectors": {seamValue, "a query's embedding, by the embeddings " +
+	"doclet.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
+	"doclet.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},
+	"doclet.SearcherOptions.Peers":  {seamNone, "the fleet half of the fan-out"},
+	"doclet.SearcherOptions.Roster": {seamNone, "the live data nodes"},
+	"doclet.SearcherOptions.Report": {seamNone, "the node's instruments"},
+	"doclet.SearcherOptions.Enter":  {seamNone, "the count of scans in flight"},
+	"doclet.SearcherOptions.Vectors": {seamValue, "a query's embedding, by the embeddings " +
 		"provider and model of the serving node's epoch"},
-	"pages.SearcherOptions.SkillsContainer": {seamValue, "the tool-skills container every " +
+	"doclet.SearcherOptions.SkillsContainer": {seamValue, "the tool-skills container every " +
 		"result leaves out, read live from the epoch's knowledge.skills_container"},
-	"pages.SearcherOptions.Copies": {seamNone, "this node's verdict on the copies it scans"},
+	"doclet.SearcherOptions.Copies": {seamNone, "this node's verdict on the copies it scans"},
 
-	"pages.ReaderOptions.DB":  {seamNone, "the replicated rows a page read answers from"},
-	"pages.ReaderOptions.Log": {seamNone, "the pages log's read authority"},
+	"doclet.ReaderOptions.DB":  {seamNone, "the replicated rows a page read answers from"},
+	"doclet.ReaderOptions.Log": {seamNone, "the pages log's read authority"},
 
-	"pages.Options.Publisher": {seamNone, "the pages log's write authority"},
-	"pages.Options.DB":        {seamNone, "the replicated rows a page write decides from"},
-	"pages.Options.Now":       {seamNone, "the clock an authored instant is stamped from"},
-	"pages.Options.Reserved": {seamValue, "the containers an agent's write is held back " +
+	"doclet.Options.Publisher": {seamNone, "the pages log's write authority"},
+	"doclet.Options.DB":        {seamNone, "the replicated rows a page write decides from"},
+	"doclet.Options.Now":       {seamNone, "the clock an authored instant is stamped from"},
+	"doclet.Options.Reserved": {seamValue, "the containers an agent's write is held back " +
 		"from and the spaces a page may be created in, read from the epoch's knowledge " +
 		"settings and chart: a write a stale reading admits is one that, sent a moment " +
 		"before the revision, would have landed anyway"},

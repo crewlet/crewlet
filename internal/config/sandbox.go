@@ -8,22 +8,28 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Placement is WHERE a seat's code work runs.
+// Placement is WHERE an executor run happens: one cell of the
+// providers.sandbox catalogue.
 //
-// # One axis, four cells
+// # One axis, three cells, named by the entry that launches
 //
 // This replaces a `type:` on the provider block, and the reason is that the
 // old shape could express only ONE answer for a whole company. A company has
-// exactly one `providers.sandbox`, so choosing `local` for the seat that needs
-// the operator's own subscription login meant choosing it for the seat whose
-// work must never touch the engine host. There was no way to say "this seat
-// remotely, that seat here" — and the two are different security decisions
+// exactly one `providers.sandbox`, so choosing `local` for the run that needs
+// the operator's own subscription login meant choosing it for the run whose
+// work must never touch the engine host. There was no way to say "this run
+// remotely, that run here" — and the two are different security decisions
 // about different work.
 //
-// So the provider block becomes a CATALOGUE — configure `e2b:`, `local:`, or
-// both — and the choice moves to the seat, as `role.sandbox.run_in`.
+// So the provider block is a CATALOGUE — configure `e2b:`, `local:`, or
+// both — and the choice sits on the providers.llm entry a seat's executor
+// launches on (`run_in`), else on the catalogue's `default_run_in`. On the
+// entry rather than the seat, because it is a property of that RUNTIME: a
+// subscription login lives on the engine host, which `direct` and
+// `container` reach and a remote cell does not.
 type Placement string
 
 const (
@@ -45,35 +51,17 @@ const (
 	// that is not the engine's, which is what makes it the right choice
 	// for anything shared.
 	PlacementE2B Placement = "e2b"
-
-	// PlacementSelf runs code work INSIDE the seat's own executor run,
-	// which is only possible when that executor is a coding CLI in agent
-	// mode: it already holds a shell, an editor and a checkout, so
-	// provisioning a second box beside it would give the seat two
-	// filesystems and make the one doing the work invisible to the other.
-	//
-	// It is the one value that needs no backend, because it IS the
-	// executor's box. A seat that names it is simply not offered
-	// run_sandbox — there is nothing to launch.
-	PlacementSelf Placement = "self"
 )
 
-// Placements is the closed set — every value a `run_in` may take.
+// Placements is the closed set — every value a `run_in` may take, each of
+// which needs a backend.
 //
-// The three that need a BACKEND are walked against the switch that builds them
-// by a test, because the list and the switch have disagreed before: `e2b` was
-// once the default with no case behind it, so a company that wrote
-// `providers.sandbox:` and no type validated cleanly, reported a configured
-// sandbox on the dashboard, and failed at its first coding run.
-var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B, PlacementSelf}
-
-// NeedsBackend reports whether a cell has a provider behind it.
-//
-// Only `self` does not, and it is worth a method rather than an equality test
-// at each site: three separate walks decide what to build, what to validate
-// and what to report, and each one silently does the wrong thing for a cell
-// that is the executor's own box rather than a box the engine mints.
-func (p Placement) NeedsBackend() bool { return p != PlacementSelf }
+// Walked against the switch that builds them by a test, because the list and
+// the switch have disagreed before: `e2b` was once the default with no case
+// behind it, so a company that wrote `providers.sandbox:` and no type
+// validated cleanly, reported a configured sandbox on the dashboard, and
+// failed at its first run.
+var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B}
 
 // backend names the catalogue entry a placement needs, for the message a
 // refusal carries: an operator who wrote `run_in: container` with no `local:`
@@ -85,72 +73,48 @@ func (p Placement) backend() string {
 	return "`local:`"
 }
 
-// BackendPlacements are the cells a provider is built for, in closed-set
-// order — every value of [Placements] but `self`.
+// SandboxProvider is the engine-wide CATALOGUE of cells every agent seat's
+// executor runs in.
 //
-// Exported because three surfaces outside this file need exactly this list and
-// must not each filter it themselves: the engine's build switch, the schema
-// enum for the two fields that name a BACKEND cell (a company default and an
-// agent-mode runtime, neither of which can be the executor's own box), and the
-// test that holds those two together.
-func BackendPlacements() []Placement {
-	out := make([]Placement, 0, len(Placements))
-	for _, p := range Placements {
-		if p.NeedsBackend() {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// CodingAgent is which coding CLI runs inside a box.
-type CodingAgent string
-
-// The coding agents a sandbox can run.
-const (
-	CodingAgentClaudeCode CodingAgent = "claude-code"
-	CodingAgentOpenCode   CodingAgent = "opencode"
-)
-
-// CodingAgents is the closed set.
-var CodingAgents = []CodingAgent{CodingAgentClaudeCode, CodingAgentOpenCode}
-
-// SandboxProvider is the engine-wide code-runtime CATALOGUE.
-//
-// A sandbox-enabled seat runs real code work as a coding agent inside a box,
-// through the run_sandbox tool. This block says WHICH BOXES EXIST; the per-seat
-// gate is role.sandbox, and `role.sandbox.run_in` picks the cell. A seat with
-// no role.sandbox never sees the tool at all.
+// Every agent seat's executor is its coding CLI's own run, in a box: this
+// block says WHICH BOXES EXIST, the providers.llm entry the run launches on
+// picks the cell (`run_in`, else `default_run_in`), and a seat's own
+// role.sandbox adds what that seat's box reads beyond the engine-wide
+// settings. So a company with an agent seat and a model to run it on needs
+// this block ([Company.validateSandboxPlacement]); one with no agent seat, or
+// no providers.llm yet, does not.
 //
 // BOTH BACKENDS MAY BE CONFIGURED AT ONCE, which is the whole point of the
-// reshape: the seat that should use the operator's own subscription login and
-// the seat whose work must never touch the engine host are different seats,
+// reshape: the run that should use the operator's own subscription login and
+// the run whose work must never touch the engine host are different runs,
 // and a company-wide `type:` could only ever answer for both.
 type SandboxProvider struct {
-	// E2B configures the remote backend. Absent means no seat may name
-	// `run_in: e2b`.
+	// E2B configures the remote backend. Absent means no run may be
+	// placed `run_in: e2b`.
 	E2B *E2BSandbox `yaml:"e2b,omitempty" json:"e2b,omitempty" desc:"The remote backend. Absent = run_in: e2b is refused."`
 
-	// Local configures the engine host as a backend, so code work can use
-	// the subscription CLI login `crewlet llm login` already established,
-	// with no remote account and no API key. Absent means no seat may name
+	// Local configures the engine host as a backend, so a run can use the
+	// subscription CLI login `crewlet llm login` already established, with
+	// no remote account and no API key. Absent means no run may be placed
 	// `run_in: direct` or `run_in: container`.
 	//
 	// It carries no containment of its own any more — `run_in` IS the
-	// containment, per seat. A block-wide one could only say the same
-	// thing for every seat, which is the limitation this reshape removes.
+	// containment, per entry. A block-wide one could only say the same
+	// thing for every run, which is the limitation this reshape removes.
 	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host as a backend. Absent = run_in: direct|container is refused."`
 
-	// Fake wires the in-process double: no real box, no real coding agent,
-	// no real MCP. For a deployment demonstrating the flow, and named in
-	// config rather than inferred so nobody runs one by accident.
+	// Fake wires the in-process double: no real box and no real coding
+	// agent, every run completed by the double's own runner. For a
+	// deployment demonstrating the flow, and named in config rather than
+	// inferred so nobody runs one by accident.
 	//
 	// It answers EVERY placement, because it is not a placement — it is
 	// the absence of one, and a double that answered only `direct` would
 	// make a demo config differ from a real one in a second place.
 	Fake bool `yaml:"fake,omitempty" json:"fake,omitempty" desc:"Use the in-process double for every placement. Demonstrations only."`
 
-	// DefaultRunIn is where a sandbox-enabled seat that names none runs.
+	// DefaultRunIn is where a run launched on a providers.llm entry that
+	// names no `run_in` happens.
 	//
 	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS
 	// CONFIGURED, and the absence of one is the point: `direct` runs the
@@ -162,16 +126,11 @@ type SandboxProvider struct {
 	// Only `e2b:` alone, and the double, resolve on their own.
 	//
 	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
-	// sandbox-enabled seat not in agent mode, and every agent-mode entry a
-	// seat's executor runs on, names its own cell has nothing left to
-	// default — an agent-mode seat's own gate places nothing — that is
-	// the shape the catalogue exists for — so the refusal is written at
-	// the seat or entry that named none, never on this field alone. See
-	// [Company.validateSandboxPlacement].
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
-
-	// DefaultCodingAgent is what a seat that names none runs.
-	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`
+	// entry an executor can launch on names its own cell has nothing left to
+	// default — that is the shape the catalogue exists for — so the refusal
+	// is written at the entry that named none, never on this field alone.
+	// See [Company.validateSandboxPlacement].
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
 
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
 	// limit: a coding job is never force-stopped on a timer, and the
@@ -200,17 +159,22 @@ type SandboxProvider struct {
 	// billing for the snapshots the setting exists to refuse.
 	DefaultPauseTTLSeconds *float64 `yaml:"default_pause_ttl_seconds,omitempty" json:"default_pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL before reap and re-seed. Unset = 1800s; 0 = never pause."`
 
-	// DefaultMaxTurns caps how many agentic rounds a coding run may take,
-	// for seats that name none.
+	// DefaultMaxTurns caps how many agentic rounds one executor run may
+	// take, for seats that name none (role.sandbox.max_turns). Read it
+	// through [SandboxProvider.MaxTurns].
 	//
-	// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT. A coding job is
+	// THE ONLY ROUND BOUND ON EVERY AGENT SEAT'S TURN. An executor run is
 	// deliberately never force-stopped on a clock — see
-	// default_timeout_seconds — so nothing else stops one that is thrashing
-	// rather than working, and the box's own TTL is refreshed on every
-	// waiter tick precisely so that it cannot. 0 means uncapped, which is
-	// the default: a cap that is too low truncates real work mid-task, and
-	// the right number depends on the tasks a company gives its agents.
-	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for coding runs on seats that name none. 0 = uncapped."`
+	// default_timeout_seconds — so nothing else stops one that is
+	// thrashing rather than working, and the box's own TTL is refreshed on
+	// every waiter tick precisely so that it cannot. Unset takes
+	// [defaultSandboxMaxTurns]; an explicit 0 is uncapped, which is how a
+	// company opts out.
+	//
+	// A POINTER, because those are three states and an int has two: an
+	// unset field's zero would read as "uncapped", so every company that
+	// said nothing would run without the one bound its turns have.
+	DefaultMaxTurns *int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped."`
 
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
@@ -265,6 +229,16 @@ func (e *E2BSandbox) validate(path Path) error {
 const (
 	defaultSandboxTimeoutSeconds  = 900.0
 	defaultSandboxPauseTTLSeconds = 1800.0
+
+	// defaultSandboxMaxTurns is 96 because it is now the only round bound
+	// on every agent seat's turn. The engine's own executor loop was capped
+	// at 48 rounds once its extension judge had granted all it could
+	// (turn_engine's execute ceiling, twice its 24-round base), and that was
+	// for engine-tool work alone. One run now also does the shell, edit and
+	// test steps code work adds, each a CLI turn of its own, so twice that
+	// ceiling: room for a real task's reading, editing and checking, and
+	// still a wall a run that is thrashing hits within one turn.
+	defaultSandboxMaxTurns = 96
 )
 
 // Timeout is the box TTL, applying the default.
@@ -273,6 +247,17 @@ func (s *SandboxProvider) Timeout() float64 {
 		return defaultSandboxTimeoutSeconds
 	}
 	return s.DefaultTimeoutSeconds
+}
+
+// MaxTurns is the agentic-round cap one executor run takes when its seat
+// names none, applying the default: an explicit 0 is uncapped, and unset is
+// [defaultSandboxMaxTurns]. Nil-safe, so a company with no catalogue reads
+// the default rather than panicking: such a company runs no box at all.
+func (s *SandboxProvider) MaxTurns() int {
+	if s == nil || s.DefaultMaxTurns == nil {
+		return defaultSandboxMaxTurns
+	}
+	return *s.DefaultMaxTurns
 }
 
 // PauseTTL is the paused-box TTL as configured, or nil when the field is
@@ -292,10 +277,10 @@ func (s *SandboxProvider) PauseTTL() *float64 {
 	return s.DefaultPauseTTLSeconds
 }
 
-// Enabled reports whether any seat could run code at all.
+// Enabled reports whether the catalogue configures any cell at all.
 //
 // A catalogue with nothing in it is not enabled: the block was written and
-// configures no box, so run_sandbox is never offered.
+// configures no box, so no executor run has anywhere to happen.
 func (s *SandboxProvider) Enabled() bool {
 	if s == nil {
 		return false
@@ -313,12 +298,6 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 	if s == nil {
 		return false
 	}
-	if !p.NeedsBackend() {
-		// `self` is the executor's own box. Nothing in the catalogue
-		// serves it, and nothing has to — which is why the question
-		// "does this company configure it" has no bearing on it.
-		return false
-	}
 	if s.Fake {
 		return slices.Contains(Placements, p)
 	}
@@ -331,8 +310,8 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 	return false
 }
 
-// RunIn is where a sandbox-enabled seat that names no placement runs, or
-// empty when the catalogue cannot answer that on its own.
+// RunIn is where a run launched on an entry that names no placement
+// happens, or empty when the catalogue cannot answer that on its own.
 //
 // EMPTY IS A REAL ANSWER, not a failure to compute one: `direct` runs the
 // coding agent as the engine user with the engine's own filesystem access,
@@ -375,13 +354,14 @@ func (s *SandboxProvider) validate(path Path) error {
 	var p problems
 	switch {
 	case !s.Enabled():
-		// A block that names no backend is an unfinished edit, and it
-		// validates and applies cleanly: every sandbox-enabled seat plans
-		// around a box it never gets, and the only symptom is code work
-		// that quietly never happens.
+		// A block that names no backend is an unfinished edit: every agent
+		// seat's executor runs in one of its cells, and this one has none
+		// to run in.
 		p.add(path, ErrMissing,
 			"a sandbox block configures nothing: give it `e2b:`, `local:`, or "+
-				"`fake: true`. Remove the block entirely to leave code work off")
+				"`fake: true`. Every agent seat's executor runs in one of its "+
+				"cells; only a company with no agent seat or no providers.llm entry "+
+				"yet may leave the block out")
 		return p.err()
 	case s.Fake && (s.E2B != nil || s.Local != nil):
 		// The double is not a third backend beside the real two — it
@@ -403,39 +383,32 @@ func (s *SandboxProvider) validate(path Path) error {
 	switch {
 	case s.DefaultRunIn == "":
 		// NOT REFUSED HERE, even when the catalogue is ambiguous: whether
-		// a default is NEEDED is a question about the seats, and this
-		// block cannot see them. A seat, or an agent-mode entry, that
-		// names no cell against an ambiguous catalogue is refused where it
-		// is written, with a message offering this field as the other
-		// remedy — see [Company.validateSandboxPlacement]. Refused here
-		// unconditionally, the remedy that message offered ("give every
-		// seat its own run_in") could never pass.
-	case !slices.Contains(BackendPlacements(), s.DefaultRunIn):
-		// `self` is deliberately not offerable as a COMPANY default: it
-		// is only meaningful for a seat whose executor is a coding CLI
-		// in agent mode, and a company-wide default would silently turn
-		// code work off for every seat that is not.
+		// a default is NEEDED is a question about the entries the seats'
+		// executors launch on, and this block cannot see them. An entry
+		// that names no cell against an ambiguous catalogue is refused
+		// where it is written, with a message offering this field as the
+		// other remedy — see [Company.validateSandboxPlacement]. Refused
+		// here unconditionally, the remedy that message offered ("give
+		// every entry its own run_in") could never pass.
+	case !slices.Contains(Placements, s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
-			s.DefaultRunIn, names(BackendPlacements()))
+			s.DefaultRunIn, words.Or(Placements))
 	case !s.Configured(s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrConflict,
 			"%q needs the %s backend configured under providers.sandbox (this "+
 				"catalogue has %s)",
-			s.DefaultRunIn, s.DefaultRunIn.backend(), names(s.available()))
+			s.DefaultRunIn, s.DefaultRunIn.backend(), words.And(s.available()))
 	}
 
-	if s.DefaultCodingAgent != "" && !slices.Contains(CodingAgents, s.DefaultCodingAgent) {
-		p.add(at(path, "default_coding_agent"), ErrUnknownValue, "%q (want %s)",
-			s.DefaultCodingAgent, names(CodingAgents))
-	}
 	if s.DefaultTimeoutSeconds < 0 {
 		p.add(at(path, "default_timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
 			defaultSandboxTimeoutSeconds, s.DefaultTimeoutSeconds)
 	}
-	if s.DefaultMaxTurns < 0 {
+	if s.DefaultMaxTurns != nil && *s.DefaultMaxTurns < 0 {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
-			"%d (a round cap cannot be negative; 0 means uncapped)", s.DefaultMaxTurns)
+			"%d (a round cap cannot be negative; omit the field for the default "+
+				"of %d, or set 0 for uncapped)", *s.DefaultMaxTurns, defaultSandboxMaxTurns)
 	}
 	// A NEGATIVE value is refused: an unbounded pause is the leak this knob
 	// exists to prevent.
@@ -468,7 +441,7 @@ func (s *SandboxProvider) available() []Placement {
 		return nil
 	}
 	out := make([]Placement, 0, len(Placements))
-	for _, p := range BackendPlacements() {
+	for _, p := range Placements {
 		if s.Configured(p) {
 			out = append(out, p)
 		}
@@ -492,28 +465,32 @@ const (
 var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePodman}
 
 // LocalSandbox is the local backend's block: the engine host as a code
-// runtime, so code work can use the subscription login already established.
+// runtime, so a run can use the subscription login already established.
 //
 // IT CARRIES NO CONTAINMENT OF ITS OWN. `run_in: direct` and `run_in:
-// container` are both served by this one block, per seat, because they are a
-// choice about ONE SEAT'S WORK rather than about the host: the seat that needs
-// the operator's own login and the seat whose generated code must not see the
-// engine's filesystem are different seats on the same machine. A block-level
-// mode could only ever answer for both.
+// container` are both served by this one block, per entry, because they are a
+// choice about ONE RUNTIME'S WORK rather than about the host: the run that
+// needs the operator's own login and the run whose generated code must not see
+// the engine's filesystem are different runs on the same machine. A
+// block-level mode could only ever answer for both.
 type LocalSandbox struct {
-	// Image is the container image, required for any seat or check that
-	// runs in a container, with deliberately no default: a box whose image
-	// lacks the coding-agent CLI fails only once an agent tries to use it,
-	// and a check's box needs git and whatever its checks build with.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the coding-agent CLI installed for a seat's box, and git 2.40 or newer and what its checks build with for a check's. Required where a seat or a check runs in a container."`
+	// Image is the container image, required wherever an executor run or a
+	// check is placed in a container, with deliberately no default: a box
+	// whose image lacks the coding-agent CLI fails only once an agent tries
+	// to use it, and a check's box needs git and whatever its checks build
+	// with.
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the coding-agent CLI installed for an executor run's box, and git 2.40 or newer and what its checks build with for a check's. Required where an executor run or a check runs in a container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
-	// StateDir is the parent directory for box directories. Boxes are
-	// removed at teardown, and orphans from a crashed engine are reaped on
-	// the next create. It applies to both placements — a direct box is a
-	// directory under it too.
-	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both local placements."`
+	// StateDir is the parent directory for box directories: the company's
+	// BOX ROOT. Boxes are removed at teardown, and orphans from a crashed
+	// engine are reaped on the next create. It applies to both placements —
+	// a direct box is a directory under it too — and to the Dashboard
+	// Assistant's deep work on the engine host, whose confined boxes the
+	// engine keeps in a directory of their own beneath it, so every box the
+	// engine makes on its host lands on the one volume sized for boxes.
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both local placements and by deep work on the engine host."`
 
 	// Network is the container network. Empty uses the runtime's default.
 	// Setting `none` cuts the box off entirely — which also cuts off the
@@ -548,7 +525,7 @@ type LocalSandbox struct {
 // containerOnly are the fields no direct box reads, named as an operator
 // wrote them. A value that means nothing where it is written is the silence
 // this package spends most of its rules on, and the check that reports it
-// needs the SEATS — see (*Company).validateSandboxPlacement.
+// needs the SEATS' executor chains — see (*Company).validateSandboxPlacement.
 func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
 	set := func(n int) string {
 		if n > 0 {
@@ -616,7 +593,7 @@ func (l *LocalSandbox) unsuppliedEnvArgs() []struct {
 func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
-		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
+		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, words.Or(ContainerRuntimes))
 	}
 	// A NAME OUTSIDE THE ENVIRONMENT'S OWN GRAMMAR is refused rather than
 	// handed on: `A=B` as a key would set a variable called A to `B=…`, and
@@ -639,7 +616,7 @@ func (l *LocalSandbox) validate(path Path) error {
 // providers.sandbox.setup and role.sandbox.setup, but for the one exception:
 // a repository on this company's own code host is a run's GRANT, which the
 // engine clones into the box itself after these steps, with the run's own
-// credential (ADR-0063) — and no step's env may set the variables that
+// credential (ADR-0086) — and no step's env may set the variables that
 // credential and its clones read ([ReservedSandboxEnv]).
 type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
@@ -679,11 +656,12 @@ type SandboxSetupStep struct {
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
 
 	// OptionalKeys names the keys of Env, and the paths of Files, whose value
-	// may resolve to nothing: such a variable is left out of the run, such a
-	// file is not written, and the coding run is not refused for it. Every
-	// other reference must resolve before a `run_sandbox` box is started —
-	// see [RoleSandbox.OptionalKeys], the seat's own block's half.
-	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run."`
+	// may resolve to nothing: such a variable is left out of the run and
+	// such a file is not written, quietly. Any other reference that resolves
+	// to nothing is left out too, and the run's start is logged naming it
+	// (sandbox_env_unresolved) — see [RoleSandbox.OptionalKeys], the seat's
+	// own block's half, for why an executor run starts either way.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, or paths of files, whose value may resolve to nothing; left out quietly rather than logged as a gap in the run's environment."`
 
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
@@ -747,8 +725,9 @@ func (s *SandboxSetupStep) validate(path Path) error {
 // run's box and a check's are both given — the values the coding clone's
 // commit-trailer hook writes, and what a check's box is told of its check
 // ([ReservedCheckEnv]). A closed list, which the validator reads here and the
-// engine's tests hold to the variables each launch sets: a coding run given
-// repositories sets every name but the check's own (internal/engine,
+// engine's tests hold to the variables each launch sets: every executor
+// launch on a node serving the code host sets every name but the check's own,
+// whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
 	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",

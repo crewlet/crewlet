@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHANGE'S CONVERSATION, DECIDED: an ask for review, a comment, a thread's
@@ -383,7 +384,7 @@ func (r *Review) validFields() error {
 	case r.Revision < 1:
 		return badField("review.revision", "%d; a change's revisions count from 1", r.Revision)
 	case !r.Verdict.Valid():
-		return badField("review.verdict", "%q is not one of %v", r.Verdict, Verdicts())
+		return badField("review.verdict", "%q is not one of %s", r.Verdict, words.Or(Verdicts()))
 	case r.Verdict == VerdictComment && strings.TrimSpace(r.Summary) == "" && len(r.Findings) == 0:
 		return badField("review", "a review that judges nothing says something: a summary or a finding")
 	case len(r.Findings) > MaxFindingsPerReview:

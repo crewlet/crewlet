@@ -3,6 +3,8 @@ package operator
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -12,12 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ONE REFUSAL MAPPING: what a call that did not do what it was asked is
@@ -32,8 +32,20 @@ import (
 // A tool's refusal carries the error underneath it as its cause, beneath the
 // class it stated (internal/mcp's [crewletmcp.Refusal]). Reading a status back
 // out of a sentence written for a model would make the wording of every
-// refusal an API. The sentence is still the `detail`, because it is the only
-// thing that says what to do.
+// refusal an API.
+//
+// # A person's words, or none (ADR-0060)
+//
+// Every caller of this mapping answers a PERSON: the dashboard, a person's
+// assistant executing what they approved, a script run on a person's
+// credential. So the `detail` is the refusal in a person's words
+// ([caveat.Refusal]) and never the tool's sentence, which is written for a
+// model and names the arguments and tools a model would use next. Where
+// nobody has worded the refusal for a person yet, the answer carries NO
+// detail, and its code's own sentence (the envelope's `message`, written for
+// people) is the whole of what it says. The parameter is typed, so no caller
+// can hand this mapping a free sentence: every detail it writes is one the
+// catalog's walk has read.
 //
 // # The classes are the codes
 //
@@ -48,17 +60,39 @@ import (
 // caller), a node that could not decide, a wiring that decided nothing.
 
 // About is what a call's failure answer names beside its own fields: the tool,
-// and the object its arguments named — the item, the page, the project, the
-// person — so a refusal or an unknown outcome says which object to read to see
-// what became of it. A failed tool answers a sentence and no receipt, and a 503
-// that dropped what it was about left a client holding a key and nothing
-// saying where to look whether it landed. The `about` every transport hands
-// [Fail].
+// and the object its arguments named — the item, the page (or, for a page not
+// written yet, the container it is written in), the project, the person — so
+// a refusal or an unknown outcome says which object to read to see what became
+// of it. A failed tool answers a sentence and no receipt, and a 503 that
+// dropped what it was about left a client holding a key and nothing saying
+// where to look whether it landed. The `about` every transport hands [Fail].
+//
+// THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
+// once beside the domain's refusal classes, rather than a list here: a list
+// here was one more place a domain added later had to be remembered in.
+//
+// AN OBJECT NAMED BY A LIST IS NAMED BY THE LIST: a direct conversation is its
+// participants, and `send_dm` and `open_dm` address it by them alone, so a
+// failed one names who it was with — the handles as the call gave them, its
+// empty entries dropped. Read as text only, it named nothing at all.
 func About(tool string, args map[string]any) httpjson.Detail {
 	about := httpjson.Detail{"tool": tool}
-	for _, field := range []string{"item", "page", "project", "handle"} {
-		if named, ok := args[field].(string); ok && strings.TrimSpace(named) != "" {
-			about[field] = named
+	for _, field := range builtin.ObjectArgs() {
+		switch named := args[field].(type) {
+		case string:
+			if strings.TrimSpace(named) != "" {
+				about[field] = named
+			}
+		case []any:
+			var listed []string
+			for _, entry := range named {
+				if text, ok := entry.(string); ok && strings.TrimSpace(text) != "" {
+					listed = append(listed, text)
+				}
+			}
+			if len(listed) > 0 {
+				about[field] = listed
+			}
 		}
 	}
 	return about
@@ -82,10 +116,11 @@ type classAnswer struct {
 // BY WHAT THE CALLER DOES NEXT, which is the only thing a status is for: 422
 // for an argument to change, 404 for an object that is not there, 403 for a
 // gesture the domain forbids this caller, 409 for a state the request collided
-// with — re-read it, or (for a spent budget, a full inbox, a run that stopped,
-// a seat a person paused with its running work stopped) change it — 503 for a
-// node that could not serve it, the one class a retry of
-// the same request can fix, 507 for content the object store had no room for
+// with — re-read it, or (for a spent budget, a full inbox, a quota the
+// company's holdings reached, a turn's notes full or spent, a run that
+// stopped) change it —
+// 503 for a node that could not serve it, the one class a retry of the same
+// request can fix, 507 for content the object store had no room for
 // ([crewletmcp.RefusalStoreFull]), which neither the request nor a wait
 // changes and an operator's room does — HTTP's own status for a server that
 // cannot store what the request needs, and never a 503, whose Retry-After sent
@@ -104,9 +139,10 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalAlreadyAnswered:    {http.StatusConflict, httpjson.CodeAlreadyAnswered},
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
 	crewletmcp.RefusalInboxFull:          {http.StatusConflict, httpjson.CodeInboxFull},
+	crewletmcp.RefusalQuotaExceeded:      {http.StatusConflict, httpjson.CodeQuotaExceeded},
+	crewletmcp.RefusalNotesFull:          {http.StatusConflict, httpjson.CodeNotesFull},
+	crewletmcp.RefusalNotesSpent:         {http.StatusConflict, httpjson.CodeNotesSpent},
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
-	crewletmcp.RefusalPaused:             {http.StatusConflict, httpjson.CodePaused},
-	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
 	crewletmcp.RefusalStoreFull:          {http.StatusInsufficientStorage, httpjson.CodeStoreFull},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
@@ -115,16 +151,53 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 
 // Fail writes the answer to one call that was NOT made: cause is the failed
 // result's cause (or a tool-less writer's error, through [ClassifyWrite]),
-// sentence the words a person reads as `detail`, key the operation the
-// request named — carried on a 503 and a reused key's 409, so the retry it
-// invites is the same operation — and about the fields that name what the
-// call was about (`tool`, an item's key), written beneath the envelope's own.
-func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjson.Detail) {
+// said the refusal in a person's words, answered as `detail` (the zero value
+// answers none, and the code's own sentence stands alone), key the operation
+// the request named, carried on a 503 and a reused key's 409 so the retry it
+// invites is the same operation, and about the fields that name what the call
+// was about (`tool`, an item's key), written beneath the envelope's own.
+func Fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
+	about httpjson.Detail) {
+
+	fail(w, cause, said, key, about, false)
+}
+
+// FailIfMatched is [Fail] for a call whose version the request stated in its
+// If-Match HEADER — a version a tool takes as an argument, which an HTTP route
+// folds the header into.
+//
+// THE ONE REFINEMENT OF THE MAPPING, and it is HTTP's: a stale version a
+// request stated as a header precondition is `412 version_moved` (RFC 9110
+// §13.1.1 — a server whose If-Match condition is false MUST NOT perform the
+// method, and answers 412), where the same version stated as an argument is
+// the class's own `409 stale_version`. One refusal of one tool; the status
+// says only whether the request made it an HTTP condition, as every route
+// that reads If-Match itself answers a moved version (a project file, an
+// artifact's head) and as the configuration answers a moved revision. Every
+// other refusal — an unknown outcome, a reused key and the authority table's
+// own answer among them, each decided BEFORE the class — is [Fail]'s, byte
+// for byte.
+func FailIfMatched(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
+	about httpjson.Detail) {
+
+	fail(w, cause, said, key, about, true)
+}
+
+// fail is [Fail] and [FailIfMatched]; conditioned is the second's.
+func fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
+	about httpjson.Detail, conditioned bool) {
+
 	detail := httpjson.Detail{}
-	for k, v := range about {
-		detail[k] = v
+	maps.Copy(detail, about)
+	if !said.IsZero() {
+		detail["detail"] = said.Person()
+		// WHERE THE LIMIT THAT CAUSED IT IS CHANGED, beside the words, for
+		// a refusal a configurable limit caused (ADR-0060): a value the
+		// dashboard resolves to the screen that edits it.
+		if remedy := said.Remedy(); !remedy.IsZero() {
+			detail["remedy"] = remedy
+		}
 	}
-	detail["detail"] = sentence
 	var unknown *builtin.UnknownOutcome
 	var refused *builtin.DecisionRefused
 	switch {
@@ -133,21 +206,26 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// can establish, and it may well have landed — so a client told
 		// "nothing was written" would make it a second time. FIRST,
 		// because the cause it wraps may be anything the step answered.
-		UnknownOutcome(w, key, unknown.Unvouched, sentence, about)
+		UnknownOutcome(w, key, unknown.Unvouched, about)
 	case errors.Is(cause, crewletmcp.ErrOutcomeUnknown):
 		// The sentinel without its facts: nothing says another node could
 		// do better, so it is the ordinary unknown.
-		UnknownOutcome(w, key, false, sentence, about)
+		UnknownOutcome(w, key, false, about)
 	case refusedFor(cause, statelog.ReasonOpReused):
 		// AN OPERATION THIS REQUEST DERIVES ALREADY NAMES A WRITE TO
 		// ANOTHER OBJECT — what the request names moved since the key
 		// was first sent — and nothing was written. A conflict the
-		// caller resolves with a new key, never by waiting.
+		// caller resolves with a new key, never by waiting. The field
+		// and the key name the cause for a client; the person reads
+		// [opkey.Reused] ALONE, the one sentence every surface taking a
+		// key answers it with, in a person's words: the sentence the call
+		// was refused with is the framework's (a writer's) or the tool's
+		// restatement of it for a model (a tool's), and either names the
+		// operation, the subject it landed on and the one this request is
+		// about, which is not why nothing was written.
 		detail["field"] = opkey.Header
 		detail["op_id"] = key
-		detail["detail"] = strings.TrimSuffix(sentence, ".") + ". This " +
-			opkey.Header + " was already used for a different change. Read it " +
-			"again and send it with a new key."
+		detail["detail"] = opkey.Reused
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput, detail)
 	case refusedFor(cause, statelog.ReasonDeleted):
 		// A PERMANENT DELETION MARKER on what the write is about: it was
@@ -162,28 +240,30 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 	case errors.Is(cause, builtin.ErrUndeclaredArgument):
 		// THE REQUEST IS THE CALLER'S TO CHANGE: an argument the tool does
 		// not read, refused by name at the tools' own gate rather than
-		// dropped.
+		// dropped, and named as `fields`.
+		var unread *builtin.UndeclaredArguments
+		if errors.As(cause, &unread) {
+			detail[KeyFields] = unread.Names
+		}
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody, detail)
 	case errors.Is(cause, builtin.ErrNoAuthorizer):
 		// A WIRING THAT DECIDED NOTHING, which no retry clears.
-		log.Error("operator_no_authorizer", "detail", sentence)
+		log.Error("operator_no_authorizer", "error", cause.Error())
 		httpjson.FailWithFields(w, http.StatusInternalServerError,
 			httpjson.CodeInternalError, about)
 	case errors.Is(cause, builtin.ErrUndecidable):
 		// THIS NODE COULD NOT DECIDE — the organisation it runs or the
 		// caller's identity could not be read — so waiting can clear it.
+		logCondition("operator_call_unavailable", cause, "op_id", key)
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 			authz.RetryUndecidedSeconds, detail)
 	case errors.As(cause, &refused):
 		// THE AUTHORITY TABLE'S OWN REFUSAL, in the envelope every surface
 		// answers one with: the rule's reason and the grants that would
-		// have admitted the caller, beside the sentence the tool's gate
-		// worded — so "you may not" reads the same in a turn, in an
-		// assistant and here, and a screen can say what would change it.
+		// have admitted the caller, which is what a screen says would
+		// change it.
 		refuseDecision(w, refused.Decision, detail)
-	case errors.Is(cause, builtin.ErrRefused):
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 	case errors.Is(cause, iam.ErrNoHolder), errors.Is(cause, iam.ErrHolderUnseated):
 		// A LOGIN NOBODY HOLDS, and a holder whose seat the chart no longer
 		// has, name no record — which the caller only learns once the
@@ -191,48 +271,127 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// roster.
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
 	default:
-		failClass(w, cause, key, detail, about)
+		failClass(w, cause, key, detail, about, conditioned)
 	}
 }
 
 // failClass answers a refusal by the class its cause states.
 //
 // A FAULT ([crewletmcp.RefusalInternalError]) is `500 internal_error` with NO
-// Retry-After, carrying the tool's sentence — which a fault's is written to
-// keep free of the error, whose words are already in the log ([FailWrite]
-// words a writer's the same way).
+// Retry-After, and its error is in the log and nowhere else.
 //
 // A FAILURE WITH NO CLASS this build knows is a first-party tool that forgot to
 // classify (`builtin`'s own suite walks for that) or a writer error nothing
-// classified: it is answered as an opaque internal error with the sentence in
-// the log, because guessing a class for it would be a status nobody chose —
-// and with no sentence at all, because nothing vouches that it was written to
-// leave the error out.
+// classified: it is answered as an opaque internal error with its cause in the
+// log, because guessing a class for it would be a status nobody chose, and
+// with no detail at all.
 func failClass(w http.ResponseWriter, cause error, key string, detail,
-	about httpjson.Detail) {
+	about httpjson.Detail, conditioned bool) {
 
 	class := classOf(cause)
 	answer, known := classAnswers[class]
 	switch {
 	case !known:
+		errText := "<nil>"
+		if cause != nil {
+			errText = cause.Error()
+		}
 		log.Error("operator_refusal_unclassified", "refusal", string(class),
-			"detail", detail["detail"])
+			"error", errText)
 		httpjson.FailWithFields(w, http.StatusInternalServerError,
 			httpjson.CodeInternalError, about)
 	case answer.status == 0:
 		// WHETHER AND WHEN TO COME BACK is the cause's to say: a refusal
 		// waiting cannot clear — an evicted node, a full log, a record
-		// this node cannot decode — carries no Retry-After, one that
-		// derived its own hint carries that, and anything else this
-		// node's undecided hint ([statelog.RetryAfter]'s rule, which
-		// every surface answering a refusal reads).
+		// this node cannot decode, a company whose file storage is full —
+		// carries no Retry-After, one that derived its own hint carries
+		// that, and anything else this node's undecided hint
+		// ([builtin.RetryAfter], the rule every surface answering a
+		// refusal reads).
 		otherwise := time.Duration(authz.RetryUndecidedSeconds) * time.Second
+		after := httpjson.RetrySeconds(builtin.RetryAfter(cause, otherwise))
+		logCondition("operator_call_unavailable", cause, "op_id", key)
 		detail["op_id"] = key
-		httpjson.UnavailableWith(w, answer.code,
-			httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise)), detail)
+		httpjson.UnavailableWith(w, answer.code, after, detail)
+	case conditioned && class == crewletmcp.RefusalStaleVersion:
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+			httpjson.CodeVersionMoved, detail)
 	default:
 		httpjson.FailWithFields(w, answer.status, answer.code, detail)
 	}
+}
+
+// LogCondition writes what a node's condition says for whoever runs the node
+// — a state-log refusal's own detail, which names positions, settings and the
+// broker's words, or a backend's error naming its hosts — to the one reader
+// it is for: every surface that answers a condition answers it without the
+// error, in a person's sentence for it ([builtin.ConditionSentence]) or, on the
+// act route and the human write surface, in its code's own (ADR-0060), so this
+// line is the only place the error goes.
+//
+// THROUGH THE SURFACE'S OWN LOGGER AND WITH ITS OWN FIELDS — the verb and the
+// operation an artifact write was, the read a configuration route made, the
+// board and the dataset a reading was for — because a line that carries the
+// error alone, under this package's component, says that something failed and
+// nothing about what. Only the level is decided once, for every surface:
+// [conditionLevel], WARN where no wait clears the condition and INFO where one
+// does, since a gesture somebody made once is worth its line.
+func LogCondition(ctx context.Context, logger *slog.Logger, event string, err error,
+	fields ...any) {
+
+	logger.Log(ctx, conditionLevel(err), event,
+		append(fields[:len(fields):len(fields)], "error", err.Error())...)
+}
+
+// logCondition is [LogCondition] on this surface, for a writer that holds no
+// request context — [Fail] and its kin, which every surface answers a refusal
+// through and none hands a context to.
+func logCondition(event string, err error, fields ...any) {
+	fields = append(fields[:len(fields):len(fields)], "error", err.Error())
+	if conditionLevel(err) == slog.LevelWarn {
+		log.Warn(event, fields...)
+		return
+	}
+	log.Info(event, fields...)
+}
+
+// conditionLevel is [statelog.ConditionLevel]'s rule over the one hint a
+// person is told ([builtin.RetryAfter]): WARN where no wait clears err — the
+// state log's own refusals of that kind, and a full file store, which only an
+// administrator can clear — and INFO where one does.
+func conditionLevel(err error) slog.Level {
+	if builtin.RetryAfter(err, time.Second) == 0 {
+		return slog.LevelWarn
+	}
+	return slog.LevelInfo
+}
+
+// AnswerCondition answers err as the condition of the node it is, for a
+// surface whose every other failure is a fault: `503` in a person's words for
+// it ([builtin.ConditionSentence]), under its own hint ([builtin.RetryAfter]:
+// none where no wait clears it, this node's undecided hint where it derived
+// none), its error to the surface's own log ([LogCondition]) under event with
+// fields, and beside the sentence the surface's own extra detail, nil for
+// none: what a `/setup` submission sealed before the condition stopped it
+// (`wrote_secrets`) is the one thing it must still be told. It writes nothing
+// and reports false for an error no condition claims, which the caller
+// answers as the fault it is.
+func AnswerCondition(ctx context.Context, w http.ResponseWriter, logger *slog.Logger,
+	event string, err error, extra httpjson.Detail, fields ...any) bool {
+
+	said, ok := builtin.ConditionSentence(err)
+	if !ok {
+		return false
+	}
+	LogCondition(ctx, logger, event, err, fields...)
+	detail := httpjson.Detail{}
+	maps.Copy(detail, extra)
+	detail["detail"] = said
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+		httpjson.RetrySeconds(builtin.RetryAfter(err,
+			time.Duration(authz.RetryUndecidedSeconds)*time.Second)),
+		detail)
+	return true
 }
 
 // classOf is the refusal class a cause states, or "" where it states none.
@@ -246,44 +405,43 @@ func refusedFor(err error, reason statelog.Reason) bool {
 	return errors.As(err, &refused) && refused.Reason == reason
 }
 
-// refuseDecision writes one authority REFUSAL in the engine's envelope: `403
-// step_up_required` naming the window for a stale proof, `403 token_refused`
-// for a machine token on a verb that needs a person present, and `403
-// unauthorized` with the rule's reason and grants otherwise, each beside
-// whatever else detail carries (the sentence a tool's gate worded it with).
+// refuseDecision writes one authority REFUSAL in the engine's envelope, in the
+// status and code the authority table's own mapping gives it
+// ([authz.RefusalFields]) — `step_up_required` naming the window for a stale
+// proof, `token_refused` for a machine token on a verb that needs a person,
+// `unauthorized` with the rule's reason and grants otherwise — each beside
+// whatever else detail carries: the fields naming what the call was about, the
+// person's words a refusal has, or the verb a surface's own decision was about.
 //
-// THE SAME CODES [authz.EnvelopeRefusal] ANSWERS, so a route that decides
-// itself and one the router stopped cannot answer one refusal two ways. A
-// token refusal answered `unauthorized` carried that code's sentence about a
-// grant the credential lacks, which no grant on a token would supply.
+// THROUGH THE ONE MAPPING rather than a copy of it: a copy is a second place
+// every new arm has to land, and this surface's once lacked the token arm and
+// answered a token's refusal `unauthorized`, whose sentence asks for a
+// permission no token could carry.
 func refuseDecision(w http.ResponseWriter, d authz.Decision, detail httpjson.Detail) {
-	if d.Reason == authz.ReasonStepUp {
-		for k, v := range authz.StepUpDetail(d) {
-			detail[k] = v
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired, detail)
+	status, code, fields := authz.RefusalFields(d)
+	if d.NotFound() {
+		// Byte for byte an id nothing holds: nothing of this surface's
+		// rides it, or the refusal says the artifact exists.
+		httpjson.FailWithFields(w, status, code, fields)
 		return
 	}
-	for k, v := range authz.RefusalDetail(d.Reason, d.Grants) {
+	for k, v := range fields {
 		detail[k] = v
 	}
-	code := httpjson.CodeUnauthorized
-	if d.Reason == authz.ReasonTokenRefused {
-		code = httpjson.CodeTokenRefused
-	}
-	httpjson.FailWithFields(w, http.StatusForbidden, code, detail)
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // RefuseDecision answers an authority decision a SURFACE took itself — on a
 // stored row it read before any tool ran — in the very envelope [Fail] answers
 // the tools' own with: `401` for nobody, `503` for a caller or a chart this
 // node could not read, `403 unauthorized` (or `step_up_required`) for a
-// refusal. The sentence is worded by [builtin.Refusal] over
-// [builtin.DecisionError] — the tools' own two functions — so a refusal a route
-// takes and one a tool takes read the same.
+// refusal. Like a tool's, it carries the rule's reason and the grants that
+// would have admitted the caller, and no sentence of the engine's verbs: the
+// code's own sentence is the one a person reads (ADR-0060).
 func RefuseDecision(w http.ResponseWriter, r *http.Request, action authz.Action,
 	d authz.Decision) {
 
+	refused := httpjson.Detail{KeyAction: string(action)}
 	switch _, how := iam.From(r.Context()); {
 	case how == iam.Anonymous:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -291,16 +449,19 @@ func RefuseDecision(w http.ResponseWriter, r *http.Request, action authz.Action,
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
 			auth.RetryIdentity(iam.Reason(r.Context())))
 	case d.Unknown():
+		log.InfoContext(r.Context(), "operator_decision_undecided",
+			"action", string(action))
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			authz.RetryUndecidedSeconds, httpjson.Detail{
-				"detail": builtin.Refusal(string(action),
-					builtin.DecisionError(action, d)),
-			})
+			authz.RetryUndecidedSeconds, refused)
 	default:
-		refuseDecision(w, d, httpjson.Detail{"detail": builtin.Refusal(
-			string(action), builtin.DecisionError(action, d))})
+		refuseDecision(w, d, refused)
 	}
 }
+
+// KeyAction names the verb a surface's own authority decision was about, on
+// [RefuseDecision]'s answer: the value a sentence naming the verb used to
+// carry.
+const KeyAction = "action"
 
 // UnknownOutcome is the 503 of a write this node cannot account for, carrying
 // `outcome: "unknown"`, the request's operation key and whether ANOTHER node
@@ -320,23 +481,18 @@ func RefuseDecision(w http.ResponseWriter, r *http.Request, action authz.Action,
 // it landed. Either way the key is the one to keep: a fresh one is a second
 // operation, and if the first landed it is a second write.
 //
-// sentence is the tool's own sentence about THIS write — what may have landed,
-// and what shows whether it did — carried as `tool_detail` beside this
-// surface's own, or empty where there is none. about is the write's own
-// receipt or the fields naming what it was about, carried beneath this
-// answer's own fields, because a 503 that dropped it left a client holding a
-// key and nothing saying which object to read to see whether it landed.
-func UnknownOutcome(w http.ResponseWriter, key string, unvouched bool, sentence string,
+// about is the write's own receipt or the fields naming what it was about,
+// carried beneath this answer's own fields, because a 503 that dropped it left
+// a client holding a key and nothing saying which object to read to see
+// whether it landed. The tool's own sentence about the write is NOT carried:
+// it is written for a model (ADR-0060), and the key, `unvouched` and the
+// object are what a client acts on.
+func UnknownOutcome(w http.ResponseWriter, key string, unvouched bool,
 	about map[string]any) {
 
 	body := httpjson.Detail{}
-	for k, v := range about {
-		body[k] = v
-	}
+	maps.Copy(body, about)
 	body["detail"] = opkey.UnknownDetail(unvouched)
-	if sentence != "" {
-		body["tool_detail"] = sentence
-	}
 	// THE WRITER OWNS `outcome`, `op_id` and `unvouched`, over whatever the
 	// receipt carried — a two-record tool's receipt has no `outcome` of its
 	// own, only its halves' — and drops the Retry-After of an unvouched one.
@@ -363,8 +519,7 @@ func Interrupted(w http.ResponseWriter, r *http.Request, key, tool string, err e
 	}
 	log.WarnContext(r.Context(), "operator_call_interrupted", "tool", tool,
 		"op_id", key, "error", err.Error())
-	UnknownOutcome(w, key, false, "the call was interrupted before "+tool+
-		" answered, so whether it landed is unknown", map[string]any{"tool": tool})
+	UnknownOutcome(w, key, false, map[string]any{"tool": tool})
 }
 
 // ClassifyWrite states the refusal class of an error a WRITER returned to a
@@ -401,62 +556,35 @@ func ClassifyWrite(err error) error {
 }
 
 // FailWrite answers the error a WRITER returned to a surface that called it
-// without a tool: classified by [ClassifyWrite] and answered by [Fail], under
-// a sentence a person may read — the domain's own refusal as it composed it,
-// a condition in [builtin.Condition]'s words, and a FAULT in fixed words with
-// its error in this node's log and nowhere else, because a store's error is a
-// driver's message or a database path. The surface used to hand [Fail] the
-// error's own text whatever it was, so a disk error's path reached the
-// client's `detail`.
+// without a tool: classified by [ClassifyWrite] and answered by [Fail], in the
+// person's words the writer put beside its error ([caveat.RefusalOf]) or in
+// none, so the code's own sentence stands alone. A writer's error text is
+// never the detail: a domain refusal's is written for a model, a condition's
+// names the node's internals, and a store's is a driver's message or a
+// database path. A FAULT's error is logged here, the one place it is read,
+// and a condition's where [Fail] answers it ([LogCondition]).
 func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string,
 	about httpjson.Detail) {
 
 	cause := ClassifyWrite(err)
-	Fail(w, cause, writeSentence(ctx, cause, err), key, about)
-}
-
-// writeFault is the sentence a writer's fault is answered with: whose it is,
-// that sending it again does not clear it, and where its reason is.
-const writeFault = "the write failed on a fault in this node itself — not " +
-	"anything about this request, and not something sending it again clears; " +
-	"the node's log has the details"
-
-// writeSentence is the words [FailWrite] answers a writer's error with.
-//
-// A WRITE NOBODY ANSWERED FOR is told in fixed words too ([builtin.Unanswered]),
-// for a condition's reason: the router's own name every node it asked, and the
-// words a person reads are what to do, which the unknown's own answer carries.
-func writeSentence(ctx context.Context, cause, err error) string {
-	switch {
-	case classOf(cause) == crewletmcp.RefusalInternalError:
+	if classOf(cause) == crewletmcp.RefusalInternalError {
 		log.ErrorContext(ctx, "operator_write_fault", "error", err.Error())
-		return writeFault
-	case errors.Is(err, estate.ErrOutcomeUnknown):
-		return builtin.Unanswered
 	}
-	if why, ok := builtin.Condition(err); ok {
-		return why
-	}
-	return err.Error()
+	Fail(w, cause, caveat.RefusalOf(err), key, about)
 }
 
-// writeClass is the class a writer's error is refused under.
+// KeyFields names the arguments a call carried that its tool does not read, on
+// its `400 invalid_body`: values a client fixes its request by.
+const KeyFields = "fields"
+
+// writeClass is the class a writer's error is refused under: the class its
+// domain decided ([builtin.WriterClass] — the one table the tools' own
+// failures are classed by, every native domain's, so a domain added beside the
+// tracker and the knowledge base is never a 500 for a content refusal here
+// while its tools class it), a condition's, or a fault.
 func writeClass(err error) crewletmcp.Refusal {
-	switch {
-	case errors.Is(err, tracker.ErrNoTask), errors.Is(err, tracker.ErrNoComment),
-		errors.Is(err, tracker.ErrNoProject), errors.Is(err, pages.ErrNotFound):
-		return crewletmcp.RefusalNotFound
-	case errors.Is(err, tracker.ErrStaleVersion), errors.Is(err, pages.ErrStaleVersion):
-		return crewletmcp.RefusalStaleVersion
-	case errors.Is(err, pages.ErrTitleTaken), errors.Is(err, statelog.ErrExists):
-		return crewletmcp.RefusalExists
-	case errors.Is(err, pages.ErrConflict), errors.Is(err, statelog.ErrConflict):
-		return crewletmcp.RefusalConflict
-	case errors.Is(err, tracker.ErrForbidden), errors.Is(err, tracker.ErrNotAuthor),
-		errors.Is(err, pages.ErrReserved):
-		return crewletmcp.RefusalForbidden
-	case errors.Is(err, tracker.ErrInvalid), errors.Is(err, pages.ErrInvalid):
-		return crewletmcp.RefusalInvalid
+	if class, ok := builtin.WriterClass(err); ok {
+		return class
 	}
 	if _, ok := builtin.Condition(err); ok {
 		return crewletmcp.RefusalUnavailable

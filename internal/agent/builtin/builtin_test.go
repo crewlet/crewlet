@@ -24,12 +24,13 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const companyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     p:
       model: sonnet
@@ -222,11 +223,10 @@ func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
-		// Leaves the process. Both are ALSO denied to a worker by name,
-		// for reasons narrower than open-world — see the denylist in
+		// Leaves the process. ALSO denied to a worker by name, for a
+		// reason narrower than open-world — see the denylist in
 		// internal/agent/subagent.
-		builtin.A2AAskTool:     true,
-		builtin.RunSandboxTool: true,
+		builtin.A2AAskTool: true,
 
 		// Private state: read back by this seat's own next turn and by
 		// nobody else. A worker writing one of these writes to its
@@ -246,11 +246,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// The tracker's and the knowledge base's own reads.
 		builtin.ListWorkItemsTool:    false,
 		builtin.GetWorkItemTool:      false,
-		tracker.GetWorkCatalogueTool: false,
-		tracker.ListProjectsTool:     false,
-		tracker.DescribeProjectTool:  false,
-		tracker.TaskActivityTool:     false,
-		tracker.MyWorkTool:           false,
+		worklet.GetWorkCatalogueTool: false,
+		worklet.ListProjectsTool:     false,
+		worklet.DescribeProjectTool:  false,
+		worklet.TaskActivityTool:     false,
+		worklet.MyWorkTool:           false,
 		builtin.ListPagesTool:        false,
 		builtin.GetPageTool:          false,
 
@@ -267,36 +267,37 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 
 		// A project's own settings, which every seat holds for one
 		// facet: a declared tag is a filter on everybody's board.
-		tracker.WriteProjectTool: true,
+		worklet.WriteProjectTool: true,
 
 		// A FOLD IS A SHARED WRITE: it closes somebody's item on every
 		// board and moves its subtasks to another.
-		tracker.MergeWorkItemTool: true,
+		worklet.MergeWorkItemTool: true,
 
 		// SO IS A MOVE: an item and its subtree leave one board for
 		// another, and every key in it changes.
-		tracker.MoveWorkItemTool: true,
+		worklet.MoveWorkItemTool: true,
 
 		// AND THE RANKED SEARCH IS A READ. It sat on the default arm,
 		// whose ReadOnly=No with OpenWorld unset is exactly what
 		// WritesToSharedSurface reads as TRUE — so a worker granted it
 		// was refused it, while list_work_items beside it was admitted.
-		tracker.SearchWorkItemsTool: false,
+		worklet.SearchWorkItemsTool: false,
 
 		// A PROJECT'S FILES: reading one is a read, and writing or
 		// removing one changes what everybody on the project opens.
-		tracker.ListProjectFilesTool:  false,
-		tracker.ReadProjectFileTool:   false,
-		tracker.WriteProjectFileTool:  true,
-		tracker.RemoveProjectFileTool: true,
+		worklet.ListProjectFilesTool:  false,
+		worklet.ReadProjectFileTool:   false,
+		worklet.WriteProjectFileTool:  true,
+		worklet.RemoveProjectFileTool: true,
 
-		// THE ARTIFACTS: the four reads (the company's brand among them)
+		// THE ARTIFACTS: the five reads (the company's brand among them)
 		// are reads, and every write is read by the people the artifact is
 		// shared with; a folder made or an artifact filed is where a whole
 		// team finds its work.
 		builtin.ListArtifactsTool:        false,
 		builtin.GetArtifactTool:          false,
 		builtin.DashboardSourcesTool:     false,
+		builtin.ArtifactFormatTool:       false,
 		builtin.CompanyBrandTool:         false,
 		builtin.CreateArtifactTool:       true,
 		builtin.PublishArtifactTool:      true,
@@ -364,6 +365,18 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// publishes, which a worker of a granted seat may be handed.
 		builtin.FleetHealthTool: false,
 		builtin.CodeStatusTool:  false,
+		// CHATLET. Its reads are reads; saying something and
+		// reacting are words on somebody else's screen; joining and
+		// leaving move only where this seat listens, which is its own.
+		builtin.ReadChannelTool:    false,
+		builtin.ListChannelsTool:   false,
+		builtin.SearchMessagesTool: false,
+		builtin.PostMessageTool:    true,
+		builtin.ReplyInThreadTool:  true,
+		builtin.SendDMTool:         true,
+		builtin.ReactToMessageTool: true,
+		builtin.JoinChannelTool:    false,
+		builtin.LeaveChannelTool:   false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1024,6 +1037,8 @@ type toolSkills struct{}
 
 func (toolSkills) Load(string) (skills.Loaded, bool) { return skills.Loaded{}, false }
 
+func (toolSkills) Keys() []string { return nil }
+
 type searcher struct{}
 
 func (searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
@@ -1042,7 +1057,7 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// EVERY builtin, so a test that asks "is each one classified"
 		// is asking about the whole set rather than the subset this
 		// helper happened to wire.
-		Sandbox: &launchSpy{}, ToolSkills: toolSkills{}, Knowledge: searcher{},
+		ToolSkills: toolSkills{}, Knowledge: searcher{},
 		// THE TRACKER AND THE KNOWLEDGE BASE INCLUDED. Left out, the
 		// classification table below was silently about eleven builtins
 		// rather than the whole registry — which is how
@@ -1092,6 +1107,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// rows read as rules no registered tool answers.
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
 			Code: codeDeps(newCodeHost())},
+		// AND CHATLET, all three halves: left out, its nine tools
+		// were classified by nothing in the table below.
+		Chat: chatDeps(newFakeChat()),
 	}
 }
 

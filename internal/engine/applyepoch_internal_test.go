@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // THE EPOCH EVERY APPLIER READS IS THE PUBLISHED COMPANY'S, AS IT STANDS NOW.
@@ -29,7 +30,7 @@ func TestTheLogsEpochFollowsThePublishedCompany(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	e, err := New(t.Context(), Options{Bootstrap: &b})
 	if err != nil {
 		t.Fatalf("New with no company: %v", err)

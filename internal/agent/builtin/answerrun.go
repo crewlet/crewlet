@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -22,21 +25,36 @@ const AnswerRunTool = "answer_run"
 
 // MaxRunAnswerBytes bounds one answer to a parked coding run.
 //
-// HALF OF [ToolAnswerBytes], because the answer is not delivered alone: it is
-// spliced into the resumed turn as the result of the suspended `run_sandbox`
-// call, framed by the question it answers and the instructions to continue,
-// and that whole message is one tool answer in the turn's context. The other
-// half is the room the question and the framing take. A person's answer to a
-// coding agent's question is a sentence or a paragraph; one this size is a
-// document, and belongs on a page the run can be pointed at.
-const MaxRunAnswerBytes = ToolAnswerBytes / 2
+// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
+// because the answer travels where the question does, beside it. It is sealed onto the
+// run's coordination row with the delivery it came in, which every status flip
+// and every listing of active runs reads whole until the run is carried on;
+// and then it is that run's prompt — the asking run's next message in its own
+// CLI session, after the question it answers, or, where that session cannot
+// go on, a fresh run's brief beside the round's own — which the run's CLI
+// re-sends with every request it makes from then on, each charged to the
+// budget in full, cached or not. So every byte of an answer is paid for again
+// at every step the run takes after it.
+//
+// A person's answer to a coding agent's question is a sentence or a
+// paragraph. One past a page is a document, and belongs on a page or the work
+// item, which the run reads with its own tools when it needs it rather than at
+// every step.
+//
+// NOT [ToolAnswerBytes], which bounds what a tool answers a model: no tool's
+// answer carries this one.
+const MaxRunAnswerBytes = sandbox.MaxAskContextBytes
 
-// RunDesk is what answer_run needs: the run an answer names, and the way to put
-// the answer on the inbox of the seat that holds it. [sandbox.AnswerDesk] is
-// the implementation.
+// RunDesk is what answer_run needs: the run an answer names, the way to put the
+// answer on the control topic of the seat that holds it, and who gave the
+// answer a run already has, which only its seal says ([sandbox.AnswerSeal]).
+// [sandbox.AnswerDesk] is the implementation.
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
-	Deliver(ctx context.Context, given types.SandboxAnswerGiven) error
+	Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error)
+	// Answerer is who gave run's recorded answer, empty where the seal does
+	// not open here.
+	Answerer(run sandbox.PendingRun) string
 }
 
 // RunDeps are answer_run's dependencies.
@@ -83,14 +101,19 @@ type runParties struct {
 //
 // # What it promises, and what it does not
 //
-// It answers `pending`: the answer is on the seat's inbox and the node holding
-// the seat will resume the run with it — but that node is the only one that
-// can, and it may be paused, busy with another of the seat's coding runs
-// (which it finishes or parks before it takes this answer, as it would a chat
-// reply), or restarting. What the answer became is announced there as
-// `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
-// What it refuses up front is what this node can know: a run that is not
-// waiting for an answer (`not_running`).
+// It answers `pending`: the answer is on the seat's control topic, and the
+// node holding the seat records it on the run when it takes it off (the run
+// then reads `answered`) and resumes the run with it once the seat is free of
+// any other coding run, any turn in flight and a person's pause. That node is
+// the only one that can, and it may be restarting, so the answer's fate is
+// settled there and not here. The result names the question it answers
+// (`launch_id`) and the answer's own id (`answer_id`), and the run's record is
+// what says what became of it: `answered` on that question once it is
+// recorded, the id among the question's `declined_answers` if the run let it
+// go, or a new question if the run moved past this one first. Each is also
+// announced as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone`,
+// `declined` or `unoffered`). What it refuses up front is what this node can know: a run that
+// is not waiting for an answer (`not_running`).
 //
 // # It answers the question it was given against
 //
@@ -113,12 +136,15 @@ func (t *answerRun) Name() string { return AnswerRunTool }
 
 func (t *answerRun) Description() string {
 	return "Answer a coding run that stopped to ask a person a question, by " +
-		"naming the run's turn. The run resumes with your answer as the reply " +
-		"to the question it is waiting on now, on the node that holds its seat, " +
-		"once that seat is free of any other coding run. Use this for any " +
-		"parked run — including one started by a schedule, an assignment or a " +
-		"colleague, which has no conversation to reply in. Find parked runs " +
-		"and their questions on the sandbox-runs board."
+		"naming the run's turn. Where the question offers options, name the one " +
+		"chosen in `choice`, with any words beside it in `answer`; an open " +
+		"question is answered in `answer`. The answer is recorded on the run at once, and " +
+		"the run resumes with it as the reply to the question it is waiting on " +
+		"now, on the node that holds its seat, as soon as that seat is free of " +
+		"any other coding run. Use this for any parked run, including one " +
+		"started by a schedule, an assignment or a colleague, which has no " +
+		"conversation to reply in. Find parked runs and their questions on the " +
+		"sandbox-runs board."
 }
 
 func (t *answerRun) Parameters() map[string]any {
@@ -129,13 +155,27 @@ func (t *answerRun) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The turn id of the parked run — its `turn_id` on the sandbox-runs board.",
 			},
+			"launch_id": map[string]any{
+				"type": "string",
+				"description": "The question you are answering: the run's `launch_id` on the " +
+					"sandbox-runs board, read with the question. A run that has moved on to " +
+					"another question since refuses the answer, so it never answers one you did " +
+					"not see.",
+			},
+			"choice": map[string]any{
+				"type": "string",
+				"description": "The id of the option chosen, where the run's question " +
+					"offers options: one of its `decision.options` on the sandbox-runs board.",
+			},
 			"answer": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Your answer to the run's question, as the "+
-					"coding agent should read it. At most %d KiB.", MaxRunAnswerBytes>>10),
+					"coding agent should read it: the whole answer to an open question, "+
+					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
+					"a page the run can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
 		},
-		"required": []any{"turn_id", "answer"},
+		"required": []any{"turn_id", "launch_id"},
 	}
 }
 
@@ -147,8 +187,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Desk == nil || t.deps.Actor == nil {
-		return refused(tools.RefusalUnavailable, AnswerRunTool+" is unavailable: "+
-			"this surface was built without the run record."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), AnswerRunTool+
+			" is unavailable: this surface was built without the run record."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -158,22 +198,31 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("answer_run needs a `turn_id` — the parked run's turn id."), nil
+		return failed(AnswerRunTool + " needs a `turn_id` — the parked run's turn id."), nil
+	}
+	launchID := strings.TrimSpace(argString(args, "launch_id"))
+	if launchID == "" {
+		return failed(AnswerRunTool + " needs a `launch_id`: the question you are answering, " +
+			"the run's `launch_id` read with it on the sandbox-runs board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
+	choice := strings.TrimSpace(argString(args, "choice"))
 	switch {
-	case answer == "":
-		return failed("answer_run needs an `answer` — what the coding agent should be told."), nil
+	case answer == "" && choice == "":
+		return failed(AnswerRunTool + " needs a `choice` naming the option chosen, or an " +
+			"`answer` saying what the coding agent should be told, or both."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
-			"it is spliced into the run as a single tool reply. Put the detail on a page "+
-			"and answer with where it is.", len(answer)>>10, MaxRunAnswerBytes>>10)), nil
+			"it becomes the run's next message, or a fresh run's brief where the run cannot "+
+			"carry on in its own session, and its coding agent reads it again at every step "+
+			"after. Put the detail on a page the run can read, and answer with where it is.",
+			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
 	}
 
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
 	switch {
 	case err != nil:
-		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf("answer_run could not "+
+		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf(AnswerRunTool+" could not "+
 			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
@@ -184,10 +233,36 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("No coding run is "+
 			"parked under turn %s: it has finished or ended, or the id names no run.",
 			clip(turnID))), nil
+	case !slices.Contains(sandbox.Awaiting, run.Status) && run.Answer != nil:
+		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
+		// was and when, rather than taken quietly: an answer is recorded the
+		// moment the seat takes it, so a second person answering the same
+		// question finds it answered here.
+		by := t.deps.Desk.Answerer(run)
+		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run, by)),
+			caveat.AnsweredAlready(by)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
-			"waiting for an answer — there is no question for this to answer.",
+			"waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
+	}
+	// THE QUESTION THE PERSON READ, never the one the run asks now if
+	// those differ: a run that moved on to another question since would
+	// otherwise take an answer, or a choice by id, given to one it no
+	// longer asks.
+	if launchID != run.LaunchID {
+		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("Run %s has moved on to "+
+			"another question since the one you answered (launch %s): read its question "+
+			"again on the sandbox-runs board and answer that one. Nothing was answered.",
+			clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
+	}
+	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
+	// row just read as waiting, whose job the answer is pinned to: a run
+	// asks a new question only under a new job, so the options this checks
+	// are the ones the answer reaches.
+	if _, unoffered := sandbox.AnswerText(run.Decision, choice, answer); unoffered != nil {
+		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf(AnswerRunTool+
+			" was refused: %s. Nothing was answered.", unoffered.Error())), nil
 	}
 	parties, refusal := t.parties(ctx, run)
 	if refusal != nil {
@@ -203,14 +278,16 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// seat it delivers to, so a seat named here is only ever the same one.
 	given := types.SandboxAnswerGiven{
 		TurnID: run.TurnID, Agent: parties.seat.String(), AgentHandle: parties.handle,
-		Answer: answer, AnsweredBy: actor.Handle, AnsweredByKind: string(actor.Kind),
-		OperatorID: actor.OperatorID,
+		Answer: answer, Choice: choice, AnsweredBy: actor.Handle,
+		AnsweredByKind: string(actor.Kind),
+		OperatorID:     actor.OperatorID,
 		// THE QUESTION THIS ANSWERS, off the row just checked as waiting:
 		// the answer resumes the run only while it still waits on it.
 		LaunchID: run.LaunchID,
 	}
 	outcome := statelog.OutcomePending
-	if err := t.deps.Desk.Deliver(ctx, given); err != nil {
+	answerID, err := t.deps.Desk.Deliver(ctx, given)
+	if err != nil {
 		// THE PUBLISH MAY HAVE LANDED, so this is `unknown` rather than a
 		// refusal — see [sandbox.AnswerDesk.Deliver]. Answering it again is
 		// safe: both copies name the question they answer, so whichever is
@@ -220,10 +297,54 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
-	return jsonResult(map[string]any{
+	result := map[string]any{
 		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
-	})
+		// THE QUESTION IT ANSWERS AND THE ANSWER'S OWN ID, which the run's
+		// record is read against to learn what became of it.
+		"launch_id": run.LaunchID,
+	}
+	if answerID != uuid.Nil {
+		result["answer_id"] = answerID.String()
+	}
+	if choice != "" {
+		result["choice"] = choice
+	}
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// the seat's name, and whoever answers it is usually reading through an
+	// assistant: it goes back fenced by the one rule for a coding run's words
+	// ([provenance.CodingRun]), as every other door to them reads them
+	// (ADR-0040), not as a line of the engine's receipt.
+	read := newForeignRead(turn, actor.Handle)
+	asked := provenance.CodingRun(parties.handle)
+	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
+		run.Question)
+	return read.answer(ctx, AnswerRunTool, result, "")
+}
+
+// answeredAlready is the refusal an answer gets for a question already
+// answered, as the model reads it: by whom (by, as the answer's seal names
+// them, or "someone else" where it does not open here), when (RFC 3339, the
+// instant as the record holds it), and what became of that answer as far as
+// the record says. A person's surface shows [caveat.AnsweredAlready] instead,
+// with the instant read off the run's row on the person's own clock.
+func answeredAlready(run sandbox.PendingRun, by string) string {
+	if by == "" {
+		by = "someone else"
+	}
+	when := ""
+	if !run.Answer.RecordedAt.IsZero() {
+		when = " at " + run.Answer.RecordedAt.UTC().Format(time.RFC3339)
+	}
+	said := fmt.Sprintf("This question was already answered by %s%s, so your answer was not used.",
+		by, when)
+	switch run.Status {
+	case sandbox.StatusAnswered:
+		return said + " The run resumes with that answer once its seat is free."
+	case sandbox.StatusResumed:
+		return said + " The run was resumed with that answer."
+	}
+	return said
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat
@@ -243,7 +364,7 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 	if err != nil || id == uuid.Nil {
 		return runParties{}, refusalOf(faulted(ctx, AnswerRunTool,
 			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf("answer_run cannot answer run %s: its "+
+				errUnreadableSeatID), fmt.Sprintf(AnswerRunTool+" cannot answer run %s: its "+
 				"record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}

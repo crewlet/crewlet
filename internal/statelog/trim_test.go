@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -363,7 +364,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 	t.Parallel()
 
 	// ARM 1 — THE HOLD IS TAKEN BEFORE THE TICK READS IT. The adopter
-	// pins the tail as step 1 of nine, before a byte is fetched, so every
+	// pins the tail as step 1 of ten, before a byte is fetched, so every
 	// tick from then on sees it and the minimum cannot pass it.
 	t.Run("a hold taken before the tick pins the tail", func(t *testing.T) {
 		t.Parallel()
@@ -384,19 +385,26 @@ func TestTrimRacesATransfer(t *testing.T) {
 
 	// ARM 2 — THE HOLD IS RENEWED FOR THE WHOLE TRANSFER. A gigabyte-scale
 	// copy outlives many ticks, and a hold that only covered the first one
-	// would be a race the joiner loses by being slow.
+	// would be a race the joiner loses by being slow. The holder is the one
+	// every holder in the engine uses ([statelog.HoldTail]) rather than a hold
+	// this case refreshes itself: a case that renewed by hand certified a
+	// holder that did not exist, while the join's own pin was put once and
+	// never renewed. Its clock runs through five stale bounds, and the trim is
+	// asked after every renewal.
 	t.Run("a renewed hold pins the tail for as long as the copy runs", func(t *testing.T) {
 		t.Parallel()
-		in := baseInputs()
-		in.AgeFloor = 9_000
-		for tick := range 20 {
-			// The adopter renews on its own cadence; the tick moves on.
-			in.Now = in.Now.Add(statelog.TrimHoldStale / 4)
-			in.Holds = []statelog.Hold{{
-				Owner: "joiner", Generation: 1, Seq: 4_000, At: in.Now,
-			}}
+		clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+		register := memory.NewFleet()
+		pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, nil)
+		for tick := range 5 * 4 {
+			now := clock.advance(statelog.TrimHoldStale / 4)
+			in := baseInputs()
+			in.Now, in.BackupAt, in.AgeFloor = now, now, 9_000
+			in.Holds = renewedAt(t, register, now)
 			if d := statelog.Trim(in.Terms()); d.To != 4_000 {
-				t.Fatalf("tick %d would remove up to %d, want 4000", tick, d.To)
+				t.Fatalf("tick %d, %s into the copy, would remove up to %d (%s), "+
+					"want 4000", tick, time.Duration(tick+1)*statelog.TrimHoldStale/4,
+					d.To, d.Detail)
 			}
 		}
 	})
@@ -444,7 +452,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 			t.Fatalf("the refusal is %q and does not say the artefact went stale "+
 				"during the transfer", err)
 		}
-		// AND THE LIVE DATABASE SURVIVED. Step 7 is before step 8, which
+		// AND THE LIVE DATABASE SURVIVED. Step 7 is before step 9, which
 		// is the one place the engine replaces a database.
 		if h.closes.Load() != 0 {
 			t.Errorf("the live database was closed %d time(s) for an install "+

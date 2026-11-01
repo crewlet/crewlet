@@ -13,7 +13,11 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { LayerHost } from "@crewlethq/ui";
-import { SlidesView } from "./SlidesView.tsx";
+import { SlidesView, deckEditFields } from "./SlidesView.tsx";
+import { context, openFrame } from "./draftTesting.ts";
+import { draftSnapshot, parseDraftChange } from "~/app/assistant/draft.ts";
+import { draftOf } from "~/lib/artifacts/deck.ts";
+import { titleOf } from "~/lib/slides.tsx";
 import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactDeck, ArtifactDetail } from "~/protocol/index.ts";
@@ -170,4 +174,42 @@ test("Present's controls stop at the ends of the deck, saying why", async () => 
   expect(await within(show).findByText(`${shown} of ${shown}`)).toBeTruthy();
   const next = within(show).getByRole("button", { name: "Next slide" });
   expect(next.getAttribute("aria-disabled")).toBe("true");
+});
+
+// A READER WHO MAY NOT PUBLISH HOLDS NO DRAFT: the deck is read, and the
+// assistant is told of no edit to change.
+test("a deck read rather than edited declares no draft", async () => {
+  openFrame("artifact");
+  mount();
+  await screen.findByText(`Slide 1 of ${deck.slides!.length}`);
+  expect(context().draft).toBeUndefined();
+  expect(context().accepts).not.toContain("draft.set");
+});
+
+// AN EDIT'S FIELDS ARE THE DECK'S TITLE AND EACH SLIDE'S TITLE AND NOTES, each
+// set as the editor's own controls write it: the title's run of text in the
+// slide's tree, the notes beside it.
+test("a deck's edit reads and sets the deck's title and each slide's title and notes", () => {
+  const draft = draftOf(deck, 1);
+  const spec = {
+    kind: "client" as const,
+    scope: "Your edit (not saved)",
+    value: draft,
+    fields: deckEditFields(draft.order),
+    apply: () => {},
+  };
+  const first = draft.slides[draft.order[0]!]!;
+  expect(draftSnapshot(spec).fields[1]).toMatchObject({
+    path: "slides.1.title",
+    value: titleOf(first.root),
+    editable: true,
+  });
+  const parsed = parseDraftChange(spec, {
+    values: { title: "Plan for Q3", "slides.1.title": "Where we are", "slides.2.notes": "Pause." },
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  expect(parsed.value.next.title).toBe("Plan for Q3");
+  expect(titleOf(parsed.value.next.slides[draft.order[0]!]!.root)).toBe("Where we are");
+  expect(parsed.value.next.slides[draft.order[1]!]!.notes).toBe("Pause.");
+  expect(parseDraftChange(spec, { values: { "slides.1.notes": "x".repeat(4001) } }).ok).toBe(false);
 });

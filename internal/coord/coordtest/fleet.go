@@ -55,18 +55,24 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"payload_race", payloadRaceCases},
 		{"channels", channelCases},
 		{"follows", followCases},
+		{"chat_reads", chatReadCases},
+		{"chat_read_watch", chatReadWatchCases},
 		{"fires", fireCases},
 		{"custody", custodyCases},
 		{"rebases", rebaseCases},
 		{"sandbox_runs", runCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
+		{"seat_access", seatAccessCases},
 		{"mailboxes", mailboxCases},
 		{"object stores", objectStoreCases},
 		{"trash reaps", trashReapCases},
 		{"upload reservations", uploadReservationCases},
 		{"seat_pauses", seatPauseCases},
+		{"model_retries", modelRetryCases},
+		{"device_sign_ins", deviceSignInCases},
 		{"maintenance", maintenanceCases},
+		{"backups", backupCases},
 		{"listings", listingCases},
 		{"markers", markerCases},
 		{"floors", floorCases},
@@ -233,6 +239,25 @@ var valveCases = []fleetCase{{
 		}
 		if h.allow("seat:ceo", 1, time.Second, at.Add(900*time.Millisecond)) {
 			h.t.Fatal("a later instant in the same window got its own count")
+		}
+	},
+}, {
+	// THE WIDEST WINDOW IS COUNTED, and one past it is an error: a backend
+	// that kept a window shorter than its caller counts over would restart
+	// the count mid-window (the Dashboard Assistant's turn rate is per
+	// minute), and one that took a wider window and reaped it would pass
+	// far more than the caller asked for.
+	name: "the widest window is counted and one past it is refused",
+	fn: func(h *fleetHarness) {
+		at := h.now().Truncate(coord.MaxRateWindow)
+		if !h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at) {
+			h.t.Fatal("the first call in the widest window was refused")
+		}
+		if h.allow("assistant.turn:p", 1, coord.MaxRateWindow, at.Add(coord.MaxRateWindow-time.Second)) {
+			h.t.Fatal("a later instant in the widest window got its own count")
+		}
+		if ok, err := h.f.Allow(h.ctx, "assistant.turn:q", 1, coord.MaxRateWindow+time.Second, at); err == nil {
+			h.t.Fatalf("a window past coord.MaxRateWindow was counted (ok %v) rather than refused", ok)
 		}
 	},
 }, {
@@ -686,33 +711,112 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
-	// EXPECTING SOMETHING WHEN NOTHING IS ACTIVE IS NOT A RACE.
-	//
-	// The comparison is "if a pointer exists it must still name this", and
-	// with no pointer there is no winner to have lost to. Refusing here
-	// looks defensible and breaks a state nodes reach constantly: one
-	// seeded from a file has a locally-active revision before it has
-	// published anything, so every config write on it would fail until it
-	// did — measured as a 409 on a single-node deployment that had done
-	// nothing wrong.
-	name: "an activation expecting a revision on an empty store still lands",
+	// EXPECTING A REVISION WHEN NOTHING IS ACTIVE IS A RACE: the write
+	// was built on a pointer that is gone, so it edits a company the fleet
+	// no longer runs. Letting it land is how a node whose own copy named
+	// a revision the fleet had dropped published that copy's successor
+	// over the fleet's loss — every config write named the node's local
+	// revision, whatever the fleet ran. A writer that read no pointer
+	// passes ExpectAbsent, which the case below lands.
+	name: "an activation expecting a revision lands only while the pointer names it",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
-			Expect: "rev-0", Origin: anOrigin}); err != nil {
-			h.t.Fatalf("Activate: %v", err)
+			Expect: "rev-0", Origin: anOrigin})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("err = %v, want coord.ErrActivationRaced over no pointer", err)
 		}
-		target, found, err := h.f.Target(h.ctx)
-		if err != nil || !found || target.RevisionID != "rev-1" {
-			h.t.Fatalf("target = %+v found=%v err=%v, want the write to land",
-				target, found, err)
+		// AND IT LEFT NOTHING BEHIND: no pointer, and no body for one.
+		if target, found, err := h.f.Target(h.ctx); err != nil || found {
+			h.t.Fatalf("target = %+v found=%v err=%v, want no activation", target, found, err)
+		}
+		if _, ok, err := h.f.Payload(h.ctx, "rev-1"); err != nil || ok {
+			h.t.Fatalf("payload ok=%v err=%v, want the refused body unpublished", ok, err)
 		}
 	},
 }, {
-	// AN EMPTY EXPECTATION IS UNCONDITIONAL, which is the boot publish:
-	// a node asserting what it holds rather than editing what it read.
-	// Turning that into a race would make a first boot fail against a
-	// fleet that had legitimately moved on.
+	// AN EXPECTED EPOCH PINS THE VERY ACTIVATION THE WRITER READ. With the
+	// revision alone, another writer re-activating it in between lets the
+	// write land a millisecond after that one — at an instant the writer
+	// never planned — and the boot publish of an offline offer, which
+	// records the instant it will land at before it publishes, then reads
+	// its own landed publish as never made. Pinned, the re-activation is the
+	// race it is, and a write at the epoch it read lands at exactly
+	// ActivationAt(its instant, that activation's).
+	name: "an activation expecting an epoch lands only on that activation",
+	fn: func(h *fleetHarness) {
+		read, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		again, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-1", Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("re-activate: %v", err)
+		}
+		planned := coord.ActivationAt(h.now().Add(time.Minute), read.At)
+		_, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte("{}"), At: planned,
+			Expect: "rev-1", ExpectEpoch: read.Epoch, Origin: anOrigin})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("an epoch the pointer has moved past: err = %v, want coord.ErrActivationRaced", err)
+		}
+		if target, _, _ := h.f.Target(h.ctx); target.Epoch != again.Epoch {
+			h.t.Fatalf("the refused write moved the pointer to %+v", target)
+		}
+		planned = coord.ActivationAt(h.now().Add(time.Minute), again.At)
+		landed, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte("{}"), At: planned,
+			Expect: "rev-1", ExpectEpoch: again.Epoch, Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("the epoch the pointer is at was refused: %v", err)
+		}
+		if !landed.At.Equal(planned) {
+			h.t.Fatalf("landed at %s, want exactly the planned %s", landed.At, planned)
+		}
+		if _, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-3", Payload: []byte("{}"), At: h.now(),
+			ExpectEpoch: landed.Epoch, Origin: anOrigin}); err == nil ||
+			errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("an epoch with no revision: err = %v, want a refusal that is no race", err)
+		}
+	},
+}, {
+	// A RESTORE SAYS SO, AND ONLY UNTIL THE NEXT WRITE. A peer that knows the
+	// fleet moved on replaces a restored pointer and never a chosen one, so a
+	// mark that outlived its write would let it replace the next choice, and
+	// one the backend dropped would leave a stale restore standing.
+	name: "a restored pointer says so until the next write",
+	fn: func(h *fleetHarness) {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			ExpectAbsent: true, Restore: true, Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("restore: %v", err)
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || !target.Restored || !published.Restored {
+			h.t.Fatalf("restored pointer reads %+v (published %+v, found=%v err=%v), "+
+				"want it marked restored", target, published, found, err)
+		}
+		if _, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-1", Origin: anOrigin}); err != nil {
+			h.t.Fatalf("choose: %v", err)
+		}
+		if target, _, _ = h.f.Target(h.ctx); target.Restored {
+			h.t.Fatalf("a chosen pointer reads %+v, want the restore's mark gone", target)
+		}
+	},
+}, {
+	// AN EMPTY EXPECTATION IS UNCONDITIONAL, which is `crewlet run
+	// -import-company`: an operator asserting a company outright at one
+	// node's start rather than editing what it read. It has nothing to have
+	// raced with, so a pointer that moved under it is replaced, not a
+	// refusal. Every other writer — the boot publish included — read the
+	// pointer, or its absence, and passes what it read.
 	name: "an activation with no expectation overwrites whatever is there",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
@@ -913,8 +1017,9 @@ var planeCases = []fleetCase{{
 }, {
 	// A LATER ACTIVATION CARRIES A LATER INSTANT, whatever the activating
 	// node's clock said. The instant is how a node tells which of two
-	// activations is newer — a booting node republishes its own only when it
-	// is later than the pointer's — so an activation from a node whose clock
+	// activations is newer — a booting node that remembers the fleet on a
+	// revision activated later than a RESTORED pointer's publishes that one
+	// over it, by compare-and-set — so an activation from a node whose clock
 	// runs behind, or a republish of an older `activated_at`, left a node
 	// holding the replaced revision reading its own copy as the newer. See
 	// [coord.ActivationAt].
@@ -1069,6 +1174,40 @@ var planeCases = []fleetCase{{
 		want := []string{"node-z", "node-a", "node-b", "node-c"}
 		if !slices.Equal(ids, want) {
 			h.t.Fatalf("fleet order = %v, want %v — freshest first, then by node id", ids, want)
+		}
+	},
+}, {
+	// WHAT A NODE RUNS IS NOT WHAT THE EPOCH ASKED FOR when it refused
+	// that revision, and the fleet view is where an operator sees a node
+	// still serving the previous company. A backend that dropped the
+	// field reported every refusing node as running nothing.
+	//
+	// AND WHAT IT BOOTS ON IS A THIRD REVISION while a write to its boot
+	// row is being retried: the node runs rev-6 and would come back on
+	// rev-5, and a backend that dropped that field reported a node as
+	// booting on nothing — which is what a reader keeping a revision's
+	// credentials acts on.
+	//
+	// AND THE EPOCH IT LAST APPLIED IS NOT THE ONE IT ATTEMPTED: the node
+	// refused 7 and runs what it applied at 6, and a backend that dropped
+	// that field reported it as having applied nothing — which a writer
+	// judging whether its save reached the node reads as "not yet" for good.
+	name: "an apply record carries what its node applied, serves and boots on",
+	fn: func(h *fleetHarness) {
+		if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+			NodeID: "node-a", Epoch: 7, RevisionID: "rev-7", Applied: 6, Serving: "rev-6",
+			Boots: "rev-5", Status: "failed", Error: "refused", UpdatedAt: h.now(),
+		}); err != nil {
+			h.t.Fatalf("RecordApply: %v", err)
+		}
+		got, err := h.f.Fleet(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Fleet: %v", err)
+		}
+		if len(got) != 1 || got[0].RevisionID != "rev-7" || got[0].Applied != 6 ||
+			got[0].Serving != "rev-6" || got[0].Boots != "rev-5" {
+			h.t.Fatalf("fleet = %+v, want node-a asked for rev-7 at epoch 7, having "+
+				"applied epoch 6, serving rev-6 and booting on rev-5", got)
 		}
 	},
 }, {
@@ -1578,422 +1717,26 @@ var custodyCases = []fleetCase{{
 		}
 	},
 }, {
+	// The caller's mistake, never coord.ErrCustodyUndecidable: that is the
+	// one DEFINITE claim error, a fact about a record the store holds, and
+	// a keeper acknowledges the delivery and steps over the batch on it —
+	// so a backend that spent it on a malformed claim would have a batch
+	// nobody claimed left unsettled as though the fleet had a record of it.
 	name: "an unnamed batch or claimant is an error, not a keeper",
 	fn: func(h *fleetHarness) {
 		for _, c := range [][2]string{{"", "data-a"}, {"batch-5", ""}} {
-			if keeper, err := h.f.ClaimCustody(h.ctx, c[0], c[1]); err == nil || keeper != "" {
+			keeper, err := h.f.ClaimCustody(h.ctx, c[0], c[1])
+			if err == nil || keeper != "" {
 				h.t.Errorf("ClaimCustody(%q, %q) = (%q, %v), want an error and no keeper",
 					c[0], c[1], keeper, err)
 			}
+			if errors.Is(err, coord.ErrCustodyUndecidable) {
+				h.t.Errorf("ClaimCustody(%q, %q) = %v, which says the store holds a "+
+					"record of the batch's keeper nothing can read — it holds none", c[0], c[1], err)
+			}
 		}
 	},
 }}
-
-// ---- the detached sandbox runs ----------------------------------------- //
-
-func (h *fleetHarness) createRun(turnID, value string) bool {
-	h.t.Helper()
-	created, err := h.f.CreateSandboxRun(h.ctx, turnID, []byte(value))
-	if err != nil {
-		h.t.Fatalf("CreateSandboxRun(%s): %v", turnID, err)
-	}
-	return created
-}
-
-func (h *fleetHarness) run(turnID string) (coord.Record, bool) {
-	h.t.Helper()
-	record, found, err := h.f.SandboxRun(h.ctx, turnID)
-	if err != nil {
-		h.t.Fatalf("SandboxRun(%s): %v", turnID, err)
-	}
-	return record, found
-}
-
-func (h *fleetHarness) updateRun(turnID, value string, version uint64) bool {
-	h.t.Helper()
-	ok, err := h.f.UpdateSandboxRun(h.ctx, turnID, []byte(value), version)
-	if err != nil {
-		h.t.Fatalf("UpdateSandboxRun(%s): %v", turnID, err)
-	}
-	return ok
-}
-
-var runCases = []fleetCase{{
-	// The reason this moved off the node's own database. A detached run
-	// outlives its turn, its process and sometimes its node — and the node
-	// that owns the seat AFTERWARDS is the one whose recovery pass has to
-	// see it. Per-node, that pass found nothing: the suspended Execute
-	// conversation became unreachable and a billed box was neither resumed
-	// nor reaped.
-	name: "a run one node launched is readable by the seat's next owner",
-	fn: func(h *fleetHarness) {
-		if !h.createRun("turn-1", `{"status":"running"}`) {
-			h.t.Fatal("the first create lost")
-		}
-		record, found := h.run("turn-1")
-		if !found {
-			h.t.Fatal("the run a peer launched is invisible — its box leaks")
-		}
-		if string(record.Value) != `{"status":"running"}` {
-			h.t.Errorf("value = %q", record.Value)
-		}
-		if record.Key != "turn-1" {
-			h.t.Errorf("key = %q, want the turn id", record.Key)
-		}
-		if record.Version == 0 {
-			h.t.Error("version = 0 — a caller cannot condition a write on it")
-		}
-	},
-}, {
-	// The kick-off turn's id IS the key, so a second create is a retried
-	// launch and not a second run. Overwriting would replace the box
-	// reference of a job that is already executing.
-	name: "a duplicate launch is a retry, not a second run",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"running","box":"sbx-1"}`)
-		if h.createRun("turn-1", `{"status":"running","box":"sbx-2"}`) {
-			h.t.Error("a second create reported itself as new")
-		}
-		record, _ := h.run("turn-1")
-		if string(record.Value) != `{"status":"running","box":"sbx-1"}` {
-			h.t.Errorf("value = %q — the retry overwrote a live run", record.Value)
-		}
-	},
-}, {
-	// The whole concurrency story. Every mutation on a run is a conditional
-	// flip whose condition is one of the run's OWN fields — the at-most-once
-	// tail claim above all — so a writer that read a version and lost it
-	// must be told, not silently allowed through.
-	name: "a stale version loses, and a fresh one wins",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"running"}`)
-		first, _ := h.run("turn-1")
-
-		if !h.updateRun("turn-1", `{"status":"resumed"}`, first.Version) {
-			h.t.Fatal("an update at the version just read was refused")
-		}
-		// The claim the other node was about to make. It read the same
-		// version and must lose.
-		if h.updateRun("turn-1", `{"status":"resumed-twice"}`, first.Version) {
-			h.t.Error("two writers both won the same version — the tail ran twice")
-		}
-		second, _ := h.run("turn-1")
-		if string(second.Value) != `{"status":"resumed"}` {
-			h.t.Errorf("value = %q, want the first writer's", second.Value)
-		}
-		if second.Version == first.Version {
-			h.t.Error("the version did not move, so the next write cannot be conditioned")
-		}
-		if !h.updateRun("turn-1", `{"status":"done"}`, second.Version) {
-			h.t.Error("an update at the version just read was refused")
-		}
-	},
-}, {
-	name: "an update to a run that is gone is a lost race, not an error",
-	fn: func(h *fleetHarness) {
-		if h.updateRun("missing", `{}`, 1) {
-			h.t.Error("an update invented a run")
-		}
-		if _, found := h.run("missing"); found {
-			h.t.Error("SandboxRun invented a run")
-		}
-	},
-}, {
-	name: "a delete is conditional too",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"done"}`)
-		record, _ := h.run("turn-1")
-
-		// A terminal delete raced by a write that reopened the run must
-		// not take the reopened row with it.
-		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version+1)
-		if err != nil {
-			h.t.Fatalf("DeleteSandboxRun: %v", err)
-		}
-		if gone {
-			h.t.Error("a delete at a version that never existed reported success")
-		}
-		gone, err = h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version)
-		if err != nil {
-			h.t.Fatalf("DeleteSandboxRun: %v", err)
-		}
-		if !gone {
-			h.t.Error("a delete at the version just read was refused")
-		}
-		if _, found := h.run("turn-1"); found {
-			h.t.Error("the run survived its delete")
-		}
-	},
-}, {
-	// A caller that never read a run has no version to offer. A store that
-	// read zero as "unconditional" would let it create a run nobody launched,
-	// or delete a live one, where the contract says it must lose.
-	name: "a write carrying no version is a lost race",
-	fn: func(h *fleetHarness) {
-		if h.updateRun("turn-1", `{"status":"running"}`, 0) {
-			h.t.Error("an update with no version created a run")
-		}
-		if _, found := h.run("turn-1"); found {
-			h.t.Fatal("an update with no version left a run behind")
-		}
-		h.createRun("turn-1", `{"status":"running"}`)
-		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", 0)
-		if err != nil {
-			h.t.Fatalf("DeleteSandboxRun: %v", err)
-		}
-		if gone {
-			h.t.Error("a delete with no version removed a live run")
-		}
-		if _, found := h.run("turn-1"); !found {
-			h.t.Error("a delete with no version removed a live run, and its box leaks")
-		}
-	},
-}, {
-	// A version belongs to one incarnation of a record. A writer still
-	// holding the version of a run that was deleted must lose against a run
-	// created under the same turn id afterwards, as it does against a KV
-	// revision, which never repeats.
-	name: "a version from a deleted run never acts on its successor",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"done"}`)
-		first, _ := h.run("turn-1")
-		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", first.Version)
-		if err != nil || !gone {
-			h.t.Fatalf("DeleteSandboxRun = (%v, %v), want (true, nil)", gone, err)
-		}
-		h.createRun("turn-1", `{"status":"running"}`)
-		second, _ := h.run("turn-1")
-		if second.Version == first.Version {
-			h.t.Errorf("the new run reused version %d of the one deleted before it", first.Version)
-		}
-		if h.updateRun("turn-1", `{"status":"stale"}`, first.Version) {
-			h.t.Error("a version from the deleted run overwrote its successor")
-		}
-	},
-}, {
-	// Every listing this serves filters on fields coordination cannot see —
-	// the seat, the status, the conversation key, the pause instant — so
-	// there is one read and the caller decodes. Ordering by turn id is part
-	// of the contract so two backends answer a recovery pass the same way.
-	name: "every run is listed, by turn id",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-b", `{"seat":"cto"}`)
-		h.createRun("turn-a", `{"seat":"ceo"}`)
-		h.createRun("turn-c", `{"seat":"cto"}`)
-
-		records, err := h.f.SandboxRuns(h.ctx)
-		if err != nil {
-			h.t.Fatalf("SandboxRuns: %v", err)
-		}
-		var keys []string
-		for _, r := range records {
-			keys = append(keys, r.Key)
-		}
-		if !slices.Equal(keys, []string{"turn-a", "turn-b", "turn-c"}) {
-			h.t.Errorf("runs = %v, want every one of them in turn-id order", keys)
-		}
-		for _, r := range records {
-			if r.Version == 0 || len(r.Value) == 0 {
-				h.t.Errorf("listed run %s came back without its value or version: %+v", r.Key, r)
-			}
-		}
-	},
-}, {
-	name: "a caller mutating a listed value cannot reach the store",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"running"}`)
-		record, _ := h.run("turn-1")
-		for i := range record.Value {
-			record.Value[i] = 'x'
-		}
-		again, _ := h.run("turn-1")
-		if string(again.Value) != `{"status":"running"}` {
-			h.t.Errorf("the store took a caller's mutation: %q", again.Value)
-		}
-	},
-}, {
-	name: "an unnamed run is an error, not a lost race",
-	fn: func(h *fleetHarness) {
-		created, err := h.f.CreateSandboxRun(h.ctx, "", []byte(`{}`))
-		if err == nil {
-			h.t.Error("CreateSandboxRun accepted a run with no turn id")
-		}
-		if created {
-			h.t.Error("CreateSandboxRun created a run with no turn id")
-		}
-	},
-}, {
-	// THE REASON A PART EXISTS: a value beside the record that a read or a
-	// listing of records never moves. A run's suspended conversation was a
-	// field of its record, so every listing of runs and every git request of
-	// its box moved it whole; beside the record, the listing returns the
-	// record alone, byte for byte as written.
-	name: "a part is kept beside its run and never listed with the records",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"running"}`)
-		if !h.putPart("turn-1", "conversation-a", "the whole conversation", 0) {
-			h.t.Fatal("the first write of a part lost")
-		}
-		part, found := h.part("turn-1", "conversation-a")
-		switch {
-		case !found:
-			h.t.Fatal("a part written a moment ago reads as absent")
-		case string(part.Value) != "the whole conversation" || part.Key != "conversation-a":
-			h.t.Errorf("part = %q under %q, want the value written under its name", part.Value, part.Key)
-		case part.Version == 0:
-			h.t.Error("a part's version is 0 — a write cannot be conditioned on it")
-		}
-		records, err := h.f.SandboxRuns(h.ctx)
-		if err != nil {
-			h.t.Fatalf("SandboxRuns: %v", err)
-		}
-		if len(records) != 1 || records[0].Key != "turn-1" || string(records[0].Value) != `{"status":"running"}` {
-			h.t.Errorf("SandboxRuns = %+v, want the one record alone and none of its parts", records)
-		}
-		record, _ := h.run("turn-1")
-		if string(record.Value) != `{"status":"running"}` {
-			h.t.Errorf("the record reads %q beside a part, want it as written", record.Value)
-		}
-	},
-}, {
-	// A part is written as a record is: a create at no version, an update at
-	// the version just read, and a writer that read a version another write
-	// replaced loses — so two appends to one log cannot drop either.
-	name: "a part is written at a version, as a record is",
-	fn: func(h *fleetHarness) {
-		if h.putPart("turn-1", "bridge-a", "one", 7) {
-			h.t.Error("an update created a part nobody wrote")
-		}
-		h.putPart("turn-1", "bridge-a", "one", 0)
-		if h.putPart("turn-1", "bridge-a", "again", 0) {
-			h.t.Error("a second create of one part reported itself as new")
-		}
-		first, _ := h.part("turn-1", "bridge-a")
-		if !h.putPart("turn-1", "bridge-a", "one, two", first.Version) {
-			h.t.Fatal("an update at the version just read was refused")
-		}
-		if h.putPart("turn-1", "bridge-a", "one, three", first.Version) {
-			h.t.Error("two writers both won one part's version — one append was lost")
-		}
-		second, _ := h.part("turn-1", "bridge-a")
-		if string(second.Value) != "one, two" || second.Version == first.Version {
-			h.t.Errorf("part = %q at %d, want the first writer's at a new version", second.Value, second.Version)
-		}
-	},
-}, {
-	// A part belongs to its writer, which removes it by name: a record's
-	// delete leaves it, a removal is unconditional, and one repeated — after
-	// a crash, or of a part never written — is no error.
-	name: "a part is removed by its writer, not by its record's delete",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-1", `{"status":"done"}`)
-		h.putPart("turn-1", "conversation-a", "the conversation", 0)
-		record, _ := h.run("turn-1")
-		if ok, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version); err != nil || !ok {
-			h.t.Fatalf("DeleteSandboxRun = (%v, %v)", ok, err)
-		}
-		if _, found := h.part("turn-1", "conversation-a"); !found {
-			h.t.Fatal("a record's delete took a part its writer had not removed")
-		}
-		for range 2 {
-			if err := h.f.DeleteSandboxRunPart(h.ctx, "turn-1", "conversation-a"); err != nil {
-				h.t.Fatalf("DeleteSandboxRunPart: %v", err)
-			}
-		}
-		if err := h.f.DeleteSandboxRunPart(h.ctx, "turn-1", "bridge-a"); err != nil {
-			h.t.Errorf("removing a part never written = %v, want nothing", err)
-		}
-		if _, found := h.part("turn-1", "conversation-a"); found {
-			h.t.Error("a removed part reads as present")
-		}
-		if !h.putPart("turn-1", "conversation-a", "written again", 0) {
-			h.t.Error("a removed part could not be written again")
-		}
-	},
-}, {
-	name: "a part with no turn or no name is an error, not an answer",
-	fn: func(h *fleetHarness) {
-		if _, _, err := h.f.SandboxRunPart(h.ctx, "", "conversation-a"); err == nil {
-			h.t.Error("a part of no turn was read")
-		}
-		if ok, err := h.f.PutSandboxRunPart(h.ctx, "turn-1", "", []byte("x"), 0); err == nil || ok {
-			h.t.Errorf("a part with no name was written: (%v, %v)", ok, err)
-		}
-		if err := h.f.DeleteSandboxRunPart(h.ctx, "", "conversation-a"); err == nil {
-			h.t.Error("a part of no turn was removed")
-		}
-	},
-}, {
-	// THE SWEEP'S WHOLE RULE: a part outlives its record only where a write
-	// raced the run's end, so a part written before the cutoff whose run has
-	// NO RECORD goes, and every other stays — a young one, one beside a live
-	// record, and one beside a record written again under its turn after the
-	// part (the turn's next job, after its last one ended), which that job's
-	// own end removes.
-	name: "the sweep removes the parts of a run with no record, and only those",
-	fn: func(h *fleetHarness) {
-		h.createRun("turn-live", `{"status":"running"}`)
-		h.putPart("turn-live", "conversation-a", "live", 0)
-		h.putPart("turn-gone", "conversation-a", "gone", 0)
-		h.putPart("turn-gone", "bridge-a", "gone", 0)
-		h.putPart("turn-again", "conversation-a", "an earlier job's", 0)
-		h.createRun("turn-again", `{"status":"launching"}`)
-
-		if n := h.sweepParts(time.Now().Add(-time.Hour)); n != 0 {
-			h.t.Errorf("a sweep before every part was written removed %d, want 0", n)
-		}
-		if n := h.sweepParts(time.Now().Add(time.Hour)); n != 2 {
-			h.t.Errorf("the sweep removed %d parts, want the two of the run with no record", n)
-		}
-		for _, p := range []struct{ turn, part string }{
-			{"turn-gone", "conversation-a"}, {"turn-gone", "bridge-a"},
-		} {
-			if _, found := h.part(p.turn, p.part); found {
-				h.t.Errorf("%s/%s outlived the sweep with no record beside it", p.turn, p.part)
-			}
-		}
-		for _, p := range []struct{ turn, part string }{
-			{"turn-live", "conversation-a"}, {"turn-again", "conversation-a"},
-		} {
-			if _, found := h.part(p.turn, p.part); !found {
-				h.t.Errorf("the sweep removed %s/%s, beside a record", p.turn, p.part)
-			}
-		}
-		if n := h.sweepParts(time.Now().Add(time.Hour)); n != 0 {
-			h.t.Errorf("a second sweep removed %d parts, want 0", n)
-		}
-		if records, err := h.f.SandboxRuns(h.ctx); err != nil || len(records) != 2 {
-			h.t.Errorf("SandboxRuns after the sweep = (%d records, %v), want both records", len(records), err)
-		}
-	},
-}}
-
-func (h *fleetHarness) putPart(turnID, part, value string, version uint64) bool {
-	h.t.Helper()
-	ok, err := h.f.PutSandboxRunPart(h.ctx, turnID, part, []byte(value), version)
-	if err != nil {
-		h.t.Fatalf("PutSandboxRunPart(%s, %s): %v", turnID, part, err)
-	}
-	return ok
-}
-
-func (h *fleetHarness) part(turnID, part string) (coord.Record, bool) {
-	h.t.Helper()
-	record, found, err := h.f.SandboxRunPart(h.ctx, turnID, part)
-	if err != nil {
-		h.t.Fatalf("SandboxRunPart(%s, %s): %v", turnID, part, err)
-	}
-	return record, found
-}
-
-func (h *fleetHarness) sweepParts(cutoff time.Time) int64 {
-	h.t.Helper()
-	n, err := h.f.SweepSandboxRunParts(h.ctx, cutoff)
-	if err != nil {
-		h.t.Fatalf("SweepSandboxRunParts: %v", err)
-	}
-	return n
-}
 
 // ---- the revision payload ---------------------------------------------- //
 
@@ -2164,10 +1907,10 @@ var payloadRaceCases = []fleetCase{{
 	// once could each write a body, and the one whose flip landed FIRST was
 	// then pointed at by a pointer whose body the other had overwritten.
 	// Every peer read "no such revision" for the epoch the fleet was on
-	// until somebody activated again. The boot path does exactly this:
-	// two nodes starting together each publish the revision they hold,
-	// unconditionally. And an edit's compare-and-set only decided the
-	// pointer — the loser's body had already landed.
+	// until somebody activated again. Unconditional writers do exactly
+	// this — two nodes started with -import-company each assert their file —
+	// and an edit's compare-and-set only decided the pointer: the loser's
+	// body had already landed.
 	name: "racing activations leave the pointer's own body readable",
 	fn: func(h *fleetHarness) {
 		const writers = 8
@@ -2182,9 +1925,9 @@ var payloadRaceCases = []fleetCase{{
 						RevisionID: id, At: h.now(), Origin: anOrigin,
 						Payload: []byte(fmt.Sprintf(`{"revision":%q}`, id)),
 					}
-					// Half race unconditionally, as two booting nodes do;
-					// half as editors naming what they read, where all but
-					// one lose the compare-and-set.
+					// Half race unconditionally, as two overriding nodes
+					// do; half as editors naming what they read, where all
+					// but one lose the compare-and-set.
 					if w%2 == 1 && round > 0 {
 						req.Expect = fmt.Sprintf("rev-%d-0", round-1)
 					}
@@ -2473,6 +2216,30 @@ var secretCases = []fleetCase{{
 		}
 	},
 }, {
+	// A CREATE'S OPERATION KEY IS KEPT, AND A PLAIN WRITE CLEARS IT. The key
+	// is how the same create retried finishes what it sealed (fleetsecrets
+	// Store.Reclaim); a store that dropped it would refuse every retry, and
+	// one that kept it across a plain write would let a stale retry re-seal
+	// over a value somebody else wrote.
+	name: "a create's operation key round-trips and a plain write clears it",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "GATEWAY_KEY", Value: "v1:first", KeyID: "key-1",
+			UpdatedAt: h.now(), OpID: "op-1",
+		})
+		if err != nil || !created {
+			h.t.Fatalf("the keyed create = (%v, %v)", created, err)
+		}
+		rec, _ := h.secret("GATEWAY_KEY")
+		if rec.OpID != "op-1" {
+			h.t.Fatalf("the create's operation key reads back as %q", rec.OpID)
+		}
+		h.putSecret("GATEWAY_KEY", "v1:rotated", "key-1")
+		if rec, _ = h.secret("GATEWAY_KEY"); rec.OpID != "" {
+			h.t.Fatalf("a plain write left the operation key %q", rec.OpID)
+		}
+	},
+}, {
 	// A VERSION IS READ, AND EVERY WRITE MOVES IT. What a conditional write
 	// is conditioned on has to be on what a read hands back, and a write
 	// that left it where it was would let a caller holding the old one win
@@ -2685,11 +2452,22 @@ var integrationCases = []fleetCase{
 
 // ---- the chat thread-follows -------------------------------------------- //
 
+// follow records reason whatever is held: the store ranks nothing, so the
+// cases here are about what it does with a choice, not about which is right.
 func (h *fleetHarness) follow(backend, handle, channel, thread, reason string) {
 	h.t.Helper()
-	if err := h.f.Follow(h.ctx, backend, handle, channel, thread, reason, h.now()); err != nil {
+	got, err := h.f.Follow(h.ctx, backend, handle, channel, thread, h.now(), overwrite(reason))
+	if err != nil {
 		h.t.Fatalf("Follow(%s/%s/%s): %v", backend, handle, thread, err)
 	}
+	if got != reason {
+		h.t.Fatalf("Follow(%s/%s/%s) answered %q, want the %q it wrote", backend, handle, thread, got, reason)
+	}
+}
+
+// overwrite is the choice that writes reason whatever the record holds.
+func overwrite(reason string) func(string, bool) string {
+	return func(string, bool) string { return reason }
 }
 
 func (h *fleetHarness) following(backend, handle, channel, thread string) (string, bool) {
@@ -2718,16 +2496,90 @@ var followCases = []fleetCase{{
 		}
 	},
 }, {
-	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
-	// a thread by a collective shout and later named personally is now
-	// following for the stronger reason, and an operator asking why it
-	// answered should see the mention.
-	name: "a re-assert overwrites the reason",
+	// A re-assert writes what the CALLER chooses, and the caller chooses
+	// against what is held: a seat first pulled into a thread by a
+	// collective shout and later named personally follows for the mention,
+	// and one named and then shouted at keeps the mention — a ranking the
+	// store does not know and must not need to.
+	name: "a re-assert writes the reason the caller chose against the record",
 	fn: func(h *fleetHarness) {
-		h.follow("slack", "agent-pm", "C1", "1700.1", "collective")
-		h.follow("slack", "agent-pm", "C1", "1700.1", "mention")
+		var shown []string
+		record := func(reason string) func(string, bool) string {
+			return func(held string, following bool) string {
+				shown = append(shown, fmt.Sprintf("%s/%v", held, following))
+				return reason
+			}
+		}
+		at := h.now()
+		for _, reason := range []string{"collective", "mention"} {
+			got, err := h.f.Follow(h.ctx, "slack", "agent-pm", "C1", "1700.1", at, record(reason))
+			if err != nil {
+				h.t.Fatalf("Follow: %v", err)
+			}
+			if got != reason {
+				h.t.Fatalf("Follow answered %q, want the %q chosen", got, reason)
+			}
+		}
+		if want := []string{"/false", "collective/true"}; !slices.Equal(shown, want) {
+			h.t.Fatalf("the choice was shown %v, want %v: a fresh thread holds nothing and "+
+				"a re-assert is shown what the first wrote", shown, want)
+		}
 		if reason, _ := h.following("slack", "agent-pm", "C1", "1700.1"); reason != "mention" {
-			h.t.Fatalf("reason = %q, want the re-asserted one", reason)
+			h.t.Fatalf("reason = %q, want the chosen one", reason)
+		}
+	},
+}, {
+	// THE CHOICE IS MADE AGAINST THE RECORD THE WRITE LANDS ON. A choice
+	// formed from an earlier read and written blind lands over whatever
+	// another node wrote in between, so the reason ends up being the last
+	// writer's rather than the one the caller would have kept — and the
+	// reason decides whether a reply obliges an answer. Here one node
+	// names the seat while seven others shout in the same thread, every
+	// one of them keeping a mention it is shown; the mention must survive.
+	name: "concurrent re-asserts never write over a reason their choice would keep",
+	fn: func(h *fleetHarness) {
+		keep := func(asserted string) func(string, bool) string {
+			return func(held string, following bool) string {
+				if following && held == "mention" {
+					return held
+				}
+				return asserted
+			}
+		}
+		at := h.now()
+		var (
+			wg    sync.WaitGroup
+			once  sync.Once
+			named = make(chan struct{})
+		)
+		name := func() { once.Do(func() { close(named) }) }
+		for i, node := range h.nodes(8) {
+			wg.Go(func() {
+				if i == 0 {
+					<-named
+					if _, err := node.Follow(h.ctx, "slack", "agent-swe", "C1", "busy", at, keep("mention")); err != nil {
+						h.t.Errorf("Follow(mention): %v", err)
+					}
+					return
+				}
+				// The mention goes in while the shouting is under way,
+				// and goes in whatever happens to this writer.
+				defer name()
+				for n := range 10 {
+					if i == 1 && n == 2 {
+						name()
+					}
+					if _, err := node.Follow(h.ctx, "slack", "agent-swe", "C1", "busy", at, keep("collective")); err != nil {
+						h.t.Errorf("Follow(collective): %v", err)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+		if reason, _ := h.following("slack", "agent-swe", "C1", "busy"); reason != "mention" {
+			h.t.Fatalf("reason = %q after a mention raced seven broadcasts, want the mention: "+
+				"a broadcast decided before the mention was written over it", reason)
 		}
 	},
 }, {
@@ -2761,102 +2613,6 @@ var followCases = []fleetCase{{
 		}
 	},
 }, {
-	name: "unfollow removes exactly one follow and reports it",
-	fn: func(h *fleetHarness) {
-		h.follow("slack", "agent-swe", "C1", "t-1", "mention")
-		h.follow("slack", "agent-swe", "C1", "t-2", "mention")
-
-		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-1")
-		if err != nil {
-			h.t.Fatalf("Unfollow: %v", err)
-		}
-		if !gone {
-			h.t.Error("Unfollow reported nothing was there")
-		}
-		if _, ok := h.following("slack", "agent-swe", "C1", "t-1"); ok {
-			h.t.Error("the follow survived an explicit unfollow, so a seat told " +
-				"to stop watching a thread keeps waking on it")
-		}
-		if _, ok := h.following("slack", "agent-swe", "C1", "t-2"); !ok {
-			h.t.Error("unfollowing one thread dropped another")
-		}
-	},
-}, {
-	name: "unfollowing a thread nobody follows reports so rather than failing",
-	fn: func(h *fleetHarness) {
-		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "never")
-		if err != nil {
-			h.t.Fatalf("Unfollow: %v", err)
-		}
-		if gone {
-			h.t.Error("Unfollow reported it removed a follow that was never there")
-		}
-	},
-}, {
-	// EXACTLY ONE UNFOLLOW REMOVED IT, AND ONLY THAT ONE MAY SAY SO.
-	//
-	// `true` has to mean "this CALL removed it", never "this call's READ saw
-	// one" — and sequential calls cannot tell the two apart, because both
-	// backends short-circuit on the read. Concurrently they come apart, which
-	// is what makes this the case the divergence was found with.
-	//
-	// [internal/coord/memory.Fleet.Unfollow] holds one mutex across its lookup
-	// and its delete, so exactly one caller can ever report true there. The KV
-	// backend has no such mutex and reaches the same answer by binding its
-	// delete to the revision it read, re-reading when it loses. Before that,
-	// every one of these eight reported it had removed the follow: every read
-	// found a record, and every delete no-oped on a key the winner had already
-	// taken.
-	name: "concurrent unfollows leave exactly one caller reporting it removed the follow",
-	fn: func(h *fleetHarness) {
-		h.follow("slack", "agent-swe", "C1", "hot", "mention")
-		var wg sync.WaitGroup
-		removed := make(chan bool, 8)
-		for range 8 {
-			wg.Go(func() {
-				gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "hot")
-				if err != nil {
-					h.t.Errorf("Unfollow: %v", err)
-					return
-				}
-				removed <- gone
-			})
-		}
-		wg.Wait()
-		close(removed)
-		winners := 0
-		for gone := range removed {
-			if gone {
-				winners++
-			}
-		}
-		if winners != 1 {
-			h.t.Fatalf("%d of 8 concurrent unfollows reported they removed the follow, want exactly 1", winners)
-		}
-		if _, ok := h.following("slack", "agent-swe", "C1", "hot"); ok {
-			h.t.Fatal("the follow survived every unfollow")
-		}
-	},
-}, {
-	name: "a second unfollow reports that it removed nothing",
-	fn: func(h *fleetHarness) {
-		h.follow("slack", "agent-swe", "C1", "t-twice", "mention")
-		if gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-twice"); err != nil {
-			h.t.Fatalf("Unfollow: %v", err)
-		} else if !gone {
-			h.t.Fatal("the first unfollow reported nothing was there")
-		}
-		gone, err := h.f.Unfollow(h.ctx, "slack", "agent-swe", "C1", "t-twice")
-		if err != nil {
-			h.t.Fatalf("second Unfollow: %v", err)
-		}
-		if gone {
-			h.t.Error("the second unfollow reported it removed a follow that was " +
-				"already gone — a report about what the READ saw rather than " +
-				"about what the delete did")
-		}
-	},
-}, {
 	// AN INCOMPLETE IDENTITY IS REFUSED rather than written under a key
 	// missing a segment, which would be a record no read could ever find.
 	name: "an incomplete identity is refused",
@@ -2867,7 +2623,7 @@ var followCases = []fleetCase{{
 			{"slack", "", "t-1"},
 			{"slack", "agent-swe", ""},
 		} {
-			err := h.f.Follow(h.ctx, missing.backend, missing.handle, "C1", missing.thread, "mention", at)
+			_, err := h.f.Follow(h.ctx, missing.backend, missing.handle, "C1", missing.thread, at, overwrite("mention"))
 			if err == nil {
 				h.t.Errorf("a follow with backend=%q handle=%q thread=%q was accepted",
 					missing.backend, missing.handle, missing.thread)

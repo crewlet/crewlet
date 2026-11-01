@@ -13,6 +13,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { DesignCreate } from "./DesignCreate.tsx";
+import { draftField, openFrame, setDraft } from "../draftTesting.ts";
 
 vi.mock("~/lib/artifacts/access.ts", () => ({
   useArtifactAccess: () => ({ can: true }),
@@ -282,4 +283,28 @@ test("the design's panel carries Add board, for widths where the list of boards 
   pickLanding();
   const head = screen.getByRole("heading", { name: "Design" }).parentElement!;
   expect(within(head).getByRole("button", { name: "Add board" })).toBeTruthy();
+});
+
+// WHAT IS LAID OUT IS THE ASSISTANT'S TO READ, and a change it proposes picks a
+// layout before any board is laid out, then names the boards and says what
+// each is for, through the page's own rules; the canvas stays the person's.
+test("the design being laid out is the assistant's to read, and a draft.set fills its boards", async () => {
+  openFrame("artifacts-new");
+  mount();
+  expect(draftField("layout")).toMatchObject({ value: "", editable: true });
+  expect(setDraft({ title: "Launch", layout: "landing" })).toMatchObject({ outcome: "applied" });
+  FakeResizeObserver.all.forEach((o) => o.resize(1000, 700));
+  expect(boards()).toEqual(["Home", "Pricing", "Home on phone"]);
+  expect(draftField("boards.2.name")).toMatchObject({ value: "Pricing", editable: true });
+  expect(
+    setDraft({ "boards.2.name": "Plans", "boards.2.purpose": "The three plans side by side." }),
+  ).toMatchObject({ outcome: "applied" });
+  expect(boards()).toEqual(["Home", "Plans", "Home on phone"]);
+  // A PICK OVER BOARDS ALREADY LAID OUT IS THE PERSON'S, and so is a board without a name.
+  expect(setDraft({ layout: "app" })).toMatchObject({ outcome: "invalid" });
+  expect(setDraft({ "boards.1.name": " " })).toMatchObject({
+    outcome: "invalid",
+    reason: "Give the board a name.",
+  });
+  expect(setDraft({ references: ["ftp://example.com"] })).toMatchObject({ outcome: "invalid" });
 });

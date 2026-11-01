@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHO A WRITE MADE THROUGH A CREDENTIAL IS RECORDED AS.
@@ -50,7 +51,7 @@ import (
 func ActorOf(p iam.Principal) Actor {
 	a := iam.ActorFor(p)
 	return Actor{
-		Handle: a.Name, Kind: tracker.AuthorKind(a.Kind), OperatorID: a.OperatorID,
+		Handle: a.Name, Kind: worklet.AuthorKind(a.Kind), OperatorID: a.OperatorID,
 	}
 }
 
@@ -61,14 +62,38 @@ func ActorOf(p iam.Principal) Actor {
 // AN ERROR FOR THE ONE KIND THE KNOWLEDGE BASE HAS NO WORD FOR: the engine's
 // own principal. Nothing writes a page as the engine, and recording such a
 // write as an operator or a person would put somebody's name on housekeeping.
-func PageActorOf(p iam.Principal) (pages.Actor, error) {
+func PageActorOf(p iam.Principal) (doclet.Actor, error) {
 	a := iam.ActorFor(p)
-	kind := pages.AuthorKind(a.Kind)
+	kind := doclet.AuthorKind(a.Kind)
 	if !kind.Valid() {
-		return pages.Actor{}, fmt.Errorf("builtin: a %s cannot author a page — "+
-			"the knowledge base records agents, people and operators", a.Kind)
+		return doclet.Actor{}, fmt.Errorf("builtin: a %s cannot author a page; "+
+			"Doclet records agents, people and operators", a.Kind)
 	}
-	return pages.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
+	return doclet.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
+}
+
+// ChatActorOf is [ActorOf] for chat, which records the SAME author under the
+// SAME name, for [PageActorOf]'s reason: one person under two names across
+// the histories an audit reads side by side is two people.
+//
+// AN ERROR FOR THE ENGINE'S OWN PRINCIPAL, although chat HAS a word for it
+// ([chatlet.AuthorSystem]): that kind is the engine NARRATING a room — somebody
+// joined, the room was archived — which the store writes from its own
+// records, never a tool call. A tool call made as the engine would put a
+// narration where a speaker belongs, a line nobody said and nobody can answer.
+//
+// A CREDENTIAL ACTING AS ITSELF CONVERTS, to [chatlet.AuthorOperator]: it is a
+// real author of what is not said in a room's voice, and the store refuses it
+// every gesture that is ([chatlet.Actor] says which), naming the remedy.
+func ChatActorOf(p iam.Principal) (chatlet.Actor, error) {
+	a := iam.ActorFor(p)
+	kind := chatlet.AuthorKind(a.Kind)
+	if !kind.Valid() || kind == chatlet.AuthorSystem {
+		return chatlet.Actor{}, fmt.Errorf("builtin: a %s cannot author a chat "+
+			"write — the engine narrates a room from its own records, and chat "+
+			"records agents, people and operators", a.Kind)
+	}
+	return chatlet.Actor{Handle: a.Name, Kind: kind, OperatorID: a.OperatorID}, nil
 }
 
 // PrincipalActor is [WorkDeps.Actor] for a surface whose caller is on the
@@ -87,12 +112,21 @@ func PrincipalActor(ctx context.Context, _ *turnctx.Turn) (Actor, error) {
 }
 
 // PrincipalPageActor is [PrincipalActor] for [PageDeps.Actor].
-func PrincipalPageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
+func PrincipalPageActor(ctx context.Context, _ *turnctx.Turn) (doclet.Actor, error) {
 	p, err := resolvedPrincipal(ctx)
 	if err != nil {
-		return pages.Actor{}, err
+		return doclet.Actor{}, err
 	}
 	return PageActorOf(p)
+}
+
+// PrincipalChatActor is [PrincipalActor] for [ChatDeps.Actor].
+func PrincipalChatActor(ctx context.Context, _ *turnctx.Turn) (chatlet.Actor, error) {
+	p, err := resolvedPrincipal(ctx)
+	if err != nil {
+		return chatlet.Actor{}, err
+	}
+	return ChatActorOf(p)
 }
 
 // resolvedPrincipal is the request's principal, or why there is none to write

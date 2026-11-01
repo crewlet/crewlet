@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY ALARM WHOSE INPUT A NODE ASSEMBLES FOR ITSELF FIRES THROUGH THE WIRING
@@ -99,10 +100,11 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 // measure the clock has, and the log must be named nowhere, because the age
 // term the tick published keeps every record the log holds. Then the published
 // floor is what the duty would publish once the records had aged (the same
-// block, its age term past the log's head) and the log must be named, under
-// the alarm whose remedy it is: the BACKUP's, since the backup term is what
-// holds it and `backup_age` is up on a node that has never taken one, so it
-// raises no `trim_blocked` of its own and the one cause reads as one problem.
+// block, its age term past the log's head) and the log's hold must be named,
+// under the alarm whose remedy it is: the BACKUP's, since the backup term is
+// what holds it and that log's own `backup_age` is up on a node that has never
+// taken one, so it raises no `trim_blocked` of its own and the one cause reads
+// as one problem.
 // A floor published at another generation must not be read as this log's at
 // all.
 func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
@@ -154,9 +156,19 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 				name, d.BlockedBy)
 		}
 	}
-	if len(backup.Domains) != 0 {
-		t.Fatalf("backup_age names %+v while nothing in any log is past the window",
-			backup.Domains)
+	// EVERY LOG IS NAMED FOR ITS MISSING BACKUP, and none with the hold: a
+	// block that keeps nothing past the window raised no trim_blocked to fold.
+	if !slices.ContainsFunc(backup.Domains, func(d statelog.AlarmDomain) bool {
+		return slices.Contains(d.Domains, name)
+	}) {
+		t.Fatalf("backup_age stands on %+v and not on the %s log, which no "+
+			"backup covers", backup.Domains, name)
+	}
+	for _, d := range backup.Domains {
+		if d.Term != "" || !d.Since.IsZero() {
+			t.Fatalf("backup_age names %+v with its trim's hold while nothing in "+
+				"any log is past the window", d)
+		}
 	}
 
 	// THE SAME BLOCK, AS THE DUTY PUBLISHES IT ONCE THE LOG HAS AGED: its
@@ -182,7 +194,7 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	backup, _ = alarmOf(aging, statelog.KindBackupAge)
 	var held *statelog.AlarmDomain
 	for i, d := range backup.Domains {
-		if d.Domain == name {
+		if slices.Contains(d.Domains, name) {
 			held = &backup.Domains[i]
 		}
 	}
@@ -210,9 +222,12 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 		t.Error("a floor published at another generation raised trim_blocked " +
 			"against this log's sequences")
 	}
-	if backup, _ := alarmOf(after, statelog.KindBackupAge); len(backup.Domains) != 0 {
-		t.Errorf("a floor published at another generation is named under backup_age "+
-			"against this log's sequences: %+v", backup.Domains)
+	backup, _ = alarmOf(after, statelog.KindBackupAge)
+	for _, d := range backup.Domains {
+		if d.Term != "" {
+			t.Errorf("a floor published at another generation is folded under "+
+				"backup_age against this log's sequences: %+v", d)
+		}
 	}
 	for _, d := range after.Domains {
 		if d.Domain == name && d.BlockedBy != "" {
@@ -234,7 +249,7 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // fleet's keyring, at a record version this build does not read — so the
 // appliers retain them exactly as a rolling upgrade makes them. And the node
 // holds one on TWO logs at once, which is what a build that moved two record
-// versions leaves behind. Every log's copy is judged on its own (ADR-0049), the
+// versions leaves behind. Every log's copy is judged on its own (ADR-0072), the
 // identity log's included, so the grace takes each log's copy out of service
 // and nothing else — the tracker's operations go to a peer while every other
 // log's copy keeps serving here, and the seats stay where they are for both.
@@ -251,17 +266,17 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		record  func(generation uint32) (statelog.Subject, []byte, error)
 	}{
 		{
-			domain: tracker.Domain{}.Name(), version: tracker.RecordVersion,
+			domain: worklet.Domain{}.Name(), version: worklet.RecordVersion,
 			record: func(generation uint32) (statelog.Subject, []byte, error) {
-				subject := tracker.TaskSubject("t-from-a-newer-build")
-				payload, err := tracker.MutationRecord{
-					RecordEnvelope: tracker.RecordEnvelope{
-						V: tracker.RecordVersion + 1, OpID: "op-from-a-newer-build",
-						Subject: subject, Op: tracker.OpCreate, Gen: generation,
+				subject := worklet.TaskSubject("t-from-a-newer-build")
+				payload, err := worklet.MutationRecord{
+					RecordEnvelope: worklet.RecordEnvelope{
+						V: worklet.RecordVersion + 1, OpID: "op-from-a-newer-build",
+						Subject: subject, Op: worklet.OpCreate, Gen: generation,
 						CreatedAt: time.Now().UTC(), Writer: "node-b",
-						Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+						Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
 					},
-					Mutation: []byte(`{}`), Actor: "ana", ActorKind: tracker.AuthorHuman,
+					Mutation: []byte(`{}`), Actor: "ana", ActorKind: worklet.AuthorHuman,
 				}.Encode()
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
@@ -338,7 +353,9 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		}
 		raised++
 		for _, d := range a.Domains {
-			byLog[d.Domain] = d
+			for _, domain := range d.Domains {
+				byLog[domain] = d
+			}
 		}
 	}
 	if raised != 1 {
@@ -351,7 +368,7 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	}{
 		// THE SAME CONSEQUENCE ON EACH LOG, the identity log's included: the
 		// grace takes that log's copy out of service and no other.
-		{tracker.Domain{}.Name(), tracker.RecordVersion,
+		{worklet.Domain{}.Name(), worklet.RecordVersion,
 			"at which this node's copy of this log goes out of service"},
 		{iamdomain.Domain{}.Name(), iamdomain.RecordVersion,
 			"at which this node's copy of this log goes out of service"},
@@ -399,7 +416,7 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 	if r.floors == nil {
 		t.Fatal("the node's retention loop keeps no floor watch")
 	}
-	name := tracker.Domain{}.Name()
+	name := worklet.Domain{}.Name()
 	generation := r.state.Domain(name).runner.Committed().Generation
 	ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
 		At: time.Now().UTC(), By: "node-b"}
@@ -516,7 +533,7 @@ func awaitObservation(t *testing.T, r *retention, after time.Time,
 // standsOn reports whether an alarm stands on exactly one log, the named one,
 // with that log's measurement as its own detail.
 func standsOn(a statelog.Alarm, domain string) bool {
-	return len(a.Domains) == 1 && a.Domains[0].Domain == domain &&
+	return len(a.Domains) == 1 && slices.Equal(a.Domains[0].Domains, []string{domain}) &&
 		a.Domains[0].Detail == a.Detail
 }
 

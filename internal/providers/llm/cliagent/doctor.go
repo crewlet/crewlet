@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // probeTimeout caps a version or status probe.
@@ -28,9 +29,9 @@ const probeTimeout = 10 * time.Second
 
 // smokePrompt is what the smoke test asks for. Short, unambiguous, and
 // answerable with one tool call — a profile can look perfect and still not
-// produce a parseable tool call, which is the whole reason the smoke test
-// runs a real one rather than just a completion.
-const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with only the JSON block."
+// hand its CLI the seat's tools, which is the whole reason the smoke test runs
+// a real call rather than just a completion.
+const smokePrompt = "Call the " + smokeTool + " tool with ok set to true, then reply with only: done"
 
 // The two isolation probes.
 //
@@ -39,13 +40,36 @@ const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with
 // by the shell, or from a public endpoint by the browser. A model asked to
 // echo a fixed token can simply write the token; a model asked for the time
 // has no way to be within a couple of minutes of it except by actually
-// running the tool. Each is sent with no tools of Crewlet's own, so no
-// envelope contract is rendered and the reply is plain prose.
+// running the tool. Each is sent with no tools of Crewlet's own, so the CLI's
+// own tools are the only ones it has and the reply is plain prose.
+
+// THE NO-TOOL ANSWER COMES FIRST, AND A CALL WRITTEN AS TEXT IS RULED OUT. A
+// prompt that opened "Using your shell tool, run ..." on a CLI given no tools
+// at all (Claude Code 2.1.310 under `--tools ""`, Sonnet) was answered with a
+// tool call typed out as prose (`<invoke name="Bash">...`), measured: no
+// command ran, and a model that goes on to write the call's output and the
+// next step as prose kept the probe running to the entry's whole timeout
+// before the doctor could read a refusal. Asked which case it is in first,
+// the model answers the refusal at once, and a model that has the tool still
+// runs it, which is the finding the probe exists for.
 
 // shellProbePrompt asks the CLI to run a command on the engine host.
-const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
-	"command and reply with only its output, nothing else: date +%s\n" +
-	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
+const shellProbePrompt = "If you were given a tool that runs shell commands, use it to run " +
+	"exactly this command and reply with only its output, nothing else: date +%s\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// fileProbePrompt asks the CLI to read a file on the engine host, the path
+// substituted for %s. The file holds a value minted for the one run, so a
+// model can echo it only by reading it.
+const fileProbePrompt = "If you were given a tool that reads files, use it to read the file " +
+	"at %s and reply with only its contents, nothing else.\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// noProseCall is the line every isolation probe ends on: a tool is called or
+// the refusal is given, never a call written out as text.
+const noProseCall = "Never write a tool call, or what a tool would return, as text."
 
 // noLocalToolsReply is what a CLI whose shell is denied is asked to say.
 const noLocalToolsReply = "NO-LOCAL-TOOLS"
@@ -58,10 +82,11 @@ const noLocalToolsReply = "NO-LOCAL-TOOLS"
 const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 // webProbePrompt asks the CLI to fetch the URL with its own browser.
-const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and reply with " +
-	"only the value after ts= on the line that starts with ts=, nothing else.\n" +
-	"If you have no tool that can fetch a URL, or the fetch fails, reply with only: " +
-	noWebReply
+const webProbePrompt = "If you were given a tool that fetches URLs, use it to fetch " +
+	webProbeURL + " and reply with only the value after ts= on the line that starts with " +
+	"ts=, nothing else.\n" +
+	"If you were given no such tool, or the fetch fails, reply with only: " + noWebReply + "\n" +
+	noProseCall
 
 // noWebReply is what a CLI with no reachable web tool is asked to say.
 const noWebReply = "NO-WEB"
@@ -84,7 +109,6 @@ const probeSkew = 5 * time.Minute
 type Diagnosis struct {
 	Provider   string
 	Agent      string
-	Mode       string
 	Model      string
 	Binary     string
 	BinaryPath string
@@ -116,37 +140,209 @@ type Diagnosis struct {
 	// LocalTools is the profile's stance on the CLI's own shell and file
 	// tools, beside what the shell probe measured.
 	LocalTools string
-	// Web is whether the CLI's own fetch tool reached the web, measured.
+	// Web is the entry's web stance beside whether the CLI's own fetch tool
+	// reached the web, measured. On a denied entry a fetch that succeeded is
+	// a problem, as a shell that ran is on a profile denying local tools.
 	Web string
 
-	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
-	// is empty for a text-mode one. Each half of it fails at a seat's
-	// first turn and nowhere earlier: a CLI with no coding-agent runner
-	// has nothing to drive, and a box with no bridge to dial gets none of
-	// the seat's tools.
-	AgentRuntime []string
+	// Executor is what an entry a seat's EXECUTOR can launch on needs beyond
+	// a login, and is empty for an entry no executor chain holds. Each half
+	// of it fails at a seat's first launch and nowhere earlier: a CLI with no
+	// in-box runner is skipped by every launch, and a box with no bridge to
+	// dial gets none of the seat's tools.
+	Executor []string
 
+	// Checks is what the report measured, one per [CheckName] in the order
+	// the report prints them, and the one account of it: [Diagnosis.Render]
+	// prints the measured lines from it, Problems is derived from it, and
+	// BinaryPath, Version, SignIn, TokenUsage, Smoke, LocalTools, Web and
+	// Executor are its details as the fields have always carried them.
+	// Structured because the API answers with it, and a client reading the
+	// text would be parsing a report written for people.
+	Checks []Check
+
+	// Problems is every problem a check raised, in the order of Checks: what
+	// `crewlet llm doctor` exits non-zero on.
 	Problems []string
+}
+
+// CheckName is one thing the doctor measures.
+type CheckName string
+
+// The checks, in the order the report prints them.
+const (
+	// CheckBinary is whether the CLI is on this host's PATH.
+	CheckBinary CheckName = "binary"
+	// CheckVersion is whether the CLI prints the version its profile reads.
+	CheckVersion CheckName = "version"
+	// CheckSignIn is what signs the CLI in, read off the environment it is
+	// handed and the login on disk.
+	CheckSignIn CheckName = "sign-in"
+	// CheckUsage is whether the profile reads the CLI's own token counts or
+	// a budget runs on estimates.
+	CheckUsage CheckName = "usage"
+	// CheckSmoke is a real completion with a real tool, served as a seat's.
+	CheckSmoke CheckName = "smoke"
+	// CheckShell is whether the CLI ran its own shell, or read a file, on
+	// the engine host, beside the profile's stance.
+	CheckShell CheckName = "shell"
+	// CheckWeb is whether the CLI fetched from the web with its own tool,
+	// beside the entry's stance.
+	CheckWeb CheckName = "web"
+	// CheckExecutor is what a seat's executor launch on the entry needs
+	// beyond a login, for an entry an executor chain holds.
+	CheckExecutor CheckName = "executor"
+)
+
+// checkOrder is the order of the report's lines, and so of
+// [Diagnosis.Checks] and [Diagnosis.Problems].
+var checkOrder = []CheckName{
+	CheckBinary, CheckVersion, CheckSignIn, CheckUsage, CheckSmoke, CheckShell, CheckWeb, CheckExecutor,
+}
+
+// Valid reports whether n is a check the doctor makes.
+func (n CheckName) Valid() bool { return slices.Contains(checkOrder, n) }
+
+// CheckKindConfig is the [Check.Kind] of a problem the entry's configuration
+// or its CLI's build causes, which no later call settles: a remedy to apply,
+// not a failure to wait out. The other kinds are a failed call's
+// ([llm.ErrorKind]).
+const CheckKindConfig = "config"
+
+// Check is one measured line of a [Diagnosis].
+type Check struct {
+	Name CheckName
+	// OK is that the check raised no problem. A probe that was skipped, or
+	// that could not run because an earlier check failed, is OK: the check
+	// that stopped it carries the problem, once.
+	OK bool
+	// Detail is what the check found, as the report's line prints it.
+	Detail string
+	// Kind is the first problem's kind: an [llm.ErrorKind]'s word (auth,
+	// rate_limit, timeout, server, fatal) for a call that failed, or
+	// [CheckKindConfig]. Empty when OK.
+	Kind string
+	// Remedy is the check's problems, each saying what is wrong and what
+	// to change, one per line. Empty when OK.
+	Remedy string
+	// Meaning is, on an auth failure, what the CLI's own words say about the
+	// credential it was handed ([cliprofile.Profile.AuthMeaning]): refused by
+	// the vendor, or never used. Empty on any other line.
+	Meaning cliprofile.AuthMeaning
+
+	// problems are the sentences Remedy joins, kept apart for Problems,
+	// where each is an item of its own.
+	problems []string
+}
+
+// checks gathers a diagnosis's checks as it measures them.
+type checks map[CheckName]*Check
+
+// at is the named check, created on first use.
+func (c checks) at(name CheckName) *Check {
+	check, ok := c[name]
+	if !ok {
+		check = &Check{Name: name}
+		c[name] = check
+	}
+	return check
+}
+
+// set records what the check found.
+func (c checks) set(name CheckName, detail string) { c.at(name).Detail = detail }
+
+// fail raises one problem on the check. The kind is the first problem's:
+// the one a caller acts on first.
+func (c checks) fail(name CheckName, kind, problem string) {
+	check := c.at(name)
+	if len(check.problems) == 0 {
+		check.Kind = kind
+	}
+	check.problems = append(check.problems, problem)
+}
+
+// finish puts the checks on d in the report's order, derives Problems from
+// them, and fills the fields that carry their details.
+func (c checks) finish(d *Diagnosis) {
+	d.Checks, d.Problems = nil, nil
+	for _, name := range checkOrder {
+		check, ok := c[name]
+		if !ok {
+			continue
+		}
+		check.OK = len(check.problems) == 0
+		if check.OK {
+			check.Kind = ""
+		}
+		check.Remedy = strings.Join(check.problems, "\n")
+		d.Checks = append(d.Checks, *check)
+		d.Problems = append(d.Problems, check.problems...)
+	}
+	d.BinaryPath = d.detail(CheckBinary)
+	d.Version = d.detail(CheckVersion)
+	d.SignIn = d.detail(CheckSignIn)
+	d.TokenUsage = d.detail(CheckUsage)
+	d.Smoke = d.detail(CheckSmoke)
+	d.LocalTools = d.detail(CheckShell)
+	d.Web = d.detail(CheckWeb)
+	d.Executor = d.executorLines()
+}
+
+// Check is the named check, and whether the diagnosis made it.
+func (d Diagnosis) Check(name CheckName) (Check, bool) {
+	for _, check := range d.Checks {
+		if check.Name == name {
+			return check, true
+		}
+	}
+	return Check{}, false
+}
+
+// detail is the named check's Detail, "" for a check not made.
+func (d Diagnosis) detail(name CheckName) string {
+	check, _ := d.Check(name)
+	return check.Detail
+}
+
+// executorLines are the executor check's lines, one per line of its Detail.
+func (d Diagnosis) executorLines() []string {
+	if detail := d.detail(CheckExecutor); detail != "" {
+		return strings.Split(detail, "\n")
+	}
+	return nil
 }
 
 // DiagnoseOptions are the facts a provider cannot see about itself.
 //
-// Both belong to the PROCESS rather than to the provider — which runners this
-// build registers, and what a sandbox can dial — and both decide whether agent
-// mode works. Passed in rather than read here, so `doctor` reports the engine's
-// own answers instead of this package's guess at them.
+// They belong to the COMPANY and the PROCESS rather than to the provider —
+// which seats launch their executor on this entry, which runners this build
+// registers, and what a box can dial — and together they decide whether a
+// seat's executor can run on it. Passed in rather than read here, so `doctor`
+// reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
 	// Smoke runs the real completion and the two tool probes.
 	Smoke bool
 
-	// AgentRunners are the coding-agent runner names this build has. An
-	// agent-mode entry naming a CLI outside them cannot run at all.
+	// ExecutorSeats are the agent seats whose executor chain holds this
+	// entry, as the company resolves them. Empty means no seat's executor
+	// can launch here, and the entry serves the phases on this host only.
+	ExecutorSeats []string
+
+	// AgentRunners are the in-box coding-agent runner names this build has.
+	// An executor launch skips an entry whose CLI is outside them.
 	AgentRunners []string
+
+	// Cell is the cell a run launched on this entry is placed in — its own
+	// run_in, else the company's default_run_in. A `direct` box on a node
+	// that serves the API dials the node's own listener on loopback; every
+	// other box dials BridgeURL.
+	Cell string
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as the engine would read it:
 	// parsed by the one grammar every URL a box dials shares
 	// (sandbox.ParseBoxURL), never the raw variable. Empty means unset, and
-	// agent mode is refused at launch.
+	// a launch whose box cannot dial a listener of its own node's is
+	// refused.
 	BridgeURL string
 
 	// BridgeRefused is that grammar's refusal of a value that is set and
@@ -156,6 +352,35 @@ type DiagnoseOptions struct {
 	// it as the bridge would tell a deploy script the opposite of what the
 	// next boot does.
 	BridgeRefused string
+	// HostHome is the directory a login this machine already holds is looked
+	// for under ([Provider.HostLogin]); empty is the user's own home, which is
+	// what an operator's `crewlet llm doctor` reads. A suite names an empty
+	// directory, so the report it judges never depends on whether the machine
+	// running it has a CLI signed in. It is not [DiagnoseOptions.Home], which
+	// moves the diagnosis itself off the entry's sign-in.
+	HostHome string
+
+	// Values are candidate credential values, by the variable the CLI is
+	// handed each under: the profile's token_env or api_key_env, or a name
+	// the entry's env sets. Each takes the place of what the entry resolved
+	// for that variable, for this diagnosis alone, so a credential can be
+	// tested before anything stores it. A name the entry does not hand its
+	// CLI under its auth mode is a sign-in problem, never a value dropped
+	// in silence: a test that passed without its candidate would vouch for
+	// a credential nothing tried.
+	//
+	// A diagnosis with Values runs in Home, and in a home of its own made
+	// and removed for it when Home is empty: a candidate tested beside the
+	// entry's login would be tested with that login seeded next to it, and
+	// whichever the CLI preferred would be what answered.
+	Values map[string]string
+
+	// Home is a state directory of the diagnosis's own, in place of the
+	// entry's: its calls are seeded from no login but the one Home holds,
+	// and whatever the CLI writes back lands there, never in the entry's
+	// shared credentials. Whoever passes it owns it, and no other diagnosis
+	// may use it at the same time.
+	Home string
 }
 
 // Diagnose measures one provider end to end.
@@ -163,38 +388,174 @@ type DiagnoseOptions struct {
 // It never returns an error: every failure it can find is a LINE in the
 // report, because an operator running `doctor` wants the whole picture, and a
 // command that stopped at the first problem would hide the three behind it.
+//
+// THE ENTRY'S RECORD LEARNS FROM IT ONLY WHEN IT RAN ON THE ENTRY'S SIGN-IN.
+// Its probes are real calls, made through [Provider.Complete], so a diagnosis
+// of the entry as it stands is recorded as any call is ([Provider.Plan]): an
+// answer clears a refused sign-in, a refusal is remembered. One with Values or
+// a Home runs on a sibling built for it ([Provider.candidate]), with a record
+// of its own: what a candidate credential met says nothing about the
+// credential the entry signs in with, and recorded on the entry it would clear
+// a sign-in the vendor refuses, or sit out one that has quota left.
 func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis {
+	if opts.Values == nil && opts.Home == "" {
+		return p.diagnose(ctx, opts, nil)
+	}
+	home := opts.Home
+	if home == "" {
+		dir, err := os.MkdirTemp("", "crewlet-candidate-")
+		if err != nil {
+			return p.unisolated(fmt.Errorf("making a home of its own: %w", err))
+		}
+		defer func() {
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				log.WarnContext(ctx, "cli_agent_candidate_cleanup_failed", "dir", dir, "error", rmErr)
+			}
+		}()
+		home = dir
+	}
+	candidate, refused, err := p.candidate(home, opts.Values)
+	if err != nil {
+		return p.unisolated(err)
+	}
+	return candidate.diagnose(ctx, opts, refused)
+}
+
+// unisolated is the diagnosis of a candidate that could not be given a home of
+// its own: nothing ran, since running it in the entry's would seed it beside
+// the entry's login and write what the CLI refreshed back over it.
+func (p *Provider) unisolated(err error) Diagnosis {
+	d := Diagnosis{Provider: p.key, Agent: p.agent, Model: p.model,
+		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor}
+	c := checks{}
+	c.set(CheckSignIn, "not tested")
+	c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("the candidate credentials for %q "+
+		"were not tested: they run in a home of their own, and none could be made: %v", p.key, err))
+	c.finish(&d)
+	return d
+}
+
+// candidate is a sibling of this entry for a diagnosis that must not run on
+// the entry's own sign-in: in a workspace at home, with values in place of
+// what the entry resolved for their variables ([DiagnoseOptions.Values]), and
+// with a [Plans] of its own, so nothing it meets is recorded on the entry.
+// refused is a problem for each value that would reach nothing.
+//
+// BUILT FIELD BY FIELD, not copied: a provider holds the mutex its plan is
+// read under, and a copy would share the entry's slots and plan. What is
+// copied is what [New] made of the entry's configuration; what is fresh is
+// what its calls change.
+//
+// THE WORKSPACE IS NOT [Shared]'s. That registry keeps one workspace per
+// directory for the life of the process, so every entry on a directory locks
+// one set of seats; a home made for one diagnosis and removed after it would
+// stay in it for good. No other entry is on this directory, so there is no
+// one to share it with.
+func (p *Provider) candidate(home string, values map[string]string) (*Provider, []string, error) {
+	key, err := keyOf(home, p.agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	env := maps.Clone(p.env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	auth := p.auth
+	var refused []string
+	placed := map[string]bool{}
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		value := values[name]
+		switch {
+		case name == p.profile.TokenEnv && name != "":
+			auth.Token, auth.TokenConfigured = value, true
+		case name == p.profile.APIKeyEnv && name != "":
+			auth.APIKey = value
+		default:
+			if _, set := p.env[name]; !set {
+				refused = append(refused, fmt.Sprintf("the candidate value for %s reaches nothing: "+
+					"it is neither the %q CLI's token variable nor its key variable, and "+
+					"providers.llm.%s.env does not set it", orNone(name), p.agent, p.key))
+				continue
+			}
+			env[name] = value
+		}
+		placed[name] = true
+	}
+	c := &Provider{
+		key: p.key, model: p.model, agent: p.agent, profile: p.profile,
+		ws: &Workspace{
+			stateDir: key.dir, root: filepath.Join(key.dir, key.agent), agent: key.agent,
+			profile: p.profile, seats: map[string]*seatState{}, retries: map[string]carryRetry{},
+		},
+		env: env, auth: auth, timeout: p.timeout, termGrace: p.termGrace,
+		slots: make(chan struct{}, cap(p.slots)),
+		plans: NewPlans(nil), zone: p.zone, now: p.now,
+	}
+	// WHAT THE CHILD IS HANDED DECIDES, as it does for the entry's own
+	// sign-in ([Provider.signIn]): a key given to a subscription entry, or
+	// a token to an api-key one, is removed by the mode ([applyAuth]), and
+	// a value inherit-env never reads stays where it was put.
+	handed := childEnv(c.profile, &Checkout{}, c.env, c.auth)
+	for _, name := range slices.Sorted(maps.Keys(placed)) {
+		if handed[name] != values[name] {
+			refused = append(refused, fmt.Sprintf("the candidate value for %s reaches nothing: "+
+				"auth.mode %s does not hand the %q CLI that variable from the entry, so a test "+
+				"with it would test the entry without it", name, c.AuthMode(), p.agent))
+		}
+	}
+	return c, refused, nil
+}
+
+// diagnose is [Provider.Diagnose] on this provider as it stands, with refused
+// the problems of candidate values that reach nothing.
+func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused []string) Diagnosis {
 	smoke := opts.Smoke
 	d := Diagnosis{
-		Provider: p.key, Agent: p.agent, Mode: p.modeName(), Model: p.model,
+		Provider: p.key, Agent: p.agent, Model: p.model,
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
-	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
+	c := checks{}
+	if lines, problems := p.executor(opts); len(lines) > 0 {
+		c.set(CheckExecutor, strings.Join(lines, "\n"))
+		for _, problem := range problems {
+			c.fail(CheckExecutor, CheckKindConfig, problem)
+		}
+	}
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
 	case err != nil:
-		d.BinaryPath = "not on PATH"
-		d.Problems = append(d.Problems, fmt.Sprintf(
+		c.set(CheckBinary, "not on PATH")
+		c.set(CheckVersion, "")
+		c.fail(CheckBinary, llm.KindFatal.String(), fmt.Sprintf(
 			"%q is not on this host's PATH — the CLI runs on the ENGINE host, so it "+
 				"must be installed here; set overrides.binary to an absolute path "+
 				"if it lives somewhere unusual", p.profile.Binary))
 	default:
-		d.BinaryPath = path
-		d.Version = p.probeVersion(ctx)
-		if d.Version == "" {
-			d.Problems = append(d.Problems, fmt.Sprintf(
+		c.set(CheckBinary, path)
+		version := p.probeVersion(ctx)
+		c.set(CheckVersion, version)
+		if version == "" {
+			c.fail(CheckVersion, CheckKindConfig, fmt.Sprintf(
 				"%s %s printed no version — the profile may not match this build; "+
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
 				orNone(p.profile.WrittenFor)))
 		}
 	}
 
-	files := p.ws.LoginFiles()
+	for _, problem := range refused {
+		c.fail(CheckSignIn, CheckKindConfig, problem)
+	}
+	login, loginErr := p.ws.Login(ctx)
 	loggedOut, loggedOutErr := p.ws.loggedOut()
 	switch {
-	case len(files) > 0:
+	case loginErr != nil:
+		d.Credentials = "unknown — the shared login could not be read"
+		c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("the shared login in %s could not be read, "+
+			"so whether its credential files sign the entry in is unknown: %v",
+			p.ws.CredentialsDir(), loginErr))
+	case len(p.ws.loginIn(login)) > 0:
 		d.Credentials = "present"
 	default:
 		d.Credentials = "none on disk"
@@ -207,10 +568,10 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 					"login is written again"
 			}
 		}
-		d.HostLogin = p.HostLogin(ctx, "")
+		d.HostLogin = p.HostLogin(ctx, opts.HostHome)
 	}
 	if loggedOutErr != nil {
-		d.Problems = append(d.Problems, fmt.Sprintf("whether the entry was logged out cannot be "+
+		c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("whether the entry was logged out cannot be "+
 			"read, so neither can whether its configured credential bundle restores: %v", loggedOutErr))
 	}
 
@@ -222,12 +583,19 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	default:
 		d.TokenEnv = "unset"
 	}
+	// A credential variable no store can hold is its own problem, at the
+	// field that names it, whether or not anything signs the entry in: the
+	// routes below leave it out ([misnamedVariable]), and without this line
+	// the report would not say why.
+	for _, variable := range p.misnamedVariables() {
+		c.fail(CheckSignIn, CheckKindConfig, p.misnamedProblem(variable))
+	}
 
 	if p.profile.ReadsUsage() {
-		d.TokenUsage = "reported by CLI"
+		c.set(CheckUsage, "reported by CLI")
 	} else {
-		d.TokenUsage = "estimated (4 characters per token)"
-		d.Problems = append(d.Problems, fmt.Sprintf(
+		c.set(CheckUsage, "estimated (4 characters per token)")
+		c.fail(CheckUsage, CheckKindConfig, fmt.Sprintf(
 			"the %q profile reads no usage figures, so budgets for seats on this "+
 				"provider run on estimates", p.agent))
 	}
@@ -237,33 +605,43 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		"side passes: " + describeRoute(p.profile.RouteFor(false)),
 	}
 
-	signIn := p.signIn()
-	d.SignIn = signIn.line()
+	signIn := p.signInFrom(login, loginErr)
+	c.set(CheckSignIn, signIn.line())
 	answered := false
 
 	stance := p.localToolsStance()
+	web := p.webStance()
 	switch {
 	case !smoke:
-		d.Smoke = "skipped (-no-smoke)"
-		d.LocalTools = stance + " — probe skipped (-no-smoke)"
-		d.Web = "probe skipped (-no-smoke)"
-	case d.BinaryPath == "not on PATH":
-		d.Smoke = "skipped — no binary to run"
-		d.LocalTools = stance + " — probe skipped, no binary to run"
-		d.Web = "probe skipped — no binary to run"
+		c.set(CheckSmoke, "skipped (-no-smoke)")
+		c.set(CheckShell, stance+"; probe skipped (-no-smoke)")
+		c.set(CheckWeb, web+"; probe skipped (-no-smoke)")
+	case err != nil:
+		c.set(CheckSmoke, "skipped: no binary to run")
+		c.set(CheckShell, stance+"; probe skipped, no binary to run")
+		c.set(CheckWeb, web+"; probe skipped, no binary to run")
 	default:
-		d.Smoke, answered = p.smokeTest(ctx)
-		if strings.HasPrefix(d.Smoke, "failed") {
-			d.Problems = append(d.Problems, d.Smoke)
+		outcome := p.smoke(ctx)
+		answered = outcome.answered
+		c.set(CheckSmoke, outcome.verdict)
+		if outcome.kind != "" {
+			c.fail(CheckSmoke, outcome.kind, outcome.verdict)
 		}
 		verdict, problem := p.shellProbe(ctx)
-		d.LocalTools = stance + " — " + verdict
-		if problem != "" {
-			d.Problems = append(d.Problems, problem)
+		if verdict == refusedVerdict {
+			// A refused shell is half the stance: the file tools read
+			// the host as well as a shell does, and the deny list that
+			// refused one says nothing about the other.
+			verdict, problem = p.fileProbe(ctx)
 		}
-		d.Web = p.webProbe(ctx)
-		if strings.HasPrefix(d.Web, "failed") {
-			d.Problems = append(d.Problems, d.Web)
+		c.set(CheckShell, stance+"; "+verdict)
+		if problem != "" {
+			c.fail(CheckShell, CheckKindConfig, problem)
+		}
+		verdict, problem, kind := p.webProbe(ctx)
+		c.set(CheckWeb, web+"; "+verdict)
+		if problem != "" {
+			c.fail(CheckWeb, kind, problem)
 		}
 	}
 
@@ -275,13 +653,20 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	// configuration cannot tell those from a missing key; the smoke test's
 	// answer can, so it decides, and without it the report says what it
 	// sees and asks for the run that settles it.
-	if len(signIn.sources) == 0 {
+	if len(signIn.sources) == 0 && signIn.unreadable == nil {
 		if answered {
 			d.SignIn = "none the engine hands the CLI — but the smoke test was " +
 				"answered, so it authenticates some other way (an endpoint that takes " +
 				"no key, or a credential in its own configuration)"
+			c.set(CheckSignIn, d.SignIn)
 		} else {
-			d.Problems = append(d.Problems, p.noSignIn(d.HostLogin, signIn.unresolved))
+			c.fail(CheckSignIn, CheckKindConfig, p.noSignIn(d.HostLogin, signIn.unresolved))
+		}
+	}
+	c.finish(&d)
+	for i := range d.Checks {
+		if d.Checks[i].Kind == llm.KindAuth.String() {
+			d.Checks[i].Meaning = p.profile.AuthMeaning(d.Checks[i].Remedy)
 		}
 	}
 	return d
@@ -389,63 +774,83 @@ func (p *Provider) keyRemedy() string {
 		"as auth.api_key (the CLI reads it from %s)", p.profile.APIKeyEnv)
 }
 
-// modeName is how this entry runs, for the report.
-func (p *Provider) modeName() string {
-	if p.agentMode {
-		return "agent (the CLI runs the executor)"
-	}
-	return "text (a model behind the engine's tool loop)"
-}
-
-// agentRuntime measures what an agent-mode entry needs beyond a login.
+// executor measures what an entry a seat's executor launches on needs beyond
+// a login.
 //
-// BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
-// whole reason they are here: an entry naming a CLI this build has no runner
-// for validates cleanly and reports a configured provider, and an engine with
-// no reachable bridge URL refuses every agent-mode launch at the moment a seat
-// finally has work. `doctor` is what a deploy script gates on, so it is the
-// last place either can be caught before an agent is waiting.
+// BOTH HALVES FAIL AT A SEAT'S FIRST LAUNCH AND NOWHERE EARLIER, which is the
+// whole reason they are here: an engine with no reachable bridge URL refuses
+// every launch at the moment a seat finally has work, and a CLI with no in-box
+// runner is skipped by every launch while validating cleanly as a provider.
+// `doctor` is what a deploy script gates on, so it is the last place either
+// can be caught before an agent is waiting.
 //
-// A TEXT-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
-// not work in a mode it is not in. It runs as a subprocess of this engine and
-// needs neither.
-func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
-	if !p.agentMode {
+// A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM. The company refuses an agent
+// seat whose executor chain holds no runner at all, so a CLI without one sits
+// in a chain beside one that has it — skipped at launch, and still the seat's
+// model for every phase on this host the chain serves. Faulting it would make `doctor`
+// red on a configuration the engine runs.
+//
+// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves the phases
+// on this host, as a subprocess of this engine, and needs neither.
+func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
+	if len(opts.ExecutorSeats) == 0 {
 		return nil, nil
 	}
-	if slices.Contains(opts.AgentRunners, p.agent) {
-		lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
-	} else {
-		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
-		problems = append(problems, fmt.Sprintf(
-			"agent mode drives %q through a coding-agent runner and this build "+
-				"registers none for it (has: %s) — set `mode: text` on "+
-				"providers.llm.%s, or point it at a CLI that has one",
-			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
+	lines = append(lines, "seats: "+strings.Join(opts.ExecutorSeats, ", "))
+	if !slices.Contains(opts.AgentRunners, p.agent) {
+		lines = append(lines, fmt.Sprintf(
+			"runner: none for %q — skipped at launch (runners: %s); serves "+
+				"those seats' phases on this host only",
+			p.agent, strings.Join(opts.AgentRunners, ", ")))
+		return lines, nil
 	}
+	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
 	switch {
 	case opts.BridgeRefused != "":
+		// FIRST, whatever the cell: the engine refuses to boot on this
+		// value, so a direct box's loopback listener is never served either.
 		lines = append(lines, "tool bridge: refused — "+opts.BridgeRefused)
 		problems = append(problems, fmt.Sprintf(
 			"%s. The engine refuses to boot on this value, so no seat runs at "+
-				"all, in agent mode or any other: set it to a URL a sandbox can "+
+				"all, on this entry or any other: set it to a URL a box can "+
 				"reach, or unset it",
 			opts.BridgeRefused))
+	case opts.Cell == directCell:
+		// ON THE HOST, so on a node that binds a listener the box reaches
+		// on loopback — api.port, on every interface or on loopback, which
+		// a node without the ingress role serves its own host alone — the
+		// node's own listener is the address, derived by the node that
+		// binds it: the variable is not needed there, and a report calling
+		// it missing would send an operator to set what the quickstart and
+		// a seat pool never ask for. Whether this node is one is its Tier
+		// A, which this command does not read; a seats node that is not
+		// says so itself at apply.
+		via := "a node on api.port 0 dials " + bridgeURLVar
+		if url := strings.TrimSpace(opts.BridgeURL); url != "" {
+			via = "a node on api.port 0 dials " + url
+		}
+		lines = append(lines, "tool bridge: this node's own listener, on loopback, "+
+			"where the node binds api.port (on every interface or on loopback); "+via)
 	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
 	default:
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
-			"agent mode hands the seat's tools to the box over an MCP bridge and "+
-				"%s is unset, so every launch is refused — a coding agent with "+
-				"none of the seat's tools cannot answer anybody or submit its "+
-				"work. Set it to a URL a sandbox can reach",
-			bridgeURLVar))
+			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
+				"the %s cell is not on the node's host, so it dials %s alone — which "+
+				"is unset, so every launch on providers.llm.%s is refused: a coding "+
+				"agent with none of the seat's tools cannot answer anybody or submit "+
+				"its work. Set it to a URL that box reaches the node at",
+			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
 	return lines, problems
 }
 
-// bridgeURLVar is the variable an agent-mode box dials the engine on.
+// directCell is the cell whose box is a process tree on the engine's own host
+// — config.PlacementDirect, spelled here for [bridgeURLVar]'s reason.
+const directCell = "direct"
+
+// bridgeURLVar is the variable an executor's box dials the engine on.
 //
 // SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
 // provider would be a dependency from a leaf onto an edge for one string —
@@ -480,7 +885,7 @@ func (p *Provider) localToolsStance() string {
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	comp, err := p.Complete(ctx, probeRequest(shellProbePrompt))
 	if err != nil {
-		return "probe failed — " + err.Error(), ""
+		return "probe failed: " + err.Error(), ""
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
@@ -497,44 +902,117 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 				"a host you would hand an autonomous agent, or prefer a backend whose "+
 				"profile denies local tools", p.agent, orNone(p.profile.LocalToolsNote))
 	default:
-		return "probe: refused", ""
+		return refusedVerdict, ""
 	}
 }
 
+// refusedVerdict is a probe that found its tool refused.
+const refusedVerdict = "probe: refused"
+
+// fileProbe asks the CLI to read a file the doctor has just written on the
+// engine host, outside the seat's home, and reports whether it did, on the
+// argv the entry runs every call on. The second
+// return is the problem line, empty when there is none.
+func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
+	dir, err := os.MkdirTemp("", "crewlet-file-probe-")
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			log.WarnContext(ctx, "cli_agent_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
+		}
+	}()
+	token := "crewlet-file-probe-" + newSessionID()
+	path := filepath.Join(dir, "probe.txt")
+	if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
+		return "file probe failed: " + writeErr.Error(), ""
+	}
+	comp, err := p.Complete(ctx, probeRequest(fmt.Sprintf(fileProbePrompt, path)))
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	if !strings.Contains(comp.Content, token) {
+		return refusedVerdict + " (shell and file read)", ""
+	}
+	if p.profile.LocalTools == cliprofile.LocalToolsDenied {
+		return "probe: FILE READ", fmt.Sprintf(
+			"the %q profile says local tools are denied, but the CLI read a file the doctor "+
+				"wrote on the engine host, outside its seat home: its file tools are not "+
+				"off on this build (%s), so it can read the engine's own data; check "+
+				"overrides against the installed version before running seats or "+
+				"Ask Crewlet on it", p.agent, orNone(p.profile.WrittenFor))
+	}
+	return "probe: FILE READ", fmt.Sprintf(
+		"the %q CLI reads files on the engine host as the engine user (%s): it can read "+
+			"the engine's own data. Run seats on it only on a host you would hand an "+
+			"autonomous agent", p.agent, orNone(p.profile.LocalToolsNote))
+}
+
+// webStance renders the entry's declared web stance.
+func (p *Provider) webStance() string {
+	if p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied {
+		return "denied by entry (" + orNone(p.profile.WebToolsNote) + ")"
+	}
+	return "allowed"
+}
+
 // webProbe asks the CLI to fetch a URL with its own browser and reports
-// whether it did.
+// whether it did. The second return is the problem line, empty when there is
+// none.
 //
-// Web is the one local tool a profile keeps ON, so a CLI that cannot reach
-// it is a problem: the seat has less reach than the same CLI at a terminal,
-// and the cause is usually a vendor sandbox flag that also cut the network,
-// or an egress proxy the child environment was not told about.
-func (p *Provider) webProbe(ctx context.Context) string {
+// WHICH ANSWER IS THE PROBLEM DEPENDS ON THE STANCE, and the verdict is
+// measured either way rather than inferred from the profile. On an entry that
+// keeps web on, a CLI that cannot reach it is the problem: the seat has less
+// reach than the same CLI at a terminal, and the cause is usually a vendor
+// sandbox flag that also cut the network, or an egress proxy the child
+// environment was not told about. On an entry that DENIES web (the one an
+// assistant runs on), a CLI that fetched is the problem, and the worse one:
+// the denial is a claim the assistant is admitted on, and a vendor that
+// renamed a flag would leave the model fetching under a configuration that
+// says it cannot.
+//
+// The third return is the problem's [Check.Kind]: the failed call's for a
+// probe that could not run, else [CheckKindConfig]; empty with no problem.
+func (p *Provider) webProbe(ctx context.Context) (verdict, problem, kind string) {
+	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
 	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
 	if err != nil {
-		return "failed — " + err.Error()
+		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error(), llm.KindOf(err).String()
 	}
-	if reportsCurrentClock(comp.Content, time.Now()) {
-		return "ok — fetched " + webProbeURL
-	}
-	// Same split as smokeTest, and for the same reason: an empty answer is
-	// a completion now, so "it said: \"\"" would send an operator to the
-	// egress proxy for a model that never spoke.
-	if strings.TrimSpace(comp.Content) == "" {
-		return fmt.Sprintf(
-			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
-				"billed), so this probe says nothing about web access either way. "+
-				"Point this entry at a stronger model and run the doctor again",
-			p.agent, comp.OutputTokens)
+	fetched := reportsCurrentClock(comp.Content, time.Now())
+	switch {
+	case fetched && denied:
+		return "probe: FETCHED " + webProbeURL, fmt.Sprintf(
+			"the entry denies the %q CLI its web tools, but the CLI fetched %s with "+
+				"its own web tool: the profile's web_denial is not taking effect on "+
+				"this build (%s); check overrides.web_denial against the installed "+
+				"version before Ask Crewlet runs on this entry",
+			p.agent, webProbeURL, orNone(p.profile.WrittenFor)), CheckKindConfig
+	case fetched:
+		return "ok: fetched " + webProbeURL, "", ""
+	case strings.TrimSpace(comp.Content) == "":
+		// Same split as smokeTest, and for the same reason: an empty
+		// answer is a completion now, so "it said: \"\"" would send an
+		// operator to the egress proxy, or past a denial that may not
+		// hold, for a model that never spoke.
+		return "probe inconclusive", fmt.Sprintf(
+			"the web probe is inconclusive: the %q CLI exited 0 and answered with "+
+				"nothing (%d output tokens billed), so it says nothing about web access "+
+				"either way. Point this entry at a stronger model and run the doctor again",
+			p.agent, comp.OutputTokens), CheckKindConfig
+	case denied:
+		return "probe: refused", "", ""
 	}
 	// WHAT IT SAID, WHOLE: the reader is an operator deciding what to fix,
 	// and a refusal's reason — a sandbox flag, a proxy's answer — is rarely
 	// in its first hundred and twenty bytes, which is where this used to stop.
-	return fmt.Sprintf(
-		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+	return "failed", fmt.Sprintf(
+		"the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (env / passthrough_env)",
-		p.agent, webProbeURL, strings.TrimSpace(comp.Content))
+		p.agent, webProbeURL, strings.TrimSpace(comp.Content)), CheckKindConfig
 }
 
 // reportsCurrentClock reports whether text carries a Unix timestamp within
@@ -600,53 +1078,104 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
-// smokeTest runs a REAL completion with a REAL tool.
+// smokeTest runs a REAL completion with a REAL tool, served the way a seat's
+// are.
 //
 // The command that matters, and the reason it is not merely a version probe:
 // a profile can look perfect — binary present, login present, flags accepted
-// — and still not produce a parseable tool call, because the envelope
-// contract is a request to a model rather than a schema the vendor enforces.
-// That failure only shows up on the first turn of a real seat otherwise.
+// — and still not hand its CLI the seat's tools, because how a CLI is told of
+// an MCP server, which of its tools it lets the model call, and how it records
+// its requests all move with every vendor release. That failure only shows up
+// on the first turn of a real seat otherwise.
 //
-// THE PRODUCTION SHAPE, and nothing stronger: tools offered, no call forced,
-// and the instruction naming the tool in the conversation — which is exactly
-// what a phase that finishes by a call sends, its corrective round included.
-// It used to force a call, which rendered the envelope's "you MUST request a
-// tool call" contract that no phase ever receives; a CLI that only called a
-// tool when told it must would have passed here and failed every seat.
+// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
+// session server this command opens for itself ([toolsession.NewHost]); the
+// profile's tool route renders the CLI's server configuration; the CLI starts
+// this binary as the relay, lists the tool and — asked the way a phase asks,
+// the instruction naming the tool and nothing forcing it — calls it. It passes
+// when the server recorded the call, and it says how the call was joined to
+// the CLI's record and which tools the CLI offered its model, which is where a
+// confinement that stopped holding shows first.
 //
 // answered reports whether the model replied at all, however badly: a reply
 // is proof the CLI reached its model signed in, which the doctor needs apart
 // from whether the reply was usable.
 func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
-	comp, err := p.Complete(ctx, smokeRequest())
+	outcome := p.smoke(ctx)
+	return outcome.verdict, outcome.answered
+}
+
+// smokeOutcome is what [Provider.smokeTest] found, and the kind of its
+// failure: empty for a pass, the failed call's where the call itself failed,
+// and [CheckKindConfig] for a CLI that ran and fell short of the route.
+type smokeOutcome struct {
+	verdict  string
+	answered bool
+	kind     string
+}
+
+// smoke is [Provider.smokeTest] with its failure's kind.
+func (p *Provider) smoke(ctx context.Context) smokeOutcome {
+	var err error
+	verdict, answered := p.smokeRun(ctx, &err)
+	outcome := smokeOutcome{verdict: verdict, answered: answered}
+	switch {
+	case !strings.HasPrefix(verdict, "failed"):
+	case err != nil:
+		outcome.kind = llm.KindOf(err).String()
+	default:
+		outcome.kind = CheckKindConfig
+	}
+	return outcome
+}
+
+// smokeRun is [Provider.smokeTest]'s run. It sets failed to the error of a
+// run that did not get as far as an answer.
+func (p *Provider) smokeRun(ctx context.Context, failed *error) (verdict string, answered bool) {
+	if p.profile.MCP == nil {
+		// Asked plainly, so the doctor still learns whether the CLI is
+		// signed in; the missing route is the finding.
+		comp, err := p.Complete(ctx, probeRequest("Reply with only: ok"))
+		return fmt.Sprintf("failed — the %q profile has no mcp block, so a seat's phase on "+
+			"this entry cannot be handed its tools and is refused (text functions still run); "+
+			"declare providers.llm.%s.overrides.mcp", p.agent, p.key), err == nil && comp != nil
+	}
+	sessions, err := toolsession.NewHost()
 	if err != nil {
-		return "failed — " + err.Error(), false
+		*failed = err
+		return "failed — this process cannot serve a tool session: " + err.Error(), false
 	}
-	if len(comp.ToolCalls) == 0 {
-		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
-		// them. A CLI that answered with prose misread the envelope
-		// contract; a CLI that answered with NOTHING spent its output on
-		// hidden reasoning and needs a different model, not a different
-		// prompt. The provider hands both back as a completion now — an
-		// empty answer is a value, not an error — so this probe is the
-		// only command that names which one an operator has.
-		if strings.TrimSpace(comp.Content) == "" {
-			return fmt.Sprintf(
-				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
-					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Every phase a seat runs on this provider will spend corrective rounds "+
-					"asking again and then end without its submission: point this entry "+
-					"at a stronger model",
-				comp.OutputTokens), true
-		}
+	defer func() { _ = sessions.Close() }()
+	host := newSmokeHost(sessions)
+	var offered []string
+	comp, err := p.Complete(withOffered(ctx, func(tools []string) { offered = tools }), smokeRequest(host))
+	if err != nil {
+		*failed = err
+		return "failed: " + err.Error(), false
+	}
+	if ok, called := host.verdict(offered, comp, p.profile.Requests != nil); called {
+		return ok, true
+	}
+	// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of them. A
+	// CLI that answered with prose never called the tool it was offered; a CLI
+	// that answered with NOTHING spent its output on hidden reasoning and
+	// needs a different model, not a different prompt. The provider hands both
+	// back as a completion — an empty answer is a value, not an error — so
+	// this probe is the only command that names which one an operator has.
+	if strings.TrimSpace(comp.Content) == "" {
 		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so every phase "+
-				"a seat runs on this provider will spend a corrective round asking again, and "+
-				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content)), true
+			"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+				"tokens billed), so it spent its whole answer on hidden reasoning. "+
+				"Every phase a seat runs on this provider will spend corrective rounds "+
+				"asking again and then end without its submission: point this entry "+
+				"at a stronger model",
+			comp.OutputTokens), true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
+	return fmt.Sprintf(
+		"failed — the CLI reached the seat's tools and answered without calling %s, so "+
+			"every phase a seat runs on this provider will spend a corrective round asking "+
+			"again, and end without its submission whenever the model never makes the call. "+
+			"It said: %q", smokeTool, strings.TrimSpace(comp.Content)), true
 }
 
 // probeSystemPrompt is the system prompt every probe carries.
@@ -686,18 +1215,10 @@ func describeRoute(r cliprofile.Route) string {
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
-// tool offered, and the instruction that names it.
-func smokeRequest() llm.Request {
+// tool offered on host, and the instruction that names it.
+func smokeRequest(host llm.ToolHost) llm.Request {
 	req := probeRequest(smokePrompt)
-	req.Tools = []llm.ToolDef{{
-		Name:        "crewlet_smoke",
-		Description: "Confirm the tool channel works.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-			"required":   []any{"ok"},
-		},
-	}}
+	req.Tools = host
 	return req
 }
 
@@ -705,18 +1226,29 @@ func smokeRequest() llm.Request {
 func (d Diagnosis) Healthy() bool { return len(d.Problems) == 0 }
 
 // Render writes the report in the fixed-width form the docs show.
+//
+// The measured lines are the checks' ([Diagnosis.Checks]), and the rest the
+// facts beside them: one account, printed for people here and answered as
+// structure by the API.
 func (d Diagnosis) Render(w io.Writer) {
 	line := func(label, value string) {
 		fmt.Fprintf(w, "%-14s: %s\n", label, value)
 	}
+	lines := func(label string, values []string) {
+		for i, value := range values {
+			if i > 0 {
+				label = ""
+			}
+			line(label, value)
+		}
+	}
 	line("provider", d.Provider)
 	line("cli agent", d.Agent)
-	line("mode", d.Mode)
 	if d.Model != "" {
 		line("model", d.Model)
 	}
-	line("binary", orNone(d.BinaryPath))
-	line("version", orNone(d.Version))
+	line("binary", orNone(d.detail(CheckBinary)))
+	line("version", orNone(d.detail(CheckVersion)))
 	line("written for", orNone(d.WrittenFor))
 	line("state dir", d.StateDir)
 	line("credentials", d.Credentials)
@@ -724,25 +1256,13 @@ func (d Diagnosis) Render(w io.Writer) {
 		line("host login", strings.Join(d.HostLogin, ", ")+" (not adopted)")
 	}
 	line("token env", d.TokenEnv)
-	line("sign-in", d.SignIn)
-	line("token usage", d.TokenUsage)
-	for i, entry := range d.SystemPrompt {
-		label := ""
-		if i == 0 {
-			label = "system prompt"
-		}
-		line(label, entry)
-	}
-	line("smoke test", d.Smoke)
-	line("local tools", d.LocalTools)
-	line("web", d.Web)
-	for i, entry := range d.AgentRuntime {
-		label := ""
-		if i == 0 {
-			label = "agent runtime"
-		}
-		line(label, entry)
-	}
+	line("sign-in", d.detail(CheckSignIn))
+	line("token usage", d.detail(CheckUsage))
+	lines("system prompt", d.SystemPrompt)
+	line("smoke test", d.detail(CheckSmoke))
+	line("local tools", d.detail(CheckShell))
+	line("web", d.detail(CheckWeb))
+	lines("executor", d.executorLines())
 	if d.Healthy() {
 		line("problems", "none")
 		return
@@ -763,30 +1283,40 @@ func orNone(s string) string {
 // SignInState is a one-word summary for `crewlet llm list`: the first route
 // the doctor's sign-in line names, or "none" — the same answer, so the two
 // commands cannot disagree about whether an entry is signed in.
-func (p *Provider) SignInState() string { return p.signIn().state() }
+func (p *Provider) SignInState(ctx context.Context) string { return p.signIn(ctx).state() }
 
 // SandboxCredentials maps this provider's login onto a coding box's home:
 // each credential path RELATIVE to the box home, against the absolute path of
 // the shared file on the engine host.
 //
-// Empty when there is no login on disk, which is the correct answer rather
-// than a set of paths that do not exist — a box seeded with missing files
-// would report a puzzling failure inside the run instead of the plain "not
-// authenticated" the CLI gives when it finds nothing.
+// EVERY FILE THE LOGIN MAY HOLD, whether or not the shared directory holds it
+// now. The box reads the login when it is seeded, as ONE login under the shared
+// directory's lock ([hostbox.ReadCredentials]), and seeds the files that login
+// holds and no others — so a box is never handed a file that does not exist.
+// A map of only the files present when it was built named a set the login may
+// have moved past by the time the box was seeded: a box given hermes's lone
+// .env would be seeded with a newer sign-in's .env and without its auth.json,
+// which is half of that sign-in.
 //
 // A LOCAL box seeds these and writes a refreshed one back. A remote box must
 // ignore them: they carry a refresh token whose rotation is shared fleet
 // state, and pushing that onto somebody else's VM is a materially larger
 // trust step than the scoped headless token the run env already exports.
+// Empty for a profile that keeps no credential file.
+//
+// NONE FOR AN ENTRY THAT SIGNS IN WITH NO LOGIN: an api-key or env entry, and
+// an inherit-env one handed a key ([Provider.signsInWithKey]). Its calls on
+// this host run in a key home no login is seeded into, so its box is seeded
+// with none either: a plan's login beside a key, or beside a cloud provider's
+// switch, is a credential handed to a run that does not sign in with it, and a
+// CLI that ranks a login over its environment would bill the plan instead.
 func (p *Provider) SandboxCredentials() map[string]string {
-	shared := p.ws.CredentialsDir()
+	if p.signsInWithKey() {
+		return nil
+	}
 	out := map[string]string{}
 	for _, rel := range p.profile.CredentialPaths {
-		host := filepath.Join(shared, filepath.Base(rel))
-		if info, err := os.Stat(host); err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		out[rel] = host
+		out[rel] = p.ws.sharedPath(filepath.Base(rel))
 	}
 	if len(out) == 0 {
 		return nil
@@ -796,47 +1326,75 @@ func (p *Provider) SandboxCredentials() map[string]string {
 
 // SandboxCredentialDocument is the shared login a CLI keeps in a database of
 // its own ([cliprofile.CredentialStore]) — the document its export printed —
-// as an absolute path on the engine host, or "" when the profile keeps none or
-// nobody has signed the entry in.
+// as an absolute path on the engine host, or "" when the profile keeps none.
 //
 // A PATH, NOT A BOX PATH: where a box keeps it is the coding runner's to say,
 // because the runner is what imports it into the CLI's database before a run
 // and exports back over it after, so the engine maps it there. It travels
 // under the same rule as [Provider.SandboxCredentials] — seeded into a local
-// box and written back from one, never handed to a remote one.
+// box from the login as it stands then, and written back from one, never
+// handed to a remote one — and is named whether or not the shared directory
+// holds it now, for the same reason; and never for an entry that signs in with
+// no login.
 func (p *Provider) SandboxCredentialDocument() string {
-	if p.profile.CredentialStore == nil {
+	if p.profile.CredentialStore == nil || p.signsInWithKey() {
 		return ""
 	}
-	path := p.ws.documentPath()
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return ""
-	}
-	return path
+	return p.ws.documentPath()
 }
 
-// SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the
-// headless subscription token, where one is configured.
+// SandboxEnv is the environment a coding run on this entry carries into its
+// box, in any cell: the entry's own env, and the credential its auth mode signs
+// the CLI in with — the headless subscription token where one is configured,
+// an api-key entry's key, the variables inherit-env forwards.
 //
-// A token travels to any box, including a remote one, because it is a single
-// scoped and revocable variable rather than a rotating refresh secret. An
-// api-key entry contributes its key here instead, and a subscription entry
-// with neither contributes nothing at all: the run then needs the credential
-// files, which is why a CLI that mints no token needs a local box.
+// THE WHOLE ENV, NOT ONLY ITS SIGN-IN. An entry's env is extra environment for
+// every invocation of its CLI, and a seat's executor run is one: a gateway's
+// ANTHROPIC_BASE_URL and the bearer token it takes, a Bedrock or Vertex AI
+// switch and its region, a proxy. Cut to the credential names, a box run on
+// an entry that reached its model through a gateway called the vendor directly
+// with the gateway's key, and one on Bedrock called the Anthropic API signed
+// in to nothing, while every other phase of the same entry worked.
 //
-// A CLI that reads its model provider's key from its own environment
-// ([cliprofile.Profile.EnvSignIn]) signs in through env, and that key
-// travels for the same reason a token does — it is the whole sign-in, and a
-// run that dropped it would start the CLI signed in to nothing while the
-// doctor reported the entry healthy.
+// A token or a key travels to any box, including a remote one, because it is a
+// single scoped and revocable variable rather than a rotating refresh secret.
+// A subscription entry with neither contributes no credential at all: the run
+// then needs the credential files, which is why a CLI that mints no token
+// needs a local box.
 //
-// Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a text-mode call is given: what the auth mode removes from the
-// child it removes from the box.
+// Read off [childEnv] like [Provider.signIn], so a run carries what a run on
+// this host is given of the entry: what the auth mode removes from the child
+// it removes from the box, and what the mode sets in the child — the
+// credential, and [cliprofile.Profile.SubscriptionEnv] — it sets in the box.
+// The rest of that environment is this host's and stays on it: the host
+// allowlist (a direct box is given its own, and a remote one is another
+// machine), the isolation variables (a box points HOME and the XDG
+// directories at its own home, and an entry's env naming one is refused on
+// every write but only warned about where it is applied), and the profile's
+// fixed env and passthrough, which tune a call on this host — a run in a box
+// is configured by its runner (internal/sandbox/codingagent).
+//
+// TZ travels with it: the zone the engine reads the run's reset in.
+//
+// A BLANK VALUE IS LEFT OUT, by the rule the rest of a run's environment is
+// held to: a reference that resolved to nothing reaches no box as an empty
+// string, and its build already warned (cli_agent_env_unresolved).
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
+	names := slices.Collect(maps.Keys(p.env))
+	names = append(names, p.profile.TokenEnv, p.profile.APIKeyEnv)
+	names = append(names, slices.Collect(maps.Keys(p.profile.SubscriptionEnv))...)
+	// THE ZONE TRAVELS TOO ([childZone]): a run in a box reports its limit
+	// in its own zone, and the engine reads a reset the CLI names without
+	// one in the zone it handed the run, never in whatever the box's image
+	// defaults to.
+	names = append(names, cliprofile.ZoneVariable)
+	isolation := p.profile.IsolationVariables()
 	out := map[string]string{}
-	for _, name := range p.CredentialEnvNames() {
+	for _, name := range names {
+		if name == "" || slices.Contains(isolation, name) {
+			continue
+		}
 		if value := env[name]; strings.TrimSpace(value) != "" {
 			out[name] = value
 		}
@@ -848,14 +1406,18 @@ func (p *Provider) SandboxEnv() map[string]string {
 }
 
 // MintsHeadlessToken reports whether this CLI can produce a token that
-// travels to a remote box, for the error that has to distinguish the two
-// cases an operator can be in.
+// travels to a remote box, for the messages that offer `crewlet llm login
+// -capture-token`: it has a minting command, and a token variable a token can
+// be stored and referenced under ([Provider.TokenCanBeStored]). A token minted
+// under any other could be neither, so a message that offered the command
+// there sent the operator to a token nothing could hand the CLI.
 func (p *Provider) MintsHeadlessToken() bool {
-	return p.profile.TokenEnv != "" && len(p.profile.CaptureTokenArgs) > 0
+	return len(p.profile.CaptureTokenArgs) > 0 && p.TokenCanBeStored()
 }
 
 // CredentialEnvNames are the variables that authenticate this CLI inside a
-// box: the headless token's and the API key's, and — for a CLI that reads its
+// box: the headless token's and the API key's, the names it signs in by from an
+// entry's env, and, for a CLI that reads its
 // model provider's key from its own environment — the credential-named
 // variables the entry's env sets.
 //
@@ -865,9 +1427,17 @@ func (p *Provider) MintsHeadlessToken() bool {
 // variable of its own, so it cannot recognise a credential by inspection; what
 // it can do is ask the profile which names count and look for those.
 func (p *Provider) CredentialEnvNames() []string {
-	names := make([]string, 0, 2)
+	names := make([]string, 0, 2+len(p.profile.SignInEnv))
 	for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
 		if name != "" {
+			names = append(names, name)
+		}
+	}
+	// The names the profile signs in by from an entry's env
+	// ([cliprofile.Profile.SignInEnv]): a cloud provider's switch or a
+	// gateway's token authenticates a box as surely as a key does.
+	for _, name := range p.profile.SignInEnv {
+		if !slices.Contains(names, name) {
 			names = append(names, name)
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"slices"
 	"strconv"
@@ -15,6 +14,9 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- reading a kit -------------------------------------------------------- //
@@ -58,7 +60,11 @@ func Read(src Source) (Brand, error) {
 
 // ReadKit is [Read], answering the files the brand serves beside its index.
 func ReadKit(src Source) (Kit, error) {
-	r := &reader{}
+	return (&reader{}).kit(src)
+}
+
+// kit reads a version through r.
+func (r *reader) kit(src Source) (Kit, error) {
 	essence, ok := src.Essence(EntryPath)
 	switch {
 	case !ok:
@@ -86,6 +92,23 @@ func ReadKit(src Source) (Kit, error) {
 		return Kit{}, r.refused()
 	}
 	return Kit{Brand: b, Files: files}, nil
+}
+
+// CheckIndex is [Read] without reading a logo's or a face's bytes: `brand.json`
+// held to the closed format, and every path it names present, of the type its
+// field takes, with no file of the version left unnamed. It is what a publish
+// whose logos were refused by their asset rule still answers beside them, so
+// one refusal names the kit's every finding rather than its assets first and
+// its index on the next attempt.
+func CheckIndex(src Source) ([]Finding, error) {
+	if _, err := (&reader{indexOnly: true}).kit(src); err != nil {
+		var refused *Refused
+		if errors.As(err, &refused) {
+			return refused.Findings, nil
+		}
+		return nil, err
+	}
+	return nil, nil
 }
 
 // Decode reads the canonical `brand.json` an adoption snapshots: the same
@@ -126,7 +149,11 @@ func Canonical(b Brand) ([]byte, error) {
 // was written on.
 type reader struct {
 	found []Finding
-	lines map[string]int
+	dec   *jsonform.Decoded
+
+	// indexOnly checks the files the index names by their presence and
+	// type alone, never reading their bytes ([CheckIndex]).
+	indexOnly bool
 }
 
 // bad reports a finding about the index itself.
@@ -136,43 +163,37 @@ func (r *reader) bad(line int, rule Rule, format string, args ...any) {
 
 // field reports a finding about one field of the index, at the line the
 // field was written on.
+//
+// A field the strict decode dropped for a structural fault is left to that
+// fault: a rule about it would be about a value the author never wrote.
 func (r *reader) field(name string, rule Rule, format string, args ...any) {
-	r.bad(r.lines[name], rule, "%s: %s", name, fmt.Sprintf(format, args...))
+	line := 0
+	if r.dec != nil {
+		if r.dec.Dropped(name) {
+			return
+		}
+		line = r.dec.Line(name)
+	}
+	r.bad(line, rule, "%s: %s", name, fmt.Sprintf(format, args...))
 }
 
 func (r *reader) refused() error { return &Refused{Findings: r.found} }
 
 // ---- the strict decode ---------------------------------------------------- //
 
-// shape is what one value of the index is: an object with its keys, an array
-// of its element, or a scalar (neither).
-type shape struct {
-	fields map[string]*shape
-	elem   *shape
-}
-
-var (
-	scalar   = &shape{}
-	faceKeys = &shape{fields: map[string]*shape{
-		"kit": scalar, "stack": scalar, "family": scalar, "licensed": scalar,
-		"files": {elem: &shape{fields: map[string]*shape{"path": scalar, "weight": scalar, "style": scalar}}},
-	}}
-	// indexShape is every key `brand.json` may carry, at every depth: the
-	// walk refuses any other, naming its line, before the typed decode.
-	indexShape = &shape{fields: map[string]*shape{
-		"v": scalar, "name": scalar, "tagline": scalar,
-		"logos": {fields: map[string]*shape{"primary": scalar, "on_dark": scalar, "mark": scalar}},
-		"colors": {fields: map[string]*shape{"primary": scalar, "secondary": scalar, "text": scalar,
-			"light_ground": scalar, "dark_ground": scalar, "primary_on_dark": scalar}},
-		"type":  {fields: map[string]*shape{"heading": faceKeys, "body": faceKeys}},
-		"voice": {fields: map[string]*shape{"summary": scalar, "write_like": {elem: scalar}, "avoid": {elem: scalar}}},
-	}}
-)
+// IndexForm is every key `brand.json` may carry, at every depth, and the type
+// of each: derived from [Brand] itself ([jsonform.Of]), so the strict decode
+// admits exactly what the typed decode reads, and the reference an agent
+// reads before it writes a kit ([Reference]) is the same tree.
+var IndexForm = jsonform.Of[Brand]()
 
 // decode reads the index strictly: at most [MaxIndexBytes] of UTF-8 holding
 // one JSON object, no key twice in any object (encoding/json keeps the last of
 // two, which another reader of the same bytes may not), no key the format does
-// not carry, no value of the wrong type, nothing after it.
+// not carry, no value of the wrong type, nothing after it. EVERY structural
+// fault is reported in the one pass, and a value faulted is left out of the
+// typed decode, so the field rules still run over every field written well:
+// a kit with six faults is answered with six findings, never one at a time.
 func (r *reader) decode(raw []byte) (Brand, bool) {
 	switch {
 	case len(raw) > MaxIndexBytes:
@@ -182,124 +203,12 @@ func (r *reader) decode(raw []byte) (Brand, bool) {
 		r.bad(0, RuleIndex, "the index is not UTF-8 text")
 		return Brand{}, false
 	}
-	r.lines = map[string]int{}
-	w := &walker{r: r, raw: raw, dec: json.NewDecoder(bytes.NewReader(raw))}
-	w.dec.UseNumber()
-	if err := w.value(indexShape, ""); err != nil {
-		r.bad(w.line(), RuleIndex, "the index is not JSON: %v", err)
-		return Brand{}, false
-	}
-	if _, err := w.dec.Token(); !errors.Is(err, io.EOF) {
-		r.bad(w.line(), RuleIndex, "the index holds more after its object: one object is the whole file")
-		return Brand{}, false
-	}
-	if len(r.found) > 0 {
-		return Brand{}, false
-	}
 	var b Brand
-	if err := json.Unmarshal(raw, &b); err != nil {
-		var typed *json.UnmarshalTypeError
-		if errors.As(err, &typed) {
-			r.bad(lineAt(raw, typed.Offset), RuleIndex, "%s is a JSON %s, and the format "+
-				"reads %s there", typed.Field, typed.Value, typed.Type)
-		} else {
-			r.bad(0, RuleIndex, "the index cannot be read: %v", err)
-		}
-		return Brand{}, false
+	r.dec = jsonform.Decode(raw, IndexForm, jsonform.Subject{File: EntryPath, Format: "the brand format"}, &b)
+	for _, f := range r.dec.Faults {
+		r.bad(f.Line, RuleIndex, "%s", f.Message)
 	}
-	return b, true
-}
-
-// walker walks the index's tokens once, recording where each field was
-// written and refusing a repeated or unknown key.
-type walker struct {
-	r   *reader
-	raw []byte
-	dec *json.Decoder
-}
-
-func (w *walker) line() int { return lineAt(w.raw, w.dec.InputOffset()) }
-
-// value reads one value whose expected shape is s (nil: anything, its keys
-// unchecked but never repeated).
-func (w *walker) value(s *shape, path string) error {
-	tok, err := w.dec.Token()
-	if err != nil {
-		return err
-	}
-	if path != "" {
-		if _, seen := w.r.lines[path]; !seen {
-			w.r.lines[path] = w.line()
-		}
-	}
-	d, ok := tok.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch d {
-	case '{':
-		if s != nil && s.fields == nil {
-			w.r.bad(w.line(), RuleIndex, "%s is an object, and the format reads a value there", path)
-			s = nil
-		}
-		seen := map[string]bool{}
-		for w.dec.More() {
-			keyTok, kerr := w.dec.Token()
-			if kerr != nil {
-				return kerr
-			}
-			key, _ := keyTok.(string)
-			at := w.line()
-			name := key
-			if path != "" {
-				name = path + "." + key
-			}
-			var next *shape
-			switch {
-			case seen[key]:
-				w.r.bad(at, RuleIndex, "%s is written twice: write each key once", name)
-			case s != nil && s.fields[key] == nil:
-				w.r.bad(at, RuleIndex, "%s is not a key the brand format carries%s", name, known(s))
-			case s != nil:
-				next = s.fields[key]
-			}
-			seen[key] = true
-			w.r.lines[name] = at
-			if verr := w.value(next, name); verr != nil {
-				return verr
-			}
-		}
-	case '[':
-		var elem *shape
-		if s != nil {
-			elem = s.elem
-		}
-		for i := 0; w.dec.More(); i++ {
-			if verr := w.value(elem, path+"["+strconv.Itoa(i)+"]"); verr != nil {
-				return verr
-			}
-		}
-	}
-	_, err = w.dec.Token() // the closing delimiter
-	return err
-}
-
-// known lists the keys an object of the format carries, for a refusal.
-func known(s *shape) string {
-	keys := make([]string, 0, len(s.fields))
-	for k := range s.fields {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return " (it carries " + strings.Join(keys, ", ") + ")"
-}
-
-// lineAt is the 1-based line of a byte offset.
-func lineAt(raw []byte, offset int64) int {
-	if offset > int64(len(raw)) {
-		offset = int64(len(raw))
-	}
-	return 1 + bytes.Count(raw[:offset], []byte("\n"))
+	return b, !r.dec.Fatal
 }
 
 // ---- the field rules ------------------------------------------------------ //
@@ -318,9 +227,9 @@ var (
 	})
 
 	// hostPattern is a bare host (`acme.io`, `evil.example`), which a model
-	// reads as an address too. Refused in every field but the name: a
-	// company's own name can be a domain ("Booking.com"), and is what the
-	// brand shows as its name.
+	// reads as an address too. Refused in every field but the name, and
+	// never the brand's own name ([ownHost]): a company's own name can be a
+	// domain ("Booking.com"), and is what the brand shows as its name.
 	hostPattern = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?` +
 			`(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,24}\b`)
@@ -339,7 +248,7 @@ func (r *reader) fields(b Brand) {
 		r.text("name", b.Name, MaxNameBytes, false)
 	}
 	r.text("tagline", b.Tagline, MaxTaglineBytes, false)
-	r.noHost("tagline", b.Tagline)
+	r.noHost("tagline", b.Tagline, b.Name)
 
 	// A DRAFT NEEDS ONLY ITS NAME: the logo and the colour an adopted brand
 	// holds are the adoption's to require ([MissingToAdopt]), so a kit is
@@ -358,19 +267,64 @@ func (r *reader) fields(b Brand) {
 	r.face("type.body", b.Type.Body)
 
 	r.text("voice.summary", b.Voice.Summary, MaxVoiceSummaryBytes, true)
-	r.noHost("voice.summary", b.Voice.Summary)
-	r.lines2("voice.write_like", b.Voice.WriteLike)
-	r.lines2("voice.avoid", b.Voice.Avoid)
+	r.noHost("voice.summary", b.Voice.Summary, b.Name)
+	r.lines2("voice.write_like", b.Voice.WriteLike, b.Name)
+	r.lines2("voice.avoid", b.Voice.Avoid, b.Name)
 }
 
 // noHost refuses a bare host in a field other than the name ([hostPattern]),
-// where [plainText] has not already refused the field.
-func (r *reader) noHost(name, s string) {
-	if s == "" || plainText(s, true) != "" || !hostPattern().MatchString(s) {
+// where [plainText] has not already refused the field. The brand's own name
+// is never refused ([ownHost]).
+func (r *reader) noHost(name, s, brand string) {
+	if s == "" || plainText(s, true) != "" {
 		return
 	}
-	r.field(name, RuleField, "holds %q, which reads as a web address: a brand's text names "+
-		"no link, so write it in words", hostPattern().FindString(s))
+	for _, host := range hostPattern().FindAllString(s, -1) {
+		if ownHost(host, brand) {
+			continue
+		}
+		r.field(name, RuleField, "holds %q, which reads as a web address: a brand's text names "+
+			"no link, so write it in words (the brand's own name, %q, may be written as it is)",
+			host, brand)
+		return
+	}
+}
+
+// ownHost reports a host is the brand's own name: the name itself, as a
+// company named for its domain writes it ("Booking.com"), or the name and one
+// top-level domain ("GoPhrase.me" for the brand GoPhrase), case aside. Only a
+// host of two labels: a subdomain (`promo.gophrase.me`) is an address, and so
+// is any other company's domain.
+//
+// THE BRAND'S `name`, NEVER THE COMPANY RECORD'S: a kit is read again at
+// adoption and at every read of its version, and a rule that consulted a name
+// held elsewhere would let a rename turn a kit already published into one its
+// own reader refuses. The brand's name is the company's name as the brand
+// shows it, and it travels with the bytes it judges.
+func ownHost(host, brand string) bool {
+	if brand == "" {
+		return false
+	}
+	if strings.EqualFold(host, brand) {
+		return true
+	}
+	label, _, ok := strings.Cut(host, ".")
+	if !ok || strings.Contains(host[len(label)+1:], ".") {
+		return false
+	}
+	return compact(label) == compact(brand)
+}
+
+// compact is a name as a domain label spells it: lowercase letters and
+// digits, nothing else ("Go Phrase" and "go-phrase" are both "gophrase").
+func compact(s string) string {
+	var b strings.Builder
+	for _, c := range strings.ToLower(s) {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 // text holds one plain-text field: at most max bytes, NFC, trimmed, no control
@@ -413,7 +367,7 @@ func plainText(s string, newlines bool) string {
 
 // lines2 holds one list of voice lines: at most [MaxVoiceExamples], each
 // non-empty plain text of at most [MaxVoiceExampleBytes] on one line.
-func (r *reader) lines2(name string, list []string) {
+func (r *reader) lines2(name string, list []string, brand string) {
 	if len(list) > MaxVoiceExamples {
 		r.field(name, RuleBound, "holds %d lines and may hold at most %d", len(list), MaxVoiceExamples)
 	}
@@ -424,18 +378,24 @@ func (r *reader) lines2(name string, list []string) {
 			continue
 		}
 		r.text(item, s, MaxVoiceExampleBytes, false)
-		r.noHost(item, s)
+		r.noHost(item, s, brand)
 	}
 }
 
 // face holds one typeface to EXACTLY ONE source, or to being unset.
 func (r *reader) face(name string, f Face) {
-	sources := 0
-	for _, set := range []bool{f.Kit != "", f.Stack != "", f.Family != ""} {
-		if set {
-			sources++
+	// The keys a face names are said as `brand.json` writes them, unquoted
+	// like the rest of the refusal's sentence ([words.Said]).
+	var named []words.Said
+	for _, s := range []struct {
+		key words.Said
+		set bool
+	}{{"kit", f.Kit != ""}, {"stack", f.Stack != ""}, {"family", f.Family != ""}} {
+		if s.set {
+			named = append(named, s.key)
 		}
 	}
+	sources := len(named)
 	switch {
 	case sources == 0 && len(f.Files) == 0 && !f.Licensed:
 		// UNSET: the kit's own face is drawn wherever the brand is.
@@ -445,13 +405,15 @@ func (r *reader) face(name string, f Face) {
 			"family they belong to, or remove them")
 		return
 	case sources > 1:
-		r.field(name, RuleField, "names more than one source: name exactly one of kit, stack and family")
+		r.field(name, RuleField, "names %s: a face has exactly one source, so keep one of kit "+
+			"(a kit face), stack (a system stack) and family (an uploaded family) and remove the "+
+			"others", words.And(named))
 		return
 	case f.Kit != "" && !slices.Contains(KitFaces, f.Kit):
-		r.field(name+".kit", RuleField, "%q is not a kit face: name one of %s", f.Kit, strings.Join(KitFaces, ", "))
+		r.field(name+".kit", RuleField, "%q is not a kit face: name one of %s", f.Kit, words.Or(KitFaces))
 	case f.Stack != "" && !slices.Contains(SystemStacks, f.Stack):
 		r.field(name+".stack", RuleField, "%q is not a system stack: name one of %s", f.Stack,
-			strings.Join(SystemStacks, ", "))
+			words.Or(SystemStacks))
 	}
 	if f.Family == "" {
 		if len(f.Files) > 0 || f.Licensed {
@@ -564,7 +526,25 @@ func (r *reader) files(src Source, b Brand) ([]KitFile, error) {
 	}
 	paths := slices.Clone(src.Paths())
 	slices.Sort(paths)
+	//
+	// A LOGO OR A FACE THE STRICT DECODE DROPPED names no path, so while the
+	// logos or the faces hold a structural fault, a file of the type they
+	// take is not called a stowaway: the fault already says what to change,
+	// and the next read judges those files against the index as written.
+	// Any other file is one no field could have named, and is refused still.
+	unsure := map[string]bool{}
+	if r.dec != nil && r.dec.Touched("logos") {
+		for _, e := range logoEssences {
+			unsure[e] = true
+		}
+	}
+	if r.dec != nil && r.dec.Touched("type") {
+		unsure[fontEssence] = true
+	}
 	for _, p := range paths {
+		if essence, _ := src.Essence(p); unsure[essence] {
+			continue
+		}
 		if !named[p] {
 			r.found = append(r.found, Finding{Path: p, Rule: RuleReference, Message: "brand.json names " +
 				"no logo or face at this path, and a kit holds its index and the files it names " +
@@ -591,6 +571,9 @@ func (r *reader) file(src Source, field, path string, essences []string) (KitFil
 	}
 	if !slices.Contains(essences, essence) {
 		r.field(field, RuleAsset, "%s is %s, and the field takes %s", path, essence, strings.Join(essences, ", "))
+		return KitFile{}, false, nil
+	}
+	if r.indexOnly {
 		return KitFile{}, false, nil
 	}
 	if sized, ok := src.(Sizer); ok {

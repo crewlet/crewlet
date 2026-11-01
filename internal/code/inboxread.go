@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ONE PERSON'S CODE INBOX — the `inbox` read: the notices the applier wrote
@@ -32,7 +33,7 @@ import (
 // the table holds them, and its cursor means what it says. Filtered on the
 // page after it was read, a person with sixty snoozed notices among their
 // newest fifty would open an inbox of nothing (the tracker's own lesson,
-// internal/tracker's inboxread.go). Every set it binds is the Classifier's
+// internal/worklet's inboxread.go). Every set it binds is the Classifier's
 // ([inbox.Classifier]), the lookups the page is then marked by, so a notice
 // the scan hides is exactly one the page would have marked. ONE STATEMENT
 // whatever is asked: a filter not asked is bound to say so ([inboxScanSQL]),
@@ -42,7 +43,7 @@ import (
 //
 // A notice is about a change on a repository, and is answered only where its
 // asker may read that repository ([JudgeRead]) — a person reads every one
-// (ADR-0058); a seat leading the person reads by its own grant. That is the
+// (ADR-0081); a seat leading the person reads by its own grant. That is the
 // one narrowing the scan cannot state, since the grant is the chart's: a page
 // leaves out a notice its asker may not read, and its cursor is still the
 // last notice it scanned, as every listing across repositories pages
@@ -171,15 +172,15 @@ func (q ReadQuery) validateInbox() error {
 	case strings.TrimSpace(in.Handle) == "":
 		return refused("inbox.handle", "an inbox read names whose inbox it reads, by the seat they hold")
 	case !in.Snoozed.Valid():
-		return refused("inbox.snoozed", fmt.Sprintf("%q is not one of %v — a surface resolves an absent scope "+
-			"to %q before it reads", in.Snoozed, inbox.SnoozeScopes, inbox.SnoozeExclude))
+		return refused("inbox.snoozed", fmt.Sprintf("%q is not one of %s — a surface resolves an absent scope "+
+			"to %q before it reads", in.Snoozed, words.Or(inbox.SnoozeScopes), inbox.SnoozeExclude))
 	case !in.Since.IsZero() && in.Since.Stream != topics.CodeLogStream:
 		return refused("inbox.since", fmt.Sprintf("%s is a position on another log than %s", in.Since,
 			topics.CodeLogStream))
 	}
 	for _, r := range in.Reasons {
 		if !r.Valid() {
-			return refused("inbox.reasons", fmt.Sprintf("%q is not one of %v", r, Reasons()))
+			return refused("inbox.reasons", fmt.Sprintf("%q is not one of %s", r, words.Or(Reasons())))
 		}
 	}
 	if q.Cursor != "" {

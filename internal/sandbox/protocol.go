@@ -1,11 +1,10 @@
-// Package sandbox is the code-work runtime: a sandbox-enabled seat runs its
-// executor phase as a coding agent inside an isolated box instead of the native
-// tool loop.
+// Package sandbox is the executor runtime: every agent seat's executor is its
+// coding CLI's own run, inside a box placed in one of the catalogue's cells.
 //
-// The shape that matters is that a coding run is DETACHED. The tool starts it,
-// the Execute loop SUSPENDS, and the engine RESUMES the same loop with the
-// result spliced in when the run completes — possibly minutes later, possibly
-// in a different process after a restart, possibly on a different node. Nothing
+// The shape that matters is that a run is DETACHED. The launch starts it, the
+// turn SUSPENDS, and the engine RESUMES the same turn with the run's report
+// when the run completes — possibly minutes later, possibly in a different
+// process after a restart, possibly on a different node. Nothing
 // here parks a goroutine on a running job: a goroutine cannot survive a
 // restart, and a coding agent legitimately runs for longer than a deployment
 // window.
@@ -30,10 +29,11 @@
 // AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
 // is either TAKEN by a resumed turn — written on the row at the last moment
 // before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
-// LET GO back to the seat's inbox through an outbox on the row
-// ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
-// reached, or by the seat's next holder reaping a claim whose node stopped
-// before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
+// LET GO back to the seat the way it came, through an outbox on the row
+// ([PendingRun.HandBack]) — a chat reply to the seat's inbox, an answer by turn
+// to its control topic ([handBackSubject]): after its attempts are spent, by an
+// ending no turn reached, or by the seat's next holder reaping a claim whose
+// node stopped before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
 // answer have died too often or for too long. Short of that, such a claim is
 // REVIVED — the answer given back to the run and the run resumed with it
 // ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
@@ -51,6 +51,11 @@
 // AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
 // is deleted, under the identity its decided ending recorded, so whichever node
 // finishes the ending publishes the same event ([Coordinator.announceEnding]).
+// So is a STOPPED one — a person's pause with `stop_running` ends the seat's
+// launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
+// never as a loss, with who stopped it recorded in the deciding write
+// ([PendingRun.Stop]), its spend read off the box and charged before the box
+// goes, and the turn parked on it closed as stopped ([CoordinatorOptions.CloseStopped]).
 //
 // The reap fences the row to its lease before it revives or lets go of
 // anything — and the revival stamps that lease on the row itself — and a take
@@ -71,18 +76,39 @@
 // ([Coordinator.AnswerByTurn]).
 //
 // WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
-// author, its kind and the credential it came through ([RecordedAnswer.By]) —
+// author, its kind and the credential it came through ([AnswerWords]) —
 // on the row and on every announcement of what became of the answer, never as a
 // seat beside an actor.
 //
-// WHAT A RUN PUSHED TO THE ENGINE'S OWN CODE HOST is the push record's
+// AND THE ANSWER IS SEALED: its words and who gave them are on the row only
+// inside a seal under the fleet keyring, bound to the run's turn, the question
+// it answers and its deliveries, like every other instruction channel
+// (ADR-0031), and every reader opens it before anything of it is used. An answer
+// whose seal does not open is never handed to a turn or attributed to anybody.
+// See answerseal.go.
+//
+// AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
+// NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
+// keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
+// read it ([BoxReader]), and a launching node whose presence stays lapsed for
+// the box timeout has its running jobs lost with it. See boxhost.go.
+//
+// AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
+// engine's restart killed — which the box tells from one that crashed by the
+// engine process that last saw it running ([JobLost], local_witness.go) — one
+// whose box is gone, and one whose node left. The waiter that drives the box
+// records the loss on the row ([PendingRun.Lost]), and the seat's holder reads
+// what the job spent where its box is left and resumes the turn to relaunch the
+// same round, at most [MaxRoundLosses] times a round. See lost.go.
+//
+// AND WHAT A RUN PUSHED TO THE ENGINE'S OWN CODE HOST is the push record's
 // account, never the run's: a collection of a run given a repository there to
 // push to reads the rows the code host wrote under its launch ([RunPushes],
-// [Result.Pushed]) and hands the executor what each ref became, and the run is
-// told its report need not name them. A record that cannot be read is SAID to
-// be unknown rather than retried — a collection held until the code host
-// answers holds a finished run's seat for as long as the host is down — and
-// never left out, since silence reads as "nothing pushed".
+// [Result.Pushed]) and the run's report states what each ref became, the run
+// having been told its own report need not name them. A record that cannot be
+// read is SAID to be unknown rather than retried — a collection held until the
+// code host answers holds a finished run's seat for as long as the host is
+// down — and never left out, since silence reads as "nothing pushed".
 //
 // See docs/concepts/code-sandbox.md.
 package sandbox
@@ -104,6 +130,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // log is the package's own component, bound for the backend-NEUTRAL runtime:
@@ -180,13 +207,21 @@ type Limits struct {
 // set by nobody while looking exactly like a wired knob.
 type Spec struct {
 	// Placement is WHICH configured backend runs this box. Resolved from
-	// role.sandbox.run_in over providers.sandbox.default_run_in, and carried
-	// here rather than chosen by the caller so the launch, the pending row
-	// and the reconnect all name the same cell.
+	// the run_in of the providers.llm entry the launch picked, over
+	// providers.sandbox.default_run_in, and carried here rather than chosen
+	// by the caller so the launch, the pending row and the reconnect all
+	// name the same cell.
 	Placement Placement
 
 	// CodingAgent names the runner: "claude-code", "opencode", …
 	CodingAgent string
+
+	// TurnID is the turn whose run the box is made for. A box on the
+	// engine's host records it in its own directory, which is how that
+	// host's waiter tells a box no run names any more from one a run is
+	// using, and reclaims it ([HostBox]); a remote box has no use for it.
+	// Set by [Coordinator.Launch], never by a caller.
+	TurnID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
 	// the launch refreshes while it provisions the box and the waiter every
@@ -210,16 +245,16 @@ type Spec struct {
 	// runner's [Limits].
 	MaxTurns int
 
-	// Env is the run environment: LLM credentials, the generic agent
-	// identity (CREWLET_AGENT_*), the setup steps' env, and role.sandbox.env
-	// — which is where an operator DECLARES an external token. The engine
-	// never names a tool-specific variable itself, but for the engine's own
-	// code host, whose access it gives a run that names repositories
-	// ([BoxGit], ADR-0063) — and that through the launch's own environment,
-	// never this field. A launch hands the box a
-	// COPY with what it minted for the job added ([LaunchRequest.RunEnv]):
-	// what the box is made with and every setup step runs with, the run's
-	// telemetry added at the job's start.
+	// Env is the run environment: the LLM entry's env and sign-in, the
+	// generic agent identity (CREWLET_AGENT_*), the setup steps' env, and
+	// role.sandbox.env — which is where an operator DECLARES an external
+	// token. The engine never names a tool-specific variable itself, but for
+	// the engine's own code host, whose access it gives a run that names
+	// repositories ([BoxGit], ADR-0086) — and that through the launch's own
+	// environment, never this field. A launch hands the box a COPY with what
+	// it minted for the job added ([LaunchRequest.RunEnv]): what the box is
+	// made with and every setup step runs with, the run's telemetry added at
+	// the job's start.
 	Env map[string]string
 
 	// CredentialFiles is a subscription-CLI login: a path relative to the
@@ -520,8 +555,8 @@ type RunRepo struct {
 func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 	switch {
 	case !purpose.Valid():
-		return fmt.Errorf("sandbox: repository %s: %q is not a clone purpose (have %v)", r.Repo, purpose,
-			ClonePurposes())
+		return fmt.Errorf("sandbox: repository %s: %q is not a clone purpose (one of %s)", r.Repo, purpose,
+			words.Or(ClonePurposes()))
 	case !gitref.ValidRepoName(r.Repo):
 		return fmt.Errorf("sandbox: %q is not a repository name", r.Repo)
 	case !canonicalID(r.RepoID):
@@ -661,30 +696,25 @@ type Result struct {
 	CostUSD          float64
 	SessionID        string
 
-	// NeedsInput means the agent asked a question and stopped. Question and
-	// AskTo say what it asked and who should answer: "requester", "team",
-	// "manager", or a name.
-	NeedsInput bool
-	Question   string
-	AskTo      string
-
-	// WIPBranch is the branch the run pushed before it asked, as the ask
-	// recorded it: the name the agent gave, or the one git reported where
-	// it asked. It is what a run re-seeded on a fresh machine is told to
-	// check out ([PendingRun.Branch]), so it is carried as its own fact —
-	// never inferred from DeliveredRefs, which name pull requests as often
-	// as branches and are empty for the branch a run pushes and opens
-	// nothing for. Empty when the ask named none and git could not say,
-	// and on a run that did not ask.
-	WIPBranch string
+	// Turns is how many model turns the run's CLI says its own loop took —
+	// each one a provider call the engine neither made nor saw — and zero
+	// where the CLI reported none. It is what the run's phase record counts
+	// as its calls (tokens.PhaseCalls): a run whose CLI said nothing counts
+	// as one, the one call the engine knows it asked for.
+	//
+	// AS REPORTED, never estimated: Claude Code states it on its result
+	// line (`num_turns`); OpenCode's stream does not carry a count a
+	// reader can trust — 2.0 prints a step's `step_start` for some steps
+	// of a run and not others — so its runs report none.
+	Turns int
 
 	// DeliveredRefs are the branches and pull or merge requests the run
 	// reported delivering, in its report's order: the `Delivered:` lines it
 	// wrote, or the pull-request URLs its prose holds where it named none.
-	// They are DISPLAY and a reminder — the run's phase record and the
-	// resumed executor's text carry them — and nothing judges a turn on
-	// them: whether a turn reached anybody is the tool loop's own record of
-	// what ran ([github.com/crewlet/crewlet/internal/agent/turn]).
+	// They are DISPLAY and a reminder — the run's phase record and the run's
+	// report its reviewer reads carry them — and nothing judges a turn on
+	// them: whether a turn reached anybody is the engine's own record of the
+	// calls it made ([github.com/crewlet/crewlet/internal/agent/turn]).
 	//
 	// A runner hands them on AS THE ACCOUNT WROTE THEM, byte for byte: the
 	// coordinator holds them to what the record can carry, for every runner
@@ -723,6 +753,16 @@ type Result struct {
 	Opened []OpenedChange
 
 	Error string
+
+	// Event is how the CLI said its run ended IN FIELDS, beside the words of
+	// Text and Error: its own terminal event, verbatim — Claude Code's
+	// result line, whose `api_error_status` names a spent plan however the
+	// sentence beside it is worded. It is what an executor's ending is
+	// classified by first, as a call's is (cliagent.Provider.RunEnded), and
+	// nothing else reads it. Set on a run that did not succeed, by a CLI that
+	// prints such an event; empty otherwise, and wherever the line is past
+	// [MaxRunEventBytes] ([boundBox]).
+	Event string
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
@@ -770,6 +810,7 @@ func (r Result) usageFloored() (Result, bool) {
 	floor(&r.OutputTokens)
 	floor(&r.CacheReadTokens)
 	floor(&r.CacheWriteTokens)
+	floor(&r.Turns)
 	if r.CostUSD < 0 {
 		r.CostUSD, floored = 0, true
 	}
@@ -792,8 +833,9 @@ type Sandbox interface {
 	// writes its result to a file a later collect reads.
 	StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error)
 
-	// JobRunning reports whether the background job whose handle
-	// StartBackground returned is still running.
+	// Job reports what is known of the background job whose handle
+	// StartBackground returned: still running, ended, or lost with the
+	// engine process that last saw it running ([JobState]).
 	//
 	// ASKED OF THE BOX, because only the backend knows what its handle
 	// names. Inside a remote VM or a container the handle is a pid in the
@@ -801,15 +843,28 @@ type Sandbox interface {
 	// can hold it. On the engine host it is a host pid, which the kernel
 	// hands to any process once the job is gone: a probe that took the pid
 	// on trust would read a stranger as the job and hold a dead run open
-	// until the stranger exits. An error means the box could not be asked,
-	// which is not proof of either answer.
-	JobRunning(ctx context.Context, commandID string) (bool, error)
+	// until the stranger exits. And only a box on the engine host can lose
+	// its job with the engine: a remote box answers running or ended. An
+	// error means the box could not be asked, which is not proof of any
+	// answer.
+	Job(ctx context.Context, commandID string) (JobState, error)
 
-	// WriteFile puts content at path whole. A backend that writes the box
-	// from the engine host writes only a regular file where it lies, and
-	// refuses anything else at the path with [ErrNotRegularFile] — a link
-	// there would be followed out of the box, and a named pipe waited on
-	// for good.
+	// WriteFile puts content at path whole, by REPLACING the file there: the
+	// content is staged under a fresh name beside the path and renamed over
+	// it, so a process in the box reading the file meanwhile — a git
+	// credential helper reading the token file the completion poll keeps
+	// current under a running job — finds the old file or the new one,
+	// never an empty or part-written one. A write that fails removes what it
+	// staged, or says it could not, where a remote box stopped answering.
+	// The new file has the mode the backend writes every file with,
+	// whatever the replaced one had.
+	//
+	// A backend that writes the box from the engine host replaces only a
+	// regular file where it lies, or puts one where nothing is, and refuses
+	// anything else at the path with [ErrNotRegularFile], leaving it as the
+	// box made it: the rename writes through no link, and a named pipe is
+	// never opened to be waited on. A remote box is a machine of its own, so
+	// what is at the path there is replaced, a link included.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
@@ -917,6 +972,44 @@ type ExecOptions struct {
 	TimeoutSec float64
 }
 
+// JobState is what is known of a detached job ([Sandbox.Job], [Runner.Poll]).
+//
+// THREE ANSWERS, because "not running" is two facts that a run is carried
+// forward from differently. A job that ENDED finished, or died while an engine
+// that had seen it running was still there to see it go: what it left is the
+// round's result, a crash included, and it is collected. A job that was LOST
+// went with the engine process that last saw it running, before any engine
+// could see it end: a `direct` box's process tree is the engine host's, and
+// the restart that replaces the engine — its container restarted, its systemd
+// unit stopped with every process in its control group, its host rebooted —
+// kills the job in the same instant, mid-step, with nothing written to say so.
+// What it left is not a result, and its round is carried on rather than
+// collected ([PendingRun.Lost]).
+type JobState string
+
+const (
+	// JobRunning is a job still working — or hung, which nothing tells apart
+	// from working without a clock the engine deliberately does not impose.
+	JobRunning JobState = "running"
+	// JobEnded is a job that is over and was seen to end: it wrote its done
+	// marker, or its process went while an engine that had watched it run was
+	// still there.
+	JobEnded JobState = "ended"
+	// JobLost is a job that is over and that nothing alive saw end: it went
+	// with the engine process that last saw it running, or after it, before
+	// the engine that replaced it could look.
+	JobLost JobState = "lost"
+)
+
+// JobStates are the three.
+var JobStates = []JobState{JobRunning, JobEnded, JobLost}
+
+// Valid reports whether this build knows s.
+func (s JobState) Valid() bool { return slices.Contains(JobStates, s) }
+
+// Over reports whether the job is no longer running, whichever way it went.
+func (s JobState) Over() bool { return s == JobEnded || s == JobLost }
+
 // ErrBoxGone is a [Provider.Connect] that found the box DEFINITIVELY not
 // there — reclaimed by its provider, reaped, its directory removed — as
 // against one that merely could not be reached. The difference decides
@@ -1003,8 +1096,10 @@ type Runner interface {
 
 	Start(ctx context.Context, box Sandbox, req RunRequest) (RunHandle, error)
 
-	// Poll reports whether the background job has finished.
-	Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error)
+	// Poll reports what is known of the background job: running, ended —
+	// finished, or seen to die — or lost with the engine that last saw it
+	// running ([JobState]).
+	Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error)
 
 	// Collect reads the finished job's result out of the box.
 	Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error)
@@ -1034,13 +1129,33 @@ type RunRequest struct {
 	// Brief is the task: the prompt the CLI runs, and nothing standing.
 	Brief string
 
+	// Resume is the CLI's own session the run CONTINUES, as an earlier run in
+	// the same box reported it ([Result.SessionID]): the conversation, its
+	// tool results and its working files are where that run left them, and
+	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
+	// `--session <id>`. A seat's job sets it where the job before it in this
+	// box parked on a person's question and the answer has come; the
+	// assistant's deep work, where its run parked on a proposal and the
+	// approval has come. Empty starts a new session.
+	//
+	// THE CLI'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
+	// knew what it had read, tried and decided, and a fresh conversation
+	// told only the question and the answer starts that work again. It holds
+	// only in the box the session lives in, which is why a seat's launch
+	// sets it only where the job continues in the asking job's box
+	// ([LaunchRequest.Continue]). A runner whose CLI cannot continue a
+	// session refuses a run that asks it to, rather than start a new
+	// conversation its caller believes is the old one.
+	Resume string
+
 	Env    map[string]string
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
 	// CLI the runner drives: the seat's providers.llm entry's model exactly
-	// as its text calls hand it to that same CLI, which is the only CLI the
-	// engine lets reach this runner. Empty leaves the agent's own choice.
+	// as its runs on the engine host hand it to that same CLI, which is the
+	// only CLI the engine lets reach this runner. Empty leaves the agent's
+	// own choice.
 	//
 	// NO ENDPOINT AND NO KEY: an entry talks to its CLI's own vendor, and its
 	// sign-in rides the run env, so nothing secret is written into a file
@@ -1054,6 +1169,14 @@ type RunRequest struct {
 	// than a control.
 	MCPServers map[string]MCPServer
 
+	// Steer is how the run's CLI reaches a person's notes to its turn while
+	// it works — see [SteerWiring]. The zero value takes no note inside the
+	// run: its notes wait for whatever reads the turn next, which is what a
+	// run with no tool bridge — the assistant's deep work — has. NEVER
+	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
+	// launch is handed its own.
+	Steer SteerWiring
+
 	// ReportedRepos are the repositories on the engine's own code host this
 	// run may push to ([Pushable]), by the names it was given them under.
 	// What it pushes there the engine reads from the push record and reports
@@ -1062,6 +1185,27 @@ type RunRequest struct {
 	// for a push the record already names is the same delivery said twice.
 	ReportedRepos []string
 }
+
+// SteerWiring is where a run's CLI asks for its turn's notes: one tool of the
+// MCP server the run's tool bridge is ([RunRequest.MCPServers]), which a hook
+// of the CLI's calls between its steps, and the URL of the bridge's notes
+// route, which a CLI that admits notes from a plugin of its own polls. The
+// engine fills it from the same names its bridge serves, so the box and the
+// bridge cannot disagree about them (internal/api/mcpbridge).
+type SteerWiring struct {
+	// Server is the name the bridge is listed under in the run's MCP
+	// configuration, and Tool the tool a hook calls on it — never listed,
+	// so no model is offered it.
+	Server string
+	Tool   string
+
+	// URL is the job's notes route: the bridge endpoint the box already
+	// dials, with the route's suffix.
+	URL string
+}
+
+// Set reports whether the wiring names anything a CLI could reach.
+func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // Run is the inline shape: start, wait, collect.
 //
@@ -1074,7 +1218,8 @@ func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFu
 		return Result{}, err
 	}
 	if err := wait(ctx, func(ctx context.Context) (bool, error) {
-		return r.Poll(ctx, box, handle)
+		state, err := r.Poll(ctx, box, handle)
+		return state.Over(), err
 	}); err != nil {
 		return Result{}, err
 	}
@@ -1085,8 +1230,8 @@ func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFu
 // inline shape's polling cadence is the caller's choice — a test wants none.
 type WaitFunc func(ctx context.Context, done func(context.Context) (bool, error)) error
 
-// probeByKill answers [Sandbox.JobRunning] for a box whose handle is a pid in
-// the box's own process namespace, by running `kill -0` inside it.
+// probeByKill answers whether a job is running for a box whose handle is a pid
+// in the box's own process namespace, by running `kill -0` inside it.
 //
 // The handle is parsed rather than interpolated: it is read back from the run's
 // record in the coordination store, and a shell command is the wrong place to
@@ -1101,4 +1246,20 @@ func probeByKill(ctx context.Context, box Sandbox, commandID string) (bool, erro
 		return false, err
 	}
 	return res.ExitCode == 0, nil
+}
+
+// remoteJob answers [Sandbox.Job] for a box whose job runs in a machine of its
+// own, which the engine's restart does not reach — an E2B VM, and the fake that
+// stands in for one: running while `kill -0` there says so ([probeByKill]),
+// and ended otherwise. Such a job is never lost with the engine: it outlives
+// every engine process, and whichever one finds it gone found it gone.
+func remoteJob(ctx context.Context, box Sandbox, commandID string) (JobState, error) {
+	running, err := probeByKill(ctx, box, commandID)
+	switch {
+	case err != nil:
+		return "", err
+	case running:
+		return JobRunning, nil
+	}
+	return JobEnded, nil
 }

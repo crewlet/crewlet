@@ -10,10 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0050.
+// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0073.
 //
 // The trim removes a log's anchors below what it no longer holds by appending
 // the domain's own trimmed record, which [trimmedEncoder] is the switch for. A
@@ -39,7 +39,7 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 	}
 }
 
-// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0050.
+// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0073.
 //
 // The sweeps run on the trim's own goroutine ([retention.run]), and each is
 // paced on this node's applier, so an applier slow but still moving would
@@ -52,7 +52,7 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 // handed a sweep, and a log that writes none is handed none.
 func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	t.Parallel()
-	r := &retention{state: everyLog(), nodeID: "node-a",
+	r := &retention{state: everyRegisteredLog(), nodeID: "node-a",
 		estate: func() statelog.ReadEstate { return nil }}
 	writers := 0
 	for _, running := range r.state.running() {
@@ -120,7 +120,7 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	}
 }
 
-// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0050. A log with nothing
+// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0073. A log with nothing
 // below its floor this tick is counted and never handed a share, wherever it
 // sits in the order: an equal share for every log that writes anchors spent a
 // share on each idle one, so registering the code log cut the tracker's sweep
@@ -247,12 +247,12 @@ func TestATickRemovesTheAnchorsBelowWhatItPurged(t *testing.T) {
 	e, back, running := trimmedTracker(t)
 	at := time.Now().UTC()
 	for _, key := range []string{"ENG", "OPS"} {
-		mustApply(t, "the project "+key, func() (tracker.WriteResult, error) {
+		mustApply(t, "the project "+key, func() (worklet.WriteResult, error) {
 			return e.native.Load().writer.WriteDocument(t.Context(), "op-"+key,
-				tracker.ProjectSubject(key), "", tracker.Project{
-					V: tracker.DocumentVersion, Key: key, Name: "Project " + key,
+				worklet.ProjectSubject(key), "", worklet.Project{
+					V: worklet.DocumentVersion, Key: key, Name: "Project " + key,
 					CreatedAt: at, UpdatedAt: at,
-				}, tracker.ChangeProjectCreated, nil)
+				}, worklet.ChangeProjectCreated, nil)
 		})
 	}
 	// THE NEWEST RECORD IS NOT AN OBJECT'S, so the purge to it removes the
@@ -356,12 +356,12 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
 	at := time.Now().UTC()
-	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+	mustApply(t, "the project", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-ENG",
-			tracker.ProjectSubject("ENG"), "", tracker.Project{
-				V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+			worklet.ProjectSubject("ENG"), "", worklet.Project{
+				V: worklet.DocumentVersion, Key: "ENG", Name: "Engineering",
 				CreatedAt: at, UpdatedAt: at,
-			}, tracker.ChangeProjectCreated, nil)
+			}, worklet.ChangeProjectCreated, nil)
 	})
 	last := barrierOn(t, running)
 	waitUntil(t, 20*time.Second, "the node to apply its own log", func() bool {
@@ -400,7 +400,7 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	}
 }
 
-// THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0050.
+// THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0073.
 //
 // Every applier opens a record's frame before it reads one, so a trimmed
 // record that is not a frame this fleet's keyring opens is refused on every
@@ -415,12 +415,12 @@ func TestTheTrimsOwnDepsSignTheTrimmedRecord(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
 	at := time.Now().UTC()
-	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+	mustApply(t, "the project", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.WriteDocument(t.Context(), "op-ENG",
-			tracker.ProjectSubject("ENG"), "", tracker.Project{
-				V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+			worklet.ProjectSubject("ENG"), "", worklet.Project{
+				V: worklet.DocumentVersion, Key: "ENG", Name: "Engineering",
 				CreatedAt: at, UpdatedAt: at,
-			}, tracker.ChangeProjectCreated, nil)
+			}, worklet.ChangeProjectCreated, nil)
 	})
 	last := barrierOn(t, running)
 	waitUntil(t, 20*time.Second, "the node to apply its own log", func() bool {

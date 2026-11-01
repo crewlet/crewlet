@@ -108,6 +108,25 @@ export function fmtTime(ts: string | null | undefined): string {
   return dateTimeFormat(undefined, zone(), TIME).format(d);
 }
 
+/**
+ * An instant as a person names a time in a sentence, in the reader's zone and
+ * the reader's own way of writing a time ("4:30 PM", "16:30"), with the day
+ * named when it is not the reader's today ("Wed 2:00 AM"): "Agents resume at
+ * 4:30 PM". Not for a log line, whose seconds are part of the answer
+ * ([fmtTime]).
+ */
+export function fmtClock(ts: string | null | undefined, now: number): string {
+  const d = parseUTC(ts);
+  if (!d) return "";
+  const time = dateTimeFormat(undefined, zone(), CLOCK).format(d);
+  if (readerDay(d) === readerDay(now)) return time;
+  const day = dateTimeFormat(undefined, zone(), WEEKDAY).format(d);
+  return `${day} ${time}`;
+}
+
+const CLOCK: DateShape = Object.freeze({ hour: "numeric", minute: "2-digit" });
+const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
+
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
@@ -227,8 +246,12 @@ export function relTime(ts: string | null | undefined, now: number): string {
   const at = tsKey(ts);
   if (!at) return EMPTY_VALUE;
   const secs = Math.round((now - at) / 1000);
+  // UNDER FIVE SECONDS EITHER WAY IS "JUST NOW". Behind, a clock that ticks
+  // once a second cannot tell 1 from 4; ahead, a stamp the engine wrote a
+  // moment after this tab's last tick, or on a clock a little ahead of the
+  // browser's, is something that has just happened, never "in 1s".
+  if (Math.abs(secs) < 5) return "just now";
   if (secs < 0) return inTime(ts, now);
-  if (secs < 5) return "just now";
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
@@ -297,6 +320,35 @@ export function inTimeExact(ts: string | null | undefined, now: number): string 
   const days = Math.floor(hours / 24);
   if (days < 30) return hours % 24 ? `in ${days}d ${hours % 24}h` : `in ${days}d`;
   return fmtDate(ts);
+}
+
+/**
+ * A WAIT a person is told to sit out, from the seconds the engine said to wait
+ * (a `Retry-After`, an assistant's busy window): "in 45s", "in 4m",
+ * "in 22h 33m", "in 2d 3h".
+ *
+ * THE ONE WAY A WAIT IS SAID. The assistant printed the engine's count as it
+ * came, "ask again in 81155 seconds", which is a number to divide rather than
+ * a time to plan by. Two units past an hour, as [inTimeExact] reads an instant,
+ * and ROUNDED UP at every magnitude, never to the nearest: a wait that says
+ * "in 4m" when four and a half remain sends the reader back to a refusal.
+ *
+ * A WAIT WITH NO NUMBER IS SAID WITHOUT ONE: an unknown or unbounded wait
+ * (not finite) is "later", never a made-up "in 1s", and one already over
+ * is "now".
+ */
+export function fmtWait(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "later";
+  if (seconds <= 0) return "now";
+  const s = Math.ceil(seconds);
+  if (s < 60) return `in ${s}s`;
+  const mins = Math.ceil(s / 60);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `in ${hours}h ${mins % 60}m` : `in ${hours}h`;
+  const hoursUp = Math.ceil(mins / 60);
+  const days = Math.floor(hoursUp / 24);
+  return hoursUp % 24 ? `in ${days}d ${hoursUp % 24}h` : `in ${days}d`;
 }
 
 /**
@@ -536,9 +588,17 @@ export function textBudget(
   return { bytes, limit, over, line };
 }
 
+/**
+ * A size in bytes, in powers of 1024 and labelled as such: KiB, MiB, GiB, TiB.
+ *
+ * THE ENGINE'S LABELS, because the same size is printed by the CLI and said in
+ * the node's own sentences (`8.0 GiB`), and the dashboard drew those powers of
+ * 1024 as KB, MB and GB, so one banner read "Resizing 4.0 GB to 8.0 GB" over a
+ * sentence about 8.0 GiB.
+ */
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let v = n;
   let u = 0;
   while (v >= 1024 && u < units.length - 1) {
@@ -577,8 +637,9 @@ export function openSentence(text: string): string {
 /**
  * A clause as a sentence: its first letter capitalised ([openSentence]) and a
  * full stop after it. The engine writes a measurement as a clause, so its log
- * line can carry it after a colon ("backup_age: no verified backup has been
- * recorded"); a screen that prints it on its own line prints it as a sentence.
+ * line can carry it after a colon ("backup_age: no verified backup of this log
+ * has been recorded"); a screen that prints it on its own line prints it as a
+ * sentence.
  */
 export function asSentence(clause: string): string {
   const head = openSentence(clause);
@@ -617,7 +678,7 @@ const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
  * eight characters — `work:task:4d631f6d` — and everything else as it is, so
  * `work:ENG-32` and `slack:C9:1718.001` are untouched.
  *
- * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a native task
+ * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a Worklet task
  * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
  * no row has room for, so a list of them read `work:task…` five times over.
  * The head of a uuid is how this product names one everywhere a row is narrow
@@ -770,7 +831,7 @@ const WALL: DateShape = Object.freeze({
  * phase elsewhere in this tree, and an unqualified `PHASE_ORDER` is how one of
  * two unrelated orders gets changed in the other's name.
  */
-const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
+const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge"];
 
 /** One row of a seat's model setting: which phase, and the chain it runs on. */
 export interface PhaseChain {
@@ -922,4 +983,38 @@ export function firstLine(body: string): string {
       .find((l) => l.trim())
       ?.trim() ?? ""
   );
+}
+
+/**
+ * "Good morning, Jane", in the READER's clock, which is whose morning it is,
+ * and with the first word of their name. A reader nobody named is greeted
+ * without one rather than as "there" or as a token id.
+ *
+ * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
+ * timestamp on the page is drawn in. Home greets with it, and so does the
+ * assistant's home.
+ */
+export function greeting(now: number, name: string): string {
+  const hour = Number(toWall(now).slice(11, 13));
+  // THE SMALL HOURS NAME NO PART OF THE DAY: "Good evening" at 01:11 read as a
+  // clock that was wrong, and "Good morning" at 02:00 is no better, so from
+  // midnight until five the greeting is a plain "Hello", true at any hour.
+  const salute =
+    hour < 5 ? "Hello" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  return first ? `${salute}, ${first}` : salute;
+}
+
+/**
+ * Names or clauses in a sentence: "a", "a and b", "a, b, and c".
+ *
+ * THE OXFORD COMMA IS LOAD-BEARING: a clause can carry its own "and" ("the
+ * company's and every seat's token budget", "reviewing and evaluations"), so
+ * without it the last two run together and read as one item. Joined here
+ * rather than by `Intl.ListFormat`, which joins in the BROWSER's locale and
+ * would put "、" between words that are themselves English.
+ */
+export function listed(parts: readonly string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
 }

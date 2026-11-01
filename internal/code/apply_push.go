@@ -708,7 +708,7 @@ func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []Pu
 // answers how many it removed.
 //
 // OLDEST BY POSITION, STOPPING AT THE FIRST INSIDE THE HORIZON. The rows are
-// read in log order (code_pushes_repo_idx, replicated 0056) and taken while
+// read in log order (code_pushes_repo_idx, replicated 0079) and taken while
 // their instant is before the horizon, and the first row that is not ends the
 // read. NEVER A FILTER ON THE INSTANT: the index orders by position, so `at <
 // ?` seeks nothing there, and over position order it would walk the
@@ -1017,7 +1017,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		// AND THEIR NOTICES, which no part counts: the table is divergent,
 		// and the part's count decides which replicated rows go
 		// (apply_notices.go).
-		removed, err := a.removeNotices(ctx, tx, whole)
+		removed, err := a.removeNotices(ctx, tx, at, whole)
 		if err != nil {
 			return 0, err
 		}
@@ -1094,7 +1094,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)
 	}
-	deleted, err := a.removeNotices(ctx, tx, remaining)
+	deleted, err := a.removeNotices(ctx, tx, at, remaining)
 	if err != nil {
 		return 0, err
 	}

@@ -708,25 +708,19 @@ test("disconnect skips a surface this company never configured", () => {
 import { waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
-import { deriveTool, type Model } from "./model.ts";
-import { AgentList } from "./parts.tsx";
+import { SeatStep } from "./catalogue.tsx";
 
 const github = CATALOG.find((e) => e.key === "github")!;
 
-/** GitHub's Agents tab with this roster, as the app's page draws it. */
+/** The gesture each seat's step asks of a person, as the Agents tab draws it beside the seat. */
 function roster(...seats: SetupSeatState[]): { container: HTMLElement } {
-  const tool = deriveTool(github, {
-    rows: rowsOf({ key: "github", configured: true }),
-    rollups: undefined,
-    setup: new Map([["github", toolState({ key: "github", seats })]]),
-    guarded: false,
-    trafficKnown: true,
-    isSeat: () => true,
-    avatarOf: () => null,
-  });
-  // THE PARTS OF THE MODEL THE LIST READS: the rest is the page's.
-  const model = { guarded: false, managed: null, check: async () => "" } as unknown as Model;
-  return render(<AgentList tool={tool} model={model} />);
+  return render(
+    <>
+      {seats.map((seat) => (
+        <SeatStep key={seat.handle} app={github.name} toolKey="github" seat={seat} />
+      ))}
+    </>,
+  );
 }
 
 function seatOf(over: Partial<SetupSeatState>): SetupSeatState {
@@ -783,11 +777,6 @@ test("a seat that needs an app of its own gets the button that creates one", () 
   roster(
     seatOf({
       step: "create_app",
-      tier: "read_only",
-      // THE LABEL COMES WITH THE TIER, always: the dashboard is embedded in
-      // the binary that serves it, so the two are never a version apart and
-      // the screen never has to restate a vocabulary Go owns.
-      tier_label: "Read-only",
       detail: "no app of its own yet",
     }),
   );
@@ -796,79 +785,6 @@ test("a seat that needs an app of its own gets the button that creates one", () 
   // AND NOT THE OTHER STEP. They are two acts, and an operator shown both at
   // once has no way to know which one they are on.
   expect(screen.queryByRole("link", { name: "Install on GitHub" })).toBeNull();
-  // THE TIER, in the engine's own words: two agents on one card can hold
-  // apps with different permissions, and "not set up" says the same word
-  // over both.
-  expect(screen.getByText("Read-only")).toBeTruthy();
-});
-
-// A TIER SITS BESIDE THE NAME, NOT OUT WITH THE STATUS.
-//
-// It is a standing fact about the agent rather than something needing
-// attention, which is where the console puts it and why. As a chip out on
-// the right beside "ready", two chips on one row read as two verdicts and a
-// reader scanning a roster for what is wrong stopped on "read-only" every
-// time.
-//
-// The words are the engine's: the tiers are a closed set whose permissions
-// live in Go beside the code that mints the tokens, so a screen prettifying
-// the raw id would be free to drift from what a token actually carries.
-test("a seat's tier is a tag on its name, not a second status chip", () => {
-  const { container } = roster(
-    seatOf({
-      satisfied: true,
-      tier: "full_access",
-      tier_label: "Full access",
-      tier_hint: "Branches, commits, pull requests, issues and checks. No administration.",
-      detail: "acme/api, acme/web",
-    }),
-  );
-
-  const tier = container.querySelector(".int-seat-tier");
-  if (!tier) throw new Error("the seat carries no tier tag");
-  expect(tier.textContent).toBe("Full access");
-  // THE TIER'S OWN CLASS carries the weight: full access takes the accent,
-  // review a lighter share, read-only stays neutral.
-  expect(tier.className).toContain("int-seat-tier--full_access");
-  // BESIDE THE NAME, which is what makes it read as an attribute of the
-  // agent rather than a verdict on it.
-  expect(tier.closest(".int-seat-name")).not.toBeNull();
-  // AND NOT THE STATUS, which is the row's only verdict.
-  expect(tier.closest(".crewlet-tag")).toBeNull();
-  // AND WHAT IT GRANTS IS REACHABLE. Three words on a pill cannot say what
-  // full access does and does not include; the sentence that can is the
-  // engine's own.
-  expect(tier.getAttribute("title")).toContain("No administration");
-
-  // WHAT IT REACHES is the line underneath, which is the one thing two
-  // finished seats on one card differ by.
-  // VERBATIM: a repository list made a sentence named "Acme/api".
-  expect(screen.getByText("acme/api, acme/web")).toBeTruthy();
-  expect(screen.getByText("Ready")).toBeTruthy();
-});
-
-// A TOOL WITH NO TIERS SHOWS NO TAG. Slack gives an agent an app and no
-// notion of how much of one, so a tag there would name a scope the app does
-// not have.
-test("a seat on a tierless app carries no tier tag", () => {
-  const { container } = roster(seatOf({ satisfied: true, detail: "its own app" }));
-  expect(container.querySelector(".int-seat-tier")).toBeNull();
-});
-
-// AN APP CAN GRADE AN AGENT IN A VOCABULARY THIS ENGINE HAS NO SCALE FOR.
-//
-// A Datadog role an organization made is its own name and nothing else: the
-// tag says it, and the weight stays neutral, because drawing it in the accent
-// reserved for full access would be this screen claiming how much a role it
-// has never seen grants.
-test("a graded seat with no known tier is drawn neutral", () => {
-  const { container } = roster(
-    seatOf({ satisfied: true, tier_label: "Acme On-Call", detail: "its own account" }),
-  );
-  const tag = container.querySelector(".int-seat-tier");
-  if (!tag) throw new Error("the seat carries no tag for the role it holds");
-  expect(tag.textContent).toBe("Acme On-Call");
-  expect(tag.className).toBe("int-seat-tier");
 });
 
 // THE MANIFEST GOES AS A FORM POST, NEVER AS A FETCH.
@@ -883,7 +799,6 @@ test("the manifest reaches the code host as a form the operator's browser sends"
   const manifest = { name: "Crewlet CTO", url: "https://crewlet.ai", public: false };
   stubFetch(sent, {
     seat: "cto",
-    tier: "review",
     action_url: "https://github.com/organizations/acme/settings/apps/new",
     manifest,
     state: "st-1",
@@ -1088,4 +1003,16 @@ test("an unconfigured surface stays out of the disconnect order", () => {
   expect(disconnectOrder(atlassian, rowsOf({ key: "jira", configured: true }), [])).toEqual([
     "jira",
   ]);
+});
+
+// THE LOOP'S CLOCK, as the fact line says it: a next sync whose time has passed
+// is due or overdue, never a time "ago".
+test("the sync fact says when the next sync is, and never puts it in the past", async () => {
+  const { syncWords } = await import("./catalogue.tsx");
+  const now = Date.parse("2026-10-29T12:00:00Z");
+  const at = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
+  expect(syncWords(at(-30), at(10), now)).toBe("30m ago · next in 10m");
+  expect(syncWords(at(-30), at(0), now)).toBe("30m ago · next due now");
+  expect(syncWords(at(-30), at(-20), now)).toBe("30m ago · next overdue by 20m");
+  expect(syncWords(null, null, now)).toBe("Not yet");
 });

@@ -32,14 +32,16 @@ flowchart LR
     R -->|the object| S
 ```
 
-Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
-and the pack bytes of the company's [git repositories](code-host.md) — one
-object per push, named by its `code_packs` row, a required reference like a
-file's — every file of every [artifact](artifacts.md) version and asset, and
-every file of the company's adopted brand.
-It is built for more than that (chat attachments and anything else a row can
-name by key) and every consumer follows the same rule: the estate names the
-object, and the store keeps its bytes.
+Today the store holds [a project's files](../guides/worklet.md#a-projects-files),
+the pack bytes of the company's [git repositories](code-host.md) — one object
+per push, named by its `code_packs` row, a required reference like a file's —
+every file of every [artifact](artifacts.md) version and asset, every file of
+the company's adopted brand, and the files an
+[Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
+keeps (the images a person attaches and the files a deep-work run delivers,
+each sealed under the fleet keyring before it is stored, so the bucket holds
+none of them in the clear). Every consumer follows the same rule: the estate
+names the object, and the store keeps its bytes.
 
 ---
 
@@ -130,9 +132,9 @@ logs survive, on the same members:
   link with a longer round trip the share lost is larger. A lease under **11.25 seconds** has a
   heartbeat shorter than even one 128 KiB message takes at the floor, so a
   renewal behind it lands with less than a heartbeat to spare — and under
-  5.6 seconds, after the lease. `crewlet validate` warns of such a
-  `coordination.lease_ttl_seconds` on a node whose uploads cross a link,
-  and on a member that serves leaves. On a data node's own client, where
+  5.6 seconds, after the lease. No node can hold such a lease:
+  `coordination.lease_ttl_seconds` is refused under 15 seconds, which is
+  over it. On a data node's own client, where
   no link lies between the upload and the stream, the window is sixteen.
   An upload waits its turn for a place behind the others, first come
   first served.
@@ -241,8 +243,18 @@ logs reserve their ceilings, and every seat's mailbox and every coordination
 bucket (the leases, ledgers and budget counters the fleet runs on) share what
 is left. A bucket allowed to grow into that remainder would, once full, refuse
 a lease heartbeat, which stops the fleet; a bucket at its reservation refuses
-**uploads, and only uploads**. The collector does not bound the bucket: it
-deletes what no row names, never the files a company keeps.
+**uploads, and only uploads**. A person uploading is told there's no room left
+and that an administrator needs to make room, as a `503` with no
+`Retry-After`, since no wait clears it, and an agent's file and artifact tools
+are told not to try again. An upload the store simply did not take (a request
+that ran out of time, a broker or a provider that didn't answer) is a `503`
+under an election's wait instead, and the tools are told to try again
+shortly: the object store classes every put it could not finish once, so a
+project file's upload, an artifact's, an image attached to a question for
+[Ask Crewlet](../guides/assistant.md) and both kinds of tool answer each
+the same way, and Ask Crewlet is told what kept out a file a deep-work run
+delivered. The collector does not bound the bucket: it deletes what no row
+names, never the files a company keeps.
 
 ```yaml
 store:
@@ -779,7 +791,7 @@ lock-free deletion sound:
 
 - the applier performs a carry only by finding the artifact's own live
   reference to that object **in its own apply transaction**; finding none, it
-  skips the record identically on every node, and the publisher is told `409
+  skips the record identically on every data node, and the publisher is told `409
   carried_object_gone`, naming the files to send again;
 - every record that adds or removes an artifact's object reference is ordered
   on that artifact's own subject, so no carry can race a removal;
@@ -797,15 +809,15 @@ object is garbage from then on. Instead one data node at a time — the
 judged against the replicated estate the data node holds:
 
 - **Collection, hourly.** It pins the estate (a barrier on the log of every
-  domain that declares a table naming objects — the tracker's, the code log
-  and the artifacts log — so it reads every row committed when it began),
+  domain that declares a table naming objects — the tracker's, the code log,
+  the artifacts log and Ask Crewlet's — so it reads every row committed when it began),
   lists the store, and deletes every object **stored more than a day ago,
   whose key was minted more than a day ago, that no row —
   [live, retired or derived](#live-retired-and-derived-references) — names**.
   The collector reads the rows of every domain that declares a table naming
   objects, whichever of the engine's own backends the company runs: every
   data node applies every domain's log, so a company that moved its tracker
-  off native, or runs none of the engine's own backends, still holds its
+  off Worklet, or runs none of the engine's own backends, still holds its
   project files' rows, and their objects are still audited and kept. It
   deletes while the listing goes on: on S3, each batch of up
   to 500 objects it judged in one `DeleteObjects` request, one batch at a
@@ -981,10 +993,10 @@ The `code-retention` duty then removes the rows past their day — by a record
 on the code log for each repository holding some, which every data node
 applies — and the collector's next pass deletes their objects. A deleted
 repository's purge takes its retired rows with the rest. The decision is
-[ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md),
+[ADR-0074](https://github.com/crewlet/crewlet/blob/main/adr/0074-a-retired-reference-keeps-its-object-for-a-grace.md),
 and the compaction's own rules — what a merge keeps, and why a retired pack
 outlives its longest read — are
-[ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md).
+[ADR-0083](https://github.com/crewlet/crewlet/blob/main/adr/0083-a-compaction-merges-packs-without-judging-reachability.md).
 
 The first derived rows are the code host's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index

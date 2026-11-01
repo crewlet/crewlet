@@ -56,8 +56,8 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	r.Register("config", queries.Requires(iam.GrantAdmin), answersWith("the company"))
-	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith("the board"))
-	r.Register("pages", queries.Requires(iam.GrantKnowledge), answersWith("the pages"))
+	r.Register("work_items", queries.Requires(iam.GrantWorklet), answersWith("the board"))
+	r.Register("pages", queries.Requires(iam.GrantDoclet), answersWith("the pages"))
 	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
 
 	for _, tc := range []struct {
@@ -68,13 +68,13 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 		{"config", []iam.Grant{iam.GrantAdmin}, true},
 		{"config", slices.Clone(iam.Apps), false},
 		{"config", nil, false},
-		{"work_items", []iam.Grant{iam.GrantTracker}, true},
+		{"work_items", []iam.Grant{iam.GrantWorklet}, true},
 		{"work_items", []iam.Grant{iam.GrantAdmin}, true},
-		{"work_items", []iam.Grant{iam.GrantKnowledge}, false},
+		{"work_items", []iam.Grant{iam.GrantDoclet}, false},
 		{"work_items", nil, false},
-		{"pages", []iam.Grant{iam.GrantKnowledge}, true},
+		{"pages", []iam.Grant{iam.GrantDoclet}, true},
 		{"pages", []iam.Grant{iam.GrantAdmin}, true},
-		{"pages", []iam.Grant{iam.GrantTracker}, false},
+		{"pages", []iam.Grant{iam.GrantWorklet}, false},
 		{"budgets", nil, true},
 	} {
 		_, err := r.Answer(asking(t, tc.holding...), tc.what, nil)
@@ -95,14 +95,14 @@ func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 func TestARefusalNamesThePermissionTheQuestionDeclares(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith(nil))
-	_, err := r.Answer(asking(t, iam.GrantKnowledge), "work_items", nil)
+	r.Register("work_items", queries.Requires(iam.GrantWorklet), answersWith(nil))
+	_, err := r.Answer(asking(t, iam.GrantDoclet), "work_items", nil)
 	var refusal *queries.Refusal
 	if !errors.As(err, &refusal) {
 		t.Fatalf("err = %v, want a *queries.Refusal", err)
 	}
-	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Errorf("the refusal names %v, want exactly [tracker]", refusal.Grants)
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Errorf("the refusal names %v, want exactly [worklet]", refusal.Grants)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestNobodyAskingIsADifferentRefusalFromLackingThePermission(t *testing.T) {
 		}
 	}
 
-	_, narrow := r.Answer(asking(t, iam.GrantTracker), "events", nil)
+	_, narrow := r.Answer(asking(t, iam.GrantWorklet), "events", nil)
 	if !errors.Is(narrow, queries.ErrUnauthorized) {
 		t.Errorf("a principal lacking the permission is not ErrUnauthorized: %v", narrow)
 	}
@@ -269,8 +269,15 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"viewer": "everybody", "schedule_runs": "everybody",
 		"budgets": "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
+		// Hosts alone, so a reader can link a reference; never the repositories.
+		"link_hosts":   "everybody",
 		"sandbox_runs": "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
+		// The other half of `decisions`: a person's own asks need no app.
+		"answered_decisions": "everybody",
+		// Each model's condition and uses, in two readings: a member's names no
+		// credential, no account and no vendor sentence, an admin's all of it.
+		"llm_entries": "everybody",
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
@@ -279,19 +286,32 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
+		// Where a model's coding runs can happen, the catalogue a model step
+		// suggests from, and one device sign-in: the configuration's reader,
+		// and the one who starts a sign-in.
+		"llm_runners": "admin", "llm_models": "admin", "llm_device_sign_in": "admin",
 
-		"work_items": "tracker", "work_comments": "tracker",
-		"work_item_turns": "tracker", "work_views": "tracker",
-		"work_saved_views": "tracker", "work_projects": "tracker",
-		"work_project": "tracker", "work_workload": "tracker",
-		"work_activity": "tracker", "work_my_work": "tracker",
-		"work_inbox": "tracker", "work_routing": "tracker",
-		"work_catalogue": "tracker", "work_person": "tracker",
-		"work_flow": "tracker", "work_files": "tracker", "work_search": "tracker",
+		"work_items": "worklet", "work_comments": "worklet",
+		"work_item_turns": "worklet", "work_views": "worklet",
+		"work_saved_views": "worklet", "work_projects": "worklet",
+		"work_project": "worklet", "work_workload": "worklet",
+		"work_activity": "worklet", "work_my_work": "worklet",
+		"work_inbox": "worklet", "work_routing": "worklet",
+		"work_catalogue": "worklet", "work_person": "worklet",
+		"work_flow": "worklet", "work_files": "worklet", "work_search": "worklet",
 
-		"pages": "knowledge", "page": "knowledge", "containers": "knowledge",
-		"page_activity": "knowledge", "page_revision": "knowledge",
-		"page_reads": "knowledge",
+		"pages": "doclet", "page": "doclet", "containers": "doclet",
+		"page_activity": "doclet", "page_revision": "doclet",
+		"page_reads": "doclet",
+
+		"chat_channels": "chatlet", "chat_channel": "chatlet", "chat_messages": "chatlet",
+		"chat_thread": "chatlet", "chat_search": "chatlet",
+		// The reader's own views, and a message's link previews, each of
+		// whose records is then decided by its own question.
+		"chat_activity": "chatlet", "chat_threads": "chatlet", "chat_saved": "chatlet",
+		"chat_sent": "chatlet", "chat_links": "chatlet", "chat_message": "chatlet",
+		"chat_unfurls":    "chatlet",
+		"chat_room_names": "chatlet", "chat_rooms": "chatlet",
 
 		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
 		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),
@@ -328,7 +348,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
 
 		// THE CODE HOST'S ROWS, each decided per repository by the grant the
-		// serving node derives from its chart (code.GrantOf, ADR-0058):
+		// serving node derives from its chart (code.GrantOf, ADR-0081):
 		// a listing leaves out what the caller may not read, and a read of
 		// one such repository is refused.
 		"code_repos":  "decided_by:" + string(authz.ActionCodeRead),

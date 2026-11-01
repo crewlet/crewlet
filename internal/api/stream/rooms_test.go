@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -34,10 +35,11 @@ var sheet = artifacts.IDFor("stream-rooms-suite-sheet")
 // artifact, by their record, settable mid-case, and an error that makes every
 // decision unknown.
 type access struct {
-	mu    sync.Mutex
-	roles map[string]artifacts.Role
-	err   error
-	asked int
+	mu      sync.Mutex
+	roles   map[string]artifacts.Role
+	trashed map[artifacts.ID]bool
+	err     error
+	asked   int
 }
 
 func newAccess() *access { return &access{roles: map[string]artifacts.Role{}} }
@@ -46,6 +48,17 @@ func (a *access) set(record string, id artifacts.ID, role artifacts.Role) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.roles[record+"|"+id.String()] = role
+}
+
+// trash puts id in the trash: every reader it is disclosed to is answered
+// [artifactsdomain.ErrTrashed], and every other reader as before.
+func (a *access) trash(id artifacts.ID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.trashed == nil {
+		a.trashed = map[artifacts.ID]bool{}
+	}
+	a.trashed[id] = true
 }
 
 func (a *access) fail(err error) {
@@ -61,7 +74,11 @@ func (a *access) Standing(_ context.Context, p iam.Principal, id artifacts.ID) (
 	if a.err != nil {
 		return "", a.err
 	}
-	return a.roles[iam.RecordOwner(p)+"|"+id.String()], nil
+	role := a.roles[iam.RecordOwner(p)+"|"+id.String()]
+	if role != "" && a.trashed[id] {
+		return "", fmt.Errorf("%w: %s", artifactsdomain.ErrTrashed, id)
+	}
+	return role, nil
 }
 
 // stores answers every datastore at version 40 with its delete floor at 10.
@@ -97,8 +114,12 @@ func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
 	if err != nil {
 		t.Fatal(err)
 	}
+	// THE ENGINE'S ASK BUDGET, not a shorter one: a room fills from its
+	// peers on that ask alone until the next rebroadcast, which is later
+	// than a case reads for, and an answer applies the moment it arrives,
+	// so a longer budget slows nothing that passes.
 	hub, err := presence.New(presence.Options{Queue: q, Wire: wire, Node: name,
-		AskBudget: 300 * time.Millisecond, Coalesce: 10 * time.Millisecond})
+		AskBudget: eventfan.FleetReadBudget, Coalesce: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,14 +133,14 @@ func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
 	for login := range bound {
 		id := strings.TrimPrefix(login, "token:")
 		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
-			ID: id, Token: id + "-token-long-enough-to-pass", Grants: []iam.Grant{iam.GrantTracker},
+			ID: id, Token: id + "-token-long-enough-to-pass", Grants: []iam.Grant{iam.GrantWorklet},
 		})
 	}
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(bound), Chart: watchSeats(bound)})
 	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: acc, Stores: stores{},
 		Presence: hub}})
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil, nil))
 	t.Cleanup(srv.Close)
 	return &roomNode{svc: svc, hub: hub, access: acc,
 		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
@@ -289,7 +310,7 @@ func TestARoomCrossesTheFleetOnTheSocket(t *testing.T) {
 	presentIn(t, erin, erinRoom, "dana", "erin")
 	presentIn(t, dana, danaRoom, "dana", "erin")
 
-	write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+	write(t, dana, map[string]any{"kind": "presence", "room": "artifact", "artifact": sheet.String(),
 		"activity": "editing", "focus": map[string]any{"collection": "review", "doc": "row-12"}})
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -356,6 +377,46 @@ func TestARevokedShareDropsFromTheRoom(t *testing.T) {
 	write(t, erin, map[string]any{"kind": "ping"})
 	if got := nextOf(t, erin, stream.KindPong, stream.KindArtifactData); kindOf(got) != stream.KindPong {
 		t.Fatalf("a reader whose share was withdrawn received %v after it", got)
+	}
+}
+
+// THE TRASH IS SAID AS THE TRASH: a member of a room whose artifact is binned
+// is withdrawn with `artifact_trashed`, and a join while it is binned is
+// refused with it, where a reader the artifact is not disclosed to is still
+// told it is not there. The room carries no content until its owner restores
+// it, and `not_found` told a reader it would never come back.
+//
+// Mutation: answer the trash as an empty role in the join or the withdrawal,
+// or as undecidable, and this goes red.
+func TestATrashedArtifactsRoomSaysItIsInTheTrash(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+
+	acc.trash(sheet)
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet,
+		What: artifactsdomain.MoveTrash, AccessEpoch: 2, Head: 3}})
+	withdrawn := nextOf(t, dana, stream.KindError)
+	if withdrawn["error"] != stream.CodeArtifactTrashed || withdrawn["artifact"] != sheet.String() ||
+		withdrawn["what"] != "artifact_join" {
+		t.Fatalf("a member of a binned artifact's room was told %v, want the room withdrawn "+
+			"as artifact_trashed", withdrawn)
+	}
+	if again := join(t, dana, sheet, 0); kindOf(again) != stream.KindError ||
+		again["error"] != stream.CodeArtifactTrashed {
+		t.Fatalf("a join of a binned artifact was answered %v, want artifact_trashed", again)
+	}
+	erin := n.open(t, "erin")
+	if stranger := join(t, erin, sheet, 0); stranger["error"] != stream.CodeNotFound {
+		t.Fatalf("a reader with no relation to a binned artifact was answered %v, want not_found",
+			stranger)
+	}
+	write(t, dana, map[string]any{"kind": "ping"})
+	if got := nextOf(t, dana, stream.KindPong); kindOf(got) != stream.KindPong {
+		t.Fatalf("the trash closed the socket: %v", got)
 	}
 }
 
@@ -569,41 +630,41 @@ func TestALargeDatastorePushNamesItsDocuments(t *testing.T) {
 	}
 }
 
-// A NODE WHOSE COPY LEAVES SERVICE withholds its appliers' pushes and tells
-// every room to read again, and does so again when the copy returns.
-func TestACopyOutOfServiceWithholdsAndTellsRoomsToReread(t *testing.T) {
+// A RESET OF BOTH ARTIFACT DOMAINS TELLS EVERY ROOM TO READ AGAIN, and is all a
+// node's rooms are told when what they hear has a gap: the engine's live relay
+// hands every switch of source to these two listeners as their own domains'
+// reset (a movement naming nothing), so a room is pushed the reset, decided
+// again, and told its datastore may have gaps — and keeps hearing what its
+// datastore commits afterwards once the decision keeps it.
+//
+// Mutation: drop the reset arm from ArtifactsMoved and the room is pushed no
+// reset; drop it from ArtifactDataMoved and the datastore is never re-read.
+func TestAResetTellsEveryRoomToReadAgain(t *testing.T) {
 	t.Parallel()
-	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
-		Stores: stores{}, Presence: nopPresence{}}})
-	c := stream.NewClient(roomReader("dana"))
-	svc.Hub().Register(c)
-	if _, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleEditor, "s"); !ok {
-		t.Fatal("the client did not join")
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{artifactsdomain.Reset()})
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{artifactdata.ResetMove()})
+	changed := nextOf(t, dana, stream.KindArtifactChanged)
+	if data, _ := changed["data"].(map[string]any); data["what"] != "reset" ||
+		data["artifact"] != sheet.String() {
+		t.Fatalf("the room was pushed %v, want its artifact reset", changed)
 	}
-	rereadOnce := func(why string) {
-		t.Helper()
-		got := drain(c)
-		if kinds := kindsIn(got); !slices.Equal(kinds, []stream.Kind{stream.KindArtifactChanged,
-			stream.KindArtifactData}) {
-			t.Fatalf("%s: the room was sent %v, want a reset and a resync", why, kinds)
-		}
-		var data stream.ArtifactData
-		decodeData(t, got[1], &data)
-		if !data.Resync {
-			t.Fatalf("%s: the datastore hint is %+v, want resync", why, data)
-		}
+	reread := nextOf(t, dana, stream.KindArtifactData)
+	if data, _ := reread["data"].(map[string]any); data["resync"] != true {
+		t.Fatalf("the datastore was pushed %v, want a resync", reread)
 	}
-	svc.ArtifactsCopy(false)
-	rereadOnce("leaving service")
-	svc.ArtifactsCopy(false)
-	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
-		delta("notes", "a", artifacts.ReadAll, "dana", `{}`))})
-	svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet, What: artifactsdomain.MoveVersion}})
-	if got := drain(c); len(got) != 0 {
-		t.Fatalf("an out-of-service copy pushed %v", kindsIn(got))
+
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "a", artifacts.ReadAll, "dana", `{"done":true}`))})
+	if got := nextOf(t, dana, stream.KindArtifactData, stream.KindError); kindOf(got) !=
+		stream.KindArtifactData {
+		t.Fatalf("the room decided again after the reset received %v", got)
 	}
-	svc.ArtifactsCopy(true)
-	rereadOnce("returning to service")
 }
 
 // A SOCKET IS IN A BOUNDED NUMBER OF ROOMS: past [stream.MaxRoomsPerSocket] a
@@ -665,24 +726,24 @@ func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{{ID: "dana", Token: "dana-token-long-enough-to-pass",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(people), Chart: watchSeats(people)})
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil, nil))
 	t.Cleanup(srv.Close)
 	n := &roomNode{svc: svc, url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
 	dana := n.open(t, "dana")
 	join(t, dana, sheet, 0)
-	for range 5 * artifacts.PresenceClientRate {
-		write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+	for range 5 * presence.ClientRate {
+		write(t, dana, map[string]any{"kind": "presence", "room": "artifact", "artifact": sheet.String(),
 			"activity": "editing"})
 	}
 	write(t, dana, map[string]any{"kind": "ping"})
 	nextOf(t, dana, stream.KindPong)
 	time.Sleep(50 * time.Millisecond)
-	if got := counting.updates(); got > artifacts.PresenceClientRate+1 {
+	if got := counting.updates(); got > presence.ClientRate+1 {
 		t.Fatalf("a burst of %d presence frames reached the hub %d times, over the "+
-			"allowance of %d", 5*artifacts.PresenceClientRate, got, artifacts.PresenceClientRate)
+			"allowance of %d", 5*presence.ClientRate, got, presence.ClientRate)
 	}
 	if counting.updates() == 0 {
 		t.Fatal("no presence frame reached the hub, so the allowance was never asked")
@@ -712,13 +773,16 @@ func dataBatch(id artifacts.ID, docs ...artifactdata.DocDelta) artifactdata.Move
 // nopPresence is a hub that holds nobody, for a case about the datastore.
 type nopPresence struct{}
 
-func (nopPresence) Join(id artifacts.ID, who presence.Local) (string, artifacts.PresenceRoster, error) {
-	return "s", artifacts.PresenceRoster{Artifact: id}, nil
+func (nopPresence) Join(_ presence.Room, _ presence.Local, hand presence.Hand) (string, error) {
+	if !hand("s", presence.Roster{}) {
+		return "", presence.ErrDeclined
+	}
+	return "s", nil
 }
-func (nopPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+func (nopPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	return nil
 }
-func (nopPresence) Leave(artifacts.ID, string)                   {}
+func (nopPresence) Leave(presence.Room, string)                  {}
 func (nopPresence) OnChange(func(presence.Change)) (stop func()) { return func() {} }
 
 // countingPresence counts the presence frames that reached it.
@@ -728,7 +792,7 @@ type countingPresence struct {
 	n  int
 }
 
-func (c *countingPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+func (c *countingPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.n++

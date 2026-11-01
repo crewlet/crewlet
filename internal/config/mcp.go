@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MCPTransport is how the engine reaches a tool server.
@@ -23,21 +24,26 @@ const (
 // MCPTransports is the closed set.
 var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 
-// BridgeServerName is the name a coding agent in agent mode sees the seat's
-// own tool bridge under — the engine-side MCP server that carries the seat's
-// colleagues, channels, memory and submission into the box.
+// ToolServerName is the name a seat's coding CLI sees the seat's own tools
+// under, wherever the CLI runs: the MCP server a phase on this host dials
+// through `crewlet mcp-relay`, and the tool bridge the seat's executor — its
+// CLI's own run in a box — dials over HTTP. One name, so a seat's tools are
+// spelled one way in every phase — the prefix its model sees
+// (`mcp__crewlet__reply`) is the same for the reviewer on this host and the
+// executor in its box — and the built-in CLI profiles, which write it into
+// each CLI's own configuration grammar, are held to it by a test in cliagent.
 //
 // RESERVED: an `mcp_servers` entry may not take it. The engine writes the
-// bridge into every agent-mode box's server list under this key, so a
-// company server of the same name would be overwritten there — its tools
-// gone from the run with no validation error and no log line saying why.
-// Named here rather than in the bridge package because this is where the
-// reservation is enforced, and the bridge and the engine read the one value.
+// bridge into every executor box's server list under this key, so a company
+// server of the same name would be overwritten there — its tools gone from
+// the run with no validation error and no log line saying why. Named here
+// rather than beside either server because this is where the reservation is
+// enforced, and every reader takes the one value.
 //
 // "crewlet" rather than the seat's handle because it reaches the CLI's own
 // prompt: a tool called `mcp__swe__reply` reads as somebody else's tool, where
 // `mcp__crewlet__reply` reads as the agent's own.
-const BridgeServerName = "crewlet"
+const ToolServerName = "crewlet"
 
 // MCPServer is one tool server.
 //
@@ -90,6 +96,13 @@ type MCPServer struct {
 	// published that token verbatim on every config read.
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
 	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
+
+	// SeatCredentials declares which integration's per-seat credential a
+	// per-seat server reads, and under which key, so the engine binds each
+	// seat's own sealed credential to it (D15). Absent, a server this build
+	// recognises by its command or address reads what [SeatToolBindings]
+	// says; see toolbinding.go.
+	SeatCredentials []SeatCredential `yaml:"seat_credentials,omitempty" json:"seat_credentials,omitempty" desc:"Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises."`
 
 	// OptionalKeys names the keys whose value may resolve to nothing: of
 	// this server's env or headers, and of a seat's or unit's mcp_env block
@@ -230,7 +243,7 @@ func (m *MCPServer) validate(path Path) error {
 	}
 	if m.Transport != "" && !slices.Contains(MCPTransports, m.Transport) {
 		p.add(at(path, "transport"), ErrUnknownValue, "%q (want %s)",
-			m.Transport, names(MCPTransports))
+			m.Transport, words.Or(MCPTransports))
 		return p.err()
 	}
 
@@ -268,6 +281,8 @@ func (m *MCPServer) validate(path Path) error {
 				"env only applies to transport stdio; an http server takes headers instead")
 		}
 	}
+
+	m.validateSeatCredentials(&p, at(path, "seat_credentials"))
 
 	// NO NUMBER IN EITHER MESSAGE. The defaults are the MCP client's
 	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where

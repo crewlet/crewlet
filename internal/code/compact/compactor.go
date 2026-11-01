@@ -46,7 +46,7 @@ type Estate interface {
 // for work charged at its own charge of a git node's background budget — the
 // first git node of the repository's rendezvous order over the live git nodes
 // whose ADVERTISED budget holds the charge, the home on a fleet of alike nodes
-// (internal/estate's Router.MaintainerOf, ADR-0061) — every one judged against
+// (internal/estate's Router.MaintainerOf, ADR-0084) — every one judged against
 // ONE LISTING of who serves git and what each advertises: the set this node
 // maintains, or an error where that listing cannot be read, on which the
 // compactor does none of a maintainer's work rather than guess. Each loop's

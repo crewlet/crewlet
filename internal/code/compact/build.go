@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // CompactConfig is the configuration a compaction's pack-objects runs under,
@@ -82,7 +83,7 @@ type output struct {
 // line, so every object an input holds is in the outputs — an object it shares
 // with a pack that is no input is written again rather than left to that pack,
 // because two compactions decided from different snapshots may each retire the
-// pack the other relied on (ADR-0060).
+// pack the other relied on (ADR-0083).
 //
 // AND NOTHING BUT THE INPUTS IN REACH, for a compaction and a publication's
 // repack alike: to fill in the name hash its delta search sorts by,
@@ -156,7 +157,7 @@ func lay(sc *cache.Scratch, cid string, printed []string) ([]output, error) {
 		wrote[i] = p.Checksum
 	}
 	if want := slices.Sorted(slices.Values(printed)); !slices.Equal(want, wrote) {
-		return nil, fmt.Errorf("compact: pack-objects printed %v and wrote %v", printed, wrote)
+		return nil, fmt.Errorf("compact: pack-objects printed %s and wrote %s", words.And(printed), words.And(wrote))
 	}
 	outs := make([]output, len(printed))
 	for n, cs := range printed {

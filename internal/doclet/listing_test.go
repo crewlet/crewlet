@@ -1,0 +1,988 @@
+package doclet_test
+
+import (
+	"cmp"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE PAGE WINDOW IS APPLIED, AND IT IS APPLIED AFTER THE FILTER.
+//
+// A listing's SQL takes positional placeholders, so the filter's values and
+// the window's share one slice and the only thing keeping them apart is the
+// order they were appended in. Nothing about a mis-ordered pair is visible
+// from the outside: `LIMIT ?` bound to a container name is a page of nothing,
+// and `LIKE ?` bound to a limit is a filter that matched nobody — both of
+// which read exactly like a company that has written little down. The window
+// is therefore appended by [doclet.Reader] itself, at the one place that knows
+// it goes last, and this is the guard over that.
+func TestAPageListingWindowsAfterItFilters(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: "prose"})
+	}
+	// A FOURTH PAGE IN ANOTHER CONTAINER, so "the window works" cannot be
+	// satisfied by a listing that ignores the filter entirely.
+	r.write(author("jane"), doclet.NewPage{
+		Container: "PROD", Title: "Alpha", Body: "prod's own",
+	})
+
+	first := r.list(doclet.Filter{Container: "ENG", Limit: 2})
+	if got := titles(first); len(got) != 2 || got[0] != "Alpha" || got[1] != "Beta" {
+		t.Fatalf("the first page of two is %v, want Alpha and Beta", got)
+	}
+	if first.Total != 3 || first.After == "" {
+		t.Fatalf("the first page of two says total %d and after %q, want 3 and a "+
+			"cursor — a window that stops at its limit must say there is more",
+			first.Total, first.After)
+	}
+	second := r.list(doclet.Filter{Container: "ENG", Limit: 2, After: first.After})
+	if got := titles(second); len(got) != 1 || got[0] != "Gamma" {
+		t.Fatalf("the second page of two is %v, want Gamma alone — a cursor "+
+			"that did not reach the query pages the same rows for ever", got)
+	}
+	if second.After != "" || second.Total != 3 {
+		t.Fatalf("the last page says after %q and total %d, want no cursor and "+
+			"the same total — the total is the whole listing, not what is left",
+			second.After, second.Total)
+	}
+
+	// AND A FILTER VALUE BESIDE THE WINDOW. This is the case a mis-ordered
+	// argument slice actually breaks: the title predicate and the bound are
+	// two placeholders in one statement.
+	narrowed := r.list(doclet.Filter{Container: "ENG", Title: "Alpha", Limit: 2})
+	if got := titles(narrowed); len(got) != 1 || got[0] != "Alpha" {
+		t.Fatalf("filtering ENG by title within a window of two gave %v", got)
+	}
+}
+
+// A PAGE'S CHILDREN COME BACK WITH IT, off the same listing and the same
+// snapshot as the page itself — which is the other caller of that query, and
+// the one whose window is the engine's own rather than a caller's.
+func TestAPageReportsItsChildren(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	parent := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Rollback", Body: "prose", ParentID: parent.Page.ID,
+	})
+	// A SIBLING AT THE TOP LEVEL, so a children list that answered with
+	// every page in the container would be caught.
+	r.write(author("jane"), doclet.NewPage{Title: "Oncall", Body: "prose"})
+
+	detail := r.get(parent.Page.ID)
+	if len(detail.Children) != 1 || detail.Children[0].Title != "Rollback" {
+		t.Fatalf("the page reports children %v, want Rollback alone",
+			titles(doclet.Listing{Pages: detail.Children}))
+	}
+	if detail.ChildrenTotal != 1 {
+		t.Fatalf("the page reports %d children in all, want 1", detail.ChildrenTotal)
+	}
+}
+
+// A "LOAD MORE" CONTINUES WHERE IT STOPPED, even when the listing moved
+// underneath it.
+//
+// This is what the cursor is for and what an offset could not do: a page
+// created BEFORE the reader's position shifts every later row one place, so
+// the offset's second window repeated the row the first one ended on. The
+// cursor names a place in the ORDER, and the new page lands behind it.
+func TestAListingCursorSurvivesAWriteBeforeIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, title := range []string{"Bravo", "Charlie", "Delta", "Echo"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: "prose"})
+	}
+	first := r.list(doclet.Filter{Container: "ENG", Limit: 2})
+	if got := titles(first); len(got) != 2 || got[1] != "Charlie" {
+		t.Fatalf("the first window is %v, want Bravo and Charlie", got)
+	}
+	// SORTS AHEAD OF EVERYTHING ALREADY READ.
+	r.write(author("jane"), doclet.NewPage{Title: "Alpha", Body: "prose"})
+
+	second := r.list(doclet.Filter{Container: "ENG", Limit: 2, After: first.After})
+	if got := titles(second); len(got) != 2 || got[0] != "Delta" || got[1] != "Echo" {
+		t.Fatalf("the window after Charlie is %v, want Delta and Echo — Charlie "+
+			"again is the repeat an offset gives", got)
+	}
+	if second.Total != 5 {
+		t.Fatalf("the total is %d after the create, want 5", second.Total)
+	}
+}
+
+// A CURSOR THIS READER DID NOT MINT IS REFUSED rather than read as "from the
+// start", which would draw the first page again under a "Load more".
+func TestAListingRefusesACursorItDidNotMint(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), doclet.NewPage{Title: "Alpha", Body: "prose"})
+	for _, bad := range []string{"not base64!", "e30"} { // e30 is `{}`
+		_, err := r.reader.List(t.Context(), doclet.Filter{Container: "ENG", After: bad},
+			statelog.Freshness{Level: statelog.ReadSession})
+		if !errors.Is(err, doclet.ErrBadCursor) {
+			t.Errorf("after=%q answered %v, want ErrBadCursor", bad, err)
+		}
+	}
+}
+
+// A TREE LOADS ONE LEVEL AT A TIME, and each row says whether it opens.
+//
+// `Roots` is the top of a container and `ParentID` one page's children; the
+// `children` count is what a tree draws its expander off, so it must count
+// the children THE SAME LISTING would show — a trashed child counted is an
+// expander that opens onto nothing.
+func TestATreeLevelSaysWhichRowsOpen(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	runbooks := r.write(author("jane"), doclet.NewPage{Title: "Runbooks", Body: "index"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Provisioner", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	gone := r.write(author("jane"), doclet.NewPage{
+		Title: "Retired", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), gone.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	lonely := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "prose"})
+	r.drain()
+
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	top := r.list(doclet.Filter{Container: "ENG", Roots: true, Status: live})
+	if got := titles(top); len(got) != 2 || got[0] != "Handbook" || got[1] != "Runbooks" {
+		t.Fatalf("the top of ENG is %v, want Handbook and Runbooks — a child "+
+			"listed at the top is a page drawn twice", got)
+	}
+	opens := map[string]int{}
+	for _, p := range top.Pages {
+		opens[p.ID] = p.Children
+	}
+	if opens[runbooks.Page.ID] != 1 {
+		t.Errorf("Runbooks counts %d children, want 1 — its trashed child is "+
+			"not in a listing of live pages", opens[runbooks.Page.ID])
+	}
+	if opens[lonely.Page.ID] != 0 {
+		t.Errorf("Handbook counts %d children, want 0", opens[lonely.Page.ID])
+	}
+	under := r.list(doclet.Filter{ParentID: runbooks.Page.ID, Status: live})
+	if got := titles(under); len(got) != 1 || got[0] != "Provisioner" || under.Total != 1 {
+		t.Fatalf("under Runbooks is %v (total %d), want Provisioner alone", got, under.Total)
+	}
+}
+
+// list reads a filtered listing at session level — this node's own writes,
+// which is what the harness has just applied.
+func (r *roundTrip) list(f doclet.Filter) doclet.Listing {
+	r.t.Helper()
+	got, err := r.reader.List(r.t.Context(), f, statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		r.t.Fatalf("list %+v: %v", f, err)
+	}
+	return got
+}
+
+func titles(l doclet.Listing) []string {
+	out := make([]string, 0, len(l.Pages))
+	for _, p := range l.Pages {
+		out = append(out, p.Title)
+	}
+	return out
+}
+
+func (r *roundTrip) containers() []doclet.ContainerListing {
+	r.t.Helper()
+	got, err := r.reader.Containers(r.t.Context(),
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		r.t.Fatalf("Containers: %v", err)
+	}
+	return got
+}
+
+// A CONTAINER SAYS HOW MUCH IS IN IT, which the rail beside it could not.
+//
+// The count is DERIVED rather than a field on the container document: the
+// document is what a writer wrote and this is a fact about other rows, so
+// putting it there would have every page create rewrite its container and two
+// writers adding a page to one space contend on a counter neither touched.
+//
+// TRASHED PAGES DO NOT COUNT. A trashed page is invisible to every default
+// listing this reader serves, so counting it would put a number on the rail
+// the list beside it cannot account for — a reader clicks "3" and finds two.
+func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// A CONTAINER IS A DOCUMENT SOMEBODY WROTE, and a page merely NAMES one
+	// — so a space with pages and no document is not in this listing at all.
+	// Declaring three, one of which nobody writes to, is what makes the zero
+	// below a real case rather than an absent key.
+	for _, key := range []string{"ENG", "PROD", "EMPTY"} {
+		if _, _, err := r.store.EnsureContainer(t.Context(), activation(0), key, key, ""); err != nil {
+			t.Fatalf("EnsureContainer %s: %v", key, err)
+		}
+	}
+	r.drain()
+	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: "prose"})
+	}
+	r.write(author("jane"), doclet.NewPage{
+		Container: "PROD", Title: "Only one", Body: "prod's own",
+	})
+	// A FOURTH PAGE IN ENG, TRASHED. Without it "trashed pages do not
+	// count" is a claim rather than a case: every count would be identical
+	// with or without the predicate.
+	binned := r.write(author("jane"), doclet.NewPage{Title: "Delta", Body: "prose"})
+	if _, err := r.store.Trash(t.Context(), author("jane"), binned.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+
+	counts := map[string]int{}
+	for _, c := range r.containers() {
+		counts[c.Key] = c.Pages
+	}
+	if counts["ENG"] != 3 {
+		t.Errorf("ENG holds %d pages, want 3 — the fourth is trashed, and a "+
+			"rail that counted it sends a reader to a list of three",
+			counts["ENG"])
+	}
+	if counts["PROD"] != 1 {
+		t.Errorf("PROD holds %d pages, want 1", counts["PROD"])
+	}
+
+	// AND A CONTAINER NOBODY HAS WRITTEN TO IS ZERO rather than absent,
+	// because the count comes from a GROUP BY that has no row for it — the
+	// listing has to supply the zero, or an empty space renders blank where
+	// every other one renders a number.
+	if n, listed := counts["EMPTY"]; !listed || n != 0 {
+		t.Errorf("EMPTY is listed=%v with %d pages, want it listed at zero",
+			listed, n)
+	}
+}
+
+func (r *roundTrip) activity(q doclet.PageActivityQuery) doclet.PageActivity {
+	r.t.Helper()
+	if q.Freshness.Level == "" {
+		q.Freshness = statelog.Freshness{Level: statelog.ReadSession}
+	}
+	got, err := r.reader.Activity(r.t.Context(), q)
+	if err != nil {
+		r.t.Fatalf("Activity(%+v): %v", q, err)
+	}
+	return got
+}
+
+// EVERY CHANGE, not only the saves.
+//
+// `pages_history` has had one row per change since the domain landed — ten
+// kinds, who made it, whether it announced anything, and the turn that made it
+// — and the schema ships an index literally named "one page's activity". Until
+// now nothing read a single row of it: a comment, a rename, a move, a label
+// edit and a status change all happened and left no trace any screen could
+// show, because the only visible history was the revision list, which is
+// SAVES.
+func TestEveryChangeToAPageIsReadable(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		doclet.NewComment{Body: "does this still hold?"}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+
+	got := r.activity(doclet.PageActivityQuery{Page: page.Page.ID})
+	kinds := map[doclet.ChangeKind]int{}
+	for _, change := range got.Changes {
+		kinds[change.Kind]++
+	}
+	if kinds[doclet.ChangeCreated] == 0 {
+		t.Errorf("the create left no entry: %+v", got.Changes)
+	}
+	if kinds[doclet.ChangeComment] == 0 {
+		t.Errorf("the comment left no entry, and a revision list cannot "+
+			"show one: %+v", got.Changes)
+	}
+	// THE TITLE IS RESOLVED, because a feed of uuids is a feed nobody
+	// reads — and it is the page's CURRENT one, which is the honest
+	// answer for a renamed page's old entries.
+	for _, change := range got.Changes {
+		if change.Title != "Runbook" {
+			t.Errorf("a change names %q, want the page's title", change.Title)
+		}
+	}
+	// NEWEST FIRST, which is what makes a cursor a keyset rather than an
+	// offset.
+	for i := 1; i < len(got.Changes); i++ {
+		if got.Changes[i].LogSeq > got.Changes[i-1].LogSeq {
+			t.Fatalf("entry %d sorts above %d: %+v", i, i-1, got.Changes)
+		}
+	}
+}
+
+// ONE PAGE, ONE CONTAINER, OR ONE KIND — the three narrowings, and each is a
+// different question a reader actually asks.
+func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, _, err := r.store.EnsureContainer(t.Context(), activation(0), "PROD", "Prod", ""); err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
+	}
+	r.drain()
+	eng := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), doclet.NewPage{
+		Container: "PROD", Title: "Deploys", Body: "prose",
+	})
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), eng.Page.ID,
+		doclet.NewComment{Body: "a remark"}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+
+	all := r.activity(doclet.PageActivityQuery{})
+	if len(all.Changes) < 3 {
+		t.Fatalf("the company-wide feed has %d changes, want at least three",
+			len(all.Changes))
+	}
+
+	onePage := r.activity(doclet.PageActivityQuery{Page: eng.Page.ID})
+	for _, change := range onePage.Changes {
+		if change.PageID != eng.Page.ID {
+			t.Errorf("one page's feed carries %s", change.PageID)
+		}
+	}
+
+	oneContainer := r.activity(doclet.PageActivityQuery{Container: "PROD"})
+	if len(oneContainer.Changes) == 0 {
+		t.Fatal("PROD's feed is empty and a page was created in it")
+	}
+	for _, change := range oneContainer.Changes {
+		if change.Container != "PROD" {
+			t.Errorf("PROD's feed carries a change in %q", change.Container)
+		}
+	}
+
+	comments := r.activity(doclet.PageActivityQuery{Kinds: []doclet.ChangeKind{doclet.ChangeComment}})
+	if len(comments.Changes) != 1 {
+		t.Fatalf("the comment filter gave %d changes, want the one comment",
+			len(comments.Changes))
+	}
+
+	// AND AN UNKNOWN KIND IS REFUSED rather than read as a filter that
+	// matches nothing, which reads to a person as a quiet company.
+	if _, err := r.reader.Activity(t.Context(), doclet.PageActivityQuery{
+		Kinds:     []doclet.ChangeKind{"vandalised"},
+		Freshness: statelog.Freshness{Level: statelog.ReadSession},
+	}); err == nil {
+		t.Error("an unknown change kind was accepted")
+	}
+}
+
+// AND BY WHO WAS WRITING, which is the fourth narrowing and the one an audit
+// is made of.
+//
+// "Every page change a token or a person made" is not expressible as a set of
+// handles: an `operator` change carries the token's own label and an `agent`
+// one carries a seat handle, so the two name spaces are disjoint and the set
+// of people is the roster, which changes. The tracker's feed carries the same
+// filter for the same reason, and one screen reads both.
+func TestThePageFeedNarrowsByWhoWasWriting(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(doclet.Actor{Handle: "ops-1", Kind: doclet.AuthorOperator},
+		doclet.NewPage{Title: "Rotation", Body: "prose"})
+	r.drain()
+
+	all := r.activity(doclet.PageActivityQuery{})
+	if len(all.Changes) < 2 {
+		t.Fatalf("the company-wide feed has %d changes, want a human's and a "+
+			"token's — this case tests nothing without both", len(all.Changes))
+	}
+
+	byOperator := r.activity(doclet.PageActivityQuery{
+		ActorKinds: []doclet.AuthorKind{doclet.AuthorOperator},
+	})
+	if len(byOperator.Changes) != 1 {
+		t.Fatalf("actor_kinds=operator gave %d changes, want the one a token "+
+			"made", len(byOperator.Changes))
+	}
+	if got := byOperator.Changes[0].ActorKind; got != string(doclet.AuthorOperator) {
+		t.Errorf("it answered a change written by a %q", got)
+	}
+
+	// A SET IS A UNION, and every change here was written by one or the
+	// other — so a filter naming both narrows nothing, which is what tells
+	// a working filter from one that is ANDing its values together.
+	both := r.activity(doclet.PageActivityQuery{
+		ActorKinds: []doclet.AuthorKind{doclet.AuthorOperator, doclet.AuthorHuman},
+	})
+	if len(both.Changes) != len(all.Changes) {
+		t.Errorf("actor_kinds=operator,human gave %d of %d changes",
+			len(both.Changes), len(all.Changes))
+	}
+
+	// AND A KIND OFF THE WIRE THAT THIS BUILD HAS NEVER HEARD OF IS
+	// REFUSED, for the reason the change kind above is: read as a filter
+	// matching nothing it answers empty, and an empty audit reads as a
+	// company nobody has touched.
+	if _, err := r.reader.Activity(t.Context(), doclet.PageActivityQuery{
+		ActorKinds: []doclet.AuthorKind{"root"},
+		Freshness:  statelog.Freshness{Level: statelog.ReadSession},
+	}); err == nil {
+		t.Error("an unknown author kind was accepted")
+	}
+}
+
+// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER.
+//
+// Each author kind is read as its own arm and the arms are merged, so the
+// claim is about the merge: across pages, every change of every kind named
+// comes back exactly once, newest first, with the kinds interleaved as the log
+// interleaved them — never one kind's page and then the other's, which is what
+// a merge that dropped its own order or limit would answer — and a kind named
+// twice is read once.
+func TestAPageAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	operator := doclet.Actor{Handle: "ops-1", Kind: doclet.AuthorOperator}
+	for i, writer := range []doclet.Actor{operator, author("jane"), operator,
+		author("jane"), operator} {
+		r.write(writer, doclet.NewPage{Title: fmt.Sprintf("Page %d", i), Body: "prose"})
+		r.drain()
+	}
+	var want []uint64
+	for _, change := range r.activity(doclet.PageActivityQuery{}).Changes {
+		want = append(want, change.LogSeq)
+	}
+	if len(want) < 5 {
+		t.Fatalf("the feed has %d changes, want at least the five creates", len(want))
+	}
+	audit := doclet.PageActivityQuery{Limit: 2, ActorKinds: []doclet.AuthorKind{
+		doclet.AuthorOperator, doclet.AuthorHuman, doclet.AuthorOperator}}
+	var got []uint64
+	for range want {
+		answer := r.activity(audit)
+		for _, change := range answer.Changes {
+			got = append(got, change.LogSeq)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor, err := strconv.ParseUint(answer.NextCursor, 10, 64)
+		if err != nil {
+			t.Fatalf("the cursor %q is not a position: %v", answer.NextCursor, err)
+		}
+		audit.Cursor = cursor
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the audit paged as %v, want %v — every change once, newest "+
+			"first, as the log made them", got, want)
+	}
+}
+
+// A REVISION IS A BODY, and the detail's summaries could only ever say that
+// one existed.
+//
+// The panel that rendered them told the reader why they could not click one:
+// "past versions are kept as metadata here; reading one back is a coordination
+// read the engine does on demand." There was no such read.
+func TestAPastRevisionAnswersItsOwnBody(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "the first draft"})
+	second := "the second draft"
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID, doclet.Save{
+		BaseVersion: page.Page.Version, Body: &second, Message: "rewrote it",
+	}); err != nil {
+		t.Fatalf("SavePage: %v", err)
+	}
+	r.drain()
+
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	// REVISION N IS THE BODY AT VERSION N, including the newest — the
+	// other reading collides with itself on the first save.
+	first, held, err := r.reader.Revision(t.Context(), page.Page.ID, 1, fresh)
+	if err != nil {
+		t.Fatalf("Revision 1: %v", err)
+	}
+	if !held || first.Body != "the first draft" {
+		t.Fatalf("version 1 is held=%v body=%q, want the first draft", held, first.Body)
+	}
+	latest, held, err := r.reader.Revision(t.Context(), page.Page.ID, 2, fresh)
+	if err != nil {
+		t.Fatalf("Revision 2: %v", err)
+	}
+	if !held || latest.Body != "the second draft" || latest.Message != "rewrote it" {
+		t.Fatalf("version 2 is %+v", latest)
+	}
+
+	// A VERSION THIS NODE DOES NOT HOLD IS NOT FOUND, never an error and
+	// never an empty body: a page keeps a bounded number of revisions, so
+	// an old one is an ordinary absence and a reader has to tell it from a
+	// page that never existed.
+	if _, held, err := r.reader.Revision(t.Context(), page.Page.ID, 99, fresh); err != nil {
+		t.Errorf("an absent version answered an error: %v", err)
+	} else if held {
+		t.Error("a version nobody saved reports itself held")
+	}
+
+	// AND A VERSION THAT IS NOT A VERSION is refused rather than read as
+	// the newest: zero is what an unset parameter arrives as.
+	if _, _, err := r.reader.Revision(t.Context(), page.Page.ID, 0, fresh); err == nil {
+		t.Error("version 0 was accepted")
+	}
+}
+
+// A CONTAINER THAT ALREADY SAYS WHAT THE CHART SAYS IS NOT WRITTEN AGAIN.
+//
+// The reconcile runs on every boot and every config apply, so the ordinary
+// outcome is no change at all — and a caller that could not tell that from a
+// create would log "applied" on every restart for a company nobody had edited,
+// while the log itself grew with restarts rather than with edits.
+func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// EACH WRITE IS APPLIED BEFORE THE NEXT ONE DECIDES: a decide runs
+	// against this node's own applied rows, so a second ensure that has not
+	// seen the first would be refused as behind rather than answering.
+	ensure := func(key, name, purpose string) bool {
+		t.Helper()
+		_, changed, err := r.store.EnsureContainer(t.Context(), activation(0), key, name, purpose)
+		if err != nil {
+			t.Fatalf("EnsureContainer %s: %v", key, err)
+		}
+		r.drain()
+		return changed
+	}
+
+	if !ensure("ENG", "Engineering", "Build it") {
+		t.Fatal("the first ensure wrote nothing — want a create")
+	}
+	if ensure("ENG", "Engineering", "Build it") {
+		t.Error("the second ensure wrote a record — want a no-op")
+	}
+	// A REAL EDIT IS STILL A WRITE, which is what makes the no-op above a
+	// saving rather than a container that can never be renamed.
+	if !ensure("ENG", "Platform", "Build it") {
+		t.Error("a rename wrote nothing")
+	}
+	// AND THE KEY IS CASE-INSENSITIVE, so the lower-case spelling is the
+	// same container rather than a second one.
+	if ensure("eng", "Platform", "Build it") {
+		t.Error("the lower-cased key wrote a record — want the same container")
+	}
+}
+
+// THE FEED SAYS WHERE ITS NODE IS ON THE LOG, and how much of that it applied.
+//
+// `log_seq` and `applied_through` were declared on the answer and never
+// filled, so every page of the feed said zero and zero: a node holding a
+// record it could not decode — whose checkpoint moves past it — read exactly
+// like one at the head of the log, and the audit, which says per source when
+// an answer is behind, had nothing to say it with.
+//
+// Mutation: leave either unset and the first half fails; take the applied
+// prefix from the checkpoint and the second does.
+func TestThePageFeedReportsItsPositionAndAppliedPrefix(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), doclet.NewPage{Container: "ENG", Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), doclet.NewPage{Container: "ENG", Title: "Rotation", Body: "prose"})
+	r.drain()
+
+	caught := r.activity(doclet.PageActivityQuery{})
+	if len(caught.Changes) == 0 {
+		t.Fatal("the feed holds no change, so this case tests nothing")
+	}
+	newest, oldest := caught.Changes[0].LogSeq, caught.Changes[len(caught.Changes)-1].LogSeq
+	if caught.LogSeq < newest {
+		t.Errorf("the feed is at %d, below its own newest change at %d", caught.LogSeq, newest)
+	}
+	if caught.AppliedThrough != caught.LogSeq {
+		t.Errorf("a node that retains nothing applied through %d of %d",
+			caught.AppliedThrough, caught.LogSeq)
+	}
+
+	// A RECORD THIS NODE RETAINS, at the oldest change's position: the
+	// checkpoint is past it and the applied prefix stops below it.
+	reader := r.retain(int64(oldest), objectPath("ENG", "x"))
+	behind, err := reader.Activity(t.Context(), doclet.PageActivityQuery{
+		Freshness: statelog.Freshness{Level: statelog.ReadStale},
+	})
+	if err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	if behind.LogSeq != caught.LogSeq {
+		t.Errorf("retaining a record moved the position from %d to %d",
+			caught.LogSeq, behind.LogSeq)
+	}
+	if behind.AppliedThrough != oldest-1 {
+		t.Errorf("a node retaining the record at %d applied through %d, want %d",
+			oldest, behind.AppliedThrough, oldest-1)
+	}
+}
+
+// A SAVE'S EXCERPT IS WHAT ITS WRITER SAID, never a line of the page.
+//
+// With no message the excerpt used to fall back to the body's first line, so
+// every such save showed the page's opening heading under the saver's name —
+// on the activity feed and in each watcher's wake — reading as a change note
+// nobody wrote, and one that is the same before and after an edit anywhere
+// below it.
+func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "## Paging rules\n\nv1"})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		doclet.Save{BaseVersion: 1, Body: ptr("## Paging rules\n\nv2")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("bob"), page.Page.ID,
+		doclet.Save{BaseVersion: 2, Body: ptr("## Paging rules\n\nv3"), Message: "raise the grace"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	var saves []string
+	for _, change := range r.activity(doclet.PageActivityQuery{Page: page.Page.ID}).Changes {
+		if change.Kind == doclet.ChangeSaved {
+			saves = append(saves, change.Excerpt)
+		}
+	}
+	// Newest first.
+	if want := []string{"raise the grace", ""}; !slices.Equal(saves, want) {
+		t.Fatalf("save excerpts = %q, want %q", saves, want)
+	}
+}
+
+// PAGING A LISTING RETURNS EVERY PAGE ONCE, IN ITS ORDER.
+//
+// A later window is read as the arms of the order strictly after the row its
+// cursor names — the title held equal with the id past it, then every title
+// past it, then every container past it — each read in turn until the window
+// is full, so a "Load more" sees every page exactly once only while those arms
+// partition what follows the cursor and are read nearest first. Each listing
+// here is read whole and then one, two and three pages at a time, so a window
+// stops at every row of it: at the boundary between two containers in the
+// workspace, beside a title another container also holds, past a trashed page
+// a listing of the live ones leaves out, inside a tree level, and inside a
+// listing a label or a watcher narrows, which is read from the filter's own
+// rows and sorted rather than walked in the order's index.
+//
+// Mutation: drop the id bound from the resume's first arm, and the row a
+// window stopped on is read again at the top of the next; read the arms
+// shallowest first, and the windows come back out of order.
+func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	retired := r.write(author("jane"), doclet.NewPage{Title: "Retired", Body: "prose"})
+	if _, err := r.store.Trash(t.Context(), author("jane"), retired.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+	// LABELLED ACROSS EVERY LEVEL AND CONTAINER, so the listings a label
+	// narrows have rows to page through on either side of a boundary.
+	runbook := []string{"runbook"}
+	for _, title := range []string{"Alpha", "Oncall", "Zeta", "Runbook"} {
+		page := doclet.NewPage{Title: title, Body: "prose"}
+		if title != "Oncall" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
+	}
+	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
+	for _, title := range []string{"Travel", "Expenses", "Leave"} {
+		page := doclet.NewPage{Title: title, Body: "prose", ParentID: handbook.Page.ID}
+		if title == "Travel" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
+	}
+	for _, title := range []string{"Deploys", "Alpha"} {
+		r.write(author("jane"), doclet.NewPage{Container: "OPS", Title: title,
+			Body: "prose", Labels: runbook})
+	}
+	r.write(author("jane"), doclet.NewPage{Container: "PROD", Title: "Roadmap", Body: "prose"})
+
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	for name, f := range map[string]doclet.Filter{
+		"the workspace":       {},
+		"one container":       {Container: "ENG"},
+		"its live pages":      {Container: "ENG", Status: live},
+		"its top level":       {Container: "ENG", Roots: true},
+		"one page's children": {ParentID: handbook.Page.ID},
+		// READ FROM THE FILTER'S OWN ROWS AND SORTED, so the windows are
+		// sorts of those rows rather than walks of the order's index, and
+		// the arms must page them all the same.
+		"a label's pages":                 {Label: "runbook"},
+		"a label's live pages in a space": {Container: "ENG", Label: "runbook", Status: live},
+		"one person's watched pages":      {Watcher: "jane", Status: live},
+	} {
+		t.Run(name, func(t *testing.T) {
+			whole := f
+			whole.Limit = doclet.MaxLimit
+			all := r.list(whole)
+			if all.After != "" || len(all.Pages) < 3 {
+				t.Fatalf("the whole listing is %d pages with a next window %q — "+
+					"the fixture must fit one window and give three to page through",
+					len(all.Pages), all.After)
+			}
+			if !slices.IsSortedFunc(all.Pages, inListingOrder) {
+				t.Fatalf("the whole listing is %v, which is not in the listing's "+
+					"order of container, title and id", placement(all.Pages))
+			}
+			for size := 1; size <= 3; size++ {
+				window := f
+				window.Limit = size
+				var paged []doclet.Summary
+				for range len(all.Pages) + 1 {
+					got := r.list(window)
+					paged = append(paged, got.Pages...)
+					if got.After == "" {
+						break
+					}
+					window.After = got.After
+				}
+				if !slices.Equal(placement(paged), placement(all.Pages)) {
+					t.Errorf("paged %d at a time the listing reads\n%v\nwant\n%v",
+						size, placement(paged), placement(all.Pages))
+				}
+			}
+		})
+	}
+}
+
+// inListingOrder orders two rows as every listing is ordered: container, then
+// title, then id, each by its bytes.
+func inListingOrder(a, b doclet.Summary) int {
+	return cmp.Or(cmp.Compare(a.Container, b.Container), cmp.Compare(a.Title, b.Title),
+		cmp.Compare(a.ID, b.ID))
+}
+
+// placement is each row's place in the order, readably.
+func placement(rows []doclet.Summary) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = row.Container + "/" + row.Title + "/" + row.ID
+	}
+	return out
+}
+
+// A LISTING'S CHILD COUNT FOLLOWS ITS NARROWING, PARENT BY PARENT.
+//
+// Each row of a listing counts the pages directly under it that the SAME
+// listing would show: its status and skill narrowing applied to the children,
+// and nothing else. The count is read for a whole window of rows at once, so
+// it must also keep each parent's children apart. Here two parents and a leaf
+// share one window of the workspace, one parent holding a live child, a
+// trashed one and a tool skill, and the counts are read under no narrowing,
+// under a listing of the live pages, and under each skill narrowing.
+//
+// Mutation: drop the narrowing from the count, and the trashed child is
+// counted under the live listing and the skill under the ordinary one; count
+// by the child's own id rather than its parent's, and every count is zero.
+func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	runbooks := r.write(author("jane"), doclet.NewPage{Title: "Runbooks", Body: "index"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Provisioner", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	gone := r.write(author("jane"), doclet.NewPage{
+		Title: "Retired", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Deploying", Body: skillBody, ParentID: runbooks.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), gone.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Travel", Body: "prose", ParentID: handbook.Page.ID,
+	})
+	leaf := r.write(author("jane"), doclet.NewPage{Title: "Glossary", Body: "prose"})
+	r.drain()
+
+	skills, ordinary := true, false
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	for name, c := range map[string]struct {
+		f    doclet.Filter
+		want map[string]int
+	}{
+		"no narrowing": {doclet.Filter{Roots: true},
+			map[string]int{runbooks.Page.ID: 3, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the live pages": {doclet.Filter{Roots: true, Status: live},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the ordinary pages": {doclet.Filter{Roots: true, Skills: &ordinary},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the tool skills": {doclet.Filter{ParentID: runbooks.Page.ID, Skills: &skills},
+			map[string]int{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := map[string]int{}
+			for _, p := range r.list(c.f).Pages {
+				if _, ok := c.want[p.ID]; ok || p.Children != 0 {
+					got[p.ID] = p.Children
+				}
+			}
+			for id, n := range c.want {
+				if got[id] != n {
+					t.Errorf("%s counts %d children, want %d (every count %v)",
+						id, got[id], n, got)
+				}
+			}
+			for id, n := range got {
+				if _, ok := c.want[id]; !ok {
+					t.Errorf("%s, a page with no children, counts %d", id, n)
+				}
+			}
+		})
+	}
+}
+
+// THE NEWEST SKILLS ARE LISTED BY WHEN THEY CHANGED, ACROSS EVERY WINDOW.
+//
+// Agent skills and Home's Agent skills widget list the tool skills newest
+// first. The only listing there was ran in the knowledge base's own order —
+// container, title, id — so "newest" was a sort of whichever window that
+// order held: past one window of skills the newest could be one no window
+// drawn had loaded. A newest-first listing is now read in that order itself
+// ([doclet.OrderNewest]), from the skill rows' own index, and paged by a cursor
+// in it. Here the skill whose title sorts first is the one saved last, a
+// rename moves another to the front, an ordinary page changed after every
+// skill is no row of it, and each window size pages the whole listing back
+// in the same order. And the instant each row reports is its HEAD's, which
+// the skill row copies on every apply that moves it.
+//
+// Mutation: order the newest listing by title again, and Alpha is listed
+// last; write the skill row's instant from anything but the head's, and a
+// row reports another instant than the page; drop the id from the cursor's
+// arm, and a window repeats the row the last one stopped on.
+func TestTheNewestSkillsAreListedByWhenTheyChanged(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	written := map[string]doclet.Written{}
+	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta"} {
+		written[title] = r.write(author("jane"), doclet.NewPage{Title: title, Body: skillBody})
+	}
+	written["Oncall"] = r.write(author("jane"), doclet.NewPage{
+		Container: "OPS", Title: "Oncall", Body: skillBody,
+	})
+	if _, err := r.store.Rename(t.Context(), author("jane"), written["Charlie"].Page.ID,
+		"Charlie renamed", false); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("jane"), written["Alpha"].Page.ID,
+		doclet.Save{BaseVersion: 1, Body: ptr(skillBody + "\nSay so in the channel.")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	r.write(author("jane"), doclet.NewPage{Title: "Echo", Body: "prose, changed after every skill"})
+
+	skills := true
+	newest := doclet.Filter{Skills: &skills, Status: []doclet.Status{doclet.StatusPublished},
+		Order: doclet.OrderNewest, Limit: doclet.MaxLimit}
+	all := r.list(newest)
+	want := []string{"Alpha", "Charlie renamed", "Oncall", "Delta", "Bravo"}
+	if got := titles(all); !slices.Equal(got, want) || all.Total != len(want) || all.After != "" {
+		t.Fatalf("the newest skills are %v (total %d, next %q), want %v in one "+
+			"window", got, all.Total, all.After, want)
+	}
+	byTitle := doclet.Filter{Skills: &skills, Status: newest.Status, Limit: doclet.MaxLimit}
+	heads := map[string]doclet.Summary{}
+	for _, row := range r.list(byTitle).Pages {
+		heads[row.ID] = row
+	}
+	for _, row := range all.Pages {
+		if head := heads[row.ID]; !row.Updated.Equal(head.Updated) || row.Updated.IsZero() {
+			t.Errorf("%s is listed newest first as changed at %v, and its head says %v",
+				row.Title, row.Updated, head.Updated)
+		}
+	}
+
+	for size := 1; size <= 3; size++ {
+		window := newest
+		window.Limit = size
+		var paged []string
+		for range len(want) + 1 {
+			got := r.list(window)
+			paged = append(paged, titles(got)...)
+			if got.Total != len(want) {
+				t.Errorf("a window of %d says total %d, want %d", size, got.Total, len(want))
+			}
+			if got.After == "" {
+				break
+			}
+			window.After = got.After
+		}
+		if !slices.Equal(paged, want) {
+			t.Errorf("paged %d at a time the newest skills are %v, want %v", size, paged, want)
+		}
+	}
+}
+
+// A NEWEST-FIRST LISTING IS SERVED FOR THE SKILLS ALONE, AND ITS CURSOR IN NO
+// OTHER ORDER.
+//
+// The order is held by the skill rows' own index, so over any other listing it
+// would sort everything that listing matches to return a window: refused,
+// naming what it is served for, rather than served slowly. And a cursor is a
+// place in ONE order, so a title listing's cursor handed to a newest-first one
+// — or the reverse — is refused rather than read as a place it does not name.
+//
+// Mutation: serve the newest order without the skill narrowing, and the
+// refusal is a listing; drop the order from the cursor, and either listing
+// resumes from a place in the other's.
+func TestANewestListingIsServedForTheSkillsAlone(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	for _, title := range []string{"Alpha", "Bravo", "Charlie"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: skillBody})
+	}
+	skills, ordinary := true, false
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	for name, f := range map[string]doclet.Filter{
+		"every page":         {Order: doclet.OrderNewest},
+		"the ordinary pages": {Order: doclet.OrderNewest, Skills: &ordinary},
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, doclet.ErrUnservedOrder) {
+			t.Errorf("%s newest first answers %v, want %v", name, err, doclet.ErrUnservedOrder)
+		}
+	}
+	if _, err := r.reader.List(t.Context(), doclet.Filter{Order: "oldest"}, fresh); err == nil {
+		t.Error("a listing in an order this build does not read was served")
+	}
+
+	byTitle := doclet.Filter{Skills: &skills, Limit: 1}
+	newest := doclet.Filter{Skills: &skills, Limit: 1, Order: doclet.OrderNewest}
+	titleCursor, newestCursor := r.list(byTitle).After, r.list(newest).After
+	if titleCursor == "" || newestCursor == "" {
+		t.Fatal("a window of one of three skills minted no cursor")
+	}
+	byTitle.After, newest.After = newestCursor, titleCursor
+	for name, f := range map[string]doclet.Filter{
+		"a title listing from a newest cursor": byTitle,
+		"a newest listing from a title cursor": newest,
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, doclet.ErrBadCursor) {
+			t.Errorf("%s answers %v, want %v", name, err, doclet.ErrBadCursor)
+		}
+	}
+	for _, order := range doclet.ListOrders() {
+		if !order.Valid() {
+			t.Errorf("%q is listed as an order this build reads and is not valid", order)
+		}
+	}
+}

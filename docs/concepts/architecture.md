@@ -67,7 +67,7 @@ flowchart LR
         LLM["<b>Models, through coding CLIs</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each CLI calls its own vendor</i>"]
         EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
-        BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
+        BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>an E2B VM, a container, or this host"]
     end
 
     OTEL["<b>OTLP collector</b><br/><i>optional — Jaeger, Tempo, …</i>"]
@@ -76,15 +76,17 @@ flowchart LR
     NODE -->|"per phase, per role"| LLM
     NODE --> EMB
     NODE -->|"tool calls, made as each agent"| MCPS
-    NODE -->|"detached coding runs"| BOX
+    NODE -->|"every seat's executor run"| BOX
     NODE -.->|traces| OTEL
     NODE -.->|"stream + coordination"| NATS
 ```
 
-**Nothing outside the boundary is a hard dependency except a model.** No
-embeddings means no similarity search — the diary's candidate pool falls back to
-recency and the "similar prior work" block renders nothing, both first-class
-states rather than failures. No sandbox means no `run_sandbox` tool. No chat,
+**Nothing outside the boundary is a hard dependency except a model, and a cell
+for its executor runs** — which the `local:` backend provides on the engine
+host itself. No embeddings means no similarity search — the diary's candidate
+pool falls back to recency and the "similar prior work" block renders nothing,
+both first-class states rather than failures. No sandbox is valid only for a
+company with no agent seat, or no model yet. No chat,
 tracker or code host means an agent has fewer surfaces to be reached on and to
 act through, and every other one still routes end to end.
 
@@ -94,7 +96,7 @@ act through, and every other one still routes end to end.
 | MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
-| Code sandbox | No | Code authoring as a detached, suspended executor phase | No `run_sandbox`; agents still read and review code over MCP |
+| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its coding CLI's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
 | OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
@@ -115,12 +117,12 @@ replicated estate and answers its seats' tools through a node that does; see
 flowchart TB
     ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
     GIT["<b>git</b>: serve the company's repositories<br/><i>a disposable cache on this node's disk ·<br/>git run per request · needs ingress</i>"]
-    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>observability edge</i>"]
+    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>observability edge · chat hub</i>"]
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge ·<br/>post-turn reflection</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i>")]
-    DB[("<b>Store</b><br/><i>one local file this<br/>process owns exclusively</i>")]
+    DB[("<b>Store</b><br/><i>two local files this<br/>process owns exclusively</i>")]
 
     ING --> ALWAYS --> STREAM --> SEATS
     SEATS -->|events| STREAM
@@ -153,9 +155,9 @@ of the implementation; two of its steps exist because of what happens if they
 are the other way round.
 
 1. The **backends** — the stream, coordination and the store file — opened together (below).
-2. The **core runtime**, on a node that holds `data`: the state log — every registered domain's stream provisioned and its applier started — with the node gate over every identity-claiming log and the [identity estate](identity-and-access.md). On a data node this is unconditional, **with a company or without one**: a node nobody has configured yet is the one a Tier A token's session signs in on to create its company, and the one its first person is invited to and signs in on once that company declares the human seat they will hold — and `ingress` requires `data`, so the node anybody signs in on always has it. A node without `data` runs no core: it applies no log, and reaches the estate, the identity directory included, through a node that holds it. It is every domain rather than the one a companyless node can use, because a join replaces the whole replicated file, a snapshot names every registered domain, and the trim counts nodes per log. What waits for a company is only the **native halves** — the tracker's and the knowledge base's writers and readers, their index, feeds and embedding duty — started here when the node boots on a company that keeps them, or by the first apply that hands it one; on a node without `data` they are the router's remote halves.
+2. The **core runtime**, on a node that holds `data`: the state log (every registered domain's stream provisioned and its applier started), with the node gate over every identity-claiming log and the [identity estate](identity-and-access.md). On a data node this is unconditional, **with a company or without one**: a node nobody has configured yet is the one a Tier A token's session signs in on to create its company, and the one its first person is invited to and signs in on once that company declares the human seat they will hold, and `ingress` requires `data`, so the node anybody signs in on always has it. A node without `data` runs no core: it applies no log, and reaches the estate, the identity directory included, through a node that holds it. It is every domain rather than the one a companyless node can use, because a join replaces the whole replicated file, a snapshot names every registered domain, and the trim counts nodes per log. What waits for a company is only **Worklet's, Doclet's and Chatlet's halves** (their writers and readers, their lexical index and chat's own, their feeds, the embedding duty and chat's message horizon), started here when the node boots on a company that keeps them, or by the first apply that hands it one; on a node without `data` they are the router's remote halves.
 3. The **tool catalogue**, equipped onto the company before anything is published — a turn can start the instant the epoch is current, and one that found an empty registry would run a seat with no tools at all.
-4. The **epoch**, built from the active revision — its organization included — and published. Every reader from here on is a single atomic load.
+4. The **epoch**, built from the revision this node boots on — the last one its engine applied, or an offline change it has not published yet ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — its organization included, and published. Every reader from here on is a single atomic load. A node that boots on no revision starts unconfigured: the engine never boots on a Tier B file, so a `-company` bootstrap or an `-import-company` file comes in by its import once the node is up. The reconciler then converges the node on the revision the fleet's pointer names.
 5. The **node**, its seats, its duties and its inbound edge.
 
 **Two slots and a file.** The stream and coordination are the two *chosen*
@@ -184,37 +186,45 @@ back what it wrote.
 
 | Route | What it is |
 |---|---|
-| `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/github/HANDLE` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/confluence/EVENT` · `/webhooks/datadog` · `/webhooks/forge` | The webhook routes. A delivery is verified, then claimed once per fleet, then handed to the notification service. Slack's OAuth landing and the GitHub App return live beside them. |
-| `/auth` · `/iam` · `/config` · `/secrets` · `/setup` · `/work` · `/pages` · `/agents` · `/org` · `/tools` · `/query` · `/backup` | The REST plane: signing in, the identity directory, the configuration — the org chart included — and the company's credentials, the human write surface over the tracker and the knowledge base, and the reads no socket question answers. It writes through the state logs and the coordination KV, and reads the store directly. |
+| `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/github/HANDLE` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/confluence/EVENT` · `/webhooks/datadog` · `/webhooks/forge` · `/webhooks/slack-oauth` · `/webhooks/github-app` | The webhook routes. A delivery is verified, then claimed once per fleet, then handed to the notification service. The last two are Slack's OAuth landing and the GitHub App return. |
+| `/auth` · `/iam` · `/config` · `/secrets` · `/llm` · `/setup` · `/worklet` · `/doclet/pages` · `/chatlet` · `/artifacts` · `/artifact-folders` · `/brand` · `/assistant` · `/agents` · `/org` · `/tools` · `/stream/snapshot` · `/query` · `/events` · `/turns` · `/feed` · `/budgets` · `/containers` · `/integrations` · `/link-hosts` · `/mcp-servers` · `/sandbox-runs` · `/schedules` · `/tokens` · `/viewer` · `/fleet` · `/objects` · `/backup` · `/backups` · `/inbox` · `/code` | The REST plane: signing in, the identity directory, the configuration (the org chart included), the company's credentials and its models (Settings › Models: a credential tested and sealed, a check, a retry, a device sign-in), the human write surface over Worklet, Doclet and Chatlet, a person's inbox, the [code host](code-host.md)'s reads (its repositories, changes, reviews, pushes and a repository's verification), the artifacts (their folders, brand and datastores), Ask Crewlet, the fleet's backups and broker membership, and the reads no socket question answers. It writes through the state logs and the coordination KV, and reads the store directly. |
+| `/` · `/dashboard` · `/static/` · `/favicon.ico` | The dashboard's page and the assets it loads, served without a credential: the page that asks for one cannot itself require one, and it ships no data, since everything it shows comes from an authenticated fetch over the REST plane or the socket. `/` redirects to `/dashboard`. |
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
-| `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker and knowledge tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login. Always guarded. |
+| `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge and chat tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login, and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
+| `/git/{repo}` | A person's git over HTTPS on the [code host](code-host.md): a fetch or a push, authenticated by the token bound to them ([Persons and their tokens](code-host.md#persons-and-their-tokens)). Answered from a git node's cache, which the node a request reaches relays to. |
+| `/box/git/{repo}` · `/box/code/{repo}` | A coding run's git and its code reads, from inside its box: the run's own token, minted per launch and held to the repositories its run was granted. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is nine company-wide singletons, each held on its own
-`worker:DUTY` lease.**
+**`workers` runs the company-wide singletons, each held on its own
+`worker:DUTY` lease.** A `workers` node holds data too, because the duties read
+and write this node's own copy of the replicated estate.
 
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
-| `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
-| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
+| `worker:sandbox-waiter` | Polls the detached runs whose boxes every node reaches (`e2b`) and resumes the turns waiting on them, over the stream; the same tick is the box keepalive. Each node polls the `direct` and `container` boxes on its own host itself, with no duty, and this one ends the runs of a node that left for good. |
+| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox and coding runs, and forgetting the chat read state of a human seat the company no longer has. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 | `worker:retention` | The state logs' trim: each domain's floor terms evaluated, what all of them permit purged, and the conclusion published. |
 | `worker:embeddings` | The knowledge base's embeddings, computed once for the company and published as records every data node applies. |
 | `worker:iam_sweep` | The identity estate's retention: a sweep record for every bucket that is due, which every data node's applier carries out. |
+| `worker:trash-reaper` | The trash's term and Ask Crewlet's retention: hourly, purges what has been in the knowledge base's or the artifacts' trash past thirty days, and Ask Crewlet's conversations unused for `assistant.retention_days` (the setting of the revision the fleet's activation pointer names, which a holder that does not run that revision cannot know, and skips them until it can) or owned by a person the identity estate removed, each through its domain's own purge record, as the engine. |
 | `worker:object-collector` | The [object store](object-store.md)'s collection and audit: hourly, the objects no row names and the uploads that never finished; daily, that every object a row names is there and whole. |
+| `worker:code-retention` | The [code host](code-host.md)'s retention, every 15 minutes where the company hosts code: the rows of the packs a compaction retired, the purge of the repositories deleted past `code.deleted_retention_days`, the release of a renamed repository's old name once its redirects end, and every seat's idle scratch repository, each step one record on the code log that every data node applies. |
+| `worker:chat-prune` | Chatlet's message horizon: hourly, publishes to the chat log the cutoff each room's horizon has reached, which every data node applies as the same delete. A record rather than a sweep, because the rows are replicated and a node's own clock would delete a different set on each. The horizon is read from the revision the fleet's activation pointer names, and a node that does not run that very revision neither prunes nor claims the duty. |
 
-**Four more services run on every node, whatever the roles say, and a fifth on every data node.**
+**Five more services run on every node, whatever the roles say, and a sixth on every data node.**
 
 | Always on | What it does |
 |---|---|
 | Notification service | One fleet-wide group, `notify-inbound`: parse → resolve → valve → wake, publishing the wake to the seat's inbox on the stream. |
-| Config reconciler | Polls the activation pointer, applies an epoch, reports status — all in the KV. |
+| Config reconciler | Polls the activation pointer, applies an epoch, and reports in the KV what it attempted and the revision it serves; once an apply succeeds, that revision is what this node boots on. |
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
 | Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
+| Chat hub | Chatlet's live half, attached to the engine on every node whatever its roles: hands each committed message to this node's sockets whose reader may see that room, puts a socket in a room's presence on the node's presence hub once the room's visibility admits its reader — who is looking at a room, who is typing, and which seat is working in it, told between nodes in sealed frames (ADR-0038) — and, on a node serving sockets, pushes a person's read state to their own tabs from a watch of the coordination record every node keeps. It raises its seats' working indicators from the moment the node is up, whether or not this node serves the API, because a seat raises its working indicator wherever its turn runs. |
 | Usage publisher (data nodes) | This node's own days — what its seats, its schedules and the people its auxiliary model spent for spent, ran and read — derived from the rows its own event log **keeps** and republished to `CREWLET_USAGE_LOG` whenever they move: today and yesterday on every tick, any older day a custody batch settled as kept has changed (back to the event log's 30-day read floor), every day it still owed when it stopped, from its watermark, at boot, and today and yesterday once more as it stops in an orderly way. Not a duty: a node's event log holds only what its own seats did, and the batches [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) gave it from nodes holding no data, so it is the only thing that can derive its day — a node without `data` keeps no event log, and its spend is counted in the day of the data node that keeps its events. |
 
 `seats` is the exception — the one group whose boxes hand work to each other.
@@ -226,15 +236,18 @@ flowchart TB
         CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
         MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.SEAT-ID.inbox<br/>+ .control for sandbox resumes<br/>+ .reflect for post-turn reflection"]
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
-        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
+        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>node.max_concurrent gates every<br/>segment, a run's collection off<br/>.control included; the run holds none</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
         PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
     end
     STREAM[("<b>Event stream</b>")]
     KV[("<b>Coordination KV</b>")]
+    RUN["<b>Executor run</b><br/>the seat's coding CLI in a box,<br/>detached from the turn"]
 
     STREAM --> MBOX
     MBOX --> BATCH --> TURN
+    TURN -->|"launches, then parks"| RUN
+    RUN -->|"the seat's tools, over the bridge"| REG
     TURN --> REG
     TURN --> PROV
     TURN -->|events| STREAM
@@ -255,10 +268,12 @@ gets its own cloned registry and its own bridge.
 **One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
 The one thing it holds of its own is a spent plan: a CLI that reported its
-vendor's rate limit in the vendor's own words is `rate_limit`, and the entry
-then sits out on this node until the reset the CLI named (an hour at most), or
-for a minute where it named none, so every round of every seat on it does not
-start a process to hear the same sentence again. The fallback chain decides
+vendor's rate limit, in its own structured status or the vendor's words, is
+`rate_limit`, and the entry then sits out on this node until the reset the
+vendor named (never more than an hour away), or, where it named none, for a
+window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
+refuses, so every round of every seat on it does not start a process to hear
+the same sentence again. The fallback chain decides
 whether the **model** is worth abandoning and moves to the next one in the
 role's chain, publishing a `provider_fallback` event for each hand-off —
 addressed to the turn, the phase and the iteration it happened in, so a chain
@@ -293,9 +308,11 @@ projection shows and what the store keeps are two questions with two answers.
 
 **The API is served inside the engine's process, and only there.** `crewlet run`
 builds it over the engine's own store, broker and coordination plane; a node
-without the `ingress` role serves only its two
+without the `ingress` role serves the network only its two
 [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
-`api.port`, and a node with `api.port: 0` serves nothing at all. `node.roles` changes what the engine
+`api.port` — and its own boxes, beside them, the tool bridge and the telemetry
+receiver to its own host's loopback alone — and a node with `api.port: 0`
+serves nothing at all. `node.roles` changes what the engine
 *does*, never whether there is one, so every API answers its node's in-flight
 count, seats, posture and applied epoch rather than reporting them as
 unknowable.
@@ -311,8 +328,9 @@ bound — and `200` from then on, while what the company configures comes up;
 `Retry-After`
 ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 The line between the two halves is the engine's own: `engine.Options.Recovered`
-is called once, at the boundary, and a startup probe sized for the store is
-never held by a tool server the company declared.
+is called once, at the boundary, and a startup probe sized for the store (and,
+on a data node of a fleet, for its join) is never held by a tool server the
+company declared.
 
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
@@ -388,13 +406,16 @@ sequenceDiagram
     autonumber 11
     participant S as Event stream
     participant O as The seat's owner<br/>(seats)
+    participant B as The executor's box
     participant M as LLM + MCP
 
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
     O->>O: drain the backlog, partition by<br/>partition key, one digest per partition
     O->>O: take a slot at node.max_concurrent
-    O->>M: executor → reviewer
-    M-->>O: the reply is posted by the agent's<br/>own Slack tool, as itself
+    O->>B: launch the executor's run, and park
+    B->>M: the run's own model, and the seat's<br/>tools over the bridge
+    M-->>B: the reply is posted by the agent's<br/>own Slack tool, as itself
+    B-->>O: the run is collected, and the reviewer judges it
     O->>S: turn events → crewlet.events.*
     O->>S: ack the delivery
 ```
@@ -459,13 +480,14 @@ onward is identical again.
 
 Every trigger that reaches a seat runs the same two-stage turn — a batch of
 triggers for one conversation is one turn. What varies is how many rounds it
-takes, and whether the turn survives its own process.
+takes and how long its executor's run works; every turn parks on that run, so
+every turn can outlive the process that started it.
 
 ```mermaid
 flowchart TB
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
-    EXEC["<b>Executor</b><br/>one agentic loop: decide, discover,<br/>act, then account for it"]
-    SUSP["<b>Suspended</b><br/>a detached coding run: the loop is serialized<br/>beside the pending-run record and left"]
+    EXEC["<b>Executor</b><br/>the seat's coding CLI's own run, in a box:<br/>decide, discover, act, then account for it"]
+    SUSP["<b>Parked</b><br/>the executor's run, detached in its box:<br/>the turn's state, no conversation,<br/>on the run's record"]
     CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
     REV["<b>Reviewer</b><br/>is the work any good?"]
@@ -475,9 +497,8 @@ flowchart TB
     AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>conversation-ledger entry · token spend"]
 
     WHO --> EXEC
-    EXEC -->|run_sandbox| SUSP
-    SUSP -->|"minutes or days later,<br/>possibly on another node"| EXEC
-    EXEC --> CHECK
+    EXEC -->|"launches its run"| SUSP
+    SUSP -->|"collected, minutes or days later,<br/>possibly on another node"| CHECK
     CHECK -->|"no_action, and nothing acted"| SKIP
     CHECK -->|"a claim the record refutes"| EXEC
     CHECK --> REV
@@ -495,17 +516,18 @@ flowchart TB
     classDef ok stroke:#46a758
     classDef danger stroke:#ef4444
     classDef happens stroke-dasharray:4 3
-    linkStyle 6,8 stroke:#46a758,color:#46a758
+    linkStyle 6,7 stroke:#46a758,color:#46a758
     linkStyle 10 stroke:#ef4444,color:#ef4444
 ```
 
 **Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
 is the model↔tool round trip *inside each phase*, bounded by its own cap
-(`max_tool_rounds` for the executor; a constant for the reviewer, which holds
-one submission tool). A turn is therefore up to `max_iterations × (executor
-rounds + review rounds)` priced model calls, which is the number to reason
-about when sizing a budget — not "one call per turn".
+(the executor's coding-CLI run by `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`, 96 unless set; a constant for the
+reviewer, which holds one submission tool). A turn is therefore up to
+`max_iterations × (executor rounds + review rounds)` priced model calls, which
+is the number to reason about when sizing a budget — not "one call per turn".
 
 **One loop where there were two, and that is the point.** The engine used to
 plan in one conversation and act in another; the actor lost everything the
@@ -521,19 +543,21 @@ prompt is smaller: is this round's work right, given the record. A frontier mode
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
-push 15–25 KB of catalogue into every prompt, so the executor sees *server
-names* and walks `list_mcp_server_tools` → `activate_tool` to promote what it
-actually needs. From the model's side a builtin and an MCP tool are the same
-thing: a function it can ask the engine to call.
+send 15–25 KB of tool definitions with every model request, so the executor sees
+*server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
+what it actually needs. From the model's side a builtin and an MCP tool are the
+same thing: two tools of the one `crewlet` server its CLI lists, which the
+engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
-**A suspended turn is the reason there is no parked goroutine anywhere.** A
-detached coding run stops the executor's loop mid-round with its `run_sandbox`
-call *unanswered*, and the conversation is serialized beside the pending-run
-record, under the job's launch, rather than held in memory. The run outlives the process: it may be
-resumed after a restart, on a different node, days later once a person answers
-the agent's question. The record carries an explicit version, a permanent
-reader for the previous one, and a build that understands neither refuses
-loudly and leaves the row untouched.
+**A parked turn is the reason there is no parked goroutine anywhere.** Every
+executor launch parks its turn: the run is detached in its box, and the turn's
+state — its bookkeeping and no conversation, since there is no engine loop to
+re-enter — is written to the run's record rather than held in memory. The run
+outlives the process: its turn may be resumed after a restart, on a different
+node, days later once a person answers the agent's question. The record carries
+an explicit version, and a build that does not know it refuses loudly and
+leaves the row untouched; a reader for an older version is kept only once a
+tag has shipped it.
 
 **Whether anything was DELIVERED is the engine's judgement, not a model's.**
 Who is waiting comes from the trigger's own type before the turn starts; what
@@ -590,19 +614,21 @@ What each of the four holds, in full:
 
 | Tables | What they hold |
 |---|---|
-| **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index — this node's own events, and on a data node the batches of a stateless node's events it **keeps** ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)) |
-| `custody_unsettled` · `custody_unsettled_rows` | The custody batches this node has written and not yet learned whether it keeps, and the identity of every row of each: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. The rows are keyed on the event log's own (time, id), so every count that leaves a batch in flight out seeks them from the row it counts — its cost the same beside a few identities as beside the tens of thousands a coordination outage leaves. Normally empty but for the batches of the last few moments; a coordination outage can leave tens of thousands |
+| **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index — this node's own events, and on a data node the batches of a stateless node's events it **keeps** ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)); every row names the node that published it, so a kept row still says where it happened |
+| `custody_unsettled` · `custody_unsettled_rows` | The custody batches this node has written and not yet learned whether it keeps, and the identity of every row of each: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. The rows are keyed on the event log's own (time, id), so every count that leaves a batch in flight out seeks them from the row it counts — its cost the same beside a few identities as beside the tens of thousands a coordination outage leaves. Normally empty but for the batches of the last few moments; a coordination outage can leave tens of thousands, and a batch whose keeper record [nothing can read](../guides/deployment.md#custody-the-rows-of-a-node-without-data) stays until it ages past the event log's retention |
 | `custody_settled` | The custody batches this node has **settled**, kept or not, so a batch the fleet redelivers — an acknowledgement lost — is written nothing: its kept rows stay counted, and a copy another node keeps is not written back. Swept with the event log |
 | `usage_rederive` | The days a custody batch settled as **kept** has changed since this node's usage publisher last derived them. Every usage count leaves a batch in flight out, so a kept settle makes its rows count on whatever day they fall — possibly a week back — and the publisher, which fingerprints only today and yesterday, derives every day from the oldest of these through the day before yesterday again (none older than the event log's thirty-day read floor). Written in the settle's own transaction, one row per UTC day the settles' oldest rows fall on, and cleared up to the newest the publisher read once those days are published |
 | `usage_day_windows` | The instants each of this node's company days was first cut on, by label. A day the usage publisher derives again — an older one a kept settle or the watermark names, or today and yesterday at the tick the company's `timezone` moves — keeps the cut its first derivation had, so a moved clock never shifts rows between days already published; a day cut for the first time abuts the cuts either side of it, and is clamped by any farther cut it would reach into after a move of more than a day, so the day the clock moved on is longer or shorter and no instant falls in two days or none. Swept with the event log |
+| `usage_republished` | The usage log's generation on every data node as this node's usage publisher last republished every day its event log holds under. A data node whose usage generation rises past it re-anchored its copy and skipped what the others published after a restore, so this node publishes every day again and then records the generations it answered; kept across a restart so a reanchor seen on the first beat after one is still answered; one row |
 | `usage_watermark` | The oldest of this node's days its usage publisher has not confirmed published whole — the day before the newest it fingerprinted, or an older one a tick could not settle. A start derives every day from it again, which is how the tail of the day a node stopped in reaches the fleet when it comes back days later; one row |
 | **`agent_diary`** · **`episodes`** | A seat's notes and turns, each with the vector of the model it came from — recall is a per-seat scan the database ranks, with no vector index |
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | `memory_change_sequence` | One counter, which every new diary note, episode and skill version — and every vector set on a note or an episode — is stamped from, so the [memory changelog](seat-ownership.md#a-seats-memory-follows-it) carries what changed since its last cycle. It only ever increases: a row's rowid is handed out again once the newest row is deleted, and a watermark over it skipped the next row written |
 | **`conversation_sessions`** | What this seat already said in that thread |
-| `company_config` · `scheduled_runs` | Revisions and cron bookkeeping |
+| `company_config` · `scheduled_runs` | Every config revision this node has met, with three facts only it can know — the revision it boots on, the fleet's revision as it last saw it, and an offline change it has not published ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — and cron bookkeeping. Which revision is the company is the activation pointer, below, never a row here |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
-| `page_links` | Which pages and tasks link to which page — the **backlinks**, derived by the same indexer from the same bodies it tokenises (`pages.Links`), so a page answers "linked from" with no scan of anybody's text. Cascades from `kb_docs`, and rebuilt by the same local walk |
+| `page_links` | Which pages and tasks link to which page: the **backlinks**, derived by the same indexer from the same bodies it tokenises (`doclet.Links`), so a page answers "linked from" with no scan of anybody's text. Cascades from `kb_docs`, and rebuilt by the same local walk |
+| `chat_docs` · `chat_postings` · `chat_index_rooms` · `chat_index_terms` · `chat_index_state` | The **keyword** index over the company's own chat: its documents and postings, each room's statistics and how many of each room's documents carry each term — summed over the rooms a search searches, so a score never depends on what is said in rooms its asker cannot read — how far its two forward walks have reached, whether a rebuild is dropping it, a batch at a time, after the replicated estate under it was replaced, and which copy of that estate it was built from — compared on every sweep with the copy's own name for itself (`statelog_estate`), so a replacement is followed even when the process that installed it stopped before saying so. Its own index rather than a corner of `kb_docs`, because a message is a remark about work rather than a statement of it — the same argument that keeps a work item's comment thread out of the knowledge index — and because chat has no semantic half at all: a year of it needs several times the whole supported vector corpus ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)) |
 | `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark |
 | `statelog_diverged` | This node's finding that a log **diverged** from its rows — the broker was restored from an older copy and another record now sits at the node's checkpoint — keyed to the stream, the checkpoint and both records' broker instants. Kept here rather than only in memory because the log can lose the record it was found by (an evicted node's checkpoint stops pinning the trim), and a restart must not then apply the other history on top of these rows. It holds while the checkpoint names the same record, so a reanchor or an adoption is what ends it |
 | `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
@@ -618,7 +644,7 @@ and no node whose copy is the real one.
 
 **Three schema rules hold over every replicated migration**, and they are one
 rule underneath: a statement that can abort inside an apply transaction aborts
-on every node at once, so what would be a rare anomaly on one node is a
+on every data node at once, so what would be a rare anomaly on one node is a
 fleet-wide stalled log instead. **No foreign key** — a cascade is a delete
 nobody committed, and an applier removes a row's children in its own statement
 list, where the deletion is part of the record's effect. **No `UNIQUE` outside
@@ -641,8 +667,9 @@ legitimately hold different ones. They are named with their reasons in one
 place, and a third fails the build — the rule and its exceptions are
 `adr/0002`, held by `internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
 A log reanchor is not among them: it writes the framework's own checkpoint,
-and the audit row it leaves is applied from the generation record it appends
-to the adopted log.
+and the audit row a log that claims identity keeps of it is applied from the
+generation record it appends to the adopted log — the vectors and the usage
+days keep none.
 
 | Tables | What they hold |
 |---|---|
@@ -652,29 +679,32 @@ to the adopted log.
 | **`iam_people`** · `iam_credentials` · `iam_invites` · `iam_sessions` · `iam_revocation_epochs` · `iam_session_generation` · `iam_history` | The company's identity estate, derived from `CREWLET_IAM_LOG`: the people and machines who can act, the verifiers they prove themselves with, the invitations that enrolled them, their sessions, the two counters that end sessions, and the authentication trail — see [Identity and Access](identity-and-access.md#the-seven-tables) |
 | **`usage_tokens`** · `usage_turns` · `usage_reads` · `usage_schedule_runs` · `usage_person_tokens` | What each node's seats, schedules and people did each company day — spend by phase, worker, model and provider slot; ended turns and how they ended; the pages seats read; every fire; and what the auxiliary model spent for a person (a question answered on the operator surface), filed under the human seat they hold rather than an agent id — derived from `CREWLET_USAGE_LOG`. Every data node publishes its own days and applies everyone's — a node holding no data has its events, and so its spend, kept by a data node through custody and counted in that node's day — so spend history is answered fleet-wide and outlives the node that spent it (ADR-0020). Kept 181 days, aged out by the applier rather than a sweep |
 | **`artifacts`** · `artifact_versions` · `artifact_objects` · `artifact_assets` · `artifact_source_claims` · `artifact_shares` · `artifact_pins` · `artifact_reads` · `artifact_history` · `artifact_usage` | The company's artifacts, derived from `CREWLET_ARTIFACTS_LOG`: each artifact's head and owner, its retained versions with their canonical manifests (a hundred unlabelled ones plus every labelled one), the objects those versions and its live assets name, its republish-in-place address, who it is shared with and at what role, each person's pins and when they last opened it, what happened to it (a year of history, refusals included) and the company's counters the stamped quotas are enforced against. The bytes are the [object store](object-store.md)'s, and `artifact_objects` and `artifact_assets` are declared in its references so the collector never deletes a file a retained version or a live asset still names |
-| **`artifact_data_stores`** · `artifact_data_collections` · `artifact_data_paths` · `artifact_data_docs` · `artifact_data_fields` · `artifact_data_writes` · `artifact_data_touches` · `artifact_data_usage` | Each artifact's datastore, derived from `CREWLET_ARTIFACT_DATA_LOG`: the store's catalogue row (its schema version, its on-disk footprint and its state digest), its collections with their columns and rules, the field paths interned to compact integers, every document as its canonical body with who created and last changed it, the field index a query is compiled against, seven days of history (at most 8 MiB per store, each row carrying who wrote, the verdict, the values each changed field held before and after, and the digest the store held after it, which is what an undo and a cell's history read), which documents each history row changed, and the company's footprint the plan quota is enforced against. Every node decides each write from the authority stamped into it and the rows alone, so a refusal is the same refusal on every data node |
+| **`artifact_data_stores`** · `artifact_data_collections` · `artifact_data_paths` · `artifact_data_docs` · `artifact_data_fields` · `artifact_data_writes` · `artifact_data_touches` · `artifact_data_usage` | Each artifact's datastore, derived from `CREWLET_ARTIFACT_DATA_LOG`: the store's catalogue row (its schema version, its on-disk footprint and its state digest), its collections with their columns and rules, the field paths interned to compact integers, every document as its canonical body with who created and last changed it, the field index a query is compiled against, seven days of history (at most 8 MiB per store, each row carrying who wrote, the verdict, the values each changed field held before and after, and the digest the store held after it, which is what an undo and a cell's history read), which documents each history row changed, and the company's footprint the plan quota is enforced against. Every data node decides each write from the authority stamped into it and the rows alone, so a refusal is the same refusal on every data node |
 | **`code_repos`** · `code_refs` · `code_packs` · `code_pushes` · `code_protections` · `code_changes` · … | The company's [git repositories](code-host.md) as rows, derived from `CREWLET_CODE_LOG`: each repository's settings and protection rules, its refs, the pack bundles its pushes stored, the pushes themselves, and the [changes](code-host.md#changes) proposed on it with their descriptions, authors and revisions. A pack's bytes are not a row: each is one object in the [object store](object-store.md), named by its `code_packs` row. `code_activation` holds the activation fence — the newest configuration activation whose reconcile of `code.repos` has published one — which refuses an older activation's decision about any repository |
-| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` · `statelog_ops_lost_kind` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows to the sweep, so a retry older than that is answered `unknown` rather than applied twice. A ledger that sweeps one kind of operation sooner than the rest — the identity estate's sessions, after an hour — records that kind's loss on its own, so every other kind is still vouched for over the month. And any record a newer build wrote that this one cannot decode |
+| **`assistant_conversations`** · `assistant_turns` · `assistant_messages` · `assistant_steps` · `assistant_cards` · `assistant_proposals` · `assistant_files` · … | Each person's [Ask Crewlet](assistant.md) conversations, derived from `CREWLET_ASSISTANT_LOG`: every conversation and its turns, the messages, steps and cards its owner saw, the proposals they decided, the files attached to it or delivered into it, an administrator's recorded compliance reads, and the marker a purge or a person's erasure leaves, so that a redelivered record cannot bring a conversation back. What a person said and saw is sealed under the fleet keyring before it is published, so the rows are the same bytes on every data node and say nothing without the keyring. A file's bytes are the [object store](object-store.md)'s, and `assistant_files` is declared in its references. The trash reaper purges a conversation nobody has used for the company's `assistant.retention_days` |
+| **`chat_channels`** · `chat_members` · `chat_messages` · `chat_reactions` · `chat_deletions` · `chat_verdicts` · … | The company's own chat, derived from `CREWLET_CHAT_LOG`: its rooms and who is in each, every message with its thread, mentions and reactions, the marker an erase leaves so that a redelivered post cannot bring back what the company destroyed, and what the applier decided about each message record — applied, or refused and why — which the writer reads back and keeps for the operation ledger's thirty days, beside the highest position that horizon has let go (`chat_verdicts_lost`), so a decision nobody keeps any more reads as one nobody can vouch for rather than as a message never said |
+| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` · `statelog_ops_lost_kind` · `statelog_estate` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows to the sweep, so a retry older than that is answered `unknown` rather than applied twice. A ledger that sweeps one kind of operation sooner than the rest — the identity estate's sessions, after an hour — records that kind's loss on its own, so every other kind is still vouched for over the month. Any record a newer build wrote that this one cannot decode. And the one framework row that differs on every data node: which **copy** of the estate this file is, a random name minted for every snapshot a join installs, before the install (a file the node created itself has the empty name) — so what a node derives from these rows by a walk that only moves forward, the chat keyword index, can tell its rows were replaced |
 
 **The whole company — coordination KV.**
 
 | Bucket | What it holds |
 |---|---|
 | **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
-| **`crewlet_duties`** | `worker:` ownership, and every other lease — the work tracker's `move:` · `merge:` · `bulk:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
-| **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
+| **`crewlet_duties`** | `worker:` ownership, and every other lease, Worklet's `move:` · `merge:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
+| **`crewlet_epochs`** | The monotonic fencing counter, which a single node's in-process leases mint from too, since their tokens are written into records that outlive the process. No age at all (see below) |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
-| **`crewlet_status`** | One key per node: which revision it applied |
+| **`crewlet_status`** | One key per node: the epoch and revision it last attempted, how that went (`error` or `degraded` is a refusal), and the revision it serves. A refused re-activation of the revision a node already runs names one revision in both, so a refusal is read from the status, never from the two differing |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
-| **`crewlet_token_windows`** · `crewlet_rate` | The token counters — one record per scope, a slot for each calendar window, aged 32 days past its last charge — and the notification valve |
-| **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+| **`crewlet_token_windows`** · `crewlet_rate` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge) and the rate windows of the notification valve and of a person's Ask Crewlet turns, each window at most a minute wide and kept three |
+| **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, every agent seat's executor run |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
+| `crewlet_chat_reads` | Per human seat — how far its person has read in each room of the engine's own chat, what they have muted and whether they are in do-not-disturb, inherited by the seat's next holder. **Not on the chat log**, deliberately: a cursor is a fact about one reader's attention that nobody replays and every data node would otherwise apply, and at a realistic flush rate it is the highest-volume thing the company writes. **No age** — an expired cursor would mark a room its reader had finished as unread |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** (`nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store), and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it, and the `trash-reaper` duty's, which the next holder of the duty resumes from. **No age**: an expired record would let the next node record a different store and split the company's files between two |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_uploads` | The bytes an artifact's upload intents have **reserved** and no record names yet: one ledger of every hold the company has outstanding, written by compare-and-set so two intents racing for the last of a budget cannot both win, and one record per upload naming the keys the engine minted for it and how far each transfer got. The bucket's age, 30 hours, outlasts the longest hold a reservation keeps (until the [object collector](object-store.md) could have deleted the bytes), so an abandoned upload's record goes on its own |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
-| `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
+| `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each node's newest backup and each log's newest operator acknowledgement cover, which is the only input each log's backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
 
 **In flight, or keyed — the event stream.**
 
@@ -689,12 +719,14 @@ to the adopted log.
 | **`CREWLET_CUSTODY`** | `crewlet.custody.>` — the events of nodes without `data`, in batches, until one data node keeps each; a mailbox (interest retention) aged at the event log's horizon. *Outside* `crewlet.events.*`, whose broadcast every dashboard streams |
 | **`CREWLET_TRACKER_LOG`** | `crewlet.tracker.log.>` — **the write-ahead log the replicated estate's tracker tables are derived from.** One subject per object, which is what makes the subject the unit two writers contend on; retention is bounded by durability rather than by age. Two of its subjects carry no object at all: **`…log.barrier`**, which every `linearizable` read appends one record to and then waits through what precedes it — every record that writes a row committed, and no barrier's commit waited for, since a barrier writes no row on any node; the acknowledgement is what proves a quorum agrees on a position, where a field read can be served by an isolated former leader; and **`…log.rankorder.<PROJECT>`**, which is where a board drag is arbitrated, so two people reordering one project's board contend and two reordering different ones never do |
 | **`CREWLET_TRACKER_VECTORS`** | `crewlet.tracker.vectors.>` — the same shape for embeddings, **compacted**: one message retained per subject, because the current embedding of a source is the only one anybody wants and a history of superseded vectors is a bill nobody asked for |
-| **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
+| **`CREWLET_PAGES_LOG`** | `crewlet.pages.log.>`, **the ordered log the replicated estate's knowledge base is derived from**, and the state log's third domain. The same shape as the tracker's: one subject per object, so two writers saving one page contend at the broker and two saving different pages never do. Retention is bounded by what every data node has already applied rather than by age, because a page is a fact for the life of the deployment and removing one is a decision somebody takes rather than a horizon that reaps it while a person is still reading it |
 | **`CREWLET_IAM_LOG`** | `crewlet.iam.log.>`, **the ordered log the replicated estate's identity tables are derived from**, and the state log's fourth domain. It is the one where the SUBJECT IS THE CONSTRAINT: the replicated estate forbids a `UNIQUE` index outside a primary key — a constraint violation inside an apply transaction aborts it deterministically on every data node at once, which here would be every login in the company — so there is no uniqueness check anywhere in the schema, and what keeps two people from taking one address is that every write that sets or frees an address, a login or a seat is ONE record on ONE subject, `…log.directory`, decided in a snapshot of every row: two such writes contend at the broker, and the second is decided again against the first. A session arbitrates on its own lineage, `…log.session.<lineage>`, and a person's content on `…log.person.<id>`. A session writes one record when it opens and one when it closes and nothing in between — a re-issue moves a deadline inside the signed bearer and records nothing — so this log grows with sign-ins rather than with requests |
-| **`CREWLET_USAGE_LOG`** | `crewlet.usage.log.>` — the state log's fifth domain, **compacted**: one message per (kind, node, company day, seat or schedule), each the object's whole cumulative value, republished by the node that owns the day whenever it moves and aged out after 181 days. The node is part of every subject, so each object has exactly one writer and nothing is arbitrated |
-| **`CREWLET_ARTIFACTS_LOG`** | `crewlet.artifacts.log.>`, the state log's sixth domain, strict and identity-claiming: every create, publish, rollback, share, transfer, trash and purge of an artifact. Every record that adds or removes an object reference arbitrates on the artifact's own subject, `…log.artifact.<id>`, so the broker orders every carry of a file against every removal; a republish-in-place address is a create-only `…log.source.<owner>.<token>`, an asset rides `…log.asset.<artifact>.<asset>` and a person's pins `…log.reader.<seat>`. A record the applier's rows refuse (a head that moved, a carried object no longer named, a quota crossed) is applied as its history row with the reason, on every node alike |
-| **`CREWLET_ARTIFACT_DATA_LOG`** | `crewlet.artifactdata.log.>`, the state log's seventh domain, strict and identity-claiming: every write, undo, schema change and purge of an artifact's datastore, on one subject per store, `…log.store.<artifact>`, because the store is the unit a batch is atomic over. A write is **sequenced**, not arbitrated: it carries no expectation, the log orders it against every other write to that store, and the applier decides it, guards and quotas included, so two people editing one sheet never contend at the broker. A schema change is arbitrated on the same subject, so it is decided against every write it migrates. A write the rows refuse is applied as its verdict, with the reason, on every node alike |
-| **`CREWLET_CODE_LOG`** | `crewlet.code.log.>` — the ordered log a repository's refs, packs and settings move on; the state log's eighth domain, strict and identity-claiming: one subject per repository and one per repository name, so two pushes to one repository contend at the broker and exactly one record lands per round, and two creates of one name contend for it. The node that commits a repository's pushes takes them in order and puts every push queued behind a record in flight into the next one (group commit, up to 64 a record), so a burst of pushes costs a record a batch rather than a record a push, and a push is reported `ok` only once the row its record wrote is read back. A push record names its pack bundle and never carries it — the bytes are the object store's — so the log grows with how often a company pushes, not with how large its repositories are |
+| **`CREWLET_USAGE_LOG`** | `crewlet.usage.log.>` — the state log's fifth domain, **compacted**: one message per (kind, node, company day, seat, schedule or person), each the object's whole cumulative value, republished by the node that owns the day whenever it moves and aged out after 181 days. The node is part of every subject, so each object has exactly one writer and nothing is arbitrated |
+| **`CREWLET_ARTIFACTS_LOG`** | `crewlet.artifacts.log.>`, the state log's sixth domain, strict and identity-claiming: every create, publish, rollback, share, transfer, trash and purge of an artifact. Every record that adds or removes an object reference arbitrates on the artifact's own subject, `…log.artifact.<id>`, so the broker orders every carry of a file against every removal; a republish-in-place address is a create-only `…log.source.<owner>.<token>`, an asset rides `…log.asset.<artifact>.<asset>` and a person's pins `…log.reader.<seat>`. A record the applier's rows refuse (a head that moved, a carried object no longer named, a quota crossed) is applied as its history row with the reason, on every data node alike |
+| **`CREWLET_ARTIFACT_DATA_LOG`** | `crewlet.artifactdata.log.>`, the state log's seventh domain, strict and identity-claiming: every write, undo, schema change and purge of an artifact's datastore, on one subject per store, `…log.store.<artifact>`, because the store is the unit a batch is atomic over. A write is **sequenced**, not arbitrated: it carries no expectation, the log orders it against every other write to that store, and the applier decides it, guards and quotas included, so two people editing one sheet never contend at the broker. A schema change is arbitrated on the same subject, so it is decided against every write it migrates. A write the rows refuse is applied as its verdict, with the reason, on every data node alike |
+| **`CREWLET_ASSISTANT_LOG`** | `crewlet.assistant.log.>`, the state log's eighth domain, strict and identity-claiming: each person's [Ask Crewlet](assistant.md) conversations, their turns and the proposals they decide. A conversation's own subject, `…log.conversation.<id>`, orders its create, its title, its purge and the opening of each turn, so a conversation has one running or parked turn whichever node opens it; a turn's, `…log.turn.<conversation>.<turn>`, orders its park, resume and close and carries its messages, steps and cards; a proposal's, `…log.proposal.<conversation>.<proposal>`, orders its decision, so two approvals on two nodes come to one; and a person's, `…log.owner.<person>`, carries the one record that erases every conversation they own. Every message, card and preview is sealed under the fleet keyring before it is published. A turn's live frames never reach it: they cross the fleet on `crewlet.assistant.live`, outside this stream, and are not stored |
+| **`CREWLET_CHAT_LOG`** | `crewlet.chat.log.>`, **the ordered log the replicated estate's chat tables are derived from**, and the state log's ninth domain. It carries TWO disciplines on one stream ([ADR-0046](../../adr/0046-a-message-is-sequenced-on-its-channels-subject.md)): a room's own state — topic, purpose, membership, archive, retention — arbitrates on `…log.channel.<id>` like any other object, while a message is SEQUENCED on its room's `…log.message.<id>`, one subject per room rather than per message, carrying no expectation, because two people talking in one room are not racing for anything and an expectation there would answer a conflict on a message somebody typed — and decided by the applier at its position, which writes a verdict per message record (`chat_verdicts`) that the writer reads back, so a post into a room archived just ahead of it, an edit of a message taken back just ahead of it or a reaction past the cap is refused to its writer rather than answered as said. A message's scope is its room's, because the applier numbers a room's messages in log order and that order is deterministic only while a record a node defers holds up its whole room |
+| **`CREWLET_CODE_LOG`** | `crewlet.code.log.>` — the ordered log a repository's refs, packs and settings move on; the state log's tenth domain, strict and identity-claiming: one subject per repository and one per repository name, so two pushes to one repository contend at the broker and exactly one record lands per round, and two creates of one name contend for it. The node that commits a repository's pushes takes them in order and puts every push queued behind a record in flight into the next one (group commit, up to 64 a record), so a burst of pushes costs a record a batch rather than a record a push, and a push is reported `ok` only once the row its record wrote is read back. A push record names its pack bundle and never carries it — the bytes are the object store's — so the log grows with how often a company pushes, not with how large its repositories are |
 | `OBJ_crewlet_files` | `$O.crewlet_files.>` — the [object store](object-store.md)'s bucket, `crewlet_files`, on the default `nats` backend only: one object per upload, named `files/<key>` by a key minted for that upload and never reused, and kept as a run of 128 KiB messages in NATS's own object store format. An ordinary stream at `stream.replicas` copies, so the company's files survive what its logs survive and every backup snapshots it with the rest. Absent when `store.objects.backend` is `s3` |
 
 **Named, not replicated — the object store.** One kind of state answers "who
@@ -743,8 +775,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are twenty-one of them rather than one with prefixes: three in the lease
-store, eighteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are twenty-two of them rather than one with prefixes: three in the lease
+store, nineteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.
@@ -840,16 +872,17 @@ on ordinary rollout lag makes the fastest node the cause of a fleet-wide outage,
 and stepping out of rotation when *no* peer has the epoch is not shedding, it is
 stopping.
 
-**History is read from every node, not copied to every node.** Each node's
-event store holds only what it published, so a fleet has no one store of its
-turns. A history read — the event log, a turn, a trace, the list of turns — is
-scattered to every live node at query time over the broker's ephemeral
-request/reply and merged by the node serving it, and every such answer carries
-a `coverage` naming any node that did not answer inside the two-second fleet
-read budget (ADR-0021). Replicating the detail would put every prompt and
-response on every node's disk to answer a question asked a few times a minute;
-the price is stated rather than hidden — a node that leaves takes its detail
-with it, while the aggregates survive it in the replicated `usage` domain. See
+**History is read from every data node, not copied to every node.** Each data
+node's event store holds only what it published and what it keeps in custody
+for a node without `data`, so a fleet has no one store of its turns. A history
+read — the event log, a turn, a trace, the list of turns — is scattered to every
+live data node at query time over the broker's ephemeral request/reply and
+merged by the node serving it, and every such answer carries a `coverage`
+naming any node that did not answer inside the two-second fleet read budget
+(ADR-0021). Replicating the detail would put every prompt and response on every
+data node's disk to answer a question asked a few times a minute; the price is
+stated rather than hidden — a node that leaves takes its detail with it, while
+the aggregates survive it in the replicated `usage` domain. See
 [Reading the fleet's history](event-system.md#reading-the-fleets-history).
 
 **A draining node keeps answering both.** Its listener stays up until the drain
@@ -861,14 +894,28 @@ every write is refused with `503` from the drain's first moment. See
 **A starting node answers both before it serves.** Its listener is bound before
 the boot, `/health` answers `503` while it recovers what it holds and `200`
 once it has, and `/ready` answers `503 starting` until the node serves — so the
-startup probe bounds exactly the part only the deployment can size, the
-recovery of the node's own store, and nothing the company configures can hold
-it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
+startup probe bounds exactly the part only the deployment can size — the
+recovery of the node's own store and, on a data node of a fleet, the snapshot
+it may have to fetch when the logs can no longer bring its rows level, which
+`rejoin_window` budgets — and nothing the company configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
-append-only pointer whose own revision *is* the epoch, so two operators
-activating at once get two revisions rather than overwriting each other. Each
-node polls it, applies, and writes its own status; a node that is behind picks
+append-only pointer whose own revision *is* the epoch: it lands only while the
+pointer still names the revision it was built on, so of two operators editing
+the same revision at once one lands and the other is refused
+`revision_advanced` rather than overwriting it, `412` where it named that
+revision in `If-Match` and `409` where it named none. The
+pointer **is** the company — `GET /config` answers it on every node. Each node
+polls it, applies, and writes its own status, naming the epoch it last applied,
+the revision it serves and the one it would come back on;
+while it runs, what it boots on moves only once an apply has succeeded, so a node that refuses
+a revision goes on serving the one before it, and would restart on that one too
+unless a write to its boot row is still being retried, or its own database is
+discarded at every start (`store.scratch`, every node without `data`), which
+restarts on nothing — that write is local and
+best effort, so the status names what it boots on as a fact of its own rather
+than leaving a reader to infer it from what it runs. A node that
+is behind picks
 a posture — `serve`, `wait`, `shed`, `isolated` or `stuck` — from what it can see
 of the pointer and of its peers. A shedding node refuses at *trigger
 admission*: the delivery goes straight back to the broker and this node stops
@@ -905,7 +952,7 @@ here.
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
 | Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
-| Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
+| Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Code host](code-host.md) |
 | A git node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a git node](code-host.md#the-cache-on-a-git-node) |
 | A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/code/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/code/` routes) | [Persons and their tokens](code-host.md#persons-and-their-tokens) · [Hosting code](../guides/code.md) |
@@ -914,8 +961,8 @@ here.
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |
 | REST, the dashboard, the socket | `internal/api`, `static/dashboard` | [API endpoints](../reference/api-endpoints.md) · [Dashboard design](../reference/dashboard-design.md) |
 | Event rows, live projection, traces | `internal/observe`, `internal/tracing`, `internal/tokens` | [Deployment](../guides/deployment.md) |
-| The fleet's turn-level history, read from every node | `internal/eventfan` | [Event system](event-system.md#reading-the-fleets-history) |
+| The fleet's turn-level history, read from every live data node | `internal/eventfan` | [Event system](event-system.md#reading-the-fleets-history) |
 | Which tracker a company runs, and why one of them keeps no state | — | [The tracker](task-engine.md) |
-| DACI, and the structured ask that is all the engine records of a decision | `internal/tracker` | [Decision framework](decision-framework.md) · [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision) |
+| DACI, and the structured ask that is all the engine records of a decision | `internal/worklet` | [Decision framework](decision-framework.md) · [Asking for a decision](../guides/worklet.md#asking-for-a-decision) |
 | More than one node | `internal/seat/placement` | [Scaling out](scaling.md) · [Running a fleet](../guides/fleet.md) · [Satellite nodes](../guides/satellite-nodes.md) |
-| What one node asks another to carry out — an estate write, a broker removal, a note to a running turn — signed and bound to one request | `internal/signedask` | [Scaling out](scaling.md#how-a-request-reaches-the-estate) · [ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md) |
+| What one node asks another to carry out (an estate write, a broker removal, a note to a running turn, a read of a run's box asked of the node it is on, a box's tool call relayed to the node holding its session, a replay or a stop of an Ask Crewlet turn running elsewhere) and the live relay an out-of-service node's dashboards hear a peer through, signed and bound to one request; and the presence and Ask Crewlet frames a node broadcasts for its peers to show, sealed one way | `internal/signedask` | [Scaling out](scaling.md#how-a-request-reaches-the-estate) · [ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md) |

@@ -21,12 +21,18 @@
 // what the Go half captures is what this half asserts — and nothing else runs
 // it.
 //
-// Usage: node replay.mjs <frames.json> <act.json> [--print]
+// Usage: node replay.mjs <frames.json> <act.json> <chat.json> [--print]
 //
 //   frames.json  a JSON array of raw frame strings, in arrival order
-//   act.json     one `/operator/act` exchange: {tool, args, op_id, status,
-//                body} — the operation key the press sent in its
-//                `Idempotency-Key` header, and the engine's answer byte for byte
+//   act.json     a JSON array of `/operator/act` exchanges: {tool, args,
+//                op_id, status, body, reads} — the operation key the press
+//                sent in its `Idempotency-Key` header, the engine's answer
+//                byte for byte, and `reads` the questions that read the log
+//                the write landed on
+//   chat.json    what the captured tab did in the company's own chat,
+//                written beside the frames rather than read from them:
+//                {room, person, seat, seq, changes, newest, cursor}, each
+//                change {op, message_id, author, author_kind, thread_root}
 //   --print      dump the resulting store state as JSON on stdout
 //
 // Exits non-zero with a diagnosis on stderr when the frames do not drive the
@@ -132,9 +138,9 @@ globalThis.location = { origin: "http://replay.invalid" };
 
 const { Store, LiveSocket, act, SessionFloors, domainsOf } = await import(pathToFileURL(PROTOCOL).href);
 
-const [file, actFile, ...flags] = process.argv.slice(2);
-if (!file || !actFile || actFile.startsWith("--")) {
-  console.error("usage: node replay.mjs <frames.json> <act.json> [--print]");
+const [file, actFile, chatFile, ...flags] = process.argv.slice(2);
+if (!file || !actFile || !chatFile || [actFile, chatFile].some((f) => f.startsWith("--"))) {
+  console.error("usage: node replay.mjs <frames.json> <act.json> <chat.json> [--print]");
   process.exit(2);
 }
 
@@ -241,10 +247,24 @@ const workItems = new Set();
 let sawRoundCap = false;
 const stages = new Set();
 let refusedWindow = null;
+// And who was in the founder's room, read the same way: the room's members
+// move with every push, so by the last one the seat has long stopped working
+// and only the walk can say the room ever showed it — the founder as a person
+// in the room, and the seat as its agent member at work there.
+const talked = JSON.parse(readFileSync(chatFile, "utf8"));
+let sawLooking = false;
+let sawWorkingInRoom = false;
 const replay = new Store();
 const probe = new LiveSocket(replay);
 for (const raw of frames) {
   probe.onMessage(raw);
+  const present = replay.state.chatPresence.rooms[talked.room];
+  for (const m of (present && present.members) || []) {
+    if (m.seat === talked.person && m.kind === "human") sawLooking = true;
+    if (m.seat === talked.seat && m.kind === "agent" && m.activity === "editing") {
+      sawWorkingInRoom = true;
+    }
+  }
   for (const agent of replay.state.agents) {
     if (agent.activity === "working") sawWorking = true;
     if (agent.live_call) {
@@ -485,66 +505,190 @@ if (!alarms || typeof alarms.count !== "number" || alarms.count < 1 || !alarms.w
   );
 }
 
-// THE SESSION FLOOR, FROM A REAL ANSWER. The capture ends with a write the
-// founder made through `/operator/act`, and its answer is handed to the
-// client's OWN `act` — the one function every button writes through — and its
-// OWN `SessionFloors`. The floor the tab then holds must be the position the
-// engine answered with, byte for byte, and every question that reads the
-// written domain must name it as `min_position` at `session`: that is what
-// the Go half then asks the engine with, and got the write back. A position
-// the client could not parse raises nothing, so the screen that pressed the
-// button would redraw from before the press with nothing to say so.
-const exchange = JSON.parse(readFileSync(actFile, "utf8"));
-const sent = [];
-globalThis.fetch = async (href, init) => {
-  sent.push({ href: String(href), init });
-  return new Response(exchange.body, {
-    status: exchange.status,
-    headers: { "Content-Type": "application/json" },
-  });
-};
-const floors = new SessionFloors();
-const wrote = await act(exchange.tool, exchange.args, {
-  opId: exchange.op_id,
-  floors,
-});
-const engineAnswer = JSON.parse(exchange.body);
-if (sent.length !== 1) {
-  problems.push(`one press sent ${sent.length} requests, want exactly one`);
+// THE COMPANY'S OWN CHAT, AS THE FOUNDER'S TAB WAS TOLD IT. The capture's tab
+// is a person's, so the engine pushed it the room the founder made and talked
+// in: a frame per committed record, the room's presence, and the founder's own
+// read state. The store files a record frame under its room — the high-water
+// mark a screen compares against what it has drawn, and the frames themselves
+// — and each of those has to come out as what the tab did in the room and
+// what the engine minted for it, which chat.json carries and no frame wrote
+// (internal/e2e's chatCapture says where each field comes from): a mark that
+// stopped short, a record that went unfiled or was filed under the wrong
+// message, author or thread, or a position that moved backwards is a screen
+// that re-reads the wrong thing, or nothing, for the life of the tab.
+//
+// EACH RECORD ON ITS OWN, by its op, the message it names, its author and
+// their kind, and a post's thread. Taken together the room's messages are
+// named by its posts alone, so an edit, a delete or a reaction filed under the
+// wrong message would pass a check over the room's set of ids — and that is
+// the frame that sends a screen to re-read the wrong range of a room.
+const room = state.chat.rooms[talked.room];
+if (!room) {
+  problems.push(
+    `no frame for the founder's room ${talked.room} reached the store: the chat ` +
+      "screen would draw a room nothing ever said anything in",
+  );
 } else {
-  const { href, init } = sent[0];
-  if (new URL(href).pathname !== `/operator/act/${exchange.tool}` || init.method !== "POST") {
-    problems.push(`the write went to ${init.method} ${href}, not POST /operator/act/${exchange.tool}`);
-  }
-  const body = JSON.parse(init.body);
-  // THE OPERATION RIDES THE HEADER, and the body is the arguments alone: the
-  // engine refuses a body key it does not read, and a key minted anywhere but
-  // the press is a retry that writes twice.
-  const key = (init.headers || {})["Idempotency-Key"];
-  if (key !== exchange.op_id) {
-    problems.push(`the write carried operation key ${JSON.stringify(key)}, not the press's own`);
-  }
-  const extra = Object.keys(body).filter((k) => k !== "args");
-  if (extra.length) {
-    problems.push(`the write's body carries ${extra.join(", ")} beside its arguments`);
-  }
-  if (JSON.stringify(body.args) !== JSON.stringify(exchange.args)) {
+  if (room.seq !== talked.seq) {
     problems.push(
-      `the client sent ${JSON.stringify(body.args)}, not the arguments the engine answered: ` +
-        JSON.stringify(exchange.args),
+      `the store's high-water mark for the room is ${room.seq} and the engine ` +
+        `numbered it to ${talked.seq}: a screen holding the room would re-read it ` +
+        "for ever, or never",
+    );
+  }
+  // A FIELD THE FRAME LEFT OUT IS EMPTY, as chat.json writes it:
+  // a record about the room names no message, and only a reply has a thread.
+  const recordOf = (c) => ({
+    op: c.op,
+    message_id: c.message_id || "",
+    author: c.author || "",
+    author_kind: c.author_kind || "",
+    thread_root: c.thread_root || "",
+  });
+  const same = (a, b) =>
+    a.op === b.op &&
+    a.message_id === b.message_id &&
+    a.author === b.author &&
+    a.author_kind === b.author_kind &&
+    a.thread_root === b.thread_root;
+  const describe = (r) =>
+    `${r.op}${r.message_id ? ` of ${r.message_id}` : ""} by ${r.author} (${r.author_kind})` +
+    (r.thread_root ? ` in the thread of ${r.thread_root}` : "");
+  const took = talked.changes.map(recordOf);
+  const filed = room.changes.map(recordOf);
+  const unfiled = took.filter((want) => !filed.some((got) => same(got, want)));
+  if (unfiled.length) {
+    problems.push(
+      `the room took ${unfiled.map(describe).join("; ")} and the store filed no frame ` +
+        `saying so (filed ${filed.map(describe).join("; ") || "none"})`,
+    );
+  }
+  const stray = filed.filter((got) => !took.some((want) => same(got, want)));
+  if (stray.length) {
+    problems.push(
+      `the store filed ${stray.map(describe).join("; ")}, which is no record the room ` +
+        "took: a screen would re-read a message nothing touched, or credit a change " +
+        "to somebody who never made it",
+    );
+  }
+  if (!room.position || room.position.stream !== talked.newest.stream ||
+    room.position.generation !== talked.newest.generation ||
+    room.position.seq !== talked.newest.seq) {
+    problems.push(
+      `the room's newest moment is ${JSON.stringify(room.position)} and its last ` +
+        `record sits at ${JSON.stringify(talked.newest)}: the rail would order it ` +
+        "among the rooms by a moment that is not its own",
     );
   }
 }
-if (wrote.kind !== engineAnswer.outcome) {
+if (!sawLooking) {
   problems.push(
-    `the engine answered ${JSON.stringify(engineAnswer.outcome)} and the client read ` +
-      `${JSON.stringify(wrote.kind)}${wrote.reason ? ` (${wrote.reason})` : ""}`,
+    `no presence frame ever showed ${talked.person} looking at the room their tab ` +
+      "said it was looking at",
   );
 }
-const domain = wrote.domain;
-if (!domain) {
-  problems.push(`${exchange.tool} names no domain a read can wait on, so its write raises no floor`);
+if (!sawWorkingInRoom) {
+  problems.push(
+    `no presence frame ever showed ${talked.seat} at work in the room it answered ` +
+      "in: a seat's turn there would look like silence until its reply landed",
+  );
+}
+const read = state.chatRead;
+if (!read || read.handle !== talked.person) {
+  problems.push(
+    `the store holds ${JSON.stringify(read && read.handle)}'s read state, not ` +
+      `${talked.person}'s: the rail's badges would be counted for somebody else`,
+  );
 } else {
+  const cursor = read.cursors && read.cursors[talked.room];
+  if (cursor !== talked.cursor) {
+    problems.push(
+      `the founder read the room through ${talked.cursor} and the store holds ` +
+        `${JSON.stringify(cursor)}: the badge another tab cleared stays lit here`,
+    );
+  }
+  if (typeof read.revision !== "number") {
+    problems.push(
+      `the read state carries no revision (${JSON.stringify(read)}): two tabs' ` +
+        "flushes could not be ordered, and the later would lose",
+    );
+  }
+}
+
+// THE SESSION FLOOR, FROM REAL ANSWERS. The capture carries writes the
+// founder made through `/operator/act` — a pin on the tracker's log and a
+// message on chat's — and each answer is handed to the client's OWN `act`,
+// the one function every button writes through, and its OWN `SessionFloors`.
+// The floor the tab then holds for that log must be the position the engine
+// answered with, byte for byte, and every question that reads it must name it
+// as `min_position` at `session`: that is what the Go half then asks the
+// engine with, and got the write back. A position the client could not parse
+// raises nothing, so the screen that pressed the button would redraw from
+// before the press with nothing to say so.
+const exchanges = JSON.parse(readFileSync(actFile, "utf8"));
+if (!Array.isArray(exchanges) || exchanges.length === 0) {
+  console.error(`replay: ${actFile} holds no act exchanges`);
+  process.exit(2);
+}
+// ONE TAB'S FLOORS ACROSS EVERY WRITE, as a tab holds them: a write on one
+// log raises that log's floor and leaves every other where it was.
+const floors = new SessionFloors();
+const wrote = [];
+for (const exchange of exchanges) {
+  const sent = [];
+  globalThis.fetch = async (href, init) => {
+    sent.push({ href: String(href), init });
+    return new Response(exchange.body, {
+      status: exchange.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const result = await act(exchange.tool, exchange.args, {
+    opId: exchange.op_id,
+    floors,
+  });
+  wrote.push(result);
+  const engineAnswer = JSON.parse(exchange.body);
+  if (sent.length !== 1) {
+    problems.push(`one ${exchange.tool} press sent ${sent.length} requests, want exactly one`);
+  } else {
+    const { href, init } = sent[0];
+    if (new URL(href).pathname !== `/operator/act/${exchange.tool}` || init.method !== "POST") {
+      problems.push(`the write went to ${init.method} ${href}, not POST /operator/act/${exchange.tool}`);
+    }
+    const body = JSON.parse(init.body);
+    // THE OPERATION RIDES THE HEADER, and the body is the arguments alone:
+    // the engine refuses a body key it does not read, and a key minted
+    // anywhere but the press is a retry that writes twice.
+    const key = (init.headers || {})["Idempotency-Key"];
+    if (key !== exchange.op_id) {
+      problems.push(
+        `the ${exchange.tool} write carried operation key ${JSON.stringify(key)}, ` +
+          "not the press's own",
+      );
+    }
+    const extra = Object.keys(body).filter((k) => k !== "args");
+    if (extra.length) {
+      problems.push(`the ${exchange.tool} write's body carries ${extra.join(", ")} beside its arguments`);
+    }
+    if (JSON.stringify(body.args) !== JSON.stringify(exchange.args)) {
+      problems.push(
+        `the client sent ${JSON.stringify(body.args)}, not the arguments the engine answered: ` +
+          JSON.stringify(exchange.args),
+      );
+    }
+  }
+  if (result.kind !== engineAnswer.outcome) {
+    problems.push(
+      `the engine answered ${exchange.tool} ${JSON.stringify(engineAnswer.outcome)} and the ` +
+        `client read ${JSON.stringify(result.kind)}${result.reason ? ` (${result.reason})` : ""}`,
+    );
+  }
+  const domain = result.domain;
+  if (!domain) {
+    problems.push(`${exchange.tool} names no domain a read can wait on, so its write raises no floor`);
+    continue;
+  }
   const floor = floors.floor(domain);
   if (floor !== engineAnswer.position) {
     problems.push(
@@ -552,15 +696,18 @@ if (!domain) {
         `${JSON.stringify(engineAnswer.position)}: the next read waits for the wrong position`,
     );
   }
+  if (!Array.isArray(exchange.reads) || exchange.reads.length === 0) {
+    problems.push(`the ${exchange.tool} exchange names no question that reads its log`);
+  }
   // ONE FLOOR PER LOG THE QUESTION READS, and these read the one log the
   // write landed on: the list names exactly that position.
-  for (const kind of ["work_person", "work_items"]) {
+  for (const kind of exchange.reads || []) {
     const fresh = floors.freshness(kind);
     if (JSON.stringify(domainsOf(kind)) !== JSON.stringify([domain]) || !fresh ||
       fresh.read_level !== "session" ||
       JSON.stringify(fresh.min_position) !== JSON.stringify([engineAnswer.position])) {
       problems.push(
-        `a read of ${kind} after the write names ${JSON.stringify(fresh)}, not a ` +
+        `a read of ${kind} after the ${exchange.tool} names ${JSON.stringify(fresh)}, not a ` +
           `session read at ${JSON.stringify(engineAnswer.position)}`,
       );
     }
@@ -574,6 +721,8 @@ if (flags.includes("--print")) {
     tokens: state.tokens,
     phases: [...phases],
     completedPhases: state.phases.map((p) => p.payload && p.payload.phase),
+    chat: state.chat,
+    chatRead: state.chatRead,
   }, null, 2));
 }
 
@@ -587,5 +736,6 @@ console.log(
     `${state.events.length} events, phases ${[...phases].join("/")}, ` +
     `${state.phases.length} durable phase records, on ${[...workItems].join("/")}, ` +
     `stages ${[...stages].join("/")}, a refused ${refusedWindow.period} window, ` +
-    `${exchange.tool} ${wrote.kind} at floor ${wrote.position}`,
+    `a room to #${room.seq} through ${[...new Set(room.changes.map((c) => c.op))].join("/")}, ` +
+    wrote.map((w) => `${w.tool} ${w.kind} at floor ${w.position}`).join(", "),
 );

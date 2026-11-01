@@ -114,8 +114,8 @@ const CARDS: Record<SectionId, HomeCard> = {
   feed: {
     label: "Recent activity",
     description: "Work finished, handed off and published",
-    // WHAT THE FEED HOLDS: the tracker's finished work and hand-offs, the
-    // schedules' runs and Knowledge's pages, each only where it is run.
+    // WHAT THE FEED HOLDS: Worklet's finished work and hand-offs, the
+    // schedules' runs and Doclet's pages, each only where it is run.
     describe: (runs) =>
       runs.tracker
         ? runs.knowledge

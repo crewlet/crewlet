@@ -25,9 +25,12 @@ func newFollows() *follows { return &follows{rows: map[string]string{}} }
 
 func key(b, h, c, th string) string { return b + "|" + h + "|" + c + "|" + th }
 
-func (f *follows) Follow(_ context.Context, b, h, c, th, reason string, _ time.Time) error {
+func (f *follows) Follow(_ context.Context, b, h, c, th string, _ time.Time,
+	choose func(string, bool) string) (string, error) {
+	held, ok := f.rows[key(b, h, c, th)]
+	reason := choose(held, ok)
 	f.rows[key(b, h, c, th)] = reason
-	return nil
+	return reason, nil
 }
 
 func (f *follows) Following(_ context.Context, b, h, c, th string) (string, bool, error) {
@@ -36,13 +39,6 @@ func (f *follows) Following(_ context.Context, b, h, c, th string) (string, bool
 	}
 	r, ok := f.rows[key(b, h, c, th)]
 	return r, ok, nil
-}
-
-func (f *follows) Unfollow(_ context.Context, b, h, c, th string) (bool, error) {
-	k := key(b, h, c, th)
-	_, ok := f.rows[k]
-	delete(f.rows, k)
-	return ok, nil
 }
 
 var seat = mattermost.Seat{Handle: "swe", Username: "agent-swe", UserID: "bot-1"}
@@ -248,21 +244,34 @@ func TestAThreadReplyNeedsAFollow(t *testing.T) {
 	if !ok {
 		t.Fatal("a mention in a thread did not wake the seat")
 	}
-	if got.Metadata["thread_follow_reason"] != string(notify.FollowMention) {
-		t.Fatalf("the follow reason is %q", got.Metadata["thread_follow_reason"])
+	if got.Metadata[notify.FollowReasonField] != string(notify.FollowMention) {
+		t.Fatalf("the follow reason is %q", got.Metadata[notify.FollowReasonField])
 	}
-	if got.Metadata["thread_following"] != "true" {
-		t.Fatal("a followed thread reply does not say so")
+	// THE REASON, never a bare "true": a follow is not an ask, and which
+	// follow is what decides whether the reply obliges an answer.
+	if got.Metadata[notify.FollowingField] != string(notify.FollowMention) {
+		t.Fatalf("a followed thread reply says %q",
+			got.Metadata[notify.FollowingField])
 	}
-	if got.Metadata["thread_ts"] != "root-1" || got.Metadata["thread_anchor"] != "root-1" {
-		t.Fatalf("a reply anchors on %q/%q", got.Metadata["thread_ts"], got.Metadata["thread_anchor"])
+	if got.Metadata[notify.ThreadField] != "root-1" ||
+		got.Metadata[notify.ThreadAnchorField] != "root-1" {
+		t.Fatalf("a reply anchors on %q/%q",
+			got.Metadata[notify.ThreadField], got.Metadata[notify.ThreadAnchorField])
 	}
 	if store.rows[key("mattermost", "swe", "C1", "root-1")] == "" {
 		t.Fatal("the mention did not record a follow")
 	}
 	// Every later reply now reaches it, named or not.
-	if _, ok := parseOne(t, p, reply("still there?")); !ok {
+	later, ok := parseOne(t, p, reply("still there?"))
+	if !ok {
 		t.Fatal("a followed thread's later reply was dropped")
+	}
+	// REACHING IT IS NOT BEING ASKED, except that a mention-held follow is
+	// the closest evidence a vendor parser has that this thread is the
+	// seat's own conversation — so the reason travels and the rule, not
+	// the parser, decides what it obliges.
+	if got := later.Metadata[notify.FollowingField]; got != string(notify.FollowMention) {
+		t.Fatalf("a later reply rides the follow as %q", got)
 	}
 }
 
@@ -277,15 +286,20 @@ func TestBeingNamedAtTopLevelFollowsTheAnswers(t *testing.T) {
 	})); !ok {
 		t.Fatal("a named seat did not hear a top-level message")
 	}
-	if store.rows[key("mattermost", "swe", "C1", "p1")] == "" {
-		t.Fatal("being named at top level did not follow the answers")
+	if got := store.rows[key("mattermost", "swe", "C1", "p1")]; got != string(notify.FollowMention) {
+		t.Fatalf("being named at top level followed the answers as %q, want the mention", got)
 	}
 
-	// The answer arrives as a reply under that post and reaches the seat.
-	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+	// The answer arrives as a reply under that post, reaches the seat and
+	// obliges it: the thread is one the seat was asked something in.
+	answer, ok := parseOne(t, p, post(func(_, pp map[string]any) {
 		pp["root_id"], pp["id"], pp["message"] = "p1", "p2", "here you go"
-	})); !ok {
+	}))
+	if !ok {
 		t.Fatal("the answer to a question the seat was asked was dropped")
+	}
+	if !mattermost.Prompt().Address.Addressed(answer.Metadata) {
+		t.Error("a reply in a thread the seat was named in does not oblige an answer")
 	}
 
 	// A message that names NOBODY follows nothing: a channel this bot
@@ -296,6 +310,63 @@ func TestBeingNamedAtTopLevelFollowsTheAnswers(t *testing.T) {
 	}
 	if len(store2.rows) != 0 {
 		t.Fatalf("a passive message recorded %v", store2.rows)
+	}
+}
+
+// A BROADCAST'S THREAD IS FOLLOWED AS A BROADCAST. The seat hears the replies
+// under an @channel — it was in the room — but it owes none of them an answer:
+// recorded as anything stronger, every seat in the channel would be obliged to
+// answer every reply to every broadcast.
+func TestABroadcastsThreadIsFollowedAsABroadcast(t *testing.T) {
+	p, store := parser(t, newFollows())
+	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["message"] = "@channel standup in five"
+	})); !ok {
+		t.Fatal("a broadcast did not reach the seat")
+	}
+	if got := store.rows[key("mattermost", "swe", "C1", "p1")]; got != string(notify.FollowCollective) {
+		t.Fatalf("the broadcast's thread is followed as %q, want collective", got)
+	}
+	reply, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "p1", "p2", "on my way"
+	}))
+	if !ok {
+		t.Fatal("a reply under a broadcast was dropped")
+	}
+	if got := reply.Metadata[notify.FollowingField]; got != string(notify.FollowCollective) {
+		t.Errorf("the reply rides the follow as %q", got)
+	}
+	if mattermost.Prompt().Address.Addressed(reply.Metadata) {
+		t.Error("a reply under a broadcast obliges every seat in the room to answer it")
+	}
+}
+
+// A BROADCAST IN A THREAD THE SEAT WAS NAMED IN STILL OBLIGES IT. The message
+// reached it as a broadcast, and it is in the thread because it was named —
+// which is what the follow key carries, so the rule reads an answer owed.
+func TestABroadcastInANamedThreadStillObliges(t *testing.T) {
+	p, store := parser(t, newFollows())
+	if _, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "root-1", "p2", "@agent-swe can you look"
+	})); !ok {
+		t.Fatal("a mention in a thread did not reach the seat")
+	}
+	got, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "root-1", "p3", "@here any update?"
+	}))
+	if !ok {
+		t.Fatal("a broadcast in a followed thread was dropped")
+	}
+	if got.Metadata[notify.FollowReasonField] != string(notify.FollowCollective) ||
+		got.Metadata[notify.FollowingField] != string(notify.FollowMention) {
+		t.Fatalf("the broadcast reached the seat as %q in a thread it follows as %q",
+			got.Metadata[notify.FollowReasonField], got.Metadata[notify.FollowingField])
+	}
+	if !mattermost.Prompt().Address.Addressed(got.Metadata) {
+		t.Error("a broadcast in a thread the seat was named in does not oblige an answer")
+	}
+	if held := store.rows[key(mattermost.Backend, "swe", "C1", "root-1")]; held != string(notify.FollowMention) {
+		t.Fatalf("the broadcast downgraded the follow to %q", held)
 	}
 }
 
@@ -522,6 +593,81 @@ func TestTheParserDeclaresItsSource(t *testing.T) {
 		t.Fatalf("Source = %q", p.Source())
 	}
 	var _ notify.Parser = p
+}
+
+// EVERY KEY THE SPINE REQUIRES IS STAMPED, on every delivery this backend
+// produces. The set is [notify.RequiredChatKeys] rather than a list copied
+// into this file, so a key a reader starts depending on is missing here
+// LOUDLY rather than reading back as "" — which every consumer would take as
+// a message with nothing to say.
+func TestTheParserStampsTheRequiredVocabulary(t *testing.T) {
+	p, _ := parser(t, newFollows())
+	deliveries := map[string]types.RawWebhook{
+		"a top-level channel message": post(nil),
+		"a direct message": post(func(b, _ map[string]any) {
+			b["channel_type"] = "D"
+		}),
+		"a replayed message": post(func(b, _ map[string]any) {
+			b["replayed"] = true
+		}),
+	}
+	for name, w := range deliveries {
+		got, ok := parseOne(t, p, w)
+		if !ok {
+			t.Fatalf("%s produced no notification", name)
+		}
+		for _, key := range notify.RequiredChatKeys() {
+			if _, stamped := got.Metadata[key]; !stamped {
+				t.Errorf("%s: %q was not stamped", name, key)
+			}
+		}
+	}
+}
+
+// A FOLLOW KEY CARRIES THE REASON, never "true". Which follow is the whole
+// question: read as a bare marker, every later reply in every thread the
+// seat had ever posted in became a turn that may not end in silence.
+func TestTheFollowKeysCarryAReasonTheRuleCanRead(t *testing.T) {
+	p, _ := parser(t, newFollows())
+	named, ok := parseOne(t, p, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"] = "root-1", "p2"
+		pp["message"] = "@agent-swe can you look"
+	}))
+	if !ok {
+		t.Fatal("a mention in a thread did not reach the seat")
+	}
+	for _, key := range []string{notify.FollowReasonField, notify.FollowingField} {
+		reason := notify.FollowReason(named.Metadata[key])
+		if !reason.Valid() {
+			t.Fatalf("%s = %q, which is not a reason the engine knows", key, reason)
+		}
+		if reason != notify.FollowMention {
+			t.Errorf("%s = %q, want the mention that established the follow", key, reason)
+		}
+	}
+	// And the rule the prompt and the indicator share agrees, which is the
+	// property the metadata exists to carry: a named seat owes an answer.
+	if !mattermost.Prompt().Address.Addressed(named.Metadata) {
+		t.Error("a message naming the seat does not oblige an answer")
+	}
+
+	// A reply the seat merely PARTICIPATED in is the counterfactual: it
+	// reaches the seat and obliges nothing.
+	quiet := newFollows()
+	quiet.rows[key(mattermost.Backend, "swe", "C1", "root-1")] = string(notify.FollowParticipated)
+	p2, _ := parser(t, quiet)
+	ordinary, ok := parseOne(t, p2, post(func(_, pp map[string]any) {
+		pp["root_id"], pp["id"], pp["message"] = "root-1", "p3", "thanks all"
+	}))
+	if !ok {
+		t.Fatal("a followed thread's reply was dropped")
+	}
+	if got := ordinary.Metadata[notify.FollowingField]; got != string(notify.FollowParticipated) {
+		t.Fatalf("the reply rides the follow as %q", got)
+	}
+	if mattermost.Prompt().Address.Addressed(ordinary.Metadata) {
+		t.Error("a reply in a thread the seat merely spoke in obliges an answer")
+	}
 }
 
 // THE WAKE'S ID IS THE POST'S, PER SEAT — the second dedupe layer.

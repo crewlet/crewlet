@@ -1,0 +1,625 @@
+/**
+ * The inline tokens: what operator-facing prose names, read out of its words.
+ *
+ * Its failure modes are the two directions of a guess. Too eager, and an
+ * issue number grows a swatch, a hashtag turns yellow, a hex word becomes a
+ * commit and a key inside a URL becomes a second link. Too trusting, and a
+ * link whose words say "github.com" is drawn as GitHub wherever it goes, or a
+ * look-alike host earns a vendor's mark. Every case below is one of those.
+ */
+
+import { describe, expect, test } from "vitest";
+import type { LinkHost } from "~/contract/integrations.ts";
+import { LINEAR_BOUND, growth } from "../test/growth.ts";
+import {
+  codeColour,
+  codeHostOwners,
+  codeRoom,
+  describeLink,
+  inlineTokens,
+  messageScope,
+  NO_ROOMS,
+  NO_SCOPE,
+  referenceTarget,
+  repositoryTarget,
+  type RoomSet,
+} from "./inlineTokens.ts";
+
+/** What a run's tokens are, as `kind:text`, read under `owners`. */
+function said(text: string, owners: readonly string[] = []): string[] {
+  return inlineTokens(text, new Set(owners)).map((t) => `${t.kind}:${t.text}`);
+}
+
+const GITHUB: LinkHost = { kind: "github", url: "https://github.com", owners: ["gophrase"] };
+const GHE: LinkHost = { kind: "github", url: "https://github.example.com" };
+const GITLAB: LinkHost = { kind: "gitlab", url: "https://code.example.com/scm", owners: ["g"] };
+const MATTERMOST: LinkHost = { kind: "mattermost", url: "https://chat.example.com" };
+const JIRA: LinkHost = { kind: "jira", url: "https://jira.example.com" };
+const WIKI: LinkHost = { kind: "confluence", url: "https://wiki.example.com/confluence" };
+
+describe("colours", () => {
+  test("a colour in prose has a digit and a letter, so an issue and a hashtag are words", () => {
+    expect(said("Ship #ffe100 over #0b0b0f and #3a7.")).toEqual([
+      "colour:#ffe100",
+      "colour:#0b0b0f",
+      "colour:#3a7",
+    ]);
+    expect(said("See #123, #456789, #facade, #bad and #beaded.")).toEqual([]);
+  });
+
+  test("a colour is six or three digits at word boundaries, never alpha and never inside a word", () => {
+    expect(said("#ffe10080 #ffe1 x#ffe100 #ffe100x &#123a;")).toEqual([]);
+  });
+
+  test("a colour's swatch takes the six-digit lowercase form", () => {
+    expect(inlineTokens("#3A7")).toMatchObject([{ kind: "colour", hex: "#33aa77" }]);
+  });
+
+  test("a code span that IS a colour is one whatever its digits, and one that holds more is code", () => {
+    expect(codeColour("#fff")).toBe("#ffffff");
+    expect(codeColour(" #DEBE42 ")).toBe("#debe42");
+    expect(codeColour("rgb(255, 225, 0)")).toBe("#ffe100");
+    expect(codeColour("rgb(255 225 0)")).toBe("#ffe100");
+    expect(codeColour("rgb(256, 0, 0)")).toBeNull();
+    expect(codeColour("color: #fff;")).toBeNull();
+    expect(codeColour("ffe100")).toBeNull();
+    expect(codeColour("#ffe10080")).toBeNull();
+  });
+});
+
+describe("addresses", () => {
+  test("a bare web address ends where the sentence takes over", () => {
+    expect(
+      said("Report: https://grafana.example.com/d/api-latency. Then (https://x.test/a_(b))."),
+    ).toEqual([
+      "address:https://grafana.example.com/d/api-latency",
+      "address:https://x.test/a_(b)",
+    ]);
+  });
+
+  test("an address swallows every key, colour and reference spelled inside it", () => {
+    expect(said("https://github.com/gophrase/backend/pull/14#issuecomment-GP-66 #ffe100")).toEqual([
+      "address:https://github.com/gophrase/backend/pull/14#issuecomment-GP-66",
+      "colour:#ffe100",
+    ]);
+  });
+
+  test("a scheme no browser should follow is not an address", () => {
+    expect(said("javascript:alert(1) ftp://files.example.com/x")).toEqual([]);
+  });
+});
+
+describe("references and commits", () => {
+  test("a reference names an issue, a merge request or a commit by its path", () => {
+    expect(said("PR gophrase/backend#14, group/sub/app!7 and gophrase/backend@7f3c2a91.")).toEqual([
+      "reference:gophrase/backend#14",
+      "reference:group/sub/app!7",
+      "reference:gophrase/backend@7f3c2a91",
+    ]);
+  });
+
+  test("a reference is never the tail of a path or an address", () => {
+    expect(said("/srv/gophrase/backend#14 ./a/b#2 x@a/b#3")).toEqual([]);
+  });
+
+  test("a commit is a SHA the prose calls one, after a reference or the word commit", () => {
+    expect(said("gophrase/backend#14 at b5362d2, then at head b5362d22aa")).toEqual([
+      "reference:gophrase/backend#14",
+      "commit:b5362d2",
+      "commit:b5362d22aa",
+    ]);
+    expect(inlineTokens("gophrase/backend#14 at b5362d2")[1]).toMatchObject({
+      after: { path: "gophrase/backend", sep: "#" },
+    });
+    expect(said("Fixed in commit 9fceb02d0ae598e95dc970b74767f19372d61af8.")).toEqual([
+      "commit:9fceb02d0ae598e95dc970b74767f19372d61af8",
+    ]);
+  });
+
+  test("a hex word with no reference before it is a word", () => {
+    expect(said("deadbeef1 at 1234567 at abcdefa head b5362d2 at B5362D2")).toEqual([]);
+    // All digits, or all letters, is a number or a word even after a reference.
+    expect(said("a/b#1 at 1234567 at deadbee")).toEqual(["reference:a/b#1"]);
+  });
+});
+
+describe("keys and mentions", () => {
+  test("a key stands alone, and a slash between two keys delimits them", () => {
+    expect(said("GP-66, GP-10/GP-11 and (GP-7).")).toEqual([
+      "key:GP-66",
+      "key:GP-10",
+      "key:GP-11",
+      "key:GP-7",
+    ]);
+    expect(said("GP-660x aGP-1 GP-1-b gp-1 GP-1_x")).toEqual([]);
+  });
+
+  test("a key inside a path is part of the path", () => {
+    expect(said("worklet/GP-11 /worklet/GP-12 ./GP-13")).toEqual([]);
+  });
+
+  test("a mention is a handle after @, and an email address is never one", () => {
+    expect(said("@miles, ask @backend-engineer. ops@gophrase.example @Miles")).toEqual([
+      "mention:@miles",
+      "mention:@backend-engineer",
+    ]);
+  });
+});
+
+describe("what an address is", () => {
+  test("a code host's pull request, issue, commit and repository read as their references", () => {
+    expect(describeLink("https://github.com/gophrase/backend/pull/14/files", [])).toEqual({
+      vendor: "github",
+      label: "gophrase/backend#14",
+      code: true,
+      kind: "GitHub",
+      // ON NO HOST OF THE COMPANY'S, nothing is rebuilt.
+      canonical: null,
+      place: { path: "gophrase/backend", number: "14" },
+    });
+    expect(describeLink("https://github.com/gophrase/backend/commit/b5362d22aa", [])?.label).toBe(
+      "gophrase/backend@b5362d2",
+    );
+    expect(describeLink("https://gitlab.com/g/sub/app/-/merge_requests/7", [])).toMatchObject({
+      vendor: "gitlab",
+      label: "g/sub/app!7",
+    });
+    expect(describeLink("https://github.com/gophrase/backend", [])?.label).toBe("gophrase/backend");
+  });
+
+  test("a self-hosted app is the company's only where its own hosts say so, path prefix and all", () => {
+    expect(describeLink("https://github.example.com/a/b/pull/2", [])?.vendor).toBeNull();
+    expect(describeLink("https://github.example.com/a/b/pull/2", [GHE])?.label).toBe("a/b#2");
+    expect(describeLink("https://code.example.com/scm/g/app/-/issues/3", [GITLAB])).toMatchObject({
+      vendor: "gitlab",
+      label: "g/app#3",
+    });
+    expect(describeLink("https://code.example.com/other/g/app", [GITLAB])?.vendor).toBeNull();
+    expect(
+      describeLink("https://chat.example.com/team/channels/design-review", [MATTERMOST]),
+    ).toMatchObject({
+      vendor: "mattermost",
+      label: "~design-review",
+    });
+    expect(describeLink("https://jira.example.com/browse/MOB-12", [JIRA])).toMatchObject({
+      vendor: "atlassian",
+      label: "MOB-12",
+      kind: "Jira",
+    });
+    expect(
+      describeLink("https://wiki.example.com/confluence/spaces/DES/pages/1/Brand+tokens", [WIKI]),
+    ).toMatchObject({ vendor: "atlassian", label: "DES page 1" });
+  });
+
+  test("Slack and Atlassian Cloud are theirs on their own domains", () => {
+    expect(
+      describeLink("https://gophrase.slack.com/archives/C07LQ2V4K/p1729950000123456", []),
+    ).toMatchObject({
+      vendor: "slack",
+      label: "Message in gophrase",
+    });
+    expect(describeLink("https://gophrase.slack.com/archives/C07LQ2V4K", [])?.label).toBe(
+      "Channel in gophrase",
+    );
+    // A TENANT ANYBODY CAN REGISTER says its host after the label; a site the
+    // company configured is its own and its labels stand alone. A PAGE IS
+    // LABELLED BY ITS SPACE AND ID, never by the title its address carries.
+    expect(describeLink("https://acme.atlassian.net/browse/GP-1", [])).toMatchObject({
+      label: "GP-1 (acme.atlassian.net)",
+      code: false,
+    });
+    expect(
+      describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub", [])?.label,
+    ).toBe("D page 2 (acme.atlassian.net)");
+    const own: LinkHost[] = [
+      { kind: "jira", url: "https://acme.atlassian.net" },
+      { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
+    ];
+    expect(describeLink("https://acme.atlassian.net/browse/GP-1", own)?.label).toBe("GP-1");
+    expect(
+      describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Brand+tokens", own)?.label,
+    ).toBe("D page 2");
+  });
+
+  // THE DASHBOARD'S OWN REBUILT ADDRESS, cited back, is a page too: the
+  // canonical form carries no title, and a page needs none to be one.
+  //
+  // Mutation: require a title after the id and the canonical form is inert.
+  test("a Confluence page with no title in its address is the same page", () => {
+    const own: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    expect(describeLink("https://acme.atlassian.net/wiki/spaces/ENG/pages/123", own)).toMatchObject(
+      {
+        label: "ENG page 123",
+        canonical: "https://acme.atlassian.net/wiki/spaces/ENG/pages/123",
+      },
+    );
+  });
+
+  // A LABEL IS ONLY WHAT AN ADDRESS IS REBUILT FROM: a Confluence page's
+  // title and a path segment no app allows are the writer's words, and a
+  // label made of them says whatever the writer chose beside a vendor's mark.
+  //
+  // Mutation: label a page by its title, or a channel by any segment, and
+  // these show the writer's words.
+  test("no label carries words the rebuilt address drops", () => {
+    const own: LinkHost[] = [
+      { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
+      MATTERMOST,
+    ];
+    const page = describeLink(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub",
+      own,
+    );
+    expect(page?.label).toBe("D page 2");
+    expect(page?.label).not.toContain("GitHub");
+    const channel = describeLink("https://chat.example.com/team/channels/Sign%20in%20to%20GitHub", [
+      MATTERMOST,
+    ]);
+    expect(channel?.label).not.toContain("Sign in");
+    expect(channel?.canonical).toBeNull();
+    const post = describeLink("https://chat.example.com/Sign%20in/pl/abc123", [MATTERMOST]);
+    expect(post?.label).not.toContain("Sign in");
+    expect(post?.canonical).toBeNull();
+  });
+
+  // A CONFLUENCE PAGE IS REBUILT AS ITS SPACE AND ID ALONE: a segment before
+  // `spaces` is the writer's, and so is the title after the id.
+  //
+  // Mutation: rebuild from the written path up to the id and the first two
+  // carry the writer's segment to the company's host.
+  test("a Confluence page on the company's site is rebuilt as spaces/<key>/pages/<id>", () => {
+    const wiki: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    const site: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net" }];
+    const canonical = (raw: string, hosts: LinkHost[]) => describeLink(raw, hosts)?.canonical;
+    expect(canonical("https://acme.atlassian.net/wiki/SECRET/spaces/D/pages/2/T", wiki)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/x/y/spaces/D/pages/2/T", site)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/2/Title?x=1", wiki)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/~me/pages/2/T", site)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/~me/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/abc/T", wiki)).toBeNull();
+    // DOTS ALONE ARE NO SEGMENT: a URL parser keeps `...`, and rebuilt as a
+    // path it is a name no space has, so the page is drawn as words.
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/.../pages/2/T", wiki)).toBeNull();
+  });
+
+  test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {
+    // `a%2Fevil` decoded read as two segments, labelling another repository.
+    const spoof = describeLink("https://github.com/a%2Fevil/b/pull/1", []);
+    expect(spoof?.label).not.toContain("a/evil");
+    expect(spoof).toMatchObject({ vendor: "github", code: false });
+    expect(describeLink("https://github.com/a/b/commit/not-a-sha", [])?.label).toBe(
+      "github.com/a/b/commit/not-a-sha",
+    );
+    expect(describeLink("https://gitlab.com/g%2Fx/app/-/issues/3", [])?.code).toBe(false);
+  });
+
+  test("a look-alike host, a credential before the host and a host by another port are nobody's", () => {
+    for (const raw of [
+      "https://github.com.login.example.net/gophrase/backend/pull/14",
+      "https://github.com@login.example.net/gophrase/backend/pull/14",
+      "https://login.example.net/github.com/gophrase/backend/pull/14",
+      "https://slack.com.example.net/archives/C1/p1",
+      "https://notatlassian.net/browse/GP-1",
+      "https://github.example.com:8443/a/b/pull/2",
+    ]) {
+      expect(describeLink(raw, [GHE])?.vendor, raw).toBeNull();
+    }
+  });
+
+  test("an address is shown as its host and path, cut, and anything that is no web address is nothing", () => {
+    expect(describeLink("https://grafana.example.com/d/api-latency?orgId=1", [])).toEqual({
+      vendor: null,
+      label: "grafana.example.com/d/api-latency",
+      code: false,
+      kind: null,
+      canonical: null,
+      place: null,
+    });
+    expect(describeLink(`https://example.com/${"a".repeat(80)}`, [])?.label).toHaveLength(48);
+    expect(describeLink("javascript:alert(1)", [])).toBeNull();
+    expect(describeLink("#/worklet/GP-1", [])).toBeNull();
+    expect(describeLink("mailto:ops@example.com", [])).toBeNull();
+  });
+});
+
+describe("where a bare reference points", () => {
+  // A HOST LINKS ONLY UNDER AN OWNER IT NAMES, and one that names none
+  // vouches for no owner at all: closed, never open.
+  //
+  // Mutation: let a host with no owners take any owner and the first case
+  // links.
+  test("a host that names no owners, or not this one, links no reference", () => {
+    const bare: LinkHost = { kind: "github", url: "https://github.com" };
+    expect(referenceTarget("gophrase/backend", "#", "14", [bare])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(referenceTarget("other/backend", "#", "14", [GITHUB])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(
+      describeLink("https://github.com/gophrase/backend/pull/14", [bare])?.canonical,
+    ).toBeNull();
+    expect(describeLink("https://github.com/other/x", [GITHUB])?.canonical).toBeNull();
+    expect(
+      describeLink("https://code.example.com/scm/g/app/-/issues/3", [{ ...GITLAB, owners: [] }])
+        ?.canonical,
+    ).toBeNull();
+  });
+
+  test("one code host links it there, GitHub's issue address standing for a pull request too", () => {
+    expect(referenceTarget("gophrase/backend", "#", "14", [GITHUB])).toEqual({
+      vendor: "github",
+      href: "https://github.com/gophrase/backend/issues/14",
+    });
+    expect(referenceTarget("g/sub/app", "!", "7", [GITLAB])).toEqual({
+      vendor: "gitlab",
+      href: "https://code.example.com/scm/g/sub/app/-/merge_requests/7",
+    });
+    expect(referenceTarget("g/app", "@", "b5362d2", [GITLAB])?.href).toBe(
+      "https://code.example.com/scm/g/app/-/commit/b5362d2",
+    );
+  });
+
+  test("with no code host, the spelling names the vendor and nothing links", () => {
+    expect(referenceTarget("a/b", "#", "1", [])).toEqual({ vendor: "github", href: null });
+    expect(referenceTarget("a/b", "!", "1", [])).toEqual({ vendor: "gitlab", href: null });
+    expect(referenceTarget("a/b", "@", "b5362d2", [])).toBeNull();
+  });
+
+  test("with both code hosts, a reference either could own stays text", () => {
+    expect(referenceTarget("a/b", "#", "1", [GITHUB, GITLAB])).toBeNull();
+    expect(referenceTarget("a/b", "@", "b5362d2", [GITHUB, GITLAB])).toBeNull();
+    expect(referenceTarget("a/b", "!", "1", [GITHUB, GITLAB])?.vendor).toBe("gitlab");
+  });
+});
+
+describe("repositories", () => {
+  const OWNERS = ["gophrase"];
+
+  test("a bare owner/repo is a repository only under an owner the code hosts name", () => {
+    expect(said("assigned to you in gophrase/backend.", OWNERS)).toEqual([
+      "repository:gophrase/backend",
+    ]);
+    expect(said("GoPhrase/Backend", OWNERS)).toEqual(["repository:GoPhrase/Backend"]);
+    expect(said("assigned to you in gophrase/backend.")).toEqual([]);
+  });
+
+  test.each(["and/or", "src/app", "client/server", "2024/10", "1/2", "UI/UX"])(
+    "%s is words: no company works under its first part",
+    (text) => {
+      expect(said(`read ${text} here`, OWNERS)).toEqual([]);
+    },
+  );
+
+  test.each([
+    "gophrase/backend/src",
+    "/gophrase/backend",
+    "./gophrase/backend",
+    "~gophrase/backend",
+    "gophrase/backend.py",
+    "x.gophrase/backend",
+    "https://example.com/gophrase/backend",
+  ])("%s is a path or an address, not a repository", (text) => {
+    expect(said(text, OWNERS).filter((t) => t.startsWith("repository:"))).toEqual([]);
+  });
+
+  test("a reference is a reference, not a repository and a number", () => {
+    expect(said("gophrase/backend#11", OWNERS)).toEqual(["reference:gophrase/backend#11"]);
+  });
+
+  test("a repository goes to its owner's code host, and nowhere when two hosts name the owner", () => {
+    const github: LinkHost = { kind: "github", url: "https://github.com", owners: ["gophrase"] };
+    expect(repositoryTarget("GoPhrase", "backend", [github])).toEqual({
+      vendor: "github",
+      href: "https://github.com/GoPhrase/backend",
+    });
+    const both: LinkHost = {
+      kind: "gitlab",
+      url: "https://gitlab.example.com",
+      owners: ["gophrase"],
+    };
+    expect(repositoryTarget("gophrase", "backend", [github, both])).toBeNull();
+    expect(repositoryTarget("other", "backend", [github])).toBeNull();
+    expect(codeHostOwners([github, { kind: "jira", url: "https://j.example.com" }])).toEqual(
+      new Set(["gophrase"]),
+    );
+  });
+});
+
+describe("bare numbers", () => {
+  const GH: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+  /** A run's references as `path#id` for its text, read in a message of `texts`. */
+  const placed = (text: string, texts: readonly string[] = [text]) =>
+    inlineTokens(text, new Set(["gophrase"]), messageScope(texts, GH)).flatMap((t) =>
+      t.kind === "reference" ? [`${t.text}=${t.path}${t.sep}${t.id}`] : [],
+    );
+
+  test.each([
+    ["#7 in gophrase/frontend", "#7 in gophrase/frontend=gophrase/frontend#7"],
+    ["#7 of gophrase/frontend.", "#7 of gophrase/frontend=gophrase/frontend#7"],
+    ["gophrase/frontend PR #7", "gophrase/frontend PR #7=gophrase/frontend#7"],
+    ["gophrase/frontend pull request #7", "gophrase/frontend pull request #7=gophrase/frontend#7"],
+    ["gophrase/frontend issue #7", "gophrase/frontend issue #7=gophrase/frontend#7"],
+    ["platform/api MR #7", "platform/api MR #7=platform/api!7"],
+    ["acme/widget #7", "acme/widget #7=acme/widget#7"],
+  ])("the sentence binds %s", (text, want) => {
+    expect(placed(text)).toEqual([want]);
+  });
+
+  test("the same number in full elsewhere in the message places it, and nothing else does", () => {
+    const texts = ["Review on gophrase/backend#11 and gophrase/web#3.", "Then #11, not #3x or #4."];
+    expect(placed(texts[1]!, texts)).toEqual(["#11=gophrase/backend#11"]);
+  });
+
+  test("a number under two repositories is a word", () => {
+    const texts = ["gophrase/backend#11 and gophrase/web#11.", "Then #11."];
+    expect(placed(texts[1]!, texts)).toEqual([]);
+  });
+
+  test("the message's one repository places a number, from an address too", () => {
+    expect(placed("in gophrase/backend; start after #11")).toContain("#11=gophrase/backend#11");
+    const texts = ["See https://github.com/gophrase/backend/pull/11/files.", "Then #12."];
+    expect(placed(texts[1]!, texts)).toEqual(["#12=gophrase/backend#12"]);
+  });
+
+  test.each([
+    "#011",
+    "&#11;",
+    "C#11",
+    "a#11",
+    "x/#11",
+    "#11a",
+    "#11-b",
+    "#1.5",
+    "https://example.com/#11",
+    "/issues/#11",
+  ])("%s is no bare number", (text) => {
+    expect(placed(text, [text, "gophrase/backend"])).toEqual([]);
+  });
+
+  test("with nothing to place it, a number is a word", () => {
+    expect(placed("Our #1 priority is #11.")).toEqual([]);
+  });
+
+  // THE CHOSEN TRADE-OFF, held so changing it is a decision: in a message that
+  // names one repository, a rank and a heading's number are its issues too,
+  // as GitHub's own autolinking reads them there.
+  test("in a message naming one repository, a rank and a heading's number are placed too", () => {
+    const texts = ["Assigned in gophrase/backend.", "Our #1 priority.", "#2 heading"];
+    expect(placed(texts[1]!, texts)).toEqual(["#1=gophrase/backend#1"]);
+    expect(placed(texts[2]!, texts)).toEqual(["#2=gophrase/backend#2"]);
+  });
+});
+
+describe("rooms", () => {
+  // THE COMPANY'S ROOMS, as the frame reads them: every one a name prose may
+  // spell as a colour or an issue's number.
+  const ROOMS = new Set(["e2e", "2fa", "b2b", "2026", "launch", "e2e-tests"]);
+  const GH: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+  /** A run's tokens as `kind:text`, read against `rooms` in a message of `texts`. */
+  const read = (text: string, rooms: RoomSet = ROOMS, texts: readonly string[] = [text]) =>
+    inlineTokens(text, new Set(["gophrase"]), messageScope(texts, GH), rooms).map(
+      (t) => `${t.kind}:${t.text}`,
+    );
+
+  test("a room the reader may read is a room, where its name is spelled as a colour", () => {
+    expect(read("#e2e has 4 unread messages and #2fa has 2.")).toEqual(["room:#e2e", "room:#2fa"]);
+    expect(read("Shall I post the notes in #b2b?")).toEqual(["room:#b2b"]);
+    // AND AS WORDS BY THEIR SHAPE WHERE THE READER HAS NO SUCH ROOM.
+    expect(read("#e2e has 4 unread messages and #2fa has 2.", NO_ROOMS)).toEqual([
+      "colour:#e2e",
+      "colour:#2fa",
+    ]);
+  });
+
+  test("a room spelled as an issue's number is the room, and a number the sentence binds is not", () => {
+    const text = "Fixed in gophrase/backend#12, and I told #2026 about it.";
+    expect(read(text)).toEqual(["reference:gophrase/backend#12", "room:#2026"]);
+    expect(read(text, NO_ROOMS)).toEqual(["reference:gophrase/backend#12", "reference:#2026"]);
+    // THE SENTENCE SAYS WHAT IT IS: a number bound to a repository is longer
+    // than the room's name at the same place, and wins it.
+    expect(read("See #2026 in gophrase/frontend.")).toEqual([
+      "reference:#2026 in gophrase/frontend",
+    ]);
+  });
+
+  test("a room is a whole name, in any case, at a colour's boundaries", () => {
+    expect(read("Ask #Launch, then #E2E.")).toEqual(["room:#Launch", "room:#E2E"]);
+    expect(inlineTokens("#Launch", undefined, NO_SCOPE, ROOMS)).toMatchObject([
+      { kind: "room", name: "launch" },
+    ]);
+    // A LONGER NAME IS ANOTHER ROOM, or none: never its first part.
+    expect(read("#e2e-tests and #e2e-nightly")).toEqual(["room:#e2e-tests"]);
+    expect(read("#launchpad, x#launch, &#launch, /#launch, ##launch")).toEqual([]);
+    expect(read("in https://x.test/#launch")).toEqual(["address:https://x.test/#launch"]);
+  });
+
+  test("a code span holding just a room's name is code, and anything else is not a room", () => {
+    expect(codeRoom("#e2e", ROOMS)).toBe(true);
+    expect(codeRoom(" #E2E ", ROOMS)).toBe(true);
+    expect(codeRoom("#e2e x", ROOMS)).toBe(false);
+    expect(codeRoom("#fff", ROOMS)).toBe(false);
+    expect(codeRoom("#e2e", NO_ROOMS)).toBe(false);
+  });
+});
+
+describe("cost", () => {
+  // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
+  // every reader, so a run that costs seconds freezes everybody.
+  //
+  // GROWTH, TIMED WITH ROOM TO SPARE (`test/growth.ts`): a call over a run
+  // thirty-two times longer must take under 181 times as long, where a linear
+  // pass takes about thirty-two and a quadratic one about a thousand. And it
+  // must take more than four times as long, so a case that measured nothing
+  // passes nothing.
+  //
+  // Mutation: count the brackets again per character trimmed, look every
+  // reference up again for each commit, bring back a lazy run between a bound
+  // number's repository and its number, or scan the text before every bound
+  // number, and its case exceeds the bound.
+  const OWNERS = new Set(["a", "gp"]);
+  const holdsLinear = (ratio: number) => {
+    expect(ratio, "the larger run took no longer, so this measured nothing").toBeGreaterThan(4);
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
+  };
+
+  // EACH CASE'S BASE RUN IS 1,000 characters, or more where a regression's
+  // linear term would hide its quadratic one at that size. Looking every
+  // reference up again for each commit read 121 to 137 at 1,000, under the
+  // bound, and 471 to 780 at 8,000, while the linear pass reads 34 there.
+  test.each<[string, (n: number) => string, number?]>([
+    ["an address closed by brackets", (n) => `https://x.test/${")".repeat(n)}`],
+    ["a word of brackets and a letter", (n) => `${")".repeat(n)}a`],
+    ["slashes", (n) => `${"a/".repeat(n / 2)}b`],
+    ["stops", (n) => "a.".repeat(n / 2)],
+    ["numbers", (n) => "#1".repeat(n / 2)],
+    ["keys between slashes", (n) => "GP-1/".repeat(n / 5)],
+    ["handles", (n) => "@a".repeat(n / 2)],
+    ["the word commit", (n) => "commit ".repeat(n / 7)],
+    ["commits after references", (n) => "a/b#1 commit abcdef1 ".repeat(n / 21), 8_000],
+    ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
+    ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
+    ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
+  ])("%s read in linear time", (_, text, n = 1_000) => {
+    holdsLinear(
+      growth((size) => {
+        const run = text(size);
+        return () => inlineTokens(run, OWNERS);
+      }, n),
+    );
+  });
+
+  // A CODE SPAN IS AN AGENT'S TOO: `rgb(1`, a run of spaces and a letter.
+  test("a colour's channels between runs of spaces read in linear time", () => {
+    holdsLinear(
+      growth((n) => {
+        const code = `rgb(1${" ".repeat(n)}x`;
+        return () => codeColour(code);
+      }, 1_000),
+    );
+  });
+
+  // A CONFIGURED HOST'S BASE, a run of slashes before its last part.
+  test("a configured host's base path of slashes reads in linear time", () => {
+    holdsLinear(
+      growth((n) => {
+        const hosts: LinkHost[] = [{ kind: "jira", url: `https://x.test${"/".repeat(n)}a` }];
+        return () => describeLink("https://x.test/a/browse/GP-1", hosts);
+      }, 1_000),
+    );
+  });
+
+  test.each([
+    ["10,000 rooms", "#e2e ".repeat(10_000)],
+    ["2,000 names past a room's longest", `#${"a".repeat(80)} `.repeat(2_000)],
+  ])("%s read in linear time", (_, text) => {
+    const start = performance.now();
+    inlineTokens(text, new Set(["a"]), NO_SCOPE, new Set(["e2e", "a".repeat(64)]));
+    expect(performance.now() - start).toBeLessThan(250);
+  });
+});

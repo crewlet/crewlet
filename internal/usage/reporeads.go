@@ -121,7 +121,7 @@ func (r RepoReader) Group() Group { return Group{r.PrincipalKind, r.Principal, r
 const (
 	// repoReadersStatement is one principal kind's readers of a repository
 	// from a principal on, in reader order — usage_repo_reads_repo_idx's own
-	// (replicated 0065) — each summed over the range's days, with the keyset
+	// (replicated 0088) — each summed over the range's days, with the keyset
 	// a resumed page puts on the principal it resumes in as the %s.
 	repoReadersStatement = `
 		SELECT principal_kind, principal, via, seat, SUM(reads), SUM(bytes), MAX(last_at)

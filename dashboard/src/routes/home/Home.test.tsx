@@ -14,7 +14,13 @@ import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import type { ReactNode } from "react";
 import { Home } from "./Home.tsx";
-import { greeting } from "./model.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
+import { greeting } from "~/lib/format.ts";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
@@ -26,6 +32,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ADMIN_RAISES } from "~/lib/remedy.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -38,7 +45,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -175,6 +182,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   localStorage.clear();
   reloadForTest();
@@ -317,7 +325,8 @@ describe("the figures", () => {
     await settle();
     const card = tile(/^Tokens · /);
     const link = within(card).getByRole("link", { name: "No weekly budget" });
-    expect(link.getAttribute("href")).toBe("#/company/budgets");
+    // THE COMPANY'S OWN CEILINGS, the section a spent week opens too.
+    expect(link.getAttribute("href")).toBe("#/company/budgets?section=company");
     // NO BARE DELTA before the budget's line: the tile's second line is the
     // budget's, and "−88% No weekly budget" read as a claim about it.
     expect(card.textContent).not.toMatch(/[+−±]\d/);
@@ -326,7 +335,7 @@ describe("the figures", () => {
   // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader without
   // Admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, grants: ["tracker"] }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, grants: ["worklet"] }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -352,6 +361,45 @@ describe("the figures", () => {
     });
     await settle();
     expect(within(tile(/^Tokens · /)).getByRole("link", { name: "No weekly budget" })).toBeTruthy();
+  });
+
+  // A SPENT WEEK OPENS THE CEILING BY THE ONE GATE EVERY REMEDY IS OFFERED BY:
+  // a reader who may raise it follows the line to the company's ceiling, and
+  // anybody else reads who can raise it rather than a fact alone.
+  //
+  // Mutation: gate the line on anything but the remedy's offer, and the
+  // reader without Admin is told nothing of who can raise it.
+  test("a spent week opens the company's ceiling, or says who can raise it", async () => {
+    const SPENT = {
+      ...UNCAPPED,
+      org: {
+        windows: [
+          {
+            period: "week" as const,
+            window: "2026-W39",
+            starts_at: "",
+            resets_at: "2026-09-28T00:00:00Z",
+            used: 1000,
+            limit: 1000,
+            state: "refusing" as const,
+          },
+        ],
+      },
+    };
+    mount({ budget: SPENT });
+    await settle();
+    const link = within(tile(/^Tokens · /)).getByRole("link", {
+      name: /This week's budget is spent/,
+    });
+    expect(link.getAttribute("href")).toBe("#/company/budgets?section=company");
+    cleanup();
+
+    mount({ viewer: { ...JANE, grants: ["worklet"] }, budget: SPENT });
+    await settle();
+    const card = tile(/^Tokens · /);
+    expect(within(card).queryByRole("link")).toBeNull();
+    expect(card.textContent).toContain("This week's budget is spent");
+    expect(card.textContent).toContain(ADMIN_RAISES);
   });
 
   test("today is asked of the engine as one company day", async () => {
@@ -606,7 +654,9 @@ describe("the decisions", () => {
         acts: [],
       },
     });
-    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    // The salute follows the wall clock ("Hello" from midnight until five), so
+    // only the name is asserted.
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello), Bob$/ })).toBeTruthy();
     const reads = () =>
       sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
     expect(reads()).toHaveLength(1);
@@ -615,7 +665,7 @@ describe("the decisions", () => {
     name = undefined;
     mount();
     await waitFor(() => expect(reads()).toHaveLength(1));
-    expect(await screen.findByRole("heading", { name: /^Good \w+$/ })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello)$/ })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 
@@ -647,10 +697,12 @@ describe("the decisions", () => {
       ],
     });
     await settle();
-    expect(screen.getByText("DevRel stopped: daily token budget exhausted")).toBeTruthy();
+    expect(screen.getByText("Stopped: daily token budget exhausted")).toBeTruthy();
     const row = screen
-      .getByText("DevRel stopped: daily token budget exhausted")
-      .closest(".decision-row") as HTMLElement;
+      .getByText("Stopped: daily token budget exhausted")
+      .closest(".decision-group") as HTMLElement;
+    // WHO IT IS, ONCE: the seat's name on the block's head, not in its title.
+    expect(row.querySelector(".decision-group-who")?.textContent).toBe("DevRel");
     expect(row.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
     expect(row.querySelector(".decision-state")?.textContent).toBe("Stopped");
     expect(tile("Waiting on your decision").textContent).toContain("1");
@@ -668,7 +720,7 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, grants: ["tracker"], acts: ["comment_on_work_item"] },
+      viewer: { ...JANE, grants: ["worklet"], acts: ["comment_on_work_item"] },
       agents: [
         {
           id: "devrel",
@@ -735,6 +787,87 @@ describe("the decisions", () => {
     ]);
   });
 
+  // A PARKED RUN'S ROW QUOTES ITS QUESTION, never its context, which its
+  // Answer reads. An older build's free-text question runs past the title's
+  // cap, and the row's one line cuts it rather than carrying every word of it
+  // or splitting it at a sentence. A run that asked to choose is answered
+  // there with one of its options, naming the question it answers.
+  //
+  // Mutation: quote the context in the row, draw a long question uncut, or
+  // send the option as `answer`, and this fails.
+  test("a parked run's row quotes its question and is answered with an option", async () => {
+    const parked = {
+      turn_id: "turn-7",
+      launch_id: "q7",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      question_context: "It is regenerated by **make fixtures**.",
+      decision: {
+        question: "May I delete the fixtures directory?",
+        options: [
+          { id: "keep", label: "Keep it" },
+          { id: "delete", label: "Delete it" },
+        ],
+        recommended: "delete",
+        role: "approver",
+      },
+      paused_at: "2026-09-22T09:48:00Z",
+      updated_at: "2026-09-22T09:48:00Z",
+      pause_ttl_seconds: 0,
+    };
+    const legacy = {
+      ...parked,
+      turn_id: "turn-8",
+      launch_id: "q8",
+      question:
+        "Which retry ceiling? The API allows five. " +
+        "The client used three, and the gateway retries twice on its own before either. ".repeat(4),
+      question_context: "",
+      decision: undefined,
+    };
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [
+            { kind: "run", at: parked.paused_at, run: parked },
+            { kind: "run", at: legacy.paused_at, run: legacy },
+          ],
+          total: 2,
+          capped: false,
+        },
+        sandbox_runs: { runs: [parked, legacy] },
+      },
+    });
+    await settle();
+    const subs = [...document.querySelectorAll(".decision-item .decision-sub")].map(
+      (el) => el.textContent ?? "",
+    );
+    expect(subs.some((s) => s.includes("“May I delete the fixtures directory?”"))).toBe(true);
+    expect(subs.join(" ")).not.toContain("make fixtures");
+    // THE LONG ONE WHOLE, CUT TO ONE LINE, never split at its first sentence.
+    const cut = document.querySelector(".decision-sub .crewlet-text--truncate");
+    expect(cut?.textContent).toBe(legacy.question.trim());
+    const row = screen
+      .getByText("“May I delete the fixtures directory?”", { exact: false })
+      .closest(".decision-group") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Answer" }));
+    });
+    await settle();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector(".prose strong")?.textContent).toBe("make fixtures");
+    expect(dialog.querySelector("blockquote")).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: /Delete it/ }));
+    });
+    await settle();
+    expect(posted).toEqual([
+      { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
+    ]);
+  });
+
   // "REVIEW" LANDS ON WHAT IT COUNTED. It pointed at the Inbox filtered on a
   // notice reason no notice carries: Home said a decision was waiting, and
   // the page it sent the reader to drew "decisions 0" and no ask at all. The
@@ -754,7 +887,7 @@ describe("the decisions", () => {
     // NEEDS YOU, over the one decision, opened in the pane with its options
     // to answer, and no updates group beside it.
     expect(review).toBe("#/inbox");
-    expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: /^Needs you/ })).toBeTruthy();
     expect(
       screen.getByRole("heading", {
         name: "Hold the 2.4 release until the scheduler migration lands?",
@@ -793,12 +926,15 @@ describe("live now", () => {
             in_progress: true,
             updated_at: "2026-09-22T09:05:00Z",
             work_item: { backend: "native", id: "t", key: "ENG-412", project: "ENG" },
-            running_call: {
-              round: 7,
-              name: "sandbox.run",
-              arguments: '{"cmd":"go test ./..."}',
-              started_at: "",
-            },
+            running_calls: [
+              {
+                id: "call-7",
+                round: 7,
+                name: "sandbox.run",
+                arguments: '{"cmd":"go test ./..."}',
+                started_at: "",
+              },
+            ],
           },
         },
       ],
@@ -937,6 +1073,18 @@ describe("the head", () => {
     expect(greeting(at, "")).toBe("Good evening");
   });
 
+  test("the small hours name no part of the day", () => {
+    pinZoneForTest("UTC");
+    reloadForTest();
+    expect(greeting(Date.parse("2026-10-26T01:11:00Z"), "Miles Rae")).toBe("Hello, Miles");
+    expect(greeting(Date.parse("2026-10-26T04:59:00Z"), "")).toBe("Hello");
+    expect(greeting(Date.parse("2026-10-26T05:00:00Z"), "Miles")).toBe("Good morning, Miles");
+    expect(greeting(Date.parse("2026-10-26T12:00:00Z"), "Miles")).toBe("Good afternoon, Miles");
+    expect(greeting(Date.parse("2026-10-26T18:00:00Z"), "Miles")).toBe("Good evening, Miles");
+    pinZoneForTest("");
+    reloadForTest();
+  });
+
   test("a condition that needs a look links to where it is listed", async () => {
     mount({
       agents: [
@@ -964,5 +1112,34 @@ describe("the head", () => {
     expect(figure?.closest("p")?.textContent).toBe(
       "Nimbus is running on 3 nodes. 1 decision is waiting on you, and no agents are working right now.",
     );
+  });
+});
+
+describe("the board being arranged, for the assistant", () => {
+  test("is declared while Edit Home is open, read only, and gone when it closes", async () => {
+    setFramePage({ screen: "home", title: "Home", path: ["home"], params: {}, query: {} });
+    mount();
+    await settle();
+    expect(pageSnapshot()!.context.draft).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Home" }));
+    await settle();
+    const draft = pageSnapshot()!.context.draft!;
+    expect(draft).toMatchObject({ kind: "client", step: "arrange" });
+    expect(draft.help).toMatch(/done on the board itself/);
+    const widgets = draft.fields.find((f) => f.path === "widgets")!;
+    expect(widgets).toMatchObject({ kind: "list" });
+    expect(widgets.value.split("\n").length).toBeGreaterThan(1);
+    // NOTHING ON THE BOARD IS THE ASSISTANT'S TO SET, so the page takes no
+    // draft.set at all.
+    expect(draft.fields.some((f) => f.editable)).toBe(false);
+    expect(pageSnapshot()!.context.accepts).not.toContain("draft.set");
+    expect(
+      applyPageAction({
+        correlation_id: "c1",
+        action: "draft.set",
+        payload: { values: { widgets: ["Note"] } },
+        source_revision: pageSnapshot()!.context.source_revision,
+      }),
+    ).toMatchObject({ outcome: "no_handler" });
   });
 });

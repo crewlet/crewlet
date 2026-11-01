@@ -42,8 +42,8 @@ const RunTokenTTL = 7 * 24 * time.Hour
 
 // BoxRunRef names a run's ONE job: the row's key (the turn's run id) and the
 // launch the token was minted for. A token naming the turn alone would keep
-// admitting the first job's box after a second run_sandbox call of the same
-// turn launched another on the row: the launch id, minted by the store at
+// admitting the first job's box after a second launch of the same
+// turn opened another on the row: the launch id, minted by the store at
 // every launch, is what a superseded job's token stops matching.
 type BoxRunRef struct {
 	TurnID   string

@@ -27,9 +27,19 @@ import (
 //
 // Both halves matter. Without the seed a first run has nothing to activate
 // and the node serves a company no peer can see; without the store a change
-// on one node would be invisible to every other. A running node serves the
-// revision the activation pointer names, and these commands operate on that
-// pointer and the revisions behind it.
+// on one node would be invisible to every other. The company is the revision
+// the fleet's activation pointer names, and a running node applies it.
+//
+// # Offline, a command chooses what this node boots on
+//
+// These commands run with the engine stopped, and the pointer lives in the
+// coordination store, which they do not open. So what `import`, `activate` and
+// `rekey` write is an OFFER: this node boots on it at its next start and
+// publishes it to the fleet only while the fleet still runs the revision it
+// was built on — the company as this node last knew it
+// ([store.Configs.Restorable]) — so a change made on a node that was behind is
+// never published over what the fleet moved on to (bootpublish.go). Through a
+// running node (`import -api`, or the API), a write is the fleet's at once.
 //
 // # Revisions are immutable and the pointer is append-only
 //
@@ -38,24 +48,28 @@ import (
 // revision a meaningful gesture — it mints a new epoch every node is
 // watching, which is how a rotated secret reaches a running fleet.
 
-const configUsage = `crewlet config — the company configuration in the store
+const configUsage = `crewlet config: the company configuration in the store
 
 Usage:
-  crewlet config import FILE       Write a company document as a new active revision
-  crewlet config show              Print the active revision (secrets redacted)
+  crewlet config import FILE       Write a company document as a new revision to boot on
+  crewlet config show              Print the company this node knows (secrets redacted)
   crewlet config export [-revision ID] [-redact]
                                    Print a revision as YAML
   crewlet config revisions [-limit N]
                                    List revisions, newest first
   crewlet config diff ID [-against ID|active]
                                    Compare two revisions
-  crewlet config activate ID       Mark a revision active here; published at the next start
-  crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
+  crewlet config activate ID       Boot on a stored revision here, offered at the next start
+  crewlet config rekey [-dry-run]  Re-seal the revision this node boots on under the active key
 
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
   -dry-run       Report what a rekey would do without writing
 
+Offline, import, activate and rekey choose what this node boots on: it starts
+on that revision and publishes it to the fleet only while the fleet still runs
+the revision the change was built on. "active" names the company this node
+knows: the fleet's revision as it last saw it, or an offline change built on it.
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
 dropping a retired key from secrets.keys, or whatever is still sealed under it
@@ -81,7 +95,7 @@ var configSubcommands = []string{
 // DELIBERATELY NOT the API's 50 (`GET /config/revisions`, whose default is
 // sized for a client that pages and renders its own list). This output is a
 // tabwriter table a person reads in a terminal, and 20 rows leaves the header
-// and the active-revision marker on screen together on a standard 24-line
+// and the STATE column's marks on screen together on a standard 24-line
 // window. An operator who wants the whole history says `-limit`.
 const defaultRevisionLimit = 20
 
@@ -130,12 +144,12 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		dryRun   bool
 	)
 	var (
-		apiURL  string
+		apiURL  = new(string)
 		summary string
 	)
 	switch sub {
 	case "import":
-		fs.StringVar(&apiURL, "api", "",
+		apiURL = nodeAPIFlag(fs,
 			"import through a running node's API; default is the "+
 				"api.host:port in -config when the engine holds the store")
 		fs.StringVar(&summary, "summary", "",
@@ -143,14 +157,14 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 				"default \"imported from <file>\"")
 	case "export":
 		fs.StringVar(&revision, "revision", "",
-			"which revision to print; default active")
+			"which revision to print; default the company this node knows")
 		fs.BoolVar(&redact, "redact", false, "mask secret-shaped values")
 	case "revisions":
 		fs.IntVar(&limit, "limit", defaultRevisionLimit,
 			"how many revisions to list")
 	case "diff":
 		fs.StringVar(&against, "against", "active",
-			"what to compare with: a revision id, or active")
+			"what to compare with: a revision id, or active for the company this node knows")
 	case "rekey":
 		fs.BoolVar(&dryRun, "dry-run", false,
 			"report what would be re-sealed without writing")
@@ -173,7 +187,7 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return importCompany(ctx, importTarget{
 			bootstrapPath: *bootstrapPath,
 			path:          subject,
-			apiURL:        apiURL,
+			apiURL:        *apiURL,
 			summary:       summary,
 			environ:       environ,
 		}, stdout)
@@ -187,9 +201,9 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 
 	switch sub {
 	case "show":
-		return exportConfig(ctx, cs, "", true, stdout)
+		return exportConfig(ctx, cs, "", true, stdout, stderr)
 	case "export":
-		return exportConfig(ctx, cs, firstNonEmpty(subject, revision), redact, stdout)
+		return exportConfig(ctx, cs, firstNonEmpty(subject, revision), redact, stdout, stderr)
 	case "revisions":
 		return listRevisions(ctx, cs, limit, stdout)
 	case "diff":
@@ -272,7 +286,8 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 	}, func() { _ = db.Close() }, nil
 }
 
-// importConfig writes a company document as a new active revision.
+// importConfig writes a company document as a new revision this node boots on,
+// offered to the fleet over the company this node knows ([offlineBase]).
 //
 // IDEMPOTENT BY CONTENT, the same rule the boot seed follows: importing an
 // unchanged file writes nothing and says so, while an edited one writes
@@ -286,38 +301,43 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
 
-	active, found, err := cs.configs.Active(ctx)
+	known, over, found, err := offlineBase(ctx, cs)
 	if err != nil {
-		return fmt.Errorf("read the active revision: %w", err)
+		return err
 	}
-	parent := ""
 	if found {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		current, err := openStored(cs.cipher, active)
+		current, err := openStored(cs.cipher, known)
 		switch {
 		case errors.Is(err, secrets.ErrUnsealedWithKey):
-			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER COMPARED: this
-			// import is the remedy every reader's refusal of one names
-			// ([refuseUnsealed]), so refusing it here too left a store
-			// whose active revision is plaintext with no way out at all.
+			// AN UNSEALED REVISION IS REPLACED, NEVER COMPARED: this import
+			// is the remedy every reader's refusal of one names
+			// ([refuseUnsealed]; configapi's UnreadableRevisionError.Remedy
+			// names it beside PUT /config), so refusing it here too left a
+			// store whose company is plaintext with no way out at all.
 			// Nothing is read from it — it is only the new one's parent.
+			// PUT /config is the same rule held online, and it is also where
+			// this command goes while a node holds the store (configapi's
+			// prepare reads nothing from an unsealed base either). A revision
+			// SEALED in a form this build does not read is not this:
+			// [openStored] refuses it, and the import with it, since it is
+			// somebody's document and only the build that sealed it reads it.
 		case err != nil:
 			return err
 		case bytes.Equal(current, document):
-			fmt.Fprintf(stdout,
-				"%s already matches the active revision %s; nothing imported\n",
-				path, active.ID)
+			fmt.Fprintf(stdout, "%s already matches revision %s, the company this node "+
+				"knows; nothing imported\n", path, known.ID)
+			sayWhatBoots(ctx, cs, known.ID, stdout)
 			return nil
 		}
-		parent = active.ID
 	}
 
 	payload, err := secrets.Seal(cs.cipher, document)
 	if err != nil {
 		return err
 	}
-	id, err := cs.configs.InsertActive(ctx, store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
+	id, err := cs.configs.Offer(ctx, over, store.Revision{
+		ParentID: known.ID, Source: "file", CreatedBy: hostActor().Name,
 		CreatedByKind: hostActor().Kind, Summary: summary,
 		Payload: payload,
 	})
@@ -328,53 +348,91 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	// printed `true` on every import, since nothing is stored unsealed.
 	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
 	fmt.Fprintf(stdout, "imported %s as revision %s (sealed under %s)\n", path, id, sealedUnder)
-	fmt.Fprintln(stdout, importPublishNote)
+	fmt.Fprintln(stdout, importPublishNote(over))
 	return nil
 }
 
-// offlinePublish is what an OFFLINE write that marks a revision active can
-// and cannot do, and every such note opens with it.
+// offlineBase is what an offline change is built on: its parent, the company
+// this node knows ([store.Configs.Restorable]), and what the boot publishes it
+// over — the fleet's revision that company is, or is built on ([offerOn]).
+// found is false on a node that knows no company, whose change is built on
+// nothing.
+func offlineBase(ctx context.Context, cs *configStore) (store.Revision, store.Offer, bool, error) {
+	known, found, err := cs.configs.Restorable(ctx)
+	if err != nil {
+		return store.Revision{}, store.Offer{}, false,
+			fmt.Errorf("read the company this node knows: %w", err)
+	}
+	if !found {
+		return store.Revision{}, store.Offer{}, false, nil
+	}
+	return known, offerOn(known), true, nil
+}
+
+// sayWhatBoots notes that this node boots on another revision than the one a
+// command answered about, which is a node that has not applied the company it
+// knows — refused it, or not yet reached it.
+func sayWhatBoots(ctx context.Context, cs *configStore, about string, out io.Writer) {
+	boot, found, err := cs.configs.Boot(ctx)
+	if err != nil || !found || boot.ID == about {
+		return
+	}
+	fmt.Fprintf(out, "this node boots on revision %s: it runs that revision until it "+
+		"applies %s\n", boot.ID, about)
+}
+
+// offlinePublishNote is what an OFFLINE write that chooses what this node boots
+// on can and cannot do, and every such note opens with it.
 //
 // The fleet's activation pointer lives in the coordination store, which a
 // command run while the engine is stopped does not open for it: a revision is
 // this node's to hold, in its own database, and the node publishes the one it
-// marks active at its next boot (see startReconciler) — so the import starts
-// no broker, and needs none. (`crewlet secrets` is different: a secret has
-// no home on the node, so that command reaches the fleet's store itself.)
+// boots on at its next boot, over the revision it was built on (bootpublish.go)
+// — so the command starts no broker, and needs none. (`crewlet secrets` is
+// different: a secret has no home on the node, so that command reaches the
+// fleet's store itself.)
 //
 // Said out loud rather than left to be discovered: an operator who imported a
 // revision and saw nothing change would reasonably conclude the import
-// failed, and the fix — restart, or reach a running node — is not guessable.
+// failed, and one whose node was behind its fleet would not guess that the
+// change is withheld rather than published over what the fleet moved on to.
 //
 // WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, which is why the notes
-// below are several rather than one: `PUT /config` stores and activates a
-// document, but it activates nothing that is already stored and re-seals
-// nothing.
-const offlinePublish = "This node will publish it to the fleet at its next start."
+// below add to this one: `PUT /config` stores and activates a document, but it
+// activates nothing that is already stored and re-seals nothing.
+func offlinePublishNote(over store.Offer) string {
+	return "This node boots on it at its next start and publishes it to the fleet " +
+		publishedWhile(over) + "; if the fleet has moved on, it runs the fleet's " +
+		"revision once it can and says it did not publish this one."
+}
 
 // importPublishNote is an offline import's: the route to a running fleet is
 // `PUT /config` on a node that is up, which this same command takes while a
 // node holds the store.
-const importPublishNote = offlinePublish + " To make the file the running " +
-	"fleet's company without a restart, PUT /config to a node that is up, or " +
-	"run `crewlet config import` while a node is up: with the engine holding " +
-	"this store it goes through that node's API, and -api names any node."
+func importPublishNote(over store.Offer) string {
+	return offlinePublishNote(over) + " To make the file the running fleet's " +
+		"company without a restart, PUT /config to a node that is up, or run " +
+		"`crewlet config import` while a node is up: with the engine holding this " +
+		"store it goes through that node's API, and -api names any node."
+}
 
 // activatePublishNote is an offline activation's: a running node activates a
 // stored revision by storing its document again as a new one, which is the
 // append-only history's way of moving the pointer back.
-func activatePublishNote(revisionID string) string {
-	return offlinePublish + " To activate it on a running fleet without a " +
+func activatePublishNote(revisionID string, over store.Offer) string {
+	return offlinePublishNote(over) + " To activate it on a running fleet without a " +
 		"restart, POST /config/revisions/" + revisionID + "/revert to the node " +
 		"holding this store while it is up."
 }
 
-// rekeyPublishNote is an offline rekey's: a running node re-seals the active
-// document under its own active key whenever it stores it again, which is
-// what a reload does.
-const rekeyPublishNote = offlinePublish + " On a running fleet, POST " +
-	"/config/reload to a node that is up stores the active document again, " +
-	"sealed under that node's active key, and activates it."
+// rekeyPublishNote is an offline rekey's: a running node re-seals the fleet's
+// document under its own active key whenever it stores it again, which is what
+// a reload does.
+func rekeyPublishNote(over store.Offer) string {
+	return offlinePublishNote(over) + " On a running fleet, POST /config/reload " +
+		"to a node that is up stores the fleet's document again, sealed under that " +
+		"node's active key, and activates it."
+}
 
 // lockedStoreRemedy is what a `crewlet config` subcommand tells an operator
 // whose engine holds the store: the route to the same answer through a
@@ -386,23 +444,23 @@ func lockedStoreRemedy(sub string) string {
 	const stop = "stop `crewlet run` on this node and re-run."
 	switch sub {
 	case "show", "export":
-		return "Read it through the running node instead — GET /config " +
-			"serves the active revision with its credentials masked, and " +
-			"GET /config/revisions/<id> any other — or " + stop
+		return "Read it through the running node instead (GET /config " +
+			"serves the fleet's revision with its credentials masked, and " +
+			"GET /config/revisions/<id> any other), or " + stop
 	case "revisions":
-		return "Read them through the running node instead — GET " +
-			"/config/revisions — or " + stop
+		return "Read them through the running node instead (GET " +
+			"/config/revisions), or " + stop
 	case "diff":
-		return "Compare them through the running node instead — GET " +
-			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+		return "Compare them through the running node instead (GET " +
+			"/config/revisions/<id>/diff?against=<id|active>), or " + stop
 	case "activate":
-		return "Activate it through the running node instead — POST " +
+		return "Activate it through the running node instead (POST " +
 			"/config/revisions/<id>/revert stores that revision's document " +
-			"again and activates it fleet-wide — or " + stop
+			"again and activates it fleet-wide), or " + stop
 	case "rekey":
-		return "Re-seal through the running node instead — POST " +
-			"/config/reload stores the active document again under that " +
-			"node's active key — or " + stop
+		return "Re-seal through the running node instead (POST " +
+			"/config/reload stores the fleet's document again under that " +
+			"node's active key), or " + stop
 	default:
 		// Every subcommand that opens the store is named above; a new one
 		// still gets the stop, which is always true.
@@ -410,13 +468,17 @@ func lockedStoreRemedy(sub string) string {
 	}
 }
 
-// exportConfig prints one revision as YAML.
+// exportConfig prints one revision as YAML: the one named, or the company this
+// node knows, with a note on stderr where this node boots on another.
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
-	redact bool, stdout io.Writer,
+	redact bool, stdout, stderr io.Writer,
 ) error {
 	rev, company, err := storedCompany(ctx, cs, revisionID)
 	if err != nil {
 		return err
+	}
+	if revisionID == "" {
+		sayWhatBoots(ctx, cs, rev.ID, stderr)
 	}
 	if redact {
 		// STRUCTURAL, not a regex over the text: it masks the fields the
@@ -444,25 +506,41 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 		fmt.Fprintln(stdout, "no revisions are stored; run `crewlet config import`")
 		return nil
 	}
-	active, found, err := cs.configs.Active(ctx)
-	if err != nil {
-		return err
-	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "\tREVISION\tCREATED\tBY\tSOURCE\tSUMMARY")
+	fmt.Fprintln(w, "REVISION\tSTATE\tCREATED\tBY\tSOURCE\tSUMMARY")
 	for _, r := range rows {
-		marker := " "
-		if found && r.ID == active.ID {
-			// THE ACTIVE ONE IS MARKED, because "which is running" is the
-			// question this list is opened to answer and an id alone
-			// cannot answer it.
-			marker = "*"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, r.ID,
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, revisionState(r),
 			r.CreatedAt.Format(time.RFC3339),
 			describeAuthor(r.CreatedBy, r.OperatorID), r.Source, r.Summary)
 	}
 	return w.Flush()
+}
+
+// revisionState is what this node knows a revision to be, as the listing's
+// STATE column says it.
+//
+// TWO FACTS, because "which is running" has two answers on a node that refused
+// the fleet's revision: what it BOOTS on, and the FLEET's revision as it last
+// saw it. One marker could say only one of them, and whichever it said, the
+// operator was left to guess the other. An offline change says what it was
+// built on, because that is what the next start publishes it over, and the
+// unconfirmed offer it replaced where there is one, the one other revision the
+// start accepts in its place ([store.Offer.Over]).
+func revisionState(r store.Revision) string {
+	var state []string
+	if r.Boots {
+		state = append(state, "boots")
+	}
+	if r.Fleets {
+		state = append(state, "fleet's")
+	}
+	if r.Offer != nil {
+		state = append(state, "offered over "+r.Offer.String())
+	}
+	if len(state) == 0 {
+		return "-"
+	}
+	return strings.Join(state, ", ")
 }
 
 // diffRevisions compares two revisions, REDACTED on both sides.
@@ -568,23 +646,37 @@ func renderValue(v any) string {
 }
 
 // openStored opens a revision this node's store holds, and a refusal says what
-// brings it back.
+// brings it back ([storedRefusal]).
+func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
+	document, err := secrets.Open(cipher, rev.Payload)
+	if err != nil {
+		return nil, storedRefusal(rev.ID, err)
+	}
+	return document, nil
+}
+
+// storedRefusal is why a revision this node's store holds does not open, and
+// what brings it back, for every command that meets one, a rekey's check of
+// its seal included.
 //
 // An UNSEALED revision is refused: nothing vouches for who wrote it, and its
 // document comes back only by importing it again from the operator's own
-// copy. A revision sealed under a key the keyring does not hold needs that key
-// back.
-func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
-	document, err := secrets.Open(cipher, rev.Payload)
+// copy. A revision SEALED IN A FORM THIS BUILD DOES NOT READ is somebody's
+// document, most likely a newer build's, which that build reads and nothing
+// here replaces. A revision sealed under a key the keyring does not hold needs
+// that key back.
+func storedRefusal(revisionID string, err error) error {
 	switch {
-	case err == nil:
-		return document, nil
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
-		return nil, refuseUnsealed(rev.ID)
+		return refuseUnsealed(revisionID)
+	case errors.Is(err, secrets.ErrUnknownEnvelope):
+		return fmt.Errorf("revision %s is sealed in a form this build of crewlet "+
+			"doesn't read, most likely by a newer build, so nothing here reads or "+
+			"replaces it; run the build that sealed it: %w", revisionID, err)
 	default:
-		return nil, fmt.Errorf("revision %s does not open under this node's "+
+		return fmt.Errorf("revision %s does not open under this node's "+
 			"keyring; restore the key it was sealed under to secrets.keys: %w",
-			rev.ID, err)
+			revisionID, err)
 	}
 }
 
@@ -597,7 +689,8 @@ func refuseUnsealed(revisionID string) error {
 		revisionID, secrets.ErrUnsealedWithKey)
 }
 
-// storedCompany opens one revision, or the active one, as the stored form.
+// storedCompany opens one revision, or the company this node knows, as the
+// stored form.
 //
 // THE STORED-FORM READER, never the authored one. A revision is JSON a build
 // marshalled, possibly a NEWER build whose fields this one does not know, and
@@ -607,7 +700,7 @@ func refuseUnsealed(revisionID string) error {
 // exporting and comparing a document never runs it, and a revision this build
 // would refuse is exactly the one an operator needs to look at.
 func storedCompany(ctx context.Context, cs *configStore, revisionID string) (store.Revision, *config.Company, error) {
-	rev, err := revisionOrActive(ctx, cs, revisionID)
+	rev, err := revisionOrKnown(ctx, cs, revisionID)
 	if err != nil {
 		return store.Revision{}, nil, err
 	}
@@ -622,46 +715,72 @@ func storedCompany(ctx context.Context, cs *configStore, revisionID string) (sto
 	return rev, company, nil
 }
 
+// activateRevision makes a stored revision what this node boots on, offered to
+// the fleet over the company this node knows.
+//
+// HELD TO THE RUNNABLE RULES FIRST, because what this writes is what the next
+// start boots on: a revision this build cannot run would refuse that start, on
+// a node whose operator asked for nothing but a different document.
 func activateRevision(ctx context.Context, cs *configStore, revisionID string, stdout io.Writer) error {
 	if revisionID == "" {
 		return errors.New("config activate needs a revision id")
 	}
-	if _, found, err := cs.configs.Get(ctx, revisionID); err != nil {
+	revision, found, err := cs.configs.Get(ctx, revisionID)
+	if err != nil {
 		return err
-	} else if !found {
+	}
+	if !found {
 		return fmt.Errorf("no revision %s", revisionID)
 	}
 	// RE-POINTING THE FLEET AT ANOTHER REVISION IS A CHANGE OF DOCUMENT, and
 	// this route is offline: no credential, so a managed document refuses it.
-	// Re-activating the CURRENT revision changes nothing in the company — it
-	// is the offline twin of POST /config/reload, the gesture a rotated
-	// credential needs — and stays open. AFTER the lookups, so a missing or
-	// unknown id is told that, not that the document is managed.
-	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
+	// Re-activating the company's own revision changes nothing in it — it is
+	// the offline twin of POST /config/reload, the gesture a rotated
+	// credential needs — and stays open. AFTER the lookup, so a missing id is
+	// told that, not that the document is managed.
+	if err = refuseManagedActivation(ctx, cs, revisionID); err != nil {
 		return err
 	}
-	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
+	document, err := openStored(cs.cipher, revision)
+	if err != nil {
 		return err
 	}
-	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP, and that is worth
-	// keeping in mind here: publishing mints a new epoch every node is
-	// watching, which is how a rotated secret reaches a running fleet
-	// without a restart.
-	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
-	fmt.Fprintln(stdout, activatePublishNote(revisionID))
+	company, err := config.DecodeCompany(document)
+	if err == nil {
+		err = company.ValidateRunnable()
+	}
+	if err != nil {
+		return fmt.Errorf("revision %s cannot run on this build, so this node could "+
+			"not start on it: %w", revisionID, err)
+	}
+	_, over, _, err := offlineBase(ctx, cs)
+	if err != nil {
+		return err
+	}
+	if err := cs.configs.OfferStored(ctx, revisionID, over); err != nil {
+		return err
+	}
+	// RE-ACTIVATING THE FLEET'S OWN REVISION IS NOT A NO-OP: the boot
+	// publishes it over itself, which mints a new epoch every node is
+	// watching — how a rotated secret reaches a running fleet without a
+	// restart of every node.
+	fmt.Fprintf(stdout, "marked %s to boot on this node; it is offered to the fleet over %s\n",
+		revisionID, over.String())
+	fmt.Fprintln(stdout, activatePublishNote(revisionID, over))
 	return nil
 }
 
-// revisionOrActive resolves an id, or the active revision for an empty one.
-func revisionOrActive(ctx context.Context, cs *configStore, revisionID string) (store.Revision, error) {
+// revisionOrKnown resolves an id, or the company this node knows for an empty
+// one ([store.Configs.Restorable]).
+func revisionOrKnown(ctx context.Context, cs *configStore, revisionID string) (store.Revision, error) {
 	if revisionID == "" {
-		rev, found, err := cs.configs.Active(ctx)
+		rev, found, err := cs.configs.Restorable(ctx)
 		if err != nil {
 			return store.Revision{}, err
 		}
 		if !found {
 			return store.Revision{}, errors.New(
-				"no revision is active; run `crewlet config import`")
+				"this node knows no company; run `crewlet config import`")
 		}
 		return rev, nil
 	}
@@ -697,16 +816,17 @@ type importTarget struct {
 	environ config.Source
 }
 
-// importCompany writes a company document as a new active revision, through
-// whichever route can actually reach the fleet.
+// importCompany writes a company document as a new revision, through whichever
+// route can actually reach the fleet.
 //
 // # Two routes, and the difference is not cosmetic
 //
-// The OFFLINE route opens this node's store directly and marks the revision
-// active in its own table. It cannot move the fleet's activation pointer,
-// because on the default topology that pointer lives inside the engine's own
-// process — so it takes effect when this node next starts, and only if this
-// node is the one that starts.
+// The OFFLINE route opens this node's store directly and makes the revision
+// what this node boots on, as an offer built on the company this node knows. It
+// cannot move the fleet's activation pointer, because on the default topology
+// that pointer lives inside the engine's own process — so it takes effect when
+// this node next starts, and reaches the fleet only while the fleet still runs
+// what it was built on.
 //
 // The API route is PUT /config on a running node, which stores the revision
 // AND activates it, so every node converges with no restart. That is what an
@@ -731,9 +851,8 @@ type importTarget struct {
 // every inline credential, and a file kept in sync from them is written back
 // with this command. Each route restores the masks from the revision the
 // import replaces, as `PUT /config` restores a document sent back to it: the
-// API route IS that PUT, and the offline route restores from this node's
-// active revision, the one it parents the new revision on
-// ([config.LoadCompany]). Both validate after the restore, because a mask is
+// API route IS that PUT, and the offline route restores from the company this
+// node knows, the one it parents the new revision on ([config.LoadCompany]). Both validate after the restore, because a mask is
 // judged as the credential it stands for — the import's own check before
 // either route used to refuse every redacted copy, on both, for carrying the
 // marker in a field nobody touched.
@@ -795,32 +914,33 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 	// one that cannot be built is refused by each of them, one after
 	// another — a fleet-wide incident from a typo that could have been
 	// caught on this machine.
-	company, err := config.LoadCompany(t.path, activeRevision(ctx, cs))
+	company, err := config.LoadCompany(t.path, knownRevision(ctx, cs))
 	if err != nil {
 		return err
 	}
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 
-// activeRevision is the company this node's store holds active, as the
-// revision a redacted import is restored against: nil where none is active,
-// and read as the STORED form, because a newer peer may have written it.
-func activeRevision(ctx context.Context, cs *configStore) config.PriorRevision {
+// knownRevision is the company this node knows ([store.Configs.Restorable]),
+// as the revision a redacted import is restored against: nil where it knows
+// none, and read as the STORED form, because a newer peer may have written it.
+func knownRevision(ctx context.Context, cs *configStore) config.PriorRevision {
 	return func() (*config.Company, error) {
-		active, found, err := cs.configs.Active(ctx)
+		known, found, err := cs.configs.Restorable(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("read the active revision: %w", err)
+			return nil, fmt.Errorf("read the company this node knows: %w", err)
 		}
 		if !found {
 			return nil, nil
 		}
-		document, err := openStored(cs.cipher, active)
+		document, err := openStored(cs.cipher, known)
 		if err != nil {
 			return nil, err
 		}
 		company, err := config.DecodeCompany(document)
 		if err != nil {
-			return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
+			return nil, fmt.Errorf("parse revision %s, the company this node knows: %w",
+				known.ID, err)
 		}
 		return company, nil
 	}

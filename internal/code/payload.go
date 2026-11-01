@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE TYPED PAYLOADS, one per (kind, op), and the closed sets they spell.
@@ -140,7 +141,7 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
 // Visibility is who may read a repository besides persons and the tokens of
-// Tier A (ADR-0058): a SEAT'S standing narrows by it, and a person's never
+// Tier A (ADR-0081): a SEAT'S standing narrows by it, and a person's never
 // does — a credential presented by a person, or a token bound to nobody, reads
 // every repository, because a CI token that could not read a unit repository
 // breaks its builds and a Tier A token is the operator's own credential.
@@ -252,7 +253,7 @@ func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p
 
 // readsChart reports a principal whose push is judged from the CHART: a
 // seat's alone. A person maintains every repository and a token bound to
-// nobody reads every one — rules that need no chart (ADR-0055), so [GrantOf]
+// nobody reads every one — rules that need no chart (ADR-0078), so [GrantOf]
 // never consults one for them — and the engine's own expiry deletes a seat's
 // idle branch by a rule of its own ([Grant.RefRule]), while a seat's standing
 // is its relation on the chart, and so is everything the push decide holds a
@@ -443,7 +444,7 @@ func pathOwnersInvalid(owners []PathOwner) string {
 		at := fmt.Sprintf("path_owners[%d]", i)
 		switch {
 		case !po.Owner.Kind.Valid():
-			return fmt.Sprintf("%s.owner.kind: %q is not one of %v", at, po.Owner.Kind, OwnerKinds())
+			return fmt.Sprintf("%s.owner.kind: %q is not one of %s", at, po.Owner.Kind, words.Or(OwnerKinds()))
 		case strings.TrimSpace(po.Owner.Ref) == "":
 			return at + ".owner.ref: a path owner names a unit or a seat"
 		case len(po.Paths) == 0:
@@ -535,7 +536,7 @@ func (p Protection) invalid() string {
 	case !gitref.ValidPattern(p.Pattern):
 		return fmt.Sprintf("pattern: %q is not a protection pattern", p.Pattern)
 	case !p.DirectPush.Valid():
-		return fmt.Sprintf("direct_push: %q is not one of %v", p.DirectPush, DirectPushes())
+		return fmt.Sprintf("direct_push: %q is not one of %s", p.DirectPush, words.Or(DirectPushes()))
 	case p.AllowForce && strings.HasPrefix(p.Pattern, "refs/tags/"):
 		return fmt.Sprintf("allow_force: a tag never moves, so allow_force has nothing to allow on %s",
 			p.Pattern)
@@ -632,9 +633,9 @@ type RepoSettings struct {
 func (s RepoSettings) Validate() error {
 	switch {
 	case !s.ManagedBy.Valid():
-		return fmt.Errorf("%w: managed_by: %q is not one of %v", ErrInvalid, s.ManagedBy, ManagedBys())
+		return fmt.Errorf("%w: managed_by: %q is not one of %s", ErrInvalid, s.ManagedBy, words.Or(ManagedBys()))
 	case !s.Kind.Valid():
-		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, s.Kind, RepoKinds())
+		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, s.Kind, words.Or(RepoKinds()))
 	case s.ManagedBy == ManagedTools && s.ConfigEpoch != 0:
 		return fmt.Errorf("%w: config_epoch: a tool's repository comes from no configuration "+
 			"activation, so its settings name none", ErrInvalid)
@@ -650,13 +651,13 @@ func (s RepoSettings) Validate() error {
 		return fmt.Errorf("%w: path_owners: a scratch repository takes no path owners — it is its "+
 			"seat's own", ErrInvalid)
 	case !s.Owner.Kind.Valid():
-		return fmt.Errorf("%w: owner.kind: %q is not one of %v", ErrInvalid, s.Owner.Kind, OwnerKinds())
+		return fmt.Errorf("%w: owner.kind: %q is not one of %s", ErrInvalid, s.Owner.Kind, words.Or(OwnerKinds()))
 	case strings.TrimSpace(s.Owner.Ref) == "":
 		return fmt.Errorf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
 	case !s.Visibility.Valid():
-		return fmt.Errorf("%w: visibility: %q is not one of %v", ErrInvalid, s.Visibility, Visibilities())
+		return fmt.Errorf("%w: visibility: %q is not one of %s", ErrInvalid, s.Visibility, words.Or(Visibilities()))
 	case !s.Search.Valid():
-		return fmt.Errorf("%w: search: %q is not one of %v", ErrInvalid, s.Search, SearchModes())
+		return fmt.Errorf("%w: search: %q is not one of %s", ErrInvalid, s.Search, words.Or(SearchModes()))
 	case s.Kind == RepoScratch && s.Search == SearchIndexed:
 		return fmt.Errorf("%w: search: a scratch repository is searched with %s — it is its seat's own "+
 			"experiment, and no index is kept for one", ErrInvalid, SearchGrep)
@@ -845,7 +846,7 @@ type Hold struct {
 // That window is long because the threshold is idle_days' FLOOR rather than
 // the idle_days in force, which a pass in flight may judge by another epoch's
 // (above). One record is small (TestAHoldRecordCostsTheLogOneSmallRecord),
-// and internal/tracker's codeLogNegligible weighs the turns' records against
+// and internal/worklet's codeLogNegligible weighs the turns' records against
 // the code log's day.
 const HoldRecordAfter = 22 * time.Hour
 
@@ -1040,7 +1041,7 @@ func (p Principal) invalid() string {
 		return fmt.Sprintf("principal.kind: %q is the engine's own account, which only the ref lifecycle's "+
 			"expiry push carries — nobody asks, reads or writes as it", p.Kind)
 	default:
-		return fmt.Sprintf("principal.kind: %q is not one of %v", p.Kind, PrincipalKinds())
+		return fmt.Sprintf("principal.kind: %q is not one of %s", p.Kind, words.Or(PrincipalKinds()))
 	}
 	return ""
 }
@@ -1272,7 +1273,7 @@ type Purge struct {
 // committer ([Committer.ProposeCompaction]) and applied as ONE record that adds
 // the outputs' rows and moves the inputs' into code_packs_retired.
 //
-// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0060): its outputs hold every
+// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0083): its outputs hold every
 // object its inputs held, so no push decided against the inputs can land a ref
 // whose closure a compaction removed, and no fence is needed beside the decide's own
 // check that every input is still live. The outputs are built over the inputs
@@ -1335,7 +1336,7 @@ type Compaction struct {
 // LayerRef is ONE published layer of a repository's multi-pack-index chain:
 // git's own incremental multi-pack-index layer, its bitmap, and the
 // commit-graph layer over the same packs, written ONCE by the repository's
-// maintainer and installed by every git node (ADR-0051's Derived standing).
+// maintainer and installed by every git node (ADR-0074's Derived standing).
 // Its bytes are the three files back to back — the multi-pack-index, its
 // bitmap, the commit-graph layer — cut into Parts, each one stored object.
 //

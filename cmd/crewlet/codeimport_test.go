@@ -537,7 +537,7 @@ func TestImportOfASourceWhoseDefaultBranchIsAnotherSaysSo(t *testing.T) {
 		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	for _, want := range []string{
-		"the source's default branch is master; code.repos says main — importing master as master; push a " +
+		"the source's default branch is master; code.repos says main: importing master as master; push a " +
 			"main for the repository's HEAD",
 		"imported step 1: refs/heads/master → ",
 		"imported step 2: refs/heads/topic → ",
@@ -833,7 +833,7 @@ func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-url", h.base,
+	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-api", h.base,
 		"-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "not bound to a person") {
 		t.Fatalf("an import with a token bound to nobody = %v, want the node's refusal", err)
@@ -1755,7 +1755,7 @@ func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-url", n.base, "-git", hermeticGit(t))
+	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-api", n.base, "-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "code.native is not set") ||
 		strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an import into a company hosting no code = %v, want the node's not_hosted and no code.repos", err)

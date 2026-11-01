@@ -141,6 +141,27 @@ afterEach(() => {
 });
 
 describe("a gesture that needs a fresher proof", () => {
+  // THE CONFIRMATION NAMES ITS ACCOUNT for a password manager. A password
+  // form with no username field reads to one as a new login it offers to
+  // save, and Bitwarden's offer, drawn blank over the top right of the page,
+  // took every press on the assistant's drawer beneath it. Mutation: drop the
+  // field, or leave it empty.
+  test("names the signed-in login in a username field", async () => {
+    engine({
+      "/secrets/GITHUB_TOKEN": [refusedFor("step_up")],
+      "/auth/session": [
+        { status: 200, body: { person: "p-1", login: "jane.doe", kind: "person" } },
+      ],
+    });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Confirm it’s you" });
+    await waitFor(() => {
+      const username = dialog.querySelector<HTMLInputElement>('input[autocomplete="username"]');
+      expect(username?.value).toBe("jane.doe");
+    });
+  });
+
   test("asks for the password, and then the same request goes through", async () => {
     const sent = engine({
       "/secrets/GITHUB_TOKEN": [refusedFor("step_up"), { status: 200, body: { stored: true } }],
@@ -152,8 +173,9 @@ describe("a gesture that needs a fresher proof", () => {
     await waitFor(() => expect(outcome).toEqual({ stored: true }));
     // The dialog goes in a render after the replay's answer is handed back.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    // AND THE DIALOG'S OWN READ of whether a code is held, beside them.
-    const asked = sent.filter((s) => s.path !== "/iam/credentials");
+    // AND THE DIALOG'S OWN READS, of whether a code is held and of who is
+    // signed in, beside them.
+    const asked = sent.filter((s) => s.path !== "/iam/credentials" && s.path !== "/auth/session");
     expect(asked.map((s) => s.path)).toEqual([
       "/secrets/GITHUB_TOKEN",
       "/auth/step-up",

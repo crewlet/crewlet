@@ -453,10 +453,10 @@ func (s *Syncer) SetSource(src Source) {
 // Refresh asks for a complete walk of the current source, from a backend that
 // can say something moved in its container but not which page.
 //
-// A REFRESH FROM ANOTHER BACKEND IS IGNORED. The native page projection runs
+// A REFRESH FROM ANOTHER BACKEND IS IGNORED. Doclet's pages applier runs
 // for the life of the node, so a company that moved its skills to Confluence
-// by an apply still has a projection reporting native skill pages, and a
-// native commit is no reason to walk a different wiki. Coalesced: however
+// by an apply still has an applier reporting Doclet skill pages, and a
+// Doclet commit is no reason to walk a different wiki. Coalesced: however
 // many arrive before the loop runs, it walks once.
 func (s *Syncer) Refresh(backend string) {
 	if s == nil {
@@ -474,7 +474,7 @@ func (s *Syncer) Refresh(backend string) {
 // and TELLS THE FLEET: every node that holds no copy of the backend — and so
 // runs nothing that would notice — walks its container on hearing it.
 //
-// The native knowledge base's appliers call this: each one that holds a copy
+// Doclet's appliers call this: each one that holds a copy
 // sees the change itself, and a node that holds none hears it only from them.
 // Every applier announces, so a fleet with several data nodes sends several
 // nudges for one edit; a hearer coalesces them into one walk, and the event is

@@ -2,19 +2,23 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY TOOL THIS BUILD REGISTERS HAS AN AUTHORITY RULE.
@@ -78,7 +82,7 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 // EVERY APP OPENS A TOOL A PERSON REACHES.
 //
 // An app is a permission somebody is given so they can USE something, and a
-// person uses the tracker and the knowledge base through the operator
+// person uses Worklet and Doclet through the operator
 // catalogue — the dashboard's act route, their assistant, the HTTP write
 // surface all dispatch into it. An app no operator tool belongs to is a
 // permission nobody could be told what it opens: ticked on somebody's row, it
@@ -104,10 +108,9 @@ func TestEveryAppOpensAPersonFacingTool(t *testing.T) {
 
 // NO SEAT-ONLY VERB IS OFFERED TO A PERSON.
 //
-// `a2a_ask` and `run_sandbox` spend an agent's turn — a colleague seat's, or
-// a coding run the seat's own loop suspends on — so the table refuses them to
-// anybody but a seat before any class is read. A person's catalogue that still
-// listed one would offer a tool every call to which is refused: the shape a
+// `a2a_ask` spends an agent's turn — a colleague seat's — so the table refuses
+// it to anybody but a seat before any class is read. A person's catalogue that
+// still listed one would offer a tool every call to which is refused: the shape a
 // model learns to distrust a whole catalogue from, and an act route a screen
 // would draw a button for. And the table must say so for each: a seat-only row
 // whose tool a seat's registry does not register would be a rule nobody
@@ -135,6 +138,55 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 	}
 }
 
+// NO VERB MADE AS A SEAT IS OFFERED TO A CREDENTIAL ACTING AS ITSELF.
+//
+// A person's surface offers what [builtin.Admits] says the table could admit
+// before any object is named (the dashboard's `viewer.acts`), so a seated row
+// is the difference between a screen that draws no control for an unbound
+// credential and one whose every press of that control is refused. Held for
+// every seated verb the operator catalogue serves, against a credential
+// holding admin — what the table admits on — and beside a person bound to a
+// seat holding the same, who must still be offered it, or a surface refusing
+// everybody would pass. Mutation: drop `seated` from answer_knowledge's row
+// and this goes red, which is the bug it was written for: viewer.acts offered
+// the answer to a Tier A token's session and every press was refused.
+func TestNoSeatedVerbIsOfferedToACredentialActingAsItself(t *testing.T) {
+	t.Parallel()
+	authorize := builtin.Decide(chartLeads)
+	unbound := iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee3"),
+		Kind: iam.KindMachine, Login: "ci:release", Stage: iam.StageActive,
+		Grants: iam.AllGrants,
+	})
+	bound := iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
+		Kind: iam.KindPerson, Login: "jane.doe", Seat: "jane", Stage: iam.StageActive,
+		Grants: iam.AllGrants,
+	})
+	seated := 0
+	for _, tool := range builtin.OperatorTools(operatorDeps(t)) {
+		only, _ := authz.SeatedOf(authz.Action(tool.Name()))
+		if !only {
+			continue
+		}
+		seated++
+		err := builtin.Admits(unbound, authorize, tool.Name())
+		var refused *builtin.DecisionRefused
+		if !errors.As(err, &refused) || refused.Decision.Reason != authz.ReasonUnseated {
+			t.Errorf("%s is offered to a credential acting as no seat (%v), "+
+				"and the table refuses its every call", tool.Name(), err)
+		}
+		if err := builtin.Admits(bound, authorize, tool.Name()); err != nil {
+			t.Errorf("%s is not offered to a person bound to a seat: %v",
+				tool.Name(), err)
+		}
+	}
+	if seated == 0 {
+		t.Fatal("the operator catalogue serves no seated verb, so this walk " +
+			"certifies nothing")
+	}
+}
+
 // EVERY APP ROW BELONGS TO ITS KIND'S APP.
 //
 // A row names the app a verb belongs to, and nothing in the table pairs a verb
@@ -148,8 +200,9 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	t.Parallel()
 	for app, names := range map[iam.Grant][]string{
-		iam.GrantTracker:   append(builtin.WorkTools(), tracker.OperatorOnlyTools()...),
-		iam.GrantKnowledge: append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+		iam.GrantWorklet: append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
+		iam.GrantDoclet:  append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+		iam.GrantChatlet: append(chatlet.Tools(), chatlet.OperatorOnlyTools()...),
 	} {
 		for _, name := range names {
 			got, known := authz.AppOf(authz.Action(name))
@@ -192,8 +245,8 @@ func everyToolName(t *testing.T) []string {
 
 // operatorDeps wires EVERY operator tool on, because a walk over a catalogue
 // that omitted half of it would certify the half it saw. OperatorTools drops
-// a tool whose dependency is nil by design — a company on Jira is shown no
-// native tracker — so a nil here is a verb this walk silently stops covering.
+// a tool whose dependency is nil by design (a company on Jira is shown no
+// Worklet), so a nil here is a verb this walk silently stops covering.
 func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	t.Helper()
 	trk := newFakeTracker()
@@ -226,7 +279,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			Seats:          func() []colleague.Seat { return nil },
 			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Pages:        full.Pages,
@@ -249,6 +302,14 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Health: builtin.HealthDeps{Leases: full.Health.Leases, Status: full.Health.Status,
 			Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters,
 				Chart: full.Code.Chart, Actor: builtin.PrincipalActor}},
+		// THE CHAT, its read-state store included, which only this surface
+		// is given — left nil, mark_chat_read is a verb no walk sees.
+		Chat: func() builtin.ChatDeps {
+			talk := full.Chat
+			talk.Cursors = fakeCursors{}
+			talk.Actor = builtin.PrincipalChatActor
+			return talk
+		}(),
 		Org: orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the

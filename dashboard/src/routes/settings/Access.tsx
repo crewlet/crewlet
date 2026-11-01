@@ -91,11 +91,11 @@
  *
  * # Access is a line, not a list
  *
- * A row's ACCESS column says what it amounts to — "Admin" (which includes
- * every app), the apps it holds ("Tracker · Knowledge"), or "Overview only" —
+ * A row's ACCESS column says what it amounts to: "Admin" (which includes
+ * every app), the apps it holds ("Worklet · Doclet"), or "Overview only",
  * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
- * stored as `[admin, tracker, knowledge]` read the same, as the engine treats
- * them.
+ * stored as `[admin, worklet, doclet, artifacts, chatlet]` read the same, as the
+ * engine treats them.
  */
 
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
@@ -126,6 +126,7 @@ import {
   TableEntityCell,
   TableTextCell,
   PageNote,
+  peekRowActivation,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -158,7 +159,7 @@ import {
 } from "~/components/people.tsx";
 import { FINDING_KINDS, type HumanSeat } from "~/contract/identity.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -176,7 +177,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { rest } from "~/protocol/index.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import {
   EditPersonDialog,
@@ -313,7 +314,12 @@ export interface DirectoryFinding {
   detail: string;
 }
 
-interface DirectoryCheck {
+/**
+ * `GET /iam/check`, as every screen that reads it takes it: this page's
+ * Needs attention card and Home's People & access widget read ONE type, so a
+ * field one of them reads is a field the other cannot lose.
+ */
+export interface DirectoryCheck {
   findings: DirectoryFinding[] | null;
   /**
    * Active, enrolled PERSONS holding Admin — never a service account, whose
@@ -321,6 +327,10 @@ interface DirectoryCheck {
    * reads.
    */
   people_with_admin: number;
+  /**
+   * Bindings this node could not check against its own chart just now, which
+   * is "could not say" and never "no dangling binding".
+   */
   bindings_unchecked: number;
 }
 
@@ -887,7 +897,7 @@ export function People() {
               // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS (the frame's one
               // rule), and the grid marks the row the peek is open on.
               rowHref={(p) => peekHref(personRef(p.id))}
-              onRowActivate={peekRow(openPeek)}
+              onRowActivate={peekRowActivation(openPeek)}
               // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
               // word for word 530px below it.
               empty={
@@ -1125,7 +1135,7 @@ export function ServiceAccounts() {
               rowKey={(p) => p.id}
               defaultSort="account"
               rowHref={(p) => peekHref(personRef(p.id))}
-              onRowActivate={peekRow(openPeek)}
+              onRowActivate={peekRowActivation(openPeek)}
               empty={{
                 title: "No service accounts yet",
                 hint: manages
@@ -1692,6 +1702,7 @@ function Invitations({
             },
             {
               key: "expires",
+              align: "right",
               header: "Expires",
               shrink: true,
               sortValue: (i) => i.expires_at ?? "",
@@ -1817,11 +1828,11 @@ export function PersonPeek({ id }: { id: string }) {
   const viewer = useViewer();
   const toast = useToast();
   const { close } = usePeekControls();
-  const at = encodeURIComponent(id);
   const read = useRest(
-    id ? `/iam/people/${at}` : null,
+    id ? `/iam/people/${pathSegment(id)}` : null,
     // THE PATH A LITERAL AT ITS CALL, which is what the dev proxy's gate reads.
-    async (signal) => (await rest.get(`/iam/people/${at}`, signal)) as DirectoryRow | null,
+    async (signal) =>
+      (await rest.get(`/iam/people/${pathSegment(id)}`, signal)) as DirectoryRow | null,
     READ,
   );
   const row = read.data;
@@ -1952,17 +1963,22 @@ function Principal({
   onRemoved: () => void;
 }) {
   const now = useNow();
-  const id = encodeURIComponent(row.id);
   const credentials = useRest(
-    `/iam/credentials?person=${id}`,
+    `/iam/credentials?${new URLSearchParams({ person: row.id })}`,
     async (signal) =>
-      listOf<CredentialRow>(await rest.get(`/iam/credentials?person=${id}`, signal), "credentials"),
+      listOf<CredentialRow>(
+        await rest.get(`/iam/credentials?${new URLSearchParams({ person: row.id })}`, signal),
+        "credentials",
+      ),
     READ,
   );
   const sessions = useRest(
-    `/iam/people/${id}/sessions`,
+    `/iam/people/${pathSegment(row.id)}/sessions`,
     async (signal) =>
-      listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
+      listOf<SessionRow>(
+        await rest.get(`/iam/people/${pathSegment(row.id)}/sessions`, signal),
+        "sessions",
+      ),
     READ,
   );
   const [gesture, setGesture] = useState<PersonGesture | null>(null);
@@ -2075,7 +2091,7 @@ function Principal({
           danger
           request={{
             method: "DELETE",
-            path: `/iam/credentials/${encodeURIComponent(gesture.revoke.id)}`,
+            path: `/iam/credentials/${pathSegment(gesture.revoke.id)}`,
             query: { person: row.id },
           }}
           onClose={close}
@@ -2099,7 +2115,7 @@ function Principal({
           danger={gesture === "suspend"}
           request={{
             method: "PATCH",
-            path: `/iam/people/${id}`,
+            path: `/iam/people/${pathSegment(row.id)}`,
             body: { stage: gesture === "reactivate" ? "active" : "suspended" },
           }}
           onClose={close}
@@ -2125,7 +2141,7 @@ function Principal({
           }
           confirm="Reset two-step verification"
           danger
-          request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
+          request={{ method: "POST", path: `/iam/people/${pathSegment(row.id)}/mfa/reset` }}
           onClose={close}
           onDone={changed}
         >
@@ -2140,7 +2156,7 @@ function Principal({
           title={you ? "Sign out everywhere?" : `Sign ${who} out everywhere?`}
           confirm="Sign out everywhere"
           danger
-          request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
+          request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}/sessions` }}
           onClose={close}
           onDone={changed}
         >
@@ -2156,7 +2172,7 @@ function Principal({
           confirm="Remove"
           danger
           typeToConfirm={row.login || row.id}
-          request={{ method: "DELETE", path: `/iam/people/${id}` }}
+          request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}` }}
           onClose={close}
           onDone={changed}
           onLanded={onRemoved}
@@ -2224,6 +2240,7 @@ function Principal({
               },
               {
                 key: "created",
+                align: "right",
                 header: "Created",
                 shrink: true,
                 drop: 3,
@@ -2305,6 +2322,9 @@ function Principal({
                   // peek's column — cut its own header to "SESS…".
                   key: "started",
                   header: "Session",
+                  // A TIME: right-aligned, as the same session start is on the
+                  // account page's own list.
+                  align: "right",
                   width: "max-content",
                   sortValue: (s) => s.created_at ?? "",
                   cell: (s) => <TableDateCell value={s.created_at} now={now} />,
@@ -2346,6 +2366,7 @@ function Principal({
                 },
                 {
                   key: "ends",
+                  align: "right",
                   header: "Ends",
                   shrink: true,
                   drop: 1,
@@ -2478,7 +2499,7 @@ function ResetLink({
         // attempt never showed, so a retry is a new link — which revokes the one
         // that may have landed.
         const answer = await write.run(
-          { method: "POST", path: `/iam/people/${encodeURIComponent(row.id)}/password-reset` },
+          { method: "POST", path: `/iam/people/${pathSegment(row.id)}/password-reset` },
           false,
         );
         if (answer) onDone();

@@ -26,14 +26,10 @@ func TestASeedIsRecordedAsTheSystems(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	active, found, err := db.Configs().Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("active: found=%v err=%v", found, err)
-	}
+	active := fleetsRevision(t, db, fleet)
 	if active.CreatedBy != testNode || active.CreatedByKind != iam.ActorSystem ||
 		active.OperatorID != "" {
 		t.Errorf("the seed is recorded as (%q, %q, %q), want (%q, system, no credential)",
@@ -73,15 +69,14 @@ func TestAPublishedLocalRevisionKeepsItsAuthor(t *testing.T) {
 		t.Fatal(err)
 	}
 	written := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	if _, err := db.Configs().Offer(t.Context(), store.Offer{}, store.Revision{
 		CreatedBy: "ops", CreatedByKind: iam.ActorOperator, OperatorID: "token:ops",
 		Source: "file", Summary: "imported offline", Payload: sealed, CreatedAt: written,
 	}); err != nil {
 		t.Fatalf("store the offline import: %v", err)
 	}
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"},
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, tierBSeed{Path: "company.yaml"}, fixtureCipher); err != nil {
 		t.Fatalf("boot: %v", err)
 	}
 	target, found, err := fleet.Target(t.Context())
@@ -105,13 +100,12 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
-		fixtureCipher, testNode, quiet()); err != nil {
+	if err := bootSeed(t, db, fleet, seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	surface, err := configapi.New(configapi.Options{
-		Store: db, Plane: fleet, Cipher: fixtureCipher,
-		Holders: func(context.Context, []string, time.Time) (
+		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil
@@ -125,10 +119,7 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 		"reload after sealing", by); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-	active, _, err := db.Configs().Active(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	active := fleetsRevision(t, db, fleet)
 	if active.CreatedBy != by.Name || active.CreatedByKind != by.Kind {
 		t.Errorf("the engine's reload is recorded as (%q, %q), want (%q, %q)",
 			active.CreatedBy, active.CreatedByKind, by.Name, by.Kind)

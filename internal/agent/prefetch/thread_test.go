@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ── the fakes ──
@@ -23,7 +24,10 @@ type threads struct {
 	older        int
 	stoppedShort bool
 	refuse       bool
-	asked        []notify.Thread
+	// hosted is what the engine's own chat says of its transcripts: every
+	// sender authenticated as a company principal.
+	hosted bool
+	asked  []notify.Thread
 }
 
 func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (notify.Transcript, bool) {
@@ -32,7 +36,7 @@ func (s *threads) ReadThread(_ context.Context, _ string, t notify.Thread) (noti
 		return notify.Transcript{}, false
 	}
 	return notify.Transcript{
-		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort,
+		Messages: s.messages, Older: s.older, StoppedShort: s.stoppedShort, Hosted: s.hosted,
 	}, true
 }
 
@@ -179,6 +183,11 @@ func TestTheMiddleOfALongThreadIsCondensed(t *testing.T) {
 	}
 	if model.calls() != 1 || !strings.Contains(model.prompts()[0], "reply 1 ") {
 		t.Fatalf("the oldest reply never reached the rewrite (%d calls)", model.calls())
+	}
+	// THE REWRITE READS THEM AS THEIR WORDS (ADR-0040): fenced as the thread
+	// under who said them, an outside party here, as the seat reads the rest.
+	if p := model.prompts()[0]; !strings.Contains(p, " source=chat_thread trust=external authors=external]\n") {
+		t.Fatalf("the rewrite was not handed the middle fenced as the thread:\n%s", p)
 	}
 	if len(text) > 8000+600 {
 		t.Fatalf("the block is %d bytes, past its bound", len(text))
@@ -581,5 +590,21 @@ func TestTheBackendsOwnDropsAreCountedInTheNotice(t *testing.T) {
 	if blocks.ThreadContextPosts != read {
 		t.Fatalf("the block rendered %d of the %d messages read",
 			blocks.ThreadContextPosts, read)
+	}
+}
+
+// THE THREAD READ'S DEADLINE COVERS A CHATLET READ THAT IS ANSWERING.
+//
+// The engine's own chat reads a woken seat's thread as a linearizable estate
+// read, and a serving node may wait a statelog.ReadBudget for the floor and
+// another for the level before it runs the query. A deadline inside those two
+// waits renders the unreadable hint for a thread a healthy node was about to
+// answer, on every wake that found it catching up — so raising ReadBudget
+// without revisiting this is the change this case is here to stop.
+func TestTheThreadDeadlineCoversAChatletReadThatIsAnswering(t *testing.T) {
+	t.Parallel()
+	if waits := 2 * statelog.ReadBudget; prefetch.ThreadTimeout <= waits {
+		t.Errorf("ThreadTimeout is %v, inside the %v a serving node may wait "+
+			"before it runs the query", prefetch.ThreadTimeout, waits)
 	}
 }

@@ -14,6 +14,8 @@ package events
 import (
 	"maps"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // RateAuthor names WHO DECIDES HOW OFTEN a type is published — never who
@@ -180,6 +182,15 @@ var categories = map[string]placement{
 	"config_revision_applied":   {"lifecycle", RateAuthenticated},
 	"operator_acted":            {"lifecycle", RateAuthenticated},
 	"backup_requested":          {"lifecycle", RateAuthenticated},
+	// A person's gesture on a model (Settings › Models): a check, a retry,
+	// a credential test or write, a device sign-in, a host login read.
+	"model_acted": {"lifecycle", RateAuthenticated},
+	// An administrator's compliance read of a person's assistant
+	// conversation (D06), with the reason they gave.
+	"assistant_conversation_read": {"lifecycle", RateAuthenticated},
+	// A person's Dashboard Assistant turn: the runtime audit of the reads
+	// it made as them, one row per segment, never its content.
+	"assistant_turn_completed": {"lifecycle", RateAuthenticated},
 	// A person pausing and resuming a seat — the change itself, published
 	// once by the writer whose compare-and-set won. Beside the runtime
 	// audit rather than folded into it: operator_acted records that a call
@@ -187,13 +198,18 @@ var categories = map[string]placement{
 	// taken and a pause refused as already taken read differently.
 	"seat_paused":  {"lifecycle", RateAuthenticated},
 	"seat_resumed": {"lifecycle", RateAuthenticated},
+	// An access sync putting back a seat's level or scope that somebody
+	// changed at a vendor. The ENGINE authors it, once per restore, on the
+	// integration loop's own cadence: a person at the vendor can cause one,
+	// and cannot make more of them than there are syncs.
+	"seat_access_drift_restored": {"lifecycle", RateEngine},
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.
 	//
 	// THERE IS NO TASK LIFECYCLE HERE. The five that were — created,
 	// started, completed, failed, delegated — described an engine-owned
-	// task object the native tracker replaced, and none of them ever had a
+	// task object Worklet replaced, and none of them ever had a
 	// publisher. Work's own record is the tracker's log, its history rows
 	// and its change feed.
 	"task_assigned":                   {"task", RateAuthenticated},
@@ -206,6 +222,10 @@ var categories = map[string]placement{
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
 	"sandbox_run_failed": {"task", RateEngine},
+	// A run a PERSON ended by pausing its seat with a stop. Kept for the
+	// same reason as the loss beside it — it is the record of why the work
+	// never came back — and apart from it, because a stop is not a failure.
+	"sandbox_run_stopped": {"task", RateEngine},
 	// What an answer to a run's question became, on either route. The chat
 	// route left no record at all, so this is the only account of whether a
 	// person's reply resumed the run, found it already answered, or found it
@@ -266,6 +286,8 @@ var categories = map[string]placement{
 	"prompt.size":                  {"system", RateEngine},
 	"turn.guard_breach":            {"system", RateEngine},
 	"provider_fallback":            {"system", RateEngine},
+	"seat_provider_parked":         {"system", RateEngine},
+	"seat_provider_released":       {"system", RateEngine},
 	"skill_telemetry_write_failed": {"system", RateEngine},
 	"subagent_batched":             {"system", RateEngine},
 
@@ -511,7 +533,7 @@ var unfed = map[string]string{
 		"a person reads a feed, pushing the turns, failures and deliveries a " +
 		"reader watches out of a ring that holds the whole company's last few " +
 		"hundred events. Who read a repository is answered where it is asked: " +
-		"the code host's readers route and `code_repo_readers`, summed across " +
+		"the code host's readers route and `" + toolname.CodeRepoReaders + "`, summed across " +
 		"the fleet from the usage domain these rows are derived into",
 	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
 		"check that ended (a second only as the correction of an ending its " +

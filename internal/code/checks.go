@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPOSITORY'S CHECKS ARE ROWS ON A SUBJECT OF THEIR OWN: checks.<repo>.
@@ -594,9 +595,9 @@ func (q CheckQueued) Validate() error {
 	}
 	switch {
 	case !q.Purpose.Valid():
-		return checkField("purpose", "%q is not one of %v", q.Purpose, CheckPurposes())
+		return checkField("purpose", "%q is not one of %s", q.Purpose, words.Or(CheckPurposes()))
 	case !q.Reason.Valid():
-		return checkField("reason", "%q is not one of %v", q.Reason, QueueReasons())
+		return checkField("reason", "%q is not one of %s", q.Reason, words.Or(QueueReasons()))
 	case (q.Purpose == PurposeHead) != (q.ChangeID != ""):
 		return checkField("change_id", "a head check names the change it measures, and no other check names one")
 	case q.ChangeID != "" && (!canonicalUUID(q.ChangeID) || q.Revision < 1):
@@ -673,7 +674,7 @@ func (s CheckStarted) Validate() error {
 	}
 	switch {
 	case !s.Placement.Valid():
-		return checkField("placement", "%q is not one of %v", s.Placement, CheckPlacements())
+		return checkField("placement", "%q is not one of %s", s.Placement, words.Or(CheckPlacements()))
 	case (s.Placement == PlacementExternal) != (s.Runner == ""):
 		return checkField("runner", "a runner of the engine names itself, and a person's CI is no runner")
 	case len(s.Runner) > MaxProvenanceBytes || len(s.Box) > MaxProvenanceBytes:

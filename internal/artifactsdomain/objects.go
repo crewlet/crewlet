@@ -21,10 +21,10 @@ import (
 // ObjectReferences is every object a retained version of an artifact names,
 // each distinct object once per artifact with its reference count.
 //
-// REQUIRED (ADR-0051): a retained version is something the company holds, so
+// REQUIRED (ADR-0074): a retained version is something the company holds, so
 // its objects are audited and every backup carries them — and so the
 // declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0052).
+// the table's rows (ADR-0075).
 var ObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_objects",
 	Key: "object", Hash: "hash", Size: "size",
@@ -214,12 +214,12 @@ func mayWriteObjects(env RecordEnvelope) bool {
 // and purge. A row goes only when its adoption is no longer current and no
 // retained version names its stylesheet.
 //
-// REQUIRED (ADR-0051), for [ObjectReferences]' reason: the adopted brand is
+// REQUIRED (ADR-0074), for [ObjectReferences]' reason: the adopted brand is
 // the company's public face, and a superseded adoption's files are what a
 // retained version that pinned its stylesheet still serves — files the
 // company holds, so they are audited, every backup carries them, and the
 // declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0052).
+// the table's rows (ADR-0075).
 var BrandFileReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_brand_files",
 	Key: "object", Hash: "hash", Size: "size",

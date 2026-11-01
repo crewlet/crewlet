@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 var log = logging.Get("code.query")
@@ -229,7 +230,7 @@ func New(o Options) (*Server, error) {
 //  3. A node holding no copy of the repository, nor filling one
 //     (Cache.Holds), answers a read that is not its walk's effective home's
 //     (code.GitQuery.Home) unready (not_held) at once, having started
-//     nothing: ONE node a walk fills a copy (ADR-0059), and every other
+//     nothing: ONE node a walk fills a copy (ADR-0082), and every other
 //     either holds one already or sends the read on.
 //  4. The node's copy is synced to the asker's floor, or read as it stands
 //     where the asker holds none, the wait bounded by statelog.ReadBudget: a
@@ -816,7 +817,8 @@ func (r *read) floorWords() (shown, instead, principal, scope string) {
 		return "this check was queued at", "a check's box reads the one commit it checks", "this check's",
 			"its repository's checks'"
 	}
-	return "this turn has read", "it has not been pushed yet, or ask code_resolve", "this turn's", "this seat's"
+	return "this turn has read", "it has not been pushed yet, or ask " + toolname.CodeResolve, "this turn's",
+		"this seat's"
 }
 
 // answer runs the kind's own git over objs (step 8), memoizing every page it

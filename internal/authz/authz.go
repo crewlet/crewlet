@@ -15,6 +15,22 @@
 // an agent owner's artifacts, and a caller with no relation is answered as if
 // the artifact did not exist.
 //
+// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0052, whose authority this
+// package is. A request the assistant makes is its person's own, so the person
+// is decided exactly as their own click is, and every row says what an
+// assistant grant may do with its verb (read it, carry the one approved
+// request, or never), which can only take away from what the person holds.
+// The SPLIT with the request guard is deliberate: the guard holds a read
+// grant to reads and an exec grant to the one request it binds, and
+// [Decide] holds every grant to the row's class wherever the verb is asked,
+// a verb asked from inside a tool included, which no route sees.
+//
+// A CHECK IS THE WRITE AT THE READ'S PROOF: ADR-0055, whose authority this
+// package is. A route declaring [Policy.Checked] answers `dry_run=true` as its
+// verb decided without the step-up, and that check is the one request with a
+// write's method a read grant may send, so the assistant's preview asks the
+// route before the person is shown a change.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -132,14 +148,15 @@
 // # Admin, and one permission per app (ADR-0033)
 //
 // The vocabulary is admin and the apps ([iam.Grant]): `admin`, which runs the
-// company and the engine, and one permission per APP (`tracker`, `knowledge`
-// and `artifacts`), which uses it. Every row names at most one app
-// ([rule.app]), and that decides three things at once: a [ClassApp] row admits whoever holds the app;
-// a RELATION row — a person's own record, a container's lead, a comment's
-// author — admits its relation only beside the app, so a lead who does not use
-// the tracker does not reorder a report's queue in it; and an administrator
-// passes every app check through [iam.Expand], so admin is never told it
-// lacks an app.
+// company and the engine, and one permission per APP (`worklet`, `doclet`,
+// `artifacts` and `chatlet`), which uses it. Every row names at most one app
+// ([rule.app]) — the one gesture drawing on several names its set instead
+// ([rule.anyOf]) — and that decides three things at once: a [ClassApp] row
+// admits whoever holds the app; a RELATION row — a person's own record, a
+// container's lead, a comment's author — admits its relation only beside the
+// app, so a lead who does not use the tracker does not reorder a report's
+// queue in it; and an administrator passes every app check through
+// [iam.Expand], so admin is never told it lacks an app.
 //
 // EVERYTHING ELSE IS EVERYBODY'S ([ClassEverybody]): the org chart, the
 // agents' status, spend, schedules, who to ask. A company is a shared place,
@@ -148,15 +165,20 @@
 // between: a reader of the trail, a manager of people and an operator of the
 // deployment were three grants nobody could tell apart, and they are one.
 //
-// # Seat-only and human-only
+// # Seat-only, human-only and seated
 //
-// Two facts about a VERB rather than about anybody's relation to an object,
+// Three facts about a VERB rather than about anybody's relation to an object,
 // each a field on the row and each checked before the class. [rule.humanOnly]
 // keeps an agent off a person's gesture — purging, archiving a project,
 // writing the chart. [rule.seatOnly] is its mirror: only an agent seat whose
-// role offers the tool takes it — asking a colleague, starting a coding run —
-// with no permission at all, because which seats are offered it is the role's
-// registry's decision and a person has no turn for it to spend.
+// role offers the tool takes it — asking a colleague — with no permission at
+// all, because which seats are offered it is the role's registry's decision
+// and a person has no turn for it to spend.
+// [rule.seated] is the third: a verb made AS A SEAT, which a principal acting
+// as itself — a token, a service account bound to none — cannot take whatever
+// it holds, because what the verb writes or reads is keyed on a seat handle
+// it does not have. A person always has one (ADR-0032); a machine has one
+// only once the identity directory binds it.
 //
 // # A seat grant
 //
@@ -213,13 +235,15 @@
 //
 // `admin` is ONE permission over the whole company configuration, and that
 // configuration runs code: an `mcp_servers` entry is a command every engine
-// host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
-// `cli-agent` provider among them) choose what a seat's children run and which
-// credentials they are handed, a `sandbox` cell of `run_in: self` runs a coding
-// agent on the engine host itself, and a seat's worker grants decide which of
-// its tools a worker runs with. So holding it IS running code on every engine
-// host, and whatever a process there can read — the keyring included — is
-// reachable through it. It is conferred like host access.
+// host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`,
+// each naming a `providers.llm` entry, which is a coding CLI) choose what a
+// seat's children run and which credentials they are handed, a
+// `providers.llm` entry or `providers.sandbox.default_run_in` placed `direct`
+// runs every agent seat's executor — a coding CLI with its own shell — on the
+// engine host itself, and a seat's worker grants decide which of its tools a
+// worker runs with. So holding it IS running code on every engine host, and
+// whatever a process there can read — the keyring included — is reachable
+// through it. It is conferred like host access.
 //
 // THE ORG CHART IS ALSO ITS LEADS' ([ClassSubtree]): a person who leads a unit
 // may change the seats and units inside it without admin, every field but a
@@ -227,11 +251,12 @@
 // its own environment wherever one stands — and every place a change reaches
 // held to their own subtree on both sides of the write
 // (internal/api/configapi). What that reaches is stated rather than narrowed:
-// a lead may point a seat in their team at any model chain and any sandbox
-// cell the company's SETTINGS offer — which remain admin's, so whether a
-// `cli-agent` provider or a host-side sandbox cell exists for a lead to choose
-// is the administrator's decision — and may not name a credential or a
-// variable at all.
+// a lead may point a seat in their team at any model chain the company's
+// SETTINGS offer, and with it at the cell each of those entries runs an
+// executor in (its `run_in`, else `providers.sandbox.default_run_in`) — the
+// entries and their cells remain admin's, so whether an entry runs a seat's
+// executor on the engine host, for a lead to choose, is the administrator's
+// decision — and may not name a credential or a variable at all.
 package authz
 
 import (
@@ -243,7 +268,7 @@ import (
 
 // Action is one verb this engine authorizes.
 //
-// THE VERB, NOT THE ROUTE. `PATCH /work/items/{key}` and `update_work_item`
+// THE VERB, NOT THE ROUTE. `PATCH /worklet/items/{key}` and `update_work_item`
 // are one action asked two ways, and naming the route would make them two —
 // which is how the operator MCP and a seat's own tools came to answer
 // differently about the same write.
@@ -295,12 +320,19 @@ const (
 	// the artifacts filed in it, so no decision about an artifact ever
 	// reads one (ADR-0047).
 	KindArtifactFolder ObjectKind = "artifact_folder"
+	// KindChannel is one chat room — a named room, a unit's room, a group
+	// or a direct conversation. For a unit's room its [Object.Container] is
+	// the UNIT, which is what its archive asks the chart about.
+	KindChannel ObjectKind = "channel"
+	// KindMessage is one chat message; its [Object.Author] is the seat that
+	// said it.
+	KindMessage ObjectKind = "message"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
-	KindView, KindCompany, KindArtifact, KindArtifactFolder,
+	KindView, KindCompany, KindArtifact, KindArtifactFolder, KindChannel, KindMessage,
 }
 
 // Valid reports whether a kind is one this build knows.
@@ -351,18 +383,20 @@ type Object struct {
 	// AND BY THE CLASSES WHOSE OBJECT IS A ROW nobody has read yet —
 	// [ClassAppOrAsked] (which open ask names the caller is on the item),
 	// [ClassTidy], [ClassContainer] and [ClassDestructive] (which project or
-	// space the row is filed in, and who wrote it): an object marked
-	// unresolved there, naming no container, is answered [ErrUnresolved] for
-	// a caller the row could still admit — read the row, then decide again on
-	// it — so a surface offering a verb before it has read anything offers it
-	// to whoever the row might let through.
+	// space the row is filed in, and who wrote it), and [ClassAuthored] (who
+	// wrote the remark): an object marked unresolved there, naming no
+	// container or author, is answered [ErrUnresolved] for a caller the row
+	// could still admit — read the row, then decide again on it — so a
+	// surface offering a verb before it has read anything offers it to
+	// whoever the row might let through.
 	Unresolved bool
 
 	// Author is the login or seat that WROTE this, for the classes where
-	// authorship is an authority: a comment is edited and removed by
-	// whoever left it ([ClassAuthored]), and a page's creator or a work
-	// item's reporter tidies it — trashes, restores, renames, removes —
-	// beside its container's lead ([ClassTidy]).
+	// authorship is an authority: a comment or a chat message is edited and
+	// removed by whoever left it ([ClassAuthored]), and a page's creator, a
+	// work item's reporter or a room's creator tidies it — trashes,
+	// restores, renames, removes, archives — beside its container's lead
+	// ([ClassTidy]).
 	//
 	// EMPTY MEANS "NO AUTHOR ARM", never "anybody wrote it": a tidy of a row
 	// whose creator nobody recorded is its container lead's or an
@@ -377,19 +411,23 @@ type Object struct {
 	// person the item's thread is waiting on an answer from — for the one
 	// class where being asked is an authority ([ClassAppOrAsked]): somebody
 	// a colleague put a question to reads the item and answers it without
-	// the tracker app.
+	// the tracker app. An ask the very remark the caller is posting again
+	// already answered counts as open to that remark: the post landed, so
+	// the call made again writes nothing, and it is the answer the arm
+	// admitted.
 	//
 	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
-	// (internal/tracker's AskedOn), never from an argument: an asked arm a
+	// (internal/worklet's AskedOn), never from an argument: an asked arm a
 	// caller could fill in for themselves would be the tracker app handed to
 	// anybody who typed their own name. Empty means nobody is asked, or
 	// nobody has looked.
 	Asked string
 
-	// Container is the project a task is filed under, or the container a
-	// page sits in. It is what the container and destructive classes ask
-	// the chart about — and, for [ClassSubtree], the key of the unit an org
-	// chart change reaches, empty for the company root.
+	// Container is the project a task is filed under, the container a page
+	// sits in, or the UNIT a unit's chat room belongs to. It is what the
+	// container, tidy and destructive classes ask the chart about — and, for
+	// [ClassSubtree], the key of the unit an org chart change reaches, empty
+	// for the company root.
 	Container string
 
 	// ContainerKind is what sort of thing Container names, for the one
@@ -472,16 +510,17 @@ type Decision struct {
 	// smallest thing to ask for. An app row names its app and never "the
 	// app or admin"; a relation refused names admin, its admin path; a lead
 	// who lacks the row's app is told the app; [ClassAnyApp] names every
-	// app. Empty where no permission could have changed the answer: the
-	// self rule, which has no admin path, an object missing the field its
-	// rule reads before it consults any permission, and the refusals that
-	// are not about permission at all — an enrolment stage, a seat taking
-	// a human-only verb, a person taking a seat-only one, a machine token
-	// taking a verb that needs a person present, a verb with no rule, an
-	// agent kept off somebody else's artifact by the company's setting
-	// ([Object.AgentsManageOthers]), a turn's requester who could not
-	// take the verb ([DecideWithin]) and an agent decided by its role's
-	// grant ([Decision.SeatGrant] names the grant instead).
+	// app of its row's set ([rule.anyOf]). Empty where no permission could
+	// have changed the answer: the self rule, which has no admin path, an
+	// object missing the field its rule reads before it consults any
+	// permission, and the refusals that are not about permission at all —
+	// an enrolment stage, a seat taking a human-only verb, a person taking
+	// a seat-only one, a principal acting as no seat taking a verb made as
+	// one, a machine token taking a verb that needs a person present, a
+	// verb with no rule, an agent kept off somebody else's artifact by the
+	// company's setting ([Object.AgentsManageOthers]), a turn's requester
+	// who could not take the verb ([DecideWithin]) and an agent decided by
+	// its role's grant ([Decision.SeatGrant] names the grant instead).
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
@@ -590,8 +629,12 @@ const (
 	// TOKEN gets and the person it acts as would not: the verb needs a
 	// person present, and a token proves nobody is. See [Presence].
 	ReasonTokenRefused Reason = "token_refused"
-	// ReasonStage is a refusal: this principal is not through enrolment,
-	// so nothing it asks for is granted yet.
+	// ReasonStage is a refusal: this principal's stage may not act —
+	// invited, enrolling, suspended or retired ([iam.Stage.MayAct]) — so
+	// nothing it asks for is granted, whatever it holds. An administrator
+	// activating the record is what clears it; a sign-in that has yet to
+	// enrol a second factor is not this — that person is active, holding a
+	// session the guard refuses `second_factor_enrolment_required`.
 	ReasonStage Reason = "stage"
 	// ReasonUnnamed is a refusal: the action named an object the rule
 	// needs a field of, and the field is empty. A rule that guessed here
@@ -616,6 +659,12 @@ const (
 	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).
 	// It names no permission, because none would change it.
 	ReasonSeatOnly Reason = "seat_only"
+	// ReasonUnseated is a refusal a principal acting as no seat gets: the
+	// verb is made AS a seat ([rule.seated]) — a Tier A token, a service
+	// account bound to none, the development principal. It names no
+	// permission, because none would change it: what does is a binding in
+	// the identity directory.
+	ReasonUnseated Reason = "unseated"
 	// ReasonShared is an admission on a SHARE: the artifact is shared with
 	// the caller's seat, a unit they sit in or the whole company, at a role
 	// that includes what the verb asks ([ClassShared]).
@@ -641,6 +690,19 @@ const (
 	// It names no permission, because no permission a seat could hold would
 	// change it: the role is what is given the grant.
 	ReasonNotGranted Reason = "not_granted"
+	// ReasonAssistRefused is a refusal a request made through the
+	// Dashboard Assistant gets and the person's own click would not: the
+	// verb is never the assistant's ([AssistNever], the human-only list).
+	// It names no permission, because none the person could hold would
+	// change it; they take the verb themselves.
+	ReasonAssistRefused Reason = "assist_refused"
+	// ReasonAssistScope is a refusal an assistant grant gets when its
+	// scope does not reach the verb: a read grant asking a verb the
+	// assistant carries only as an approved request ([AssistApprove]), or
+	// one that needs a person at the keyboard ([rule.presence]), which only
+	// the person's approval of the request supplies.
+	// The remedy is a proposal the person approves, never a permission.
+	ReasonAssistScope Reason = "assist_scope"
 )
 
 // Reasons are every one, in declaration order.
@@ -649,8 +711,9 @@ var Reasons = []Reason{
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
-	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
-	ReasonSeatGrant, ReasonNotGranted,
+	ReasonSeatOnly, ReasonUnseated, ReasonShared, ReasonNotShared, ReasonRole,
+	ReasonCeiling, ReasonSeatGrant, ReasonNotGranted,
+	ReasonAssistRefused, ReasonAssistScope,
 }
 
 // Valid reports whether a reason is one this build knows.

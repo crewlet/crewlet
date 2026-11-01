@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // Callable, Result, Annotations and Refusal are the MCP package's, reused rather than
@@ -49,9 +50,10 @@ const (
 	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
 	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
 	RefusalInboxFull          = mcp.RefusalInboxFull
+	RefusalQuotaExceeded      = mcp.RefusalQuotaExceeded
+	RefusalNotesFull          = mcp.RefusalNotesFull
+	RefusalNotesSpent         = mcp.RefusalNotesSpent
 	RefusalNotRunning         = mcp.RefusalNotRunning
-	RefusalPaused             = mcp.RefusalPaused
-	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalStoreFull          = mcp.RefusalStoreFull
 	RefusalUnavailable        = mcp.RefusalUnavailable
@@ -139,7 +141,7 @@ type Entry struct {
 	// A first-party declaration at all because the gate used to key on
 	// ORIGIN — a tool delivered if an MCP server served it — and that was a
 	// proxy for the real question, correct only while every shared surface
-	// was somebody else's product. A native tracker breaks the proxy:
+	// was somebody else's product. Worklet breaks the proxy:
 	// commenting on a work item reaches the person who asked, and it is a
 	// builtin.
 	//
@@ -246,8 +248,9 @@ type Option func(*Entry)
 //
 // The surface name has to be the SAME vocabulary the trigger's own source is
 // reported in, because the delivery gate compares the two: an engine builtin
-// says `tracker` or `pages`, and a vendor's tool takes its MCP server's name,
-// which is what an inbound notification reports itself as.
+// says `work` or `page` (Worklet's and Doclet's feed sources), and a vendor's
+// tool takes its MCP server's name, which is what an inbound notification
+// reports itself as.
 func DeliversTo(surface string) Option { return func(e *Entry) { e.Surface = surface } }
 
 // RegisterWith adds a tool together with its annotations.
@@ -372,13 +375,14 @@ func (r *Registry) MCPNames() []string {
 // delivers to its own SERVER, which is the name an inbound notification from
 // that vendor reports itself under. A first-party tool delivers only when it
 // was registered with [DeliversTo], because the engine ships its own tools and
-// knows which of them reach anybody and where: a native work-item comment
+// knows which of them reach anybody and where: a Worklet work-item comment
 // reaches the tracker, a diary write reaches nobody.
 //
 // This replaced an origin test. The rule "a delivery only ever comes from an
 // MCP server" was true of a company whose every shared surface was a vendor's,
-// and false the moment the tracker moved in-process — a seat that answered its
-// assignment natively was judged to have reached nobody and looped to failure.
+// and false the moment the tracker moved in-process: a seat that answered
+// its assignment in Worklet was judged to have reached nobody and looped to
+// failure.
 // Widening it to a flat set of NAMES then bought the opposite error: every
 // deliverable satisfied every obligation, so the tracker write that fixed the
 // first incident discharged a Mattermost DM in the second. A name and a
@@ -487,11 +491,12 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // only — in registration order, or "" when there is nothing to discover.
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — as the tool catalogue of a text-mode
-// prompt, or over an agent-mode CLI's tool bridge — and a second copy of its
+// reaches the model with every request — as a tool of the CLI's `crewlet` MCP
+// server, over the tool bridge to the executor's run in its box and over its
+// phase's tool session for every phase on this host — and a second copy of its
 // description in the system prompt is the same words paid for twice. On the
-// executor, which holds every first-party tool from its first round, that copy
-// was most of its system prompt. What is left is what the model can learn
+// executor, which holds every first-party tool from its launch, that copy was
+// most of its system prompt. What is left is what the model can learn
 // nowhere else: that a server exists, and that a tool it does not hold yet
 // does.
 //
@@ -570,6 +575,19 @@ func (r *Registry) Snapshot() Snapshot {
 
 // Lookup returns one entry from the snapshot.
 func (s Snapshot) Lookup(name string) (Entry, bool) { e, ok := s.byName[name]; return e, ok }
+
+// ArgsOf is a call to name's arguments in the canonical form its tool reads
+// ([ArgsOf]): the one rule a surface over this snapshot reads a call by
+// ([Surface.ArgsOf]). A name the snapshot does not hold keeps them as sent;
+// nothing reads them but the ledger's refusal.
+func (s Snapshot) ArgsOf(name string, raw map[string]any) toolargs.Args {
+	e, known := s.Lookup(name)
+	if !known {
+		return toolargs.Of(nil, raw)
+	}
+	_, thirdParty := e.FromMCP()
+	return ArgsOf(e.Tool, thirdParty, raw)
+}
 
 // Names returns every name in the snapshot, in registration order.
 func (s Snapshot) Names() []string {

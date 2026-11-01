@@ -39,14 +39,16 @@ type PageReadsQuery struct {
 	Vias []string
 }
 
-// PageReads reads every node's reads of some pages over q's days, in (page,
-// day, node, seat, via) order — through `usage_reads_page_idx`, which is
-// exactly this question's shape and order (replicated 0050), one page id at a
+// PageReads reads every data node's reads of some pages over q's days, in
+// (page, day, node, seat, via) order — through `usage_reads_page_idx`, which is
+// exactly this question's shape and order (replicated 0073), one page id at a
 // time ([PageReadsPage]).
 //
-// EVERY NODE'S ROWS, which is why this is the domain's and not the event
-// log's: a seat's reads are recorded where its turn ran, and a page's readers
-// are the union — including a node that has since left the fleet.
+// EVERY DATA NODE'S ROWS, which is why this is the domain's and not the event
+// log's: a seat's reads are recorded in the day of the data node whose event
+// log holds its turn — where it ran, or that node's custody keeper — and a
+// page's readers are the union, including a node that has since left the
+// fleet.
 func PageReads(ctx context.Context, estate Estate, q PageReadsQuery) ([]PageRead, error) {
 	page, err := PageReadsPage(ctx, estate, q, nil, 0)
 	return page.Rows, err

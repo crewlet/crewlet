@@ -6,8 +6,8 @@
  *
  * Every figure here is a NAMED WINDOW of whole company days — 7, 30 or 90, or
  * two dates a reader chose — read from the replicated usage domain (ADR-0020):
- * every node's days, so the answer is the company's whichever node serves it,
- * and it reaches back the domain's 181 days rather than the event log's 30.
+ * every data node's days, so the answer is the company's whichever node serves
+ * it, and it reaches back the domain's 181 days rather than the event log's 30.
  * There is no live rolling window on this screen any more. It opened on one,
  * and a "24 hours" beside a chart of company days put two windows that cannot
  * be compared on one screen; the live window is the live push's, which Home
@@ -34,10 +34,12 @@
  */
 
 import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { urlAction } from "~/app/assistant/urlAction.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { GROUPS } from "~/contract/spend.ts";
+import { ADMIN_GROUPS, GROUPS } from "~/contract/spend.ts";
 import { useNow } from "~/lib/clock.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
@@ -45,7 +47,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { ByAgent } from "./ByAgent.tsx";
 import { ByModel } from "./ByModel.tsx";
@@ -55,10 +57,14 @@ import { Hero } from "./Hero.tsx";
 import { PhaseChart } from "./PhaseChart.tsx";
 import { Workers } from "./Workers.tsx";
 import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from "./model.ts";
-import { DownloadButton } from "@crewlethq/ui";
+import { spendGroupKeys, spendRangeKeys } from "./assistantActions.ts";
+import { DownloadButton, TimeRangePicker } from "@crewlethq/ui";
 
-/** The dimensions the chart splits on — the contract's six, and nothing else. */
-const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
+/** The dimensions the chart splits on for a reader: the contract's six, less
+ *  the ones only an admin is answered (`ADMIN_GROUPS`). */
+function groupsFor(admin: boolean) {
+  return GROUPS.filter((g) => admin || !ADMIN_GROUPS.includes(g.value));
+}
 
 export function Spend() {
   const zone = useOrg()?.timezone;
@@ -67,11 +73,31 @@ export function Spend() {
   const named = isRange(range.window);
   const params = spendWindowParams(range.window, zone);
 
+  const viewer = useViewer();
+  const groups = groupsFor(viewer.admin);
   const [rawGroup, setGroup] = useParam("group", "phase", "section");
   // A GROUP THE ENGINE WOULD REFUSE IS THE DEFAULT, not a refusal on screen:
   // a hand-edited `group=turn` (the dimension this answer no longer has) is a
   // stale link, and the chart is still worth drawing.
-  const group = GROUP_VALUES.includes(rawGroup) ? rawGroup : "phase";
+  const group = groups.some((g) => g.value === rawGroup) ? rawGroup : "phase";
+
+  // --- assistant page actions (WP12) ---
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: {
+      ...urlAction("spend.range.set", {
+        scope: "Spend window (view only)",
+        keys: spendRangeKeys(range.offer, () => now),
+        nav,
+      }),
+      ...urlAction("spend.group.set", {
+        scope: "Spend chart split (view only)",
+        keys: spendGroupKeys(),
+        nav,
+      }),
+    },
+  });
+  // --- end assistant page actions (WP12) ---
 
   const tokens = useQuery("tokens", params);
   const series = useQuery("token_series", { ...params, group, bucket: "day" });
@@ -82,7 +108,6 @@ export function Spend() {
 
   const budget = useOrgBudget();
   const agents = useAgents();
-  const viewer = useViewer();
   const runs = useServicesRun();
 
   // A REFUSED WINDOW HAS NO FIGURES. The previous answer is still in the
@@ -113,7 +138,7 @@ export function Spend() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         <DownloadButton
           label="Export"
           filename={`crewlet-spend-${rollup?.from ?? "window"}-${rollup?.to ?? ""}.csv`}
@@ -148,7 +173,13 @@ export function Spend() {
               budget={budget}
               mayConfigure={mayChangeConfig(viewer)}
             />
-            <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
+            <PhaseChart
+              series={series}
+              group={group}
+              groups={groups}
+              onGroup={setGroup}
+              zone={zone}
+            />
           </div>
           {/* WHO SPENT IT, three ways: the seats' table beside the two ranked
               lists that break the same tokens down by model and by team. */}
@@ -163,7 +194,7 @@ export function Spend() {
             <div className="spend-side">
               <ByModel rollup={rollup} loading={tokens.loading} words={words} />
               <ByUnit params={params} words={words} />
-              {/* WHERE THE COMPANY RUNS NO CREWLET WORKS there are no tasks to
+              {/* WHERE THE COMPANY RUNS NO WORKLET there are no tasks to
                   rank, and the auxiliary model's card joins this column
                   rather than standing alone in a row of its own. */}
               {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} words={words} />}

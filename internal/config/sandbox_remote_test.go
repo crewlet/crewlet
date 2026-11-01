@@ -16,59 +16,79 @@ import (
 // answer for the whole company.
 func TestAPlacementNeedsItsBackend(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, yaml, field string }{
+	for _, tc := range []struct{ name, yaml, field, has string }{
 		{"a company default naming an unconfigured backend",
-			"local: {}\n    default_run_in: e2b", "providers.sandbox.default_run_in"},
-		{"a seat naming an unconfigured backend",
-			"e2b: {api_key: k}\nroles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}",
-			"roles[0].sandbox.run_in"},
-		// The seats inside `units:` are checked too. They were not, for as
-		// long as the walk that reaches them was written inline in one
-		// rule — which exempted most of a real company's seats from every
-		// cross-field rule there is.
-		{"a unit's seat naming an unconfigured backend",
-			"e2b: {api_key: k}\nunits:\n  - name: Platform\n    roles:\n" +
-				"      - name: SWE\n        sandbox: {enabled: true, run_in: container}",
-			"units[0].roles[0].sandbox.run_in"},
+			"    local: {}\n    default_run_in: e2b\n", "providers.sandbox.default_run_in",
+			`(this catalogue has "direct" and "container")`},
+		{"an entry naming an unconfigured backend",
+			"    e2b: {api_key: k}\n  llm:\n    main: {model: sonnet, run_in: direct}\n" +
+				"roles:\n  - name: SWE\n", "providers.llm.main.run_in", `(this catalogue has "e2b")`},
+		// The seats inside `units:` reach their entries too. They did not,
+		// for as long as the walk that reaches them was written inline in
+		// one rule — which exempted most of a real company's seats from
+		// every cross-field rule there is.
+		{"an entry only a unit's seat runs on",
+			"    e2b: {api_key: k}\n  llm:\n    main: {model: sonnet}\n" +
+				"    boxed: {model: sonnet, run_in: container}\n" +
+				"roles:\n  - name: CEO\n    llm: main\nunits:\n  - name: Platform\n    roles:\n" +
+				"      - name: SWE\n        llm: boxed\n", "providers.llm.boxed.run_in",
+			`(this catalogue has "e2b")`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    "+tc.yaml+"\n", tc.field)
+			err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n"+tc.yaml, tc.field)
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
+			}
+			// THE CELLS IT HAS ARE A LIST READ WHOLE, each quoted as the
+			// value it was refused beside.
+			if !strings.Contains(err.Error(), tc.has) {
+				t.Errorf("the refusal does not say %s:\n%v", tc.has, err)
 			}
 		})
 	}
 }
 
-// AN AMBIGUOUS CATALOGUE HAS TO BE TOLD WHERE A SILENT SEAT RUNS — and only
-// then.
+// AN AMBIGUOUS CATALOGUE HAS TO BE TOLD WHERE A SILENT ENTRY'S RUN HAPPENS —
+// and only then.
 //
 // `local:` alone is TWO cells, not one: it serves `direct`, which runs the
 // coding agent as the engine's user, and `container`, which does not. Picking
 // either for an operator who wrote neither is the default that gets discovered
-// afterwards. But the question is about the SEATS: a catalogue whose every
-// sandbox-enabled seat names its own cell has nothing left to default, and
-// that is the shape the catalogue exists for. Refused on the block alone, the
-// remedy its own message offered — "give every seat its run_in" — could never
-// pass.
-func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T) {
+// afterwards. But the question is about the ENTRIES the seats' executors
+// launch on: a catalogue whose every such entry names its own cell has nothing
+// left to default, and that is the shape the catalogue exists for. Refused on
+// the block alone, the remedy its own message offered — "give every entry its
+// run_in" — could never pass.
+func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereAnEntryWouldReadIt(t *testing.T) {
 	t.Parallel()
 	const local = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"
 	const both = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n"
 
-	// A silent seat is refused where it is written, on either catalogue.
-	silent := "roles:\n  - name: SWE\n    sandbox: {enabled: true}\n"
-	for _, doc := range []string{local + silent, both + silent} {
-		err := rejects(t, doc, "roles[0].sandbox.run_in")
+	// A silent entry is refused where it is written, on either catalogue —
+	// and only there: the default is one of that refusal's remedies, so a
+	// second refusal at the catalogue would say the one mistake twice.
+	silent := "  llm:\n    main: {model: sonnet}\nroles:\n  - name: SWE\n"
+	for doc, places := range map[string]string{
+		local + silent: `("direct" and "container")`,
+		both + silent:  `("direct", "container" and "e2b")`,
+	} {
+		err := rejects(t, doc, "providers.llm.main.run_in")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
 		}
+		if !strings.Contains(err.Error(), "more than one place to run one "+places) {
+			t.Errorf("the refusal does not name the places as %s:\n%v", places, err)
+		}
+		if problems := Problems(err); len(problems) != 1 {
+			t.Errorf("want the one refusal at the entry, got %d:\n%v", len(problems), err)
+		}
 	}
 
-	// Every seat naming its cell needs no default.
-	cfg := mustCompany(t, both+"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n"+
-		"  - name: Ops\n    sandbox: {enabled: true, run_in: e2b}\n")
+	// Every entry naming its cell needs no default.
+	cfg := mustCompany(t, both+"  llm:\n    here: {model: sonnet, run_in: direct}\n"+
+		"    there: {model: sonnet, run_in: e2b}\n"+
+		"roles:\n  - name: SWE\n    llm: here\n  - name: Ops\n    llm: there\n")
 	reached := cfg.SandboxPlacements()
 	if _, ok := reached[PlacementDirect]; !ok {
 		t.Errorf("direct is not reached: %v", reached)
@@ -93,29 +113,30 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T
 // default only where something reads it" must NOT let through.
 //
 // The engine builds a backend only for a cell something reaches, so an
-// ambiguous catalogue with no default and no seat reaches nothing, builds
-// nothing, and registers run_sandbox for nobody: a block that reads as
-// configuration and configures nothing, which is why an empty block is refused
-// too. Every catalogue that resolves a default reaches it precisely so a seat
-// added later has somewhere to go.
+// ambiguous catalogue with no default and no executor to place reaches
+// nothing and builds nothing: a block that reads as configuration and
+// configures nothing, which is why an empty block is refused too. Every
+// catalogue that resolves a default reaches it precisely so an entry a seat
+// is pointed at later has somewhere to go.
 func TestACatalogueNothingReachesIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, doc := range []string{
-		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n",
-		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n",
+	for doc, places := range map[string]string{
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n":                        `("direct" and "container")`,
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n": `("direct", "container" and "e2b")`,
 	} {
 		err := rejects(t, doc, "providers.sandbox.default_run_in")
 		if !errors.Is(err, ErrMissing) {
 			t.Fatalf("want ErrMissing, got %v", err)
 		}
+		if !strings.Contains(err.Error(), "more than one place to run an executor "+places) {
+			t.Errorf("the refusal does not name the places as %s:\n%v", places, err)
+		}
 	}
-	// The three ways to reach a cell all satisfy it, or the rule would be
+	// The two ways to reach a cell both satisfy it, or the rule would be
 	// "an ambiguous catalogue is refused" wearing a longer message.
 	for _, tail := range []string{
 		"    default_run_in: direct\n",
-		"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n",
-		"  llm:\n    sub:\n      model: sonnet\n" +
-			"      agent: claude-code\n      mode: agent\n      run_in: direct\n" +
+		"  llm:\n    sub:\n      model: sonnet\n      run_in: direct\n" +
 			"roles:\n  - name: SWE\n    llm: sub\n",
 	} {
 		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+tail)
@@ -144,8 +165,8 @@ func TestTheRemoteBackendRequiresItsKey(t *testing.T) {
 
 // AN EMPTY BLOCK CONFIGURES NOTHING, and it is the shape an unfinished edit
 // leaves behind: it parses, and without this rule it would apply — every
-// sandbox-enabled seat planning around a box it never gets, with code work
-// quietly never happening and nothing anywhere saying why.
+// agent seat's executor launching into a box that is never there, and
+// nothing anywhere saying why.
 func TestAnEmptyCatalogueIsRefused(t *testing.T) {
 	t.Parallel()
 	err := rejects(t, "name: Acme\nproviders:\n  sandbox: {}\n", "providers.sandbox")
@@ -168,7 +189,7 @@ func TestTheDoubleRefusesARealBackendBesideIt(t *testing.T) {
 
 // A CONTAINER IMAGE IS REQUIRED WHERE A CONTAINER IS ACTUALLY RUN, and only
 // there. Required unconditionally it would refuse a perfectly good direct-only
-// company; unchecked, the seat's first coding run fails at container create,
+// company; unchecked, the seat's first launch fails at container create,
 // minutes into a turn.
 func TestTheContainerImageIsRequiredOnlyWhereAContainerRuns(t *testing.T) {
 	t.Parallel()
@@ -270,7 +291,7 @@ func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
 // reachablePerson is a `roles:` block declaring one human seat somebody can be
 // reached at — what a fixture counting advisories declares, so the count is its
 // subject's alone: a company with no human seat is advised that nobody can
-// join it, and a human seat with no contact identity that nobody can be
-// mentioned at.
+// join it, and on a vendor chat surface a human seat with no account there
+// that nobody can be mentioned at.
 const reachablePerson = "roles:\n  - name: Founder\n    kind: human\n" +
 	"    contact:\n      slack_user_id: U0FOUNDER\n"

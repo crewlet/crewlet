@@ -20,6 +20,7 @@ import (
 const referenceDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -44,6 +45,7 @@ roles:
       notion: {NOTION_TOKEN: "${NOTION_TOKEN}"}
     integrations:
       slack:
+        enabled: false
         bot_token: "${SLACK_BOT_TOKEN_CEO}"
         signing_secret: "${SLACK_SIGNING_CEO}"
 `
@@ -118,6 +120,7 @@ func TestAnEntrysFallbackCredentialIsReportedAsRead(t *testing.T) {
 	cfg, err := ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     plan:
       model: sonnet
@@ -160,6 +163,35 @@ providers:
 	}
 }
 
+// AN EMBEDDER THAT NAMES ITS KEY READS NO FALLBACK. providers.embeddings
+// falls back to OPENAI_API_KEY only while api_key is empty, so one that writes
+// a reference is reported at that field under the name it wrote and never as
+// reading the conventional key too: the Secrets screen would otherwise show
+// an OPENAI_API_KEY row as read by a company whose embedder never touches it.
+// The LLM entries above hold the same rule per credential; the embedder
+// decides it in a branch of its own, so it is pinned on its own.
+//
+// Mutation: drop the empty-key guard in VariablesRead, and EmbeddingKeyVar is
+// reported beside MY_KEY.
+func TestAnEmbedderNamingItsKeyReadsNoFallback(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseCompany([]byte(`
+name: Acme
+providers:
+  embeddings:
+    type: openai
+    model: text-embedding-3-small
+    api_key: "${MY_KEY}"
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []Reference{{Path: "providers.embeddings.api_key", Name: "MY_KEY"}}
+	if got := cfg.VariablesRead(); !slices.Equal(got, want) {
+		t.Errorf("VariablesRead = %v, want %v alone", got, want)
+	}
+}
+
 // ONE ENTRY'S READS ARE ITS OWN, by the rule VariablesRead uses: what the
 // entry names and what it falls back to, and nothing of an entry whose key
 // starts with the same letters and a dot — `gpt-5` beside `gpt-5.1`, which
@@ -174,6 +206,7 @@ roles:
     handle: ceo
     goal: Run the company
 providers:
+  sandbox: {fake: true}
   llm:
     gpt-5:
       agent: codex

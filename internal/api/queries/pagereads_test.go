@@ -14,13 +14,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const readPage = "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a"
@@ -60,8 +60,8 @@ func read(via string, count int64, at time.Time, turn, query string) usage.Read 
 		LastAt: at, LastTurnID: turn, LastQuery: query}
 }
 
-// A PAGE'S READERS ARE EVERY NODE'S, summed per seat and way of reading, with
-// the newest read's details — and "today" is the COMPANY's day. spendNow is
+// A PAGE'S READERS ARE EVERY DATA NODE'S, summed per seat and way of reading,
+// with the newest read's details — and "today" is the COMPANY's day. spendNow is
 // 09:00 on the 25th in Tokyo and still the 24th in UTC, so a count cut on the
 // wrong clock reads yesterday's seats as today's.
 func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
@@ -76,7 +76,7 @@ func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
 		// OFFERED IN A CATALOGUE is not a read, and never counts toward one.
 		read("skill_injected", 9, yesterday, "run-c", ""))
 
-	work := &stubWork{places: map[string]tracker.TurnPlace{
+	work := &stubWork{places: map[string]worklet.TurnPlace{
 		"run-b": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
 	sources := f.sources()
 	sources.Work = work
@@ -101,7 +101,7 @@ func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
 	// of date, and only a seat the chart no longer holds keeps it.
 	want := []queries.PageReadRow{
 		{Handle: "lead", Role: "Lead", Via: "get_page", Count: 3, LastAt: late, LastTurnID: "run-b",
-			LastWorkItem: &tracker.TurnPlace{TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}},
+			LastWorkItem: &worklet.TurnPlace{TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}},
 		{Handle: "sre", Role: "Site Reliability", Via: "search", Count: 4, LastAt: yesterday,
 			LastTurnID: "run-c", LastQuery: "dhcp lease"},
 	}
@@ -157,7 +157,7 @@ func TestThePageAnswerSaysWhyItCarriesNoBacklinks(t *testing.T) {
 			t.Parallel()
 			f := newSpendFixture(t)
 			sources := f.sources()
-			sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}}
+			sources.Pages = &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage, Title: "Deploying"}}}
 			sources.Backlinks = stubBacklinks{err: tc.err}
 			got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
 			if !ok {
@@ -212,7 +212,7 @@ func TestThePageAnswerCarriesSkillLoadsAndBacklinks(t *testing.T) {
 		Tasks:      []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Status: "in_progress"}},
 		PagesTotal: 1, TasksTotal: 1,
 	}
-	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
+	stub := &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
 	sources.Pages, sources.Backlinks = stub, stubBacklinks{links: links}
 	got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
@@ -245,7 +245,7 @@ func TestThePageAnswerCarriesSkillLoadsAndBacklinks(t *testing.T) {
 func TestAnUnloadedSkillSendsAnEmptyListNotAnAbsentKey(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
-	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
+	stub := &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
 	sources.Pages = stub
 	wire := func() map[string]json.RawMessage {
@@ -277,7 +277,7 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 	at := time.Date(2026, 9, 24, 3, 0, 0, 0, time.UTC)
 	f.reads("node-a", "2026-09-25", "lead", 0,
 		read("skill_loaded", 2, at, "run-a", ""), read("skill_injected", 3, at, "run-a", ""))
-	stub := &stubPages{list: []pages.Summary{{ID: readPage, Title: "Deploying", Skill: true},
+	stub := &stubPages{list: []doclet.Summary{{ID: readPage, Title: "Deploying", Skill: true},
 		{ID: "p-quiet", Title: "Rollback", Skill: true}}, total: 2}
 	sources := f.sources()
 	sources.Pages = stub
@@ -303,14 +303,14 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 // (ADR-0033). A page is the knowledge base's, and two things beside it are the
 // tracker's rows: the tasks whose bodies link here (`linked_from.tasks`) and
 // the task each read happened on (`page_reads`' `last_work_item`). A reader of
-// the pages without the tracker is shown the pages that link here and who read
+// the pages without Worklet is shown the pages that link here and who read
 // it, and no task — the list empty and its total zero rather than the key gone,
 // since the shape a reader parses is the same either way — and the tracker is
 // not asked to place a run for them at all.
 //
 // Mutation: drop the tracker check from linksFor, or from pageReads' placing of
 // each run, and the knowledge-only reader is shown ENG-412.
-func TestLinkedFromTasksNeedTracker(t *testing.T) {
+func TestLinkedFromTasksNeedWorklet(t *testing.T) {
 	t.Parallel()
 	links := search.Backlinks{
 		Pages:      []search.PageLink{{ID: "p-2", Container: "ENG", Title: "Scheduler on-call"}},
@@ -323,19 +323,19 @@ func TestLinkedFromTasksNeedTracker(t *testing.T) {
 		holding []iam.Grant
 		tasks   bool
 	}{
-		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, false},
-		{"both apps", iam.Apps, true},
+		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, false},
+		{"every app", iam.Apps, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			f := newSpendFixture(t)
 			f.reads("node-a", "2026-09-25", "lead", 0, read("get_page", 1, late, "run-b", ""))
-			work := &stubWork{places: map[string]tracker.TurnPlace{
+			work := &stubWork{places: map[string]worklet.TurnPlace{
 				"run-b": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
 			sources := f.sources()
 			sources.Work = work
-			sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}}
+			sources.Pages = &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage, Title: "Deploying"}}}
 			sources.Backlinks = stubBacklinks{links: links}
 			r := queries.NewRegistry()
 			queries.Register(r, sources)

@@ -231,7 +231,7 @@ func (a *Applier) labelAdopted(ctx context.Context, tx *sql.Tx, c applyContext, 
 	if err != nil {
 		return 0, false, err
 	}
-	a.move(p.Kit, MoveMeta, head.epoch, head.head, c.position)
+	a.move(c, p.Kit, MoveMeta, head.epoch, head.head)
 	return n + 1, true, nil
 }
 

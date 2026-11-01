@@ -54,7 +54,7 @@ export const FILL: Record<string, string> = {
 /**
  * The path a printed address names. A query (`?tab=…`) is not part of the
  * path. An address ending in `/` is a PREFIX the code completes with an id
- * (`pages.AddressPrefix`, `#/knowledge/pages/`), so it is asked about with one.
+ * (`doclet.AddressPrefix`, `#/doclet/pages/`), so it is asked about with one.
  *
  * Throws on a placeholder {@link FILL} does not carry, naming it.
  */

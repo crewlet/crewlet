@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -144,21 +145,24 @@ type PeoplePage struct {
 	At statelog.Position
 }
 
-// People answers one page of the directory.
-func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
-	limit := pageLimit(q.Limit)
-	out := PeoplePage{At: r.reached()}
-	// ONE MORE THAN ASKED FOR, which is how the cursor is derived without
-	// a second count: the extra row is what says there IS a next page, and
-	// it is dropped rather than returned.
+// personRowSelect is a directory row as [scanPerson] reads it: the person and
+// the revocation epoch beside it, joined by the person's key.
+const personRowSelect = `
+	SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
+	       p.seat_id, p.document,
+	       p.created_at, p.updated_at, p.version,
+	       COALESCE(e.epoch, 0)
+	FROM iam_people p
+	LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id`
+
+// peoplePageStatement is one page of the directory, in the order of the
+// people's own key from past q.After, narrowed by q's stage and search term,
+// and limited to ONE MORE THAN ASKED FOR, which is how the cursor is derived
+// without a second count: the extra row is what says there IS a next page,
+// and it is dropped rather than returned.
+func peoplePageStatement(q PeopleQuery, limit int) (string, []any) {
 	query := strings.Builder{}
-	query.WriteString(`
-		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-		       p.seat_id, p.document,
-		       p.created_at, p.updated_at, p.version,
-		       COALESCE(e.epoch, 0)
-		FROM iam_people p
-		LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
+	query.WriteString(personRowSelect + `
 		WHERE p.id > ?`)
 	args := []any{q.After}
 	if q.Stage != "" {
@@ -172,9 +176,16 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	}
 	query.WriteString(` ORDER BY p.id LIMIT ?`)
 	args = append(args, limit+1)
+	return query.String(), args
+}
 
+// People answers one page of the directory.
+func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
+	limit := pageLimit(q.Limit)
+	out := PeoplePage{At: r.reached()}
+	query, args := peoplePageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, query.String(), args...)
+		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the directory: %w", err)
 		}
@@ -198,6 +209,63 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	return out, nil
 }
 
+// Removed answers which of ids carry a removal tombstone, in the order given:
+// the persons whose removal this node has applied. It is what another domain's
+// erasure is reconciled against (ADR-0053's Dashboard Assistant conversations),
+// because a removal is permanent and nothing names a removed person again.
+//
+// AN ORDINARY READ, never identity work ([store.Identity]): it is asked by a
+// background pass, never before a request can decide anything, so it must not
+// spend the connection the store holds back for the lookups that decide.
+func (r *Reader) Removed(ctx context.Context, ids []string) ([]string, error) {
+	out := []string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		for chunk := range slices.Chunk(ids, removedChunk) {
+			among, args := inList(chunk)
+			rows, err := tx.QueryContext(ctx,
+				`SELECT person_id FROM iam_removed WHERE person_id IN `+among, args...)
+			if err != nil {
+				return err
+			}
+			found := map[string]bool{}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				found[id] = true
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
+			}
+			for _, id := range chunk {
+				if found[id] {
+					out = append(out, id)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read which persons were removed: %w", err)
+	}
+	return out, nil
+}
+
+// removedChunk is how many ids one statement of [Reader.Removed] asks about:
+// five hundred, the object store's references batch, far under the driver's
+// bind limit and small enough that one statement never holds the reader long.
+const removedChunk = 500
+
+// personRowStatement is one directory row, by the person's key.
+const personRowStatement = personRowSelect + `
+	WHERE p.id = ?`
+
 // Person answers one directory row, or [ErrNotFound].
 //
 // THE SENTINEL IS DELIBERATE HERE, unlike [Reader.PersonByLogin]'s zero
@@ -208,14 +276,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 	var out PersonRow
 	found := false
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-			       p.seat_id, p.document,
-			       p.created_at, p.updated_at, p.version,
-			       COALESCE(e.epoch, 0)
-			FROM iam_people p
-			LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
-			WHERE p.id = ?`, id)
+		rows, err := tx.QueryContext(ctx, personRowStatement, id)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read person %q: %w", id, err)
 		}
@@ -408,6 +469,24 @@ type InvitationPage struct {
 	At          statelog.Position
 }
 
+// invitationsPageStatement is one page of the invitations, in the order of
+// their own key from past q.After, limited to one more than asked for as
+// [peoplePageStatement] is.
+func invitationsPageStatement(q InvitationsQuery, limit int) (string, []any) {
+	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
+	args := []any{q.After}
+	if !q.All {
+		// OPEN IS [InvitationRow.Spent]'s complement — not redeemed and a
+		// deadline still ahead — and the very predicate a directory
+		// decide holds a value against ([openInvitation]), so the listing
+		// shows exactly the invitations that hold something.
+		query += ` AND ` + openInvitation
+		args = append(args, q.Now.UnixMilli())
+	}
+	query += ` ORDER BY id LIMIT ?`
+	return query, append(args, limit+1)
+}
+
 // Invitations answers one page of the invitations this estate holds.
 //
 // THE ROW CARRIES THE VERIFIER, as [Reader.InvitationByID]'s does, and a
@@ -419,18 +498,7 @@ func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 
 	limit := pageLimit(q.Limit)
 	out := InvitationPage{At: r.reached()}
-	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
-	args := []any{q.After}
-	if !q.All {
-		// OPEN IS [InvitationRow.Spent]'s complement — not redeemed, a
-		// deadline still ahead, a seat named — and the very predicate a
-		// directory decide holds a value against ([openInvitation]), so
-		// the listing shows exactly the invitations that hold something.
-		query += ` AND ` + openInvitation
-		args = append(args, q.Now.UnixMilli())
-	}
-	query += ` ORDER BY id LIMIT ?`
-	args = append(args, limit+1)
+	query, args := invitationsPageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -659,26 +727,17 @@ type HistoryPage struct {
 	At statelog.Position
 }
 
-// History answers one page of the identity estate's own trail.
+// historyPageStatement is one page of the identity estate's trail, newest
+// first, narrowed by q, limited to one more than asked for as
+// [peoplePageStatement] is.
 //
-// NEWEST FIRST, which is what somebody investigating actually reads: the
-// question is almost always "what just happened", and a reader that started
-// at the beginning would page through years to reach it.
-func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, error) {
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = DefaultHistoryPage
-	case limit > MaxHistoryPage:
-		limit = MaxHistoryPage
-	}
-	out := HistoryPage{At: r.reached()}
+// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it stands,
+// by its key: an entry names them by id, and a trail of id prefixes said whose
+// session opened and whose row changed to nobody reading it. A removed
+// person's row is gone, so their entries name nobody — the removal erases what
+// identified them, and the trail keeps the id.
+func historyPageStatement(q HistoryQuery, limit int) (string, []any) {
 	query := strings.Builder{}
-	// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it
-	// stands: an entry names them by id, and a trail of id prefixes said
-	// whose session opened and whose row changed to nobody reading it. A
-	// removed person's row is gone, so their entries name nobody — the
-	// removal erases what identified them, and the trail keeps the id.
 	query.WriteString(`
 		SELECT h.id, h.class, h.object_kind, h.object_id, h.person_id, h.op,
 		       h.actor, h.actor_kind, h.operator_id, h.reason, h.summary,
@@ -704,9 +763,26 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	}
 	query.WriteString(` ORDER BY h.version DESC LIMIT ?`)
 	args = append(args, limit+1)
+	return query.String(), args
+}
 
+// History answers one page of the identity estate's own trail.
+//
+// NEWEST FIRST, which is what somebody investigating actually reads: the
+// question is almost always "what just happened", and a reader that started
+// at the beginning would page through years to reach it.
+func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, error) {
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = DefaultHistoryPage
+	case limit > MaxHistoryPage:
+		limit = MaxHistoryPage
+	}
+	out := HistoryPage{At: r.reached()}
+	query, args := historyPageStatement(q, limit)
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, query.String(), args...)
+		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the identity trail: %w", err)
 		}
@@ -755,6 +831,13 @@ const (
 	MaxHistoryPage     = 1000
 )
 
+// positionAtStatement is the newest trail position committed at or before an
+// instant: a walk of the trail's position index from its newest row, which
+// stops at the first row at or before the instant.
+const positionAtStatement = `
+	SELECT version FROM iam_history WHERE broker_at <= ?
+	ORDER BY version DESC LIMIT 1`
+
 // PositionAt resolves an instant to the newest trail position at or before it.
 //
 // ONCE, AT THE SURFACE, which is what lets everything else page by POSITION:
@@ -764,9 +847,8 @@ const (
 func (r *Reader) PositionAt(ctx context.Context, at time.Time) (uint64, error) {
 	var version int64
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx, `
-			SELECT version FROM iam_history WHERE broker_at <= ?
-			ORDER BY version DESC LIMIT 1`, at.UnixMilli()).Scan(&version)
+		err := tx.QueryRowContext(ctx, positionAtStatement,
+			at.UnixMilli()).Scan(&version)
 		if errors.Is(err, sql.ErrNoRows) {
 			// NOTHING AT OR BEFORE IT IS ZERO, which is the floor
 			// every page already reads as "no floor" — an instant
@@ -852,6 +934,22 @@ type SeatClaims struct {
 	Invitations []SeatInvitation
 }
 
+// The two statements [Reader.SeatClaims] reads in its one snapshot: every
+// binding, in seat order, and every open invitation, in seat order and the
+// newest first on each.
+const (
+	seatClaimBindingsStatement = `
+		SELECT id, kind, login, name_sealed, stage, seat_id
+		  FROM iam_people
+		 WHERE seat_id != ''
+		 ORDER BY seat_id, id`
+	openSeatInvitationsStatement = `
+		SELECT id, seat_id, email_sealed, invited_by, created_at, expires_at
+		  FROM iam_invites
+		 WHERE ` + openInvitation + `
+		 ORDER BY seat_id, created_at DESC, id`
+)
+
 // SeatClaims answers [SeatClaims] at now — the instant an invitation is open
 // at, the caller's clock as every reader of an expiry here takes it.
 //
@@ -881,11 +979,7 @@ func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, err
 	var out SeatClaims
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = SeatClaims{}
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id, kind, login, name_sealed, stage, seat_id
-			  FROM iam_people
-			 WHERE seat_id != ''
-			 ORDER BY seat_id, id`)
+		rows, err := tx.QueryContext(ctx, seatClaimBindingsStatement)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
@@ -907,11 +1001,8 @@ func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, err
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
 
-		invites, err := tx.QueryContext(ctx, `
-			SELECT id, seat_id, email_sealed, invited_by, created_at, expires_at
-			  FROM iam_invites
-			 WHERE `+openInvitation+`
-			 ORDER BY seat_id, created_at DESC, id`, now.UnixMilli())
+		invites, err := tx.QueryContext(ctx, openSeatInvitationsStatement,
+			now.UnixMilli())
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the open invitations: %w", err)
 		}

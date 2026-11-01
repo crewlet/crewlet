@@ -1,5 +1,7 @@
 package prompts
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // OnboardingHeader is the one-time setup contract, run on a seat's first turn
 // before the executor.
 //
@@ -10,7 +12,7 @@ package prompts
 // copies of one instruction, one of them a sentence before the other.
 //
 // BACKEND-NEUTRAL, by capability ("your knowledge-base tools"), never by
-// product or by tool name: on the native backend they are first-party tools
+// product or by tool name: on Doclet they are first-party tools
 // (`search_knowledge`, `get_page`) listed among the tools to discover, and on
 // Confluence the page reads are an MCP server's. It said once that they were
 // always MCP tools, which on the default backend sent every seat to list a
@@ -19,8 +21,8 @@ const OnboardingHeader = "\n## ONBOARDING phase" +
 	"\nThis is a one-time setup pass with its **own** budget. Do ONLY the " +
 	"steps below now — not the task you were triggered on, which runs next. " +
 	"Your knowledge-base tools are among the tools to discover below: " +
-	"`activate_tool` makes one callable (an MCP server's are named by " +
-	"`list_mcp_server_tools` first)."
+	"`" + toolname.Activate + "` makes one callable (an MCP server's are " +
+	"named by `" + toolname.ListMCPServerTools + "` first)."
 
 // OnboardingInput is what the onboarding pass renders beyond the seat.
 type OnboardingInput struct {

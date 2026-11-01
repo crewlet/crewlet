@@ -175,7 +175,7 @@ describe("a board read from storage", () => {
   });
 
   test("linkHref says why it refuses an address", () => {
-    expect(linkHref("#/work")).toEqual({ href: "#/work" });
+    expect(linkHref("#/worklet")).toEqual({ href: "#/worklet" });
     expect(linkHref("http://example.com")).toEqual({ href: "http://example.com/" });
     expect(linkHref("")).toEqual({ error: "Enter an address." });
     expect("error" in linkHref("javascript:void(0)")).toBe(true);

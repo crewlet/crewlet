@@ -46,7 +46,7 @@ var (
 //     committer holds every input to its own snapshot, and a plan from an
 //     older one is refused stale. The repository's maintainer holds it
 //     already in the ordinary case — on a fleet of alike git nodes it is the
-//     home, whose reads are asked of it too (ADR-0059).
+//     home, whose reads are asked of it too (ADR-0082).
 //  2. PLAN ([plan]) over the incarnation's live packs less every pack a
 //     published layer of its chain names — a published pack is never a
 //     compaction's input (the decide's rule 2), since a node's chain loads

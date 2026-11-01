@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -17,6 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
+
+// MailboxTurn hands e one inbox partition for handle's seat as the node's
+// mailbox does once it has admitted the turn ([Engine.mailboxTurn]), for a test
+// outside the package whose subject is the dispatcher behind it rather than the
+// node's admission in front of it.
+func MailboxTurn(ctx context.Context, e *Engine, handle string, evs []*events.Event) queue.Result {
+	return e.mailboxTurn(ctx, handle, evs)
+}
+
+// ControlOutcome is what a seat's control-topic delivery leaves with the broker,
+// for a test outside the package that drives the coordinator behind it.
+func ControlOutcome(err error) queue.Result { return controlOutcome(err) }
 
 // Reflects reports whether e has built its reflect dispatcher, for a test
 // outside the package that drives an engine through its public surface.
@@ -197,6 +211,12 @@ func RequireNodeGit(t testing.TB, b *config.Bootstrap, company *config.Company) 
 		gittest.RequireNode(t)
 	}
 }
+
+// RelistFleetView asks this node's view of the fleet's presence leases for a
+// listing now ([coord.LeaseView.Invalidate]) rather than at its cadence — a
+// third of the lease TTL — for a test outside the package that opens an input
+// the view reads and must not tie how soon the view sees it to a lease TTL.
+func RelistFleetView(e *Engine) { e.dataView.Invalidate() }
 
 // SettleSeatServers waits until no seat this node holds has a pass over its
 // per-role children in flight, for a test outside the package that reads what

@@ -7,12 +7,13 @@
  * seat's (`routes/agents/seat/Turns.tsx`) — and each used to spell both for
  * itself, so the seat's list asked for the read's default week while calling
  * itself "the newest 50 this seat took", and both drew a keyless item as a
- * full `native:<uuid>` that no row had room for.
+ * full `<backend>:<uuid>` that no row had room for.
  */
 
 import { pathOf } from "~/app/frame/objects.ts";
 import { href } from "~/app/router.tsx";
 import { doingWords, RUNNING_ROWS, workingLongestFirst } from "./seats.ts";
+import { WORKLET_ITEM_BACKEND } from "./work.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
 /**
@@ -22,7 +23,7 @@ import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
  */
 export const MAX_TURN_DAYS = 30;
 
-/** A uuid, which is what a native task's id is: 36 characters no row has room for. */
+/** A uuid, which is what a Worklet task's id is: 36 characters no row has room for. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -33,19 +34,20 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * wake carries the key the write minted. A turn that recorded none — woken by
  * a trigger that named the item by its identity alone — is still ABOUT an
  * item, so it is named by the item's kind
- * and the head of its id rather than dropped; the full `<backend>:<id>` a
- * search or the event log's `work_item=` takes is on the title, never in the
- * row, where 43 unbreakable characters took the whole cell on a phone and
- * left the summary beside it one letter wide.
+ * and the head of its id rather than dropped; the whole identity is on the
+ * title, never in the row, where 43 unbreakable characters took the whole cell
+ * on a phone and left the summary beside it one letter wide. A vendor's item
+ * is titled `<backend>:<id>`, as a search or the event log's `work_item=` takes
+ * it; Worklet's own is titled by Worklet's name, since the backend word the
+ * engine stores for it is never shown.
  */
 export function workItemLabel(ref: WorkItemRef): { text: string; title?: string } {
-  const identity = `${ref.backend}:${ref.id}`;
   if (ref.key) return { text: ref.key };
-  const kind = ref.backend === "native" ? "task" : ref.backend;
+  const worklet = ref.backend === WORKLET_ITEM_BACKEND;
   const head = UUID.test(ref.id) ? ref.id.slice(0, 8) : ref.id;
   return {
-    text: `${kind} ${head}`,
-    title: `${identity}: no key recorded`,
+    text: `${worklet ? "task" : ref.backend} ${head}`,
+    title: `${worklet ? `Worklet task ${ref.id}` : `${ref.backend}:${ref.id}`}: no key recorded`,
   };
 }
 

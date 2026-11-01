@@ -125,10 +125,10 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
 			// lists nothing — and no app is a code permission: what a
 			// credential may do to a repository is the standing of the
-			// person it is bound to (ADR-0058), so the grant decides
+			// person it is bound to (ADR-0081), so the grant decides
 			// nothing a code case reads.
 			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
-				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantTracker}})
+				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantWorklet}})
 		}
 		if amend != nil {
 			amend(b)
@@ -766,7 +766,7 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 			"code reads take and the rest refuse", len(padding), codeAnswerBytes)
 	}
 	const position = `"position":{"stream":"CREWLET_CODE_LOG","generation":1,"seq":7}`
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		var body string
 		switch {
@@ -788,9 +788,9 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(body + `,"padding":"` + padding + `"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
-	node := []string{"-url", server.URL}
+	node := []string{"-api", server.URL}
 	for _, c := range []struct {
 		args []string
 		// ok is whether the command succeeds; the export of a deleted
@@ -859,11 +859,11 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 		t.Fatalf("code status -repo web: %v", err)
 	}
 	for _, want := range []string{
-		"web — active, owned by seat:founder, default branch main\n",
+		"web: active, owned by seat:founder, default branch main\n",
 		"  description:  The customer-facing web app.\n",
-		"  visibility:   company — every seat reads it\n",
-		"  search:       indexed — read from an index of its default branch, by a search across the " +
-			"company's repositories as well as one naming it\n",
+		"  visibility:   company (every seat reads it)\n",
+		"  search:       indexed (read from an index of its default branch, by a search across the " +
+			"company's repositories as well as one naming it)\n",
 		"  protections:  refs/heads/main (no force, no delete)\n",
 		"  refs:         2 branches, 0 tags; main at " + first + "\n",
 		"  pushes:       2 ever",
@@ -916,20 +916,20 @@ func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
 		{"a declared one, deleted",
 			`{"name":"web","status":"deleted","managed_by":"config","kind":"project",` +
 				`"deleted_at":"2026-10-20T09:00:00Z","owner":{"kind":"unit","ref":"eng"}}`,
-			[]string{"web — deleted on 2026-10-20 09:00 UTC; declaring it again in code.repos restores it",
+			[]string{"web: deleted on 2026-10-20 09:00 UTC; declaring it again in code.repos restores it",
 				"  managed by:   code.repos\n"}},
 		{"a tool-made one, deleted",
 			`{"name":"api","status":"deleted","managed_by":"tools","kind":"project",` +
 				`"deleted_at":"2026-10-20T09:00:00Z","owner":{"kind":"unit","ref":"eng"}}`,
-			[]string{"api — deleted on 2026-10-20 09:00 UTC; a restore through the code tools brings it back",
-				"  managed by:   the code tools — a project\n"}},
+			[]string{"api: deleted on 2026-10-20 09:00 UTC; a restore through the code tools brings it back",
+				"  managed by:   the code tools (a project)\n"}},
 		{"a scratch repository",
 			`{"name":"alice.spike","status":"active","managed_by":"tools","kind":"scratch",` +
 				`"last_activity_at":"2026-10-27T10:30:00Z","owner":{"kind":"seat","ref":"alice"},` +
 				`"default_branch":"main"}`,
-			[]string{"alice.spike — active, owned by seat:alice, default branch main\n",
-				"  managed by:   the code tools — alice's scratch repository, last active 2026-10-27 10:30 UTC, " +
-					"deleted once idle for code.scratch.idle_days unless a live turn holds it\n"}},
+			[]string{"alice.spike: active, owned by seat:alice, default branch main\n",
+				"  managed by:   the code tools (alice's scratch repository, last active 2026-10-27 10:30 UTC, " +
+					"deleted once idle for code.scratch.idle_days unless a live turn holds it)\n"}},
 		{"one asked for by an old name",
 			`{"name":"web","status":"active","managed_by":"tools","kind":"project","redirect":"web",` +
 				`"redirect_until":"2026-11-27T10:00:00Z","owner":{"kind":"unit","ref":"eng"},` +
@@ -1073,11 +1073,11 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 		!strings.Contains(out, "web: the rebuilt copy is whole\n") {
 		t.Fatalf("a repair = %v\nstdout:\n%s\nstderr:\n%s\nwant it rebuilt whole", err, out, errOut)
 	}
-	// AS JSON, stdout is the node's verifications alone, one a line, and
-	// what is said of them — docs passed over among it — goes beside them.
+	// AS JSON, stdout is the node's verifications alone, one document each,
+	// and what is said of them — docs passed over among it — goes beside
+	// them.
 	out, errOut, err = cli(t, "code", "verify", h.cfg, "-json")
-	if lines := strings.Split(strings.TrimRight(out, "\n"), "\n"); err != nil || len(lines) != 1 ||
-		!json.Valid([]byte(lines[0])) || !strings.Contains(lines[0], `"state":"done"`) ||
+	if states := verificationStates(t, out); err != nil || !slices.Equal(states, []string{"done"}) ||
 		!strings.Contains(errOut, "docs: not held on this node") {
 		t.Errorf("a verify after the repair, as JSON = %v\nstdout %q\nstderr %q\nwant web's done "+
 			"verification alone on stdout", err, out, errOut)
@@ -1088,6 +1088,28 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 		!strings.Contains(errOut, `"nope"`) || !strings.Contains(errOut, "code.repos") {
 		t.Errorf("a verify naming an undeclared repository = %v, stderr %q; want it refused and counted, "+
 			"the rest verified", err, errOut)
+	}
+}
+
+// verificationStates is the state of each verification a `code verify -json`
+// printed, in order: its stdout is a stream of the node's answers, one JSON
+// document each, and nothing else.
+func verificationStates(t *testing.T, out string) []string {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(out))
+	var states []string
+	for {
+		var v struct {
+			State string `json:"state"`
+		}
+		err := dec.Decode(&v)
+		if errors.Is(err, io.EOF) {
+			return states
+		}
+		if err != nil {
+			t.Fatalf("code verify -json printed something other than verifications: %v\n%s", err, out)
+		}
+		states = append(states, v.State)
 	}
 }
 
@@ -1215,7 +1237,7 @@ func TestAVerifyWaitsForTheNodesCheck(t *testing.T) {
 		// never ends by it.
 		lateBy = time.Now().Add(20 * time.Millisecond).UTC().Format(time.RFC3339Nano)
 	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		asked[r.Method+" "+r.URL.Path]++
 		n := asked[r.Method+" "+r.URL.Path]
@@ -1270,7 +1292,7 @@ func TestAVerifyWaitsForTheNodesCheck(t *testing.T) {
 		default:
 			answer(http.StatusNotFound, `{"error":"not_found","detail":"no such route in this script"}`)
 		}
-	}))
+	})))
 	t.Cleanup(server.Close)
 	client := &nodeClient{base: server.URL, token: "t", http: httpxtest.Pool(t)}
 	waits := codeVerifyWaits{pollFirst: time.Millisecond, pollMax: 5 * time.Millisecond,
@@ -1314,24 +1336,24 @@ func TestAVerifyWaitsForTheNodesCheck(t *testing.T) {
 		t.Errorf("a verify asked %q, want it at its floor", q)
 	}
 
-	// A NODE SERVING NO VERIFY is the -url's, not the repository's: an error
+	// A NODE SERVING NO VERIFY is the -api's, not the repository's: an error
 	// that stops a sweep, naming the flag.
 	if _, err := verifyOne(t.Context(), client, "nowhere", floor, false, false, waits, io.Discard,
-		io.Discard); err == nil || !strings.Contains(err.Error(), "point -url at one") {
-		t.Errorf("a verify of a node serving no verify = %v, want an error naming -url", err)
+		io.Discard); err == nil || !strings.Contains(err.Error(), "Point -api at one") {
+		t.Errorf("a verify of a node serving no verify = %v, want an error naming -api", err)
 	}
 }
 
 // A SWEEP OF A NODE THAT SERVES NO VERIFY STOPS AT ITS FIRST ANSWER: whether the
 // route exists is the node's, never the repository's, so one refusal says the
-// -url is wrong — once, not once a repository.
+// -api is wrong — once, not once a repository.
 //
 // Mutation: count a missing route against the repository and go on, and the
 // sweep asks the node once for each.
 func TestAVerifySweepOfANodeWithNoVerifyStopsAtOnce(t *testing.T) {
 	t.Parallel()
 	var posts atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost {
 			posts.Add(1)
@@ -1341,35 +1363,37 @@ func TestAVerifySweepOfANodeWithNoVerifyStopsAtOnce(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"repos":[{"name":"a"},{"name":"b"},{"name":"c"}],` +
 			`"position":{"stream":"CREWLET_CODE_LOG","generation":0,"seq":7}}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
-	_, _, err := cli(t, "code", "verify", "-url", server.URL)
-	if err == nil || !strings.Contains(err.Error(), "point -url at one") || posts.Load() != 1 {
+	_, _, err := cli(t, "code", "verify", "-api", server.URL)
+	if err == nil || !strings.Contains(err.Error(), "Point -api at one") || posts.Load() != 1 {
 		t.Errorf("a sweep of a node serving no verify = %v after %d verifies, want one, and an error naming "+
-			"-url", err, posts.Load())
+			"-api", err, posts.Load())
 	}
 }
 
 // A NODE SERVING NO CODE READS IS NAMED BY THE FLAG THE COMMAND TAKES: every
-// `crewlet code` command names its node with -url, so the sentence for a
-// node without the routes says -url, never the -api the config and secrets
-// clients take.
-func TestACodeReadOfANodeWithoutTheRoutesNamesURL(t *testing.T) {
+// `crewlet code` command names its node with -api, as every command reaching
+// a node does ([nodeAPIFlag]), so the sentence for a node without the routes
+// tells the operator to point -api elsewhere.
+func TestACodeReadOfANodeWithoutTheRoutesNamesTheAPIFlag(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// THE ENGINE'S OWN no_route, marked as every answer it writes is: an
+	// unmarked one is a proxy's, which is told something else.
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"no_route","detail":"no such route"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	for _, args := range [][]string{
-		{"code", "status", "-url", server.URL},
-		{"code", "status", "-repo", "web", "-url", server.URL},
-		{"code", "verify", "-url", server.URL},
+		{"code", "status", "-api", server.URL},
+		{"code", "status", "-repo", "web", "-api", server.URL},
+		{"code", "verify", "-api", server.URL},
 	} {
 		_, _, err := cli(t, args...)
-		if err == nil || !strings.Contains(err.Error(), "point -url at a node") || strings.Contains(err.Error(), "-api") {
-			t.Errorf("%v of a node serving no code reads = %v, want it to name -url and not -api", args, err)
+		if err == nil || !strings.Contains(err.Error(), "Point -api at a node") {
+			t.Errorf("%v of a node serving no code reads = %v, want it to name -api", args, err)
 		}
 	}
 }
@@ -1555,7 +1579,7 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
 		t.Errorf("a refused export left %v", entries)
 	}
-	if _, _, err := cliIn(t, tokenEnviron(h.token), "code", "export", "web", "-url", h.base); err == nil ||
+	if _, _, err := cliIn(t, tokenEnviron(h.token), "code", "export", "web", "-api", h.base); err == nil ||
 		!strings.Contains(err.Error(), "bundle file") {
 		t.Errorf("an export naming no bundle file = %v, want it refused naming what is missing", err)
 	}

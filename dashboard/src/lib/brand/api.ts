@@ -28,7 +28,7 @@
  * that is gone is replaced by a new one holding the same files.
  */
 
-import { isAbort, newActOpID, rest, RestError } from "~/protocol/index.ts";
+import { isAbort, newActOpID, pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { refusalText } from "../refusal.ts";
 import {
@@ -59,7 +59,7 @@ export function clearBrand(): Omit<KeyedRequest, "key"> {
  * typed from the adoption's own content type and never from the response.
  */
 export function brandFile(hash: string, signal?: AbortSignal): Promise<Blob> {
-  return rest.blob(`/brand/files/${encodeURIComponent(hash)}`, signal);
+  return rest.blob(`/brand/files/${pathSegment(hash)}`, signal);
 }
 
 /**
@@ -268,7 +268,7 @@ export async function saveBrand(save: BrandSave, keys: BrandSaveKeys): Promise<B
       return {
         kind: "published",
         ...landed,
-        text: `Version ${landed.version} of the brand kit is saved and not adopted yet. ${adopted.text}`,
+        text: `Version ${landed.version} of the brand kit is saved and not published yet. ${adopted.text}`,
       };
   }
 }

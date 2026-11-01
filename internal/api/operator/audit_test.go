@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // auditedSurface is [actSurface] auditing into a log the case reads.
@@ -62,7 +62,7 @@ func TestEveryTransportAuditsAWriteAndNoneAuditsARead(t *testing.T) {
 	s, audit := auditedSurface(t)
 
 	key := newKey()
-	status, answer := act(t, guarded(s), "founder", tracker.CreateWorkItemTool,
+	status, answer := act(t, guarded(s), "founder", worklet.CreateWorkItemTool,
 		"application/json", createBody(), key)
 	if status != http.StatusOK {
 		t.Fatalf("the act answered %d", status)
@@ -73,20 +73,20 @@ func TestEveryTransportAuditsAWriteAndNoneAuditsARead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	if _, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.CreateWorkItemTool, Arguments: createArgs(),
+		Name: worklet.CreateWorkItemTool, Arguments: createArgs(),
 	}); err != nil {
 		t.Fatalf("create over MCP: %v", err)
 	}
 	if _, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{},
+		Name: worklet.ListWorkItemsTool, Arguments: map[string]any{},
 	}); err != nil {
 		t.Fatalf("list over MCP: %v", err)
 	}
 	asFounder := iam.WithPrincipal(t.Context(), founder)
 	workKey := newKey()
 	for tool, args := range map[string]map[string]any{
-		tracker.CreateWorkItemTool: createArgs(),
-		tracker.ListWorkItemsTool:  {},
+		worklet.CreateWorkItemTool: createArgs(),
+		worklet.ListWorkItemsTool:  {},
 	} {
 		if _, err := s.Dispatch(asFounder, operator.Call{
 			Transport: types.TransportWork, Key: workKey, Tool: tool, Args: args,
@@ -116,7 +116,7 @@ func TestEveryTransportAuditsAWriteAndNoneAuditsARead(t *testing.T) {
 			t.Errorf("no record of the write over %s", transport)
 			continue
 		}
-		if p.Tool != tracker.CreateWorkItemTool || p.ActorName != "jane-founder" ||
+		if p.Tool != worklet.CreateWorkItemTool || p.ActorName != "jane-founder" ||
 			p.ActorKind != string(iam.ActorHuman) || p.OperatorID != "jane.founder" ||
 			p.Outcome != types.AuditApplied || p.Position == "" {
 
@@ -144,7 +144,7 @@ func TestAnAuditRecordOutlivesItsRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(iam.WithPrincipal(t.Context(), founder))
 	cancel()
 	operator.Audit(ctx, audit, operator.Acted(ctx, types.TransportAct,
-		tracker.CreateWorkItemTool, newKey(), types.AuditUnknown, "", ""))
+		worklet.CreateWorkItemTool, newKey(), types.AuditUnknown, "", ""))
 	got := audit.published()
 	if len(got) != 1 {
 		t.Fatalf("a call whose caller hung up left %d audit records, want one", len(got))
@@ -174,7 +174,7 @@ func TestTheAuditReadsACallAsItsAnswerDoes(t *testing.T) {
 			err: context.Canceled, outcome: types.AuditUnknown},
 		{name: "a classified refusal names its class",
 			result: tools.Result{Failed: true, Cause: crewletmcp.Classify(
-				crewletmcp.RefusalNotFound, tracker.ErrNoTask)},
+				crewletmcp.RefusalNotFound, worklet.ErrNoTask)},
 			outcome: types.AuditRefused, refusal: string(crewletmcp.RefusalNotFound)},
 		{name: "a tool's write nobody can vouch for may have landed",
 			result: tools.Result{Failed: true, Cause: &builtin.UnknownOutcome{
@@ -202,7 +202,7 @@ func TestTheAuditReadsACallAsItsAnswerDoes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			outcome, position, refusal := operator.AuditOutcomeOf(
-				tracker.CreateWorkItemTool, tc.result, tc.err)
+				worklet.CreateWorkItemTool, tc.result, tc.err)
 			if outcome != tc.outcome || position != tc.position || refusal != tc.refusal {
 				t.Errorf("read as (%s, %q, %q), want (%s, %q, %q)", outcome, position,
 					refusal, tc.outcome, tc.position, tc.refusal)
@@ -229,12 +229,12 @@ func TestAToolLessGestureIsAuditedAsItsWriterAnswered(t *testing.T) {
 		refusal  string
 		at       string
 	}{
-		{name: "a refusal the writer marked", err: tracker.ErrNoTask,
+		{name: "a refusal the writer marked", err: worklet.ErrNoTask,
 			want: types.AuditRefused, refusal: string(crewletmcp.RefusalNotFound)},
 		{name: "a write that may have landed", err: crewletmcp.ErrOutcomeUnknown,
 			want: types.AuditUnknown},
 		{name: "a write that met a fault of the node",
-			err:  errors.New("tracker: read the ledger: disk I/O error"),
+			err:  errors.New("worklet: read the ledger: disk I/O error"),
 			want: types.AuditFailed},
 		{name: "a write the log refused", err: &statelog.Unavailable{
 			Reason: statelog.ReasonBehind}, want: types.AuditRefused,
@@ -308,7 +308,7 @@ func TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs(t *testing.T) {
 			switch transport {
 			case types.TransportAct:
 				status, answer := act(t, guarded(s), "founder",
-					tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+					worklet.CreateWorkItemTool, "application/json", createBody(), newKey())
 				if status != http.StatusOK {
 					t.Fatalf("the act answered %d %v", status, answer)
 				}
@@ -316,7 +316,7 @@ func TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
 				if _, err := dialOperator(t, s, founder).CallTool(ctx, &mcp.CallToolParams{
-					Name: tracker.CreateWorkItemTool, Arguments: createArgs(),
+					Name: worklet.CreateWorkItemTool, Arguments: createArgs(),
 				}); err != nil {
 					t.Fatalf("create over MCP: %v", err)
 				}
@@ -353,7 +353,7 @@ func TestAnAuditThatCannotPublishDoesNotFailTheCall(t *testing.T) {
 		Org:   company,
 		Audit: audit,
 	})
-	status, answer := act(t, guarded(s), "founder", tracker.CreateWorkItemTool,
+	status, answer := act(t, guarded(s), "founder", worklet.CreateWorkItemTool,
 		"application/json", createBody(), newKey())
 	if status != http.StatusOK {
 		t.Fatalf("a write that landed answered %d %v because its audit record "+

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -14,17 +16,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The act transport is the dashboard's write path. Every case drives the real
@@ -40,8 +47,8 @@ import (
 var (
 	founder   = person("jane.founder", "jane-founder", iam.Apps...)
 	cofounder = person("kim.cofounder", "kim-cofounder", iam.Apps...)
-	pipeline  = machine("token:ci", iam.GrantTracker)
-	reader    = machine("token:reader", iam.GrantKnowledge)
+	pipeline  = machine("token:ci", iam.GrantWorklet)
+	reader    = machine("token:reader", iam.GrantDoclet)
 )
 
 // company is the chart the cases run in: the two people's seats, and an agent.
@@ -67,7 +74,12 @@ type recordingWork struct {
 	actors  []builtin.Actor
 	opIDs   []string
 	taskIDs []string
+	// fields is every create's custom-field values, as the tool encoded
+	// them for the writer.
+	fields  []map[string]json.RawMessage
 	outcome statelog.Outcome
+	// caveats is what every create answers it was not refused for.
+	caveats []caveat.Caveat
 }
 
 type recordingWriter struct {
@@ -80,43 +92,52 @@ func (r *recordingWork) writer(actor builtin.Actor) builtin.WorkWriter {
 }
 
 func (w recordingWriter) CreateTaskAsking(ctx context.Context, opID string,
-	task tracker.Task, _ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+	task worklet.Task, _ worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	return w.CreateTask(ctx, opID, task, notify)
 }
 
-func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (w recordingWriter) CreateTask(_ context.Context, opID string, task worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
 	w.w.actors = append(w.w.actors, w.actor)
 	w.w.opIDs = append(w.w.opIDs, opID)
 	w.w.taskIDs = append(w.w.taskIDs, task.ID)
+	w.w.fields = append(w.w.fields, task.Fields)
 	outcome := w.w.outcome
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
 	}
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome:  outcome,
 			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711},
 			Version:  4711,
 		},
-		Key: "ENG-9",
+		Key:     "ENG-9",
+		Caveats: w.w.caveats,
 	}, nil
 }
 
 func (w recordingWriter) UpdateTask(context.Context, string, string, string, uint64,
-	tracker.TaskPatch, tracker.ChangeKind, *tracker.Notify) (tracker.WriteResult, error) {
+	worklet.TaskPatch, worklet.ChangeKind, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 func (r *recordingWork) writes() ([]builtin.Actor, []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]builtin.Actor(nil), r.actors...), append([]string(nil), r.opIDs...)
+}
+
+// fieldsFiled is every create's custom-field values, in order.
+func (r *recordingWork) fieldsFiled() []map[string]json.RawMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]map[string]json.RawMessage(nil), r.fields...)
 }
 
 // filed is the id of every task a create was asked to file, in order.
@@ -137,7 +158,8 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 				Reader: stubPageReader{}, Writer: stubPageWriter{},
 			},
 		}),
-		Org: company,
+		Org:       company,
+		Authorize: builtin.Decide(leadsNobody{}),
 	})
 }
 
@@ -215,7 +237,7 @@ func TestAnyResolvedPrincipalMayAct(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
-				tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+				worklet.CreateWorkItemTool, "application/json", createBody(), newKey())
 			if status != tc.status || (tc.code != "" && answer["error"] != string(tc.code)) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
 			}
@@ -234,12 +256,12 @@ func TestAnActTheTableRefusesIsAnsweredInTheEnvelope(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
 	status, answer := act(t, guarded(actSurface(t, work)), "reader",
-		tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+		worklet.CreateWorkItemTool, "application/json", createBody(), newKey())
 	if status != http.StatusForbidden || answer["error"] != string(httpjson.CodeUnauthorized) {
 		t.Fatalf("a reader's create answered %d %v, want 403 unauthorized", status, answer)
 	}
 	grants, _ := answer["grants"].([]any)
-	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantTracker))) {
+	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantWorklet))) {
 		t.Errorf("the refusal %v does not name its reason and the grant that "+
 			"would have admitted the caller", answer)
 	}
@@ -258,17 +280,17 @@ func TestAnActWriteIsMadeAsItsPrincipal(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		bearer, author, credential string
-		kind                       tracker.AuthorKind
+		kind                       worklet.AuthorKind
 	}{
-		"a bound person":   {"founder", "jane-founder", "jane.founder", tracker.AuthorHuman},
-		"an unbound token": {"ci", "token:ci", "token:ci", tracker.AuthorOperator},
+		"a bound person":   {"founder", "jane-founder", "jane.founder", worklet.AuthorHuman},
+		"an unbound token": {"ci", "token:ci", "token:ci", worklet.AuthorOperator},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			key := newKey()
 			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
-				tracker.CreateWorkItemTool, "application/json; charset=utf-8",
+				worklet.CreateWorkItemTool, "application/json; charset=utf-8",
 				createBody(), key)
 			if status != http.StatusOK {
 				t.Fatalf("the create answered %d %v", status, answer)
@@ -293,7 +315,7 @@ func TestAnActWriteIsMadeAsItsPrincipal(t *testing.T) {
 				t.Errorf("the write's operation carries the instant %v, want the "+
 					"key's own %v", derived, at)
 			}
-			if answer["tool"] != tracker.CreateWorkItemTool || answer["outcome"] != "applied" ||
+			if answer["tool"] != worklet.CreateWorkItemTool || answer["outcome"] != "applied" ||
 				answer["position"] != "CREWLET_TRACKER_LOG@1:4711" {
 
 				t.Errorf("the act answered %v, want the tool, applied and the position", answer)
@@ -320,11 +342,11 @@ func TestARetriedActIsOneWrite(t *testing.T) {
 	work := &recordingWork{}
 	h := guarded(actSurface(t, work))
 	first, second := newKey(), newKey()
-	_, answer := act(t, h, "founder", tracker.CreateWorkItemTool, "application/json",
+	_, answer := act(t, h, "founder", worklet.CreateWorkItemTool, "application/json",
 		createBody(), first)
 	returned, _ := answer["op_id"].(string)
 	for _, key := range []string{first, returned, second} {
-		if status, answer := act(t, h, "founder", tracker.CreateWorkItemTool,
+		if status, answer := act(t, h, "founder", worklet.CreateWorkItemTool,
 			"application/json", createBody(), key); status != http.StatusOK {
 			t.Fatalf("key %s answered %d %v", key, status, answer)
 		}
@@ -344,11 +366,11 @@ func TestARetriedActIsOneWrite(t *testing.T) {
 
 	other := &recordingWork{}
 	both := guarded(actSurface(t, other))
-	act(t, both, "founder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
-	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
+	act(t, both, "founder", worklet.CreateWorkItemTool, "application/json", createBody(), first)
+	act(t, both, "cofounder", worklet.CreateWorkItemTool, "application/json", createBody(), first)
 	// AND THE OP_ID THE FIRST PERSON WAS ANSWERED, sent by somebody else,
 	// is scoped again under the sender rather than taken as it is.
-	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), returned)
+	act(t, both, "cofounder", worklet.CreateWorkItemTool, "application/json", createBody(), returned)
 	if _, crossed := other.writes(); len(crossed) != 3 ||
 		crossed[1] == crossed[0] || crossed[2] == crossed[0] {
 
@@ -372,7 +394,7 @@ func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	work := &recordingWork{outcome: statelog.OutcomeUnknown}
 	key := newKey()
 	h := guarded(actSurface(t, work))
-	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.CreateWorkItemTool,
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+worklet.CreateWorkItemTool,
 		strings.NewReader(createBody()))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer founder")
@@ -398,9 +420,9 @@ func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("a write this node can settle by being asked again answered no Retry-After")
 	}
-	if detail, _ := answer["tool_detail"].(string); strings.Contains(detail, "`op_id`") {
-		t.Errorf("a person is told to send an op_id argument, which this transport "+
-			"refuses: %s", detail)
+	if detail, has := answer["tool_detail"]; has {
+		t.Errorf("an unknown answered the tool's own sentence, written for a "+
+			"model: %v", detail)
 	}
 }
 
@@ -433,7 +455,7 @@ func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 			"application/json", comment, key); status != http.StatusOK {
 			t.Fatalf("comment_on_page answered %d %v", status, answer)
 		}
-		if status, answer := act(t, h, "founder", tracker.WriteProjectTool,
+		if status, answer := act(t, h, "founder", worklet.WriteProjectTool,
 			"application/json", tags, key); status != http.StatusOK {
 			t.Fatalf("write_project answered %d %v", status, answer)
 		}
@@ -462,21 +484,21 @@ type recordingProject struct {
 	opIDs []string
 }
 
-func (p *recordingProject) WriteProject(context.Context, string, string, tracker.ProjectEdit,
-	tracker.ProjectAuthority) (tracker.WriteResult, error) {
-	return tracker.WriteResult{}, nil
+func (p *recordingProject) WriteProject(context.Context, string, string, worklet.ProjectEdit,
+	worklet.ProjectAuthority) (worklet.WriteResult, error) {
+	return worklet.WriteResult{}, nil
 }
 
-func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ tracker.TagEdit,
-	_ tracker.TagAuthority) (tracker.WriteResult, error) {
+func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ worklet.TagEdit,
+	_ worklet.TagAuthority) (worklet.WriteResult, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.opIDs = append(p.opIDs, opID)
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []string, error) {
+func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []caveat.Caveat, error) {
 	return nil, nil, nil
 }
 
@@ -494,21 +516,21 @@ func (p *recordingProject) ops() []string {
 // ([authz.ErrUnresolved] for the comment), which is offerable, so the comment
 // control is enabled and the tool decides on the item; the board's ordinary
 // writes, which no ask admits, are not offered at all.
-func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
+func TestActsOffersTheAnswerToAPersonWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	s := actSurface(t, &recordingWork{})
 	acts, err := s.Acts(t.Context(), reader)
 	if err != nil {
 		t.Fatalf("Acts: %v", err)
 	}
-	if !slices.Contains(acts, tracker.CommentOnWorkTool) {
-		t.Errorf("somebody without the tracker is not offered %s, so an ask put "+
+	if !slices.Contains(acts, worklet.CommentOnWorkTool) {
+		t.Errorf("somebody without Worklet is not offered %s, so an ask put "+
 			"to them could never be answered from a screen: %v",
-			tracker.CommentOnWorkTool, acts)
+			worklet.CommentOnWorkTool, acts)
 	}
-	for _, write := range []string{tracker.CreateWorkItemTool, tracker.UpdateWorkItemTool} {
+	for _, write := range []string{worklet.CreateWorkItemTool, worklet.UpdateWorkItemTool} {
 		if slices.Contains(acts, write) {
-			t.Errorf("somebody without the tracker is offered %s, which no ask "+
+			t.Errorf("somebody without Worklet is offered %s, which no ask "+
 				"admits them to: %v", write, acts)
 		}
 	}
@@ -522,7 +544,7 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	t.Parallel()
 	s := actSurface(t, &recordingWork{})
 	body := `{"args":{"container":"workspace"}}`
-	status, answer := act(t, guarded(s), "founder", tracker.ListWorkItemsTool,
+	status, answer := act(t, guarded(s), "founder", worklet.ListWorkItemsTool,
 		"application/json", body, newKey())
 	if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeReadOnlyTool) {
 		t.Fatalf("a read answered %d %v, want 400 read_only_tool", status, answer)
@@ -531,18 +553,22 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acts: %v", err)
 	}
-	if slices.Contains(acts, tracker.ListWorkItemsTool) {
+	if slices.Contains(acts, worklet.ListWorkItemsTool) {
 		t.Errorf("the act list %v offers a read", acts)
 	}
-	if !slices.Contains(acts, tracker.CreateWorkItemTool) {
+	if !slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("the act list %v does not offer the create the founder may make", acts)
 	}
 	// AND WHAT THE TABLE WOULD NEVER ADMIT IS NOT OFFERED: a screen enables
 	// exactly the controls a press of could be served.
-	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, tracker.CreateWorkItemTool) {
+	// THE ERROR IS READ: a list that could not be decided is nil, which
+	// contains nothing and passed this check while it decided nothing.
+	if acts, err := s.Acts(t.Context(), reader); err != nil {
+		t.Errorf("Acts for a reader: %v", err)
+	} else if slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
 	}
-	status, answer = act(t, guarded(s), "founder", "run_sandbox",
+	status, answer = act(t, guarded(s), "founder", "no_such_tool",
 		"application/json", body, newKey())
 	if status != http.StatusNotFound || answer["error"] != string(httpjson.CodeUnknownTool) {
 		t.Fatalf("an unknown tool answered %d %v, want 404 unknown_tool", status, answer)
@@ -582,6 +608,8 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"two objects", "application/json", good + good, newKey(),
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		{"arguments that are not an object", "application/json",
+			`{"args":["title"]}`, newKey(), http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"no operation key", "application/json", good, "",
 			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
 		{"a key that is not an operation id", "application/json", good, "r-1",
@@ -600,7 +628,7 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			status, answer := act(t, guarded(actSurface(t, work)), "founder",
-				tracker.CreateWorkItemTool, tc.contentType, tc.body, tc.key)
+				worklet.CreateWorkItemTool, tc.contentType, tc.body, tc.key)
 			if status != tc.status || answer["error"] != string(tc.code) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
 			}
@@ -629,7 +657,7 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	answer := func(class crewletmcp.Refusal) (*httptest.ResponseRecorder, map[string]any) {
 		rec := httptest.NewRecorder()
 		operator.Fail(rec, crewletmcp.Classify(class, errors.New("the reason")),
-			"the sentence", newKey(), nil)
+			caveat.NotAnOption(), newKey(), nil)
 		var body map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("%q answered a body that is not JSON: %q", class, rec.Body)
@@ -695,22 +723,93 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	}
 }
 
-// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, with the tool's own
-// sentence as the detail, at the status the class maps to — here the one an
-// update of an item the stub tracker does not hold comes back with.
+// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, at the status the class
+// maps to (here the one an update of an item the stub tracker does not hold
+// comes back with), naming the tool and the item, and in its code's own
+// sentence: nobody has worded this refusal for a person, so it carries no
+// detail, and the tool's sentence (written for a model) is never it
+// (ADR-0060).
 func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	t.Parallel()
 	body := `{"args":{"item":"ENG-404","status":"done"}}`
 	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
-		tracker.UpdateWorkItemTool, "application/json", body, newKey())
+		worklet.UpdateWorkItemTool, "application/json", body, newKey())
 	if status != http.StatusNotFound || answer["error"] != string(crewletmcp.RefusalNotFound) {
 		t.Fatalf("an update of a missing item answered %d %v, want 404 not_found",
 			status, answer)
 	}
-	if detail, _ := answer["detail"].(string); !strings.Contains(detail, "ENG-404") ||
-		answer["tool"] != tracker.UpdateWorkItemTool {
+	if answer["tool"] != worklet.UpdateWorkItemTool || answer["item"] != "ENG-404" {
+		t.Errorf("the refusal %v does not name the tool and the item", answer)
+	}
+	if detail, has := answer["detail"]; has {
+		t.Errorf("a refusal nobody worded for a person answered a detail: %v", detail)
+	}
+	if answer["message"] != httpjson.CodeNotFound.Message() {
+		t.Errorf("the refusal's sentence is %v, want its code's own", answer["message"])
+	}
+}
 
-		t.Errorf("the refusal %v does not carry the tool and its own sentence", answer)
+// A TOOL REFUSED UNDER AN If-Match HEADER IS ANSWERED AS [operator.FailTool]
+// ANSWERS IT, BUT FOR A STALE VERSION, which is HTTP's failed precondition
+// (`412 version_moved`, [operator.FailIfMatched]); and either way the tool's
+// own sentence is told to the model that made the call and is never in the
+// person's answer. A route that folded the header answers both halves through
+// one function ([operator.FailToolIfMatched]), so the header moves the status
+// of a stale version and nothing about who hears which words.
+//
+// Mutation: answer the stale class 409 under the header, any other class
+// differently from FailTool, or drop FailToolIfMatched's modelnote.Tell, and
+// this goes red naming it.
+func TestAToolRefusedUnderIfMatchIsFailToolsAnswerButForAStaleVersion(t *testing.T) {
+	t.Parallel()
+	const model = "update_work_item refused that: the model's sentence, naming what to send."
+	answer := func(fail func(http.ResponseWriter, *http.Request, tools.Result, string,
+		httpjson.Detail), cause error) (*httptest.ResponseRecorder, string) {
+
+		ctx, heard := modelnote.Expect(t.Context())
+		r := httptest.NewRequestWithContext(ctx, http.MethodPatch, "/worklet/items/ENG-1", nil)
+		rec := httptest.NewRecorder()
+		// ANY PERSON'S WORDS: what is held is that both answers carry them.
+		fail(rec, r, tools.Result{Failed: true, Output: model, Cause: cause,
+			PersonRefusal: caveat.NotAnOption()}, "the-key",
+			httpjson.Detail{"tool": worklet.UpdateWorkItemTool})
+		return rec, heard.Said()
+	}
+	causes := map[string]error{
+		"an outcome nobody can establish": crewletmcp.ErrOutcomeUnknown,
+		"an unclassified failure":         errors.New("a tool that forgot to classify"),
+	}
+	for _, class := range crewletmcp.Refusals {
+		causes[string(class)] = crewletmcp.Classify(class, errors.New("the reason"))
+	}
+	for name, cause := range causes {
+		plain, toldPlain := answer(operator.FailTool, cause)
+		matched, toldMatched := answer(operator.FailToolIfMatched, cause)
+		if toldMatched != model || toldPlain != model {
+			t.Errorf("%s: the model heard %q under If-Match and %q without it, want "+
+				"the tool's sentence both times", name, toldMatched, toldPlain)
+		}
+		if strings.Contains(matched.Body.String(), "refused that") {
+			t.Errorf("%s: the person's answer under If-Match carries the model's "+
+				"sentence: %s", name, matched.Body)
+		}
+		if name == string(crewletmcp.RefusalStaleVersion) {
+			body, class := decode(t, matched), decode(t, plain)
+			if matched.Code != http.StatusPreconditionFailed ||
+				body["error"] != string(httpjson.CodeVersionMoved) ||
+				body["detail"] != class["detail"] || body["tool"] != worklet.UpdateWorkItemTool {
+				t.Errorf("a stale version under If-Match answered %d %v, want 412 "+
+					"version_moved carrying the person's words and what it was about",
+					matched.Code, body)
+			}
+			continue
+		}
+		if matched.Code != plain.Code || matched.Body.String() != plain.Body.String() ||
+			matched.Header().Get("Retry-After") != plain.Header().Get("Retry-After") {
+			t.Errorf("%s: under If-Match %d %s, and through FailTool %d %s: only a "+
+				"stale version may differ", name, matched.Code, matched.Body, plain.Code,
+				plain.Body)
+		}
 	}
 }
 
@@ -720,8 +819,8 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 // cap at the page's own size refused a page the store would have taken.
 func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	t.Parallel()
-	pageBody := strings.Repeat("\"\\\n", pages.MaxBody/3)
-	pageBody += strings.Repeat("\"", pages.MaxBody-len(pageBody))
+	pageBody := strings.Repeat("\"\\\n", doclet.MaxBody/3)
+	pageBody += strings.Repeat("\"", doclet.MaxBody-len(pageBody))
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	// JSON.stringify does not escape <, > and &; Go's encoder does unless
@@ -729,14 +828,14 @@ func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(map[string]any{
 		"args": map[string]any{
-			"container": "ENG", "title": strings.Repeat("T", pages.MaxTitle),
+			"container": "ENG", "title": strings.Repeat("T", doclet.MaxTitle),
 			"body": pageBody, "labels": []string{"runbook", "security"},
 			"message": strings.Repeat("m", 512),
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if buf.Len() <= pages.MaxBody*2 {
+	if buf.Len() <= doclet.MaxBody*2 {
 		t.Fatalf("the envelope is %d bytes; the case is not measuring the worst escape", buf.Len())
 	}
 	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
@@ -775,7 +874,7 @@ func TestTheActAnswerLiftsTheToolsOwnOutcome(t *testing.T) {
 		{"a sentence", `done`, statelog.OutcomeApplied, ""},
 	}
 	for _, tc := range cases {
-		got := operator.ReceiptOf("t", tc.output)
+		got := operator.ReceiptOf("t", tools.Result{Output: tc.output})
 		position := ""
 		if got.Position != nil {
 			position = *got.Position
@@ -815,14 +914,56 @@ func TestAPageWriteStatesItsOutcomeAndPosition(t *testing.T) {
 // position.
 type positionedPages struct{ recordingPages }
 
-func (p *positionedPages) Comment(ctx context.Context, actor pages.Actor, id string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p *positionedPages) Comment(ctx context.Context, actor doclet.Actor, id string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	comment, _, err := p.recordingPages.Comment(ctx, actor, id, in)
-	return comment, pages.Written{Revision: 88, Outcome: statelog.Result{
+	return comment, doclet.Written{Revision: 88, Outcome: statelog.Result{
 		Outcome:  statelog.OutcomePending,
 		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 2, Seq: 88},
 	}}, err
+}
+
+// A PAGE CREATE NOBODY ANSWERED NAMES WHERE TO LOOK.
+//
+// A new page has no id to name: write_page addresses it by its container and
+// its title, so the answer to a create whose outcome nobody can establish names
+// the container beside the tool — the object to read to see whether the page
+// landed. It named the tool alone, because no declared object argument covered
+// a page that does not exist yet.
+//
+// Mutation: drop `container` from the pages domain's objects (builtin's
+// writerclass.go) and the answer names no container.
+func TestAPageCreateNobodyAnsweredNamesItsContainer(t *testing.T) {
+	t.Parallel()
+	kb := &unansweredPages{}
+	s := newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{Pages: builtin.PageDeps{Reader: kb, Writer: kb}}),
+		Org:    company,
+	})
+	body := `{"args":{"container":"ENG","title":"Rollback runbook","body":"step one"}}`
+	status, answer := act(t, guarded(s), "founder", builtin.WritePageTool,
+		"application/json", body, newKey())
+	if status != http.StatusServiceUnavailable ||
+		answer["outcome"] != string(statelog.OutcomeUnknown) {
+
+		t.Fatalf("a create nobody answered answered %d %v, want 503 with outcome "+
+			"unknown", status, answer)
+	}
+	if answer["tool"] != builtin.WritePageTool || answer["container"] != "ENG" {
+		t.Errorf("the answer names tool %v and container %v, want %s in ENG — "+
+			"nothing else in it says where the page would be", answer["tool"],
+			answer["container"], builtin.WritePageTool)
+	}
+}
+
+// unansweredPages is a knowledge base whose create was sent to a data node
+// that never answered.
+type unansweredPages struct{ recordingPages }
+
+func (*unansweredPages) Create(context.Context, doclet.Actor, doclet.NewPage) (doclet.Written, error) {
+	return doclet.Written{}, fmt.Errorf("%w (pages.create, asked of data-b)",
+		estate.ErrOutcomeUnknown)
 }
 
 // AN INTERRUPTED CALL SAYS, IN A FIELD, THAT NOBODY KNOWS WHETHER IT LANDED.
@@ -864,7 +1005,7 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	rec = httptest.NewRecorder()
 	operator.Fail(rec, crewletmcp.Classify(crewletmcp.RefusalUnavailable,
 		errors.New("the tracker is sealed for maintenance")),
-		"the tracker is sealed for maintenance", key,
+		caveat.Refusal{}, key,
 		httpjson.Detail{"tool": "create_work_item"})
 	body = decode(t, rec)
 	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
@@ -885,5 +1026,255 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if rec.Code < 400 || rec.Code >= 500 {
 		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
 			"a closed tab as this node failing", rec.Code)
+	}
+}
+
+// THE NOTE ON A CALL'S ARGUMENTS IS THE MODEL'S, NEVER A PERSON'S (ADR-0059,
+// ADR-0060): a person's receipt ([operator.PersonsReceipt], which the act
+// route and the human write surface both answer through) is the tool's answer
+// and carries neither the note nor a field for it, and the note is told in
+// process to the model that wrote the call, the one reader it is worded for.
+//
+// Mutation: carry the note beside the receipt and its text is in the answer;
+// drop TellNote and the assistant's model hears nothing.
+func TestTheArgumentsNoteIsTheModelsAndNeverAPersons(t *testing.T) {
+	t.Parallel()
+	const note = "`ops[0].opp` is not an argument"
+	result := tools.Result{Output: `{"key": "ENG-9", "outcome": "applied"}`, Note: note}
+	answer := operator.ReceiptOf(worklet.CreateWorkItemTool, result)
+	var receipt map[string]any
+	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil || receipt["key"] != "ENG-9" {
+		t.Errorf("the receipt is %s (%v), want the tool's own JSON answer", answer.Receipt, err)
+	}
+	raw, _ := json.Marshal(answer)
+	if strings.Contains(string(raw), "is not an argument") || strings.Contains(string(raw), "note") {
+		t.Errorf("a person's answer carries the model's note: %s", raw)
+	}
+	ctx, heard := modelnote.Expect(t.Context())
+	operator.TellNote(httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx), result)
+	if heard.Said() != note {
+		t.Errorf("the model heard %q, want the note", heard.Said())
+	}
+}
+
+// A PERSON IS ANSWERED A CAVEAT IN A PERSON'S WORDS, and never the model's.
+//
+// The incident: answering a decision in the dashboard left a toast that never
+// went away, telling a person to "Use ask: backend-engineer", the receipt's
+// `warnings` written for a model and shown verbatim. The act route answers
+// each caveat's person phrasing with what it asks of the person, and takes the
+// model's list off the receipt, so no screen reading the receipt can show it.
+func TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels(t *testing.T) {
+	t.Parallel()
+	gone := caveat.DefaultAssigneeGone("ENG", "bo")
+	work := &recordingWork{caveats: []caveat.Caveat{gone}}
+	h := guarded(actSurface(t, work))
+
+	status, answer := act(t, h, "founder", "create_work_item", "application/json",
+		createBody(), newKey())
+	if status != http.StatusOK {
+		t.Fatalf("the create answered %d: %v", status, answer)
+	}
+	receipt, _ := answer["receipt"].(map[string]any)
+	if receipt == nil {
+		t.Fatalf("the answer carries no receipt: %v", answer)
+	}
+	if said, carried := receipt[builtin.WarningsKey]; carried {
+		t.Errorf("the receipt still carries the model's words, which a screen "+
+			"reading it would show a person: %v", said)
+	}
+	if receipt["key"] != "ENG-9" {
+		t.Errorf("the rest of the receipt was not kept: %v", receipt)
+	}
+	want := []any{map[string]any{"code": string(caveat.CodeDefaultAssigneeGone),
+		"message": gone.Person(), "action": string(caveat.ActionRequired)}}
+	if got := answer["caveats"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("caveats = %v, want %v", got, want)
+	}
+
+	// AND A WRITE WITH NOTHING TO ADD ANSWERS AN EMPTY LIST, never null,
+	// so a client reads one shape.
+	quiet := guarded(actSurface(t, &recordingWork{}))
+	if _, answer := act(t, quiet, "founder", "create_work_item", "application/json",
+		createBody(), newKey()); !reflect.DeepEqual(answer["caveats"], []any{}) {
+		t.Errorf("a write with no caveats answered %#v, want []", answer["caveats"])
+	}
+}
+
+// THE RECEIPT LOSES ITS MODEL WORDS AND NOTHING ELSE: a receipt that carries
+// no warnings is answered exactly as the tool wrote it. A tool answer that is
+// not a receipt at all (not a JSON object) is the tool's words to a model, so
+// the write's outcome stands and the answer carries no receipt (ADR-0060).
+func TestTheActReceiptLosesOnlyTheModelsWarnings(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ output, want string }{
+		"warnings and fields":  {`{"key":"ENG-1","warnings":["Use ask: ana"]}`, `{"key":"ENG-1"}`},
+		"no warnings":          {`{"key": "ENG-1"}`, `{"key": "ENG-1"}`},
+		"not an object":        {`["a","b"]`, `null`},
+		"a sentence, not JSON": {`Filed ENG-1; call get_work_item to read it.`, `null`},
+	} {
+		got := operator.ReceiptOf("t", tools.Result{Output: c.output})
+		if string(got.Receipt) != c.want || got.Outcome != statelog.OutcomeApplied {
+			t.Errorf("%s: receipt %s (%s), want %s applied", name, got.Receipt,
+				got.Outcome, c.want)
+		}
+	}
+}
+
+// oneTaskReader is a work reader that holds one item, ENG-1.
+type oneTaskReader struct{ stubWorkReader }
+
+func (oneTaskReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+
+	return worklet.TaskDetail{Task: worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Title: "Rotate the signing key"}}, nil
+}
+
+// THE ACT ROUTE TELLS THE MODEL THE NOTE AND NEVER THE PERSON (ADR-0059,
+// ADR-0060), through the handler itself: a call that succeeds while one of its
+// arguments was not read as sent (a key `checklist` does not take) is answered
+// to the person with the receipt and nothing of the note, and the note is told
+// to the model that made the request, in process.
+//
+// Mutation: drop TellNote from the act handler and the model hears nothing;
+// carry the note beside the receipt and the body names it.
+func TestTheActRouteTellsTheModelTheNoteAndNeverThePerson(t *testing.T) {
+	t.Parallel()
+	h := guarded(newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{Reader: oneTaskReader{}, Writer: (&recordingWork{}).writer},
+			Pages: builtin.PageDeps{
+				Reader: stubPageReader{}, Writer: stubPageWriter{},
+			},
+		}),
+		Org: company,
+	}))
+	body, _ := json.Marshal(map[string]any{"args": map[string]any{
+		"item": "ENG-1", "checklist": map[string]any{
+			"op": "remove_list", "list": "l-1", "bogus": "x"}}})
+	ctx, heard := modelnote.Expect(t.Context())
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+builtin.UpdateWorkItemTool,
+		strings.NewReader(string(body))).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer founder")
+	r.Header.Set(opkey.Header, newKey())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the update answered %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(heard.Said(), "checklist.bogus") {
+		t.Errorf("the model heard %q, want the note on `checklist.bogus`", heard.Said())
+	}
+	if strings.Contains(rec.Body.String(), "bogus") {
+		t.Errorf("the person's answer carries the model's note: %s", rec.Body)
+	}
+}
+
+// AN OPERATOR CALL'S NUMBERS ARRIVE EXACTLY, on both of this surface's
+// transports, as they do from a seat.
+//
+// Every other path into these tools reads a call's arguments through
+// json.Number — a seat's from its provider — and the tools are written for
+// that. The act and MCP transports decoded with the default decoder, which
+// turns every JSON number into a float64 first, so an integer past 2^53 was
+// rounded before any tool saw it: a whole-number custom-field value a person
+// typed was filed as one they never typed, and nothing said so.
+//
+// Mutation: decode the act envelope's `args` as a map with its own decoder, or
+// the MCP handler's with json.Unmarshal, and that transport's case goes red.
+func TestAnOperatorCallsNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	args := map[string]any{"title": "Rotate the signing key", "project": "ENG",
+		"fields": map[string]any{"points": json.Number(past)}}
+	filedExactly := func(t *testing.T, work *recordingWork) {
+		t.Helper()
+		filed := work.fieldsFiled()
+		if len(filed) != 1 {
+			t.Fatalf("the create reached the writer %d times", len(filed))
+		}
+		if got := string(filed[0]["points"]); got != past {
+			t.Errorf("points was filed as %s, want %s as it was sent", got, past)
+		}
+	}
+
+	t.Run("act", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		raw, err := json.Marshal(map[string]any{"args": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			worklet.CreateWorkItemTool, "application/json", string(raw), newKey())
+		if status != http.StatusOK {
+			t.Fatalf("the act answered %d %v", status, answer)
+		}
+		filedExactly(t, work)
+	})
+
+	t.Run("mcp", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		dir := &directory{people: map[string]iam.Principal{"founder": founder}}
+		server := httptest.NewServer(dir.middleware(actSurface(t, work).MCPHandler()))
+		t.Cleanup(server.Close)
+		sess := connectAs(t, server.URL+operator.MCPPath, "founder")
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+			Name: worklet.CreateWorkItemTool, Arguments: args,
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("the create was refused: %+v", res.Content)
+		}
+		filedExactly(t, work)
+	})
+}
+
+// A BODY THAT DOES NOT DECODE IS ANSWERED BY ITS CODE, AND LOGGED IN WORDS
+// ([plainjson.Unreadable]). The route's own refusal names the tool and says
+// nothing else (ADR-0060), so a person reads invalid_body's own sentence; what
+// the body got wrong is what this node logs (operator_act_body_refused), which
+// carried encoding/json's own sentence after the envelope's shape (`invalid
+// character '}' looking for beginning of value`, `json: unknown field
+// "op_id"`, "json: cannot unmarshal array into Go value of type
+// map[string]interface {}"). Mutation: wrap the decoder's error again in
+// decodeAct, or the arguments' error, and its row goes red; answer the error
+// as the refusal's detail, and every row does.
+func TestAnActBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"args":`, "the body isn't valid JSON: it ends too soon. Send one JSON " +
+			`object, {"args": {…}}, with the operation in the Idempotency-Key header`},
+		{`{"args":{},"tool":"x"}`, `in the body, "tool" isn't a field this takes. ` +
+			`Send one JSON object, {"args": {…}}, with the operation in the ` +
+			"Idempotency-Key header"},
+		{`{"args":[1]}`, `"args" in the body is a list where an object belongs`},
+		{`{"args":{}} {}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+		{`{"args":{}}}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+	} {
+		if _, err := operator.DecodeAct([]byte(tc.body)); err == nil || err.Error() != tc.says {
+			t.Errorf("%s is logged as %v, want %q", tc.body, err, tc.says)
+		}
+		work := &recordingWork{}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			worklet.CreateWorkItemTool, "application/json", tc.body, newKey())
+		if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeInvalidBody) ||
+			answer["tool"] != worklet.CreateWorkItemTool {
+			t.Errorf("%s answered %d %v, want 400 invalid_body naming the tool", tc.body,
+				status, answer)
+		}
+		if detail, has := answer["detail"]; has {
+			t.Errorf("%s answered the detail %v: the route's own refusal says its "+
+				"code's sentence alone", tc.body, detail)
+		}
 	}
 }

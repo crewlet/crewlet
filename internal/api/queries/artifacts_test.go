@@ -3,7 +3,9 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,10 +100,15 @@ func (e *artifactsEstate) Usage(context.Context) (artifactsdomain.Usage, error) 
 }
 
 // Trail answers kim's private page's elevated read, as the domain would, and
-// refuses an op the log does not record.
+// refuses an op the log does not record IN THE READER'S OWN WORDS — the
+// sentinel wrapping its sentence, as the domain builds it, since a bare
+// sentinel cut of its package and class word reads "invalid" whether or not
+// the class word is cut.
 func (e *artifactsEstate) Trail(_ context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
-	if q.Op != "" && !q.Op.Valid() {
-		return artifactsdomain.TrailPage{}, artifactsdomain.ErrInvalid
+	if q.Op != "" && !slices.Contains(artifactsdomain.HistoryOps, q.Op) {
+		return artifactsdomain.TrailPage{}, fmt.Errorf("%w: %q is not an op an artifact's "+
+			"history records, which are %v", artifactsdomain.ErrInvalid, q.Op,
+			artifactsdomain.HistoryOps)
 	}
 	e.trails = append(e.trails, q)
 	return artifactsdomain.TrailPage{Entries: []artifactsdomain.TrailEntry{{Artifact: qaPrivate,
@@ -313,8 +320,17 @@ func TestTheCompanyTrailListsEveryArtifactsRecordsToAnAdministrator(t *testing.T
 	if len(e.trails) != 1 || e.trails[0].Op != artifactsdomain.OpReadElevated || e.trails[0].Limit != 10 {
 		t.Errorf("the trail was asked %+v", e.trails)
 	}
-	if _, err := r.Answer(seated(t, "ada", iam.GrantAdmin), "artifact_trail",
-		map[string]any{"op": "glance"}); !errors.Is(err, queries.ErrBadParams) {
+	_, err = r.Answer(seated(t, "ada", iam.GrantAdmin), "artifact_trail",
+		map[string]any{"op": "glance"})
+	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an op the log does not record: %v, want bad params", err)
+	}
+	// IN THE DOMAIN'S SENTENCE: the trail's refusal is the artifacts', and
+	// told as its Go error it read "artifactsdomain: invalid: …" to a person.
+	if detail := queries.RefusalDetail(err); !strings.HasPrefix(detail,
+		`"glance" is not an op`) || strings.Contains(detail, "artifactsdomain") ||
+		strings.Contains(detail, "invalid") {
+		t.Errorf("an op the log does not record is told %q, want the reader's "+
+			"sentence alone", detail)
 	}
 }

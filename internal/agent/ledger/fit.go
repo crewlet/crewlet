@@ -1,13 +1,12 @@
 package ledger
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // PieceKind is what an over-budget payload in a ledger render is.
@@ -37,8 +36,9 @@ const (
 // So a render now NAMES the pieces that exceed their budget, the caller has
 // each one REWRITTEN to fit by the seat's auxiliary model
 // ([github.com/crewlet/crewlet/internal/compact]), and hands the rewrites back
-// as [Fitted]. The package still imports nothing from crewlet, because the
-// rewriting is the caller's — this only says what needs it.
+// as [Fitted]. The package still holds no model and imports nothing that
+// could reach one, because the rewriting is the caller's — this only says what
+// needs it.
 //
 // A PIECE THE CALLER DID NOT FIT RENDERS WHOLE. That is the default because
 // it is the only one that cannot lie: a missing rewrite costs prompt weight,
@@ -80,7 +80,12 @@ func over(text string, limit int) bool {
 //
 // A NON-STRING VALUE is judged by its JSON, and only becomes a piece when that
 // JSON is over the budget — so a number or a short object keeps its native
-// type, and the rendered arguments still read as what was sent.
+// type, and the rendered arguments still read as what was sent. The JSON is the
+// line's own ([marshal]'s, through [plainjson.Marshal], unescaped): a piece is
+// what the rewrite is handed and what the line then shows, and an object
+// holding markup was weighed and sent as `\u003c` escapes — six bytes for each
+// `<`, so a value the line would carry whole was judged over its budget and
+// handed to a model to decode.
 func valuePiece(value any, limit int) (Piece, bool) {
 	if s, ok := value.(string); ok {
 		if !over(s, limit) {
@@ -88,8 +93,8 @@ func valuePiece(value any, limit int) (Piece, bool) {
 		}
 		return Piece{Kind: PieceArgument, Text: s, Limit: limit}, true
 	}
-	dumped, err := json.Marshal(value)
-	text := string(dumped)
+	encoded, err := plainjson.Marshal(value, "")
+	text := string(encoded)
 	if err != nil {
 		// Unmarshalable (a channel, a func, a NaN) — there is nothing to
 		// preserve the type of, so it is judged by its Go rendering.
@@ -171,27 +176,18 @@ func renderArgs(args map[string]any, opts FormatOptions) string {
 // because one argument held an unmarshalable value is the worst outcome
 // available.
 //
-// WITHOUT HTML ESCAPING, which `json.Marshal` does by default. A ledger line
-// has two audiences and the escaping is wrong for both: a model re-reads it
-// every round, where `&` costs six bytes and `<` reads as noise;
-// and a person reads it on the seat screen, where the line is rendered as the
-// conversation ledger's `tool_calls`. Neither is an HTML document.
-//
-// This package imports nothing from crewlet, so the rule is spelled here
-// rather than shared with `tools.RecordArgs`, which states the same one for
-// the records a transcript renders. That is the boundary working, not a copy
-// nobody noticed: an encoder is two lines and the import would drag the whole
-// tool layer behind a type the turn context, the prompt builder and the API
-// all hold.
+// WITHOUT HTML ESCAPING, through [plainjson.Marshal], whose package doc says
+// why that is not `json.Marshal`. A ledger line has two audiences and the
+// escaping is wrong for both: a model re-reads it every round, where `&` costs
+// six bytes and `<` reads as noise; and a person reads it on the seat screen,
+// where the line is rendered as the conversation ledger's `tool_calls`.
+// Neither is an HTML document.
 func marshal(v map[string]any) string {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
+	text, err := plainjson.Marshal(v, "")
+	if err != nil {
 		return goString(v)
 	}
-	// Encode writes a trailing newline; a ledger line is one line.
-	return strings.TrimSuffix(buf.String(), "\n")
+	return string(text)
 }
 
 // goString renders a value that JSON refuses. Only reached for arguments a

@@ -65,13 +65,28 @@ export const STORAGE_KEYS = {
    */
   homeBoard: "crewlet_home_board/",
   /**
+   * The PREFIX of each reader's sidebar shape, `full` or `compact`
+   * (`app/sidebar/railShape.ts`): the reader's id follows it.
+   */
+  railShape: "crewlet_rail_shape/",
+  /**
    * Which principal this TAB was last read by, in `sessionStorage` rather
    * than `localStorage` — it describes one tab, and goes with everything else
    * the tab holds (`lib/reader.ts`).
    */
   reader: "crewlet_reader",
-  /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
+  /** The width the reader dragged the detail rail to (`app/frame/PeekHost.tsx`). */
   peekWidth: "crewlet.peek.width",
+  /** The width the reader dragged the assistant to (`app/assistant/AssistantFrame.tsx`). */
+  assistantWidth: "crewlet.assistant.width",
+  /**
+   * Whether the assistant is open in THIS TAB and which conversation it
+   * shows, in `sessionStorage` (`app/assistant/tab.ts`): a reload comes back
+   * to it, and the hand-over that empties the tab's storage when somebody
+   * else signs in (`lib/session.ts`) takes it with everything else, so a
+   * shared browser never shows one person's conversation to the next.
+   */
+  assistantTab: "crewlet_assistant_tab",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
   /**
@@ -82,6 +97,16 @@ export const STORAGE_KEYS = {
   reviewDrafts: "crewlet.code.review_drafts/",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
   artifactsShape: "crewlet.artifacts.shape",
+  /**
+   * Whether Chatlet's Rooms panel is pinned beside the conversation rather
+   * than slid in from Menu (`routes/chatlet/nav.tsx`).
+   */
+  chatletRoomsDocked: "crewlet.chatlet.rooms-docked",
+  /**
+   * Whether Chatlet's message boxes show their formatting row, one choice for
+   * every box (`routes/chatlet/Composer.tsx`).
+   */
+  chatletFormatting: "crewlet.chatlet.formatting",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

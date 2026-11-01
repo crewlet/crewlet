@@ -24,29 +24,31 @@ func TestALocalFileThatCannotBeOpenedIsAnError(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", sock)
+	box := boxLayout{id: "b", root: dir}
+	if err := os.MkdirAll(box.home(), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	l, err := net.Listen("unix", filepath.Join(box.home(), "s"))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
 
-	if got, err := readHostFile(sock, "findings.md", MaxFileBytes); err == nil {
-		t.Errorf("readHostFile = %q, nil; want the open's failure, not an empty file", got)
+	if got, err := readHomeFile(box, "s", "findings.md", MaxFileBytes); err == nil {
+		t.Errorf("readHomeFile = %q, nil; want the open's failure, not an empty file", got)
 	}
-	if r, err := openHostFile(sock, "stream.jsonl"); err == nil {
+	if r, err := openHomeFile(box, "s", "stream.jsonl"); err == nil {
 		_ = r.Close()
-		t.Error("openHostFile = a reader, nil; want the open's failure, not an empty stream")
+		t.Error("openHomeFile = a reader, nil; want the open's failure, not an empty stream")
 	}
-	if tail, err := readHostTail(sock, "err.log", 64); err == nil {
-		t.Errorf("readHostTail = %+v, nil; want the open's failure", tail)
+	if tail, err := readHomeTail(box, "s", "err.log", 64); err == nil {
+		t.Errorf("readHomeTail = %+v, nil; want the open's failure", tail)
 	}
 	// And absence is still empty, for all three.
-	missing := filepath.Join(dir, "absent")
-	if got, err := readHostFile(missing, "done", MaxFileBytes); err != nil || got != nil {
+	if got, err := readHomeFile(box, "absent", "done", MaxFileBytes); err != nil || got != nil {
 		t.Errorf("a missing file = %q, %v; want empty", got, err)
 	}
-	if tail, err := readHostTail(missing, "done", 64); err != nil || tail.Size != 0 {
+	if tail, err := readHomeTail(box, "absent", "done", 64); err != nil || tail.Size != 0 {
 		t.Errorf("a missing tail = %+v, %v; want empty", tail, err)
 	}
 }

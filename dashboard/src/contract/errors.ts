@@ -24,6 +24,25 @@ export type QueryErrorCode =
    *  second is an answer a person acts on. A source this node does not have
    *  at all is `unknown_query`, which waiting never changes. */
   | "unavailable"
+  /** A question about the CONTENT of an artifact in the trash — its
+   *  datastore, its room — asked by somebody it is disclosed to: the REST
+   *  routes' `409 artifact_trashed`. Its owner's restore ends it, so a screen
+   *  says the artifact is in the trash rather than that it does not exist
+   *  (`not_found`, the answer for a reader it is not disclosed to). */
+  | "artifact_trashed"
+  /** A configuration revision this node cannot open: sealed under a key the
+   *  keyring lost, stored without a seal, the fleet's active revision met
+   *  only through its pointer, sealed under a key this node was never given or
+   *  put there without a seal, or a revision of either origin sealed in a form
+   *  this build does not read (most likely a newer build's). The REST route's
+   *  own five codes; the frame's `detail` names the key, the document or the
+   *  build that brings it back, which only an administrator can do, so a
+   *  screen shows it and never retries. */
+  | "unreadable_revision"
+  | "unsealed_revision"
+  | "unreadable_fleet_revision"
+  | "unsealed_fleet_revision"
+  | "unknown_seal_revision"
   | "timeout"
   | "closed";
 
@@ -45,12 +64,26 @@ export type QueryErrorCode =
  * read — the browser's session cookie is the whole of it — so a person is
  * told to sign in again, never to set anything.
  *
- * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
- * which means "show the tool's own `detail`". Those are the two classes whose
- * sentence names the argument that was wrong (`invalid`) or the rule that
- * forbade it (`forbidden`); every other class's sentence is written for a
- * model reading a tool result, and a person reading it would be told about
- * `if_match` and record ids.
+ * THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
+ * which means "show the engine's own words". Those are the four classes whose
+ * words say what to change (`invalid`), whom to ask (`forbidden`), the state
+ * that refused the change (`conflict`: a room archived, an item in the trash,
+ * or a write that lost its race and may be made again), or what is already
+ * there (`exists`). The engine answers them as a `detail` worded for a person,
+ * or, where nobody has worded that refusal for one yet, with no detail and its
+ * code's own `message` (ADR-0060): never the tool's sentence, which is written
+ * for a model and names the next call, its arguments and record ids. One fixed
+ * sentence for every `conflict` ended "retry", which re-trying an archived
+ * room's post never changes.
+ *
+ * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+ * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
+ * with a `detail`, which it writes only in a person's words (ADR-0060), is
+ * shown in that `detail`, as a coding run's question somebody already
+ * answered names who did and a spent token budget names whose it was; and a
+ * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
+ * gives way to the engine's own sentence for the code where the answer
+ * carries no `Retry-After`, since the engine said waiting won't change it.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
@@ -58,6 +91,8 @@ export const ACT_ERRORS = {
   identity_unavailable: "Couldn’t confirm who you are. Try again.",
   seat_unavailable: "Your seat was removed. Ask an admin to move you.",
   second_factor_enrolment_required: "Set up two-step verification first.",
+  reader_changed:
+    "Someone else is signed in here now, so nothing changed. Reload to continue as them.",
   csrf_origin:
     "The engine refused a change sent from another site. Make it from this page's own address.",
   // The authority table's, through the one refusal mapping.
@@ -76,7 +111,7 @@ export const ACT_ERRORS = {
   body_too_large: "The change is larger than the engine accepts in one request.",
   unreadable_body: "The change could not be read in full by the engine.",
   no_active_revision:
-    "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
+    "This node isn’t running a company yet, so there’s nothing to change. Try again once it is.",
   draining: "This node is shutting down and takes no changes now. Try again in a moment.",
   starting: "This node is still starting and takes no changes yet. Try again in a moment.",
   // The tool's own refusal classes. `internal_error` is one of them — a fault
@@ -86,15 +121,19 @@ export const ACT_ERRORS = {
   not_found: "It is not there any more. Somebody may have removed or moved it.",
   forbidden: null,
   stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
-  conflict: "It collided with another change landing at the same moment. Look again, then retry.",
-  exists: "That already exists.",
+  conflict: null,
+  exists: null,
   already_answered: "Somebody has already answered it.",
   reassignment_budget:
     "It has been handed between seats too many times. A person has to pick it up now.",
   inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+  quota_exceeded:
+    "This would pass a limit on what the company keeps. Remove what it no longer needs, or ask an admin to raise the limit.",
+  notes_full:
+    "The turn already holds as many notes as it can before it reads them. Send this again once it has read them, at its next step.",
+  notes_spent:
+    "The turn has taken as many notes as a turn takes, so sending this again changes nothing. Put the rest on the work item.",
   not_running: "It is not running any more.",
-  paused: "The seat is paused with its running work stopped. Resume it, then try again.",
-  steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
   budget_exhausted:
     "The token budget for this window is spent. Raise it, or wait for the window to reset.",
   store_full:

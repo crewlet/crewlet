@@ -3,9 +3,11 @@ package engine
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -63,6 +65,24 @@ func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	// TTL, which is a lease that has already lapsed.
 	if got := effectiveLeaseTTL(&b, ttlBackend{ttl: 0}); got != configured {
 		t.Errorf("a backend reporting no TTL resolved to %v, want %v", got, configured)
+	}
+}
+
+// THE DEFAULT LEASE TTL IS ONE A DEPLOYMENT COULD HAVE WRITTEN.
+//
+// An unset coordination.lease_ttl_seconds takes the seat layer's measured
+// constant here ([leaseTTL]), because config must not import it, and Tier A
+// refuses anything set below [config.MinLeaseTTL] for the watchdog's sake. The
+// two live in packages that cannot see each other, so a default lowered past
+// the floor would boot every deployment that set nothing on a TTL the floor
+// exists to refuse — the one place the rule would not reach.
+func TestTheDefaultLeaseTTLIsNotBelowTheFloor(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Coordination.LeaseTTLSeconds = 0
+	if got := leaseTTL(&b); got < config.MinLeaseTTL {
+		t.Fatalf("an unset lease TTL takes %v, below the %v floor Tier A holds a set "+
+			"one to", got, config.MinLeaseTTL)
 	}
 }
 
@@ -132,5 +152,29 @@ func TestADataNodeHoldsTheEstateForTheWholeRegister(t *testing.T) {
 					c.roles, len(register()), err)
 			}
 		})
+	}
+}
+
+// THE FLOOR'S ERROR SENDS THE OPERATOR WHERE THE BUCKET IS: stream.store_dir
+// only where this node's own broker keeps it, the external cluster on
+// stream.type nats, and the data members on a leaf.
+func TestTheRunsBucketIsNamedWhereItLives(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		stream config.Stream
+		want   string
+	}{
+		"embedded": {stream: config.Stream{Type: config.StreamEmbedded}, want: "stream.store_dir"},
+		"external": {stream: config.Stream{Type: config.StreamNATS}, want: "stream.url"},
+		"leaf": {stream: config.Stream{Type: config.StreamEmbedded,
+			Leaf: config.StreamLeaf{URLs: []string{"nats-leaf://member-a.example.com:7422"}}}, want: "stream.leaf.urls"},
+	} {
+		got := runsBucketHome(&config.Bootstrap{Stream: tc.stream})
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: %q does not name %s", name, got, tc.want)
+		}
+		if tc.want != "stream.store_dir" && strings.Contains(got, "stream.store_dir") {
+			t.Errorf("%s: %q names stream.store_dir, which holds none of this bucket", name, got)
+		}
 	}
 }

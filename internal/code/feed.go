@@ -29,7 +29,7 @@ import (
 //
 // # A change's wake names its work item
 //
-// A change implements one work item (ADR-0067), and its routing carries it, so
+// A change implements one work item (ADR-0090), and its routing carries it, so
 // every wake about the change names it ([Prompt.WorkItem]) and the turn the
 // wake starts is charged to it (ADR-0022's trigger rule). No change row
 // carries spend of its own: spend is the turn's, charged to the item.

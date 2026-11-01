@@ -77,9 +77,9 @@ func executorPrompt(t *testing.T, n *node) string {
 	return ""
 }
 
-// executorOffered is the tools the call that did the work was offered: the
-// catalogue its request carried, which is where a tool the seat holds is
-// defined, rather than any list in its system prompt.
+// executorOffered is the tools the request that did the work was offered: the
+// ones its CLI listed from the seat's tool server, which is where a tool the
+// seat holds is defined, rather than any list in its system prompt.
 func executorOffered(t *testing.T, n *node) []string {
 	t.Helper()
 	n.model.mu.Lock()

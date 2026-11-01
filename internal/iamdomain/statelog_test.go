@@ -23,7 +23,7 @@ import (
 // that their tables are byte-identical. That the comparison holds at all is
 // what says the sealing happens at the WRITER rather than on each node, which
 // is what keeps a name, an address and a seed ciphertext on the log and in
-// every node's rows alike.
+// every data node's rows alike.
 func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -48,7 +48,7 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 			Write:  suiteWrite,
 			// THE PRODUCTION ENCODER the engine hands the trim, so this
 			// log's anchors below the floor are removed by the same record
-			// every log that writes anchors takes (ADR-0050).
+			// every log that writes anchors takes (ADR-0073).
 			EncodeTrimmed: iamdomain.EncodeTrimmed,
 			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
 			// for this log: certified to write no row.
@@ -128,7 +128,7 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			Write: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpUpdate,
 					id, writer, opID, iamdomain.PeopleScope(id),
-					gateSuitePerson([]iam.Grant{iam.GrantTracker}))
+					gateSuitePerson([]iam.Grant{iam.GrantWorklet}))
 			},
 			// A REMOVAL IS THE PURGE: the one record here with no inverse,
 			// and the one that writes the tombstone every later record
@@ -268,7 +268,7 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 			Stage:      iam.StageActive,
 			NameSealed: "sealed:renamed", EmailSealed: "sealed:email",
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		}, iamdomain.PeopleScope(id)
 	case iamdomain.KindSession:
 		return iamdomain.OpOpen, suitePerson, iamdomain.Session{

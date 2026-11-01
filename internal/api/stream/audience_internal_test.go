@@ -18,8 +18,8 @@ import (
 var (
 	adminPrincipal = iam.Principal{Login: "erin.ng", Stage: iam.StageActive,
 		Seat: "founder", Grants: []iam.Grant{iam.GrantAdmin}}
-	trackerPrincipal = iam.Principal{Login: "sam.lee", Stage: iam.StageActive,
-		Seat: "analyst", Grants: []iam.Grant{iam.GrantTracker}}
+	workletPrincipal = iam.Principal{Login: "sam.lee", Stage: iam.StageActive,
+		Seat: "analyst", Grants: []iam.Grant{iam.GrantWorklet}}
 	overviewPrincipal = iam.Principal{Login: "pat.kim", Stage: iam.StageActive,
 		Seat: "intern", Grants: []iam.Grant{}}
 )
@@ -72,10 +72,10 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 	h := NewHub()
 	defer h.Close()
 	admin := NewClient(NewAudience(adminPrincipal, nil))
-	tracker := NewClient(NewAudience(trackerPrincipal, nil))
+	workletReader := NewClient(NewAudience(workletPrincipal, nil))
 	overview := NewClient(NewAudience(overviewPrincipal, nil))
 	nobody := NewClient(Audience{})
-	for _, c := range []*Client{admin, tracker, overview, nobody} {
+	for _, c := range []*Client{admin, workletReader, overview, nobody} {
 		h.Register(c)
 	}
 	at := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -88,7 +88,7 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 		want   []Kind
 	}{
 		{"an admin", admin, []Kind{KindEvent, KindAgents}},
-		{"the tracker alone", tracker, []Kind{KindAgents}},
+		{"Worklet alone", workletReader, []Kind{KindAgents}},
 		{"no permission at all", overview, []Kind{KindAgents}},
 		{"the zero audience", nobody, nil},
 	} {
@@ -108,12 +108,12 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 // room's own admission is the whole of who reads it, and the zero audience
 // still reads none.
 //
-// It was the TRACKER's, which put one domain's permission in front of every
+// It was WORKLET's, which put one domain's permission in front of every
 // domain's news: the frame names the domain whose half of the inbox moved, and
-// a domain other than the tracker announcing one would have been withheld from
+// a domain other than Worklet announcing one would have been withheld from
 // a reader its own grant admits.
 //
-// Mutation: declare KindInboxChanged the tracker's or admin's, or answer the
+// Mutation: declare KindInboxChanged Worklet's or admin's, or answer the
 // seat room's need with an app, and the reader holding no app receives
 // nothing.
 func TestAnInboxFrameNeedsNoApp(t *testing.T) {
@@ -129,7 +129,7 @@ func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 		want bool
 	}{
 		{"an admin", NewAudience(adminPrincipal, nil), true},
-		{"the tracker", NewAudience(trackerPrincipal, nil), true},
+		{"Worklet", NewAudience(workletPrincipal, nil), true},
 		{"no app at all", NewAudience(overviewPrincipal, nil), true},
 		{"nobody resolved", Audience{}, false},
 	} {
@@ -209,7 +209,7 @@ func drainClient(c *Client) []*Frame {
 // the same table as the broadcast, while the socket's own answers pass.
 func TestAReplyNeverCarriesAFactItsClientMayNotRead(t *testing.T) {
 	t.Parallel()
-	c := NewClient(NewAudience(trackerPrincipal, nil))
+	c := NewClient(NewAudience(workletPrincipal, nil))
 	c.Reply(Push(KindEvent, map[string]any{"type": "x"}, time.Now()))
 	c.Reply(Envelope{Kind: KindResult, ID: 1, What: "anything"})
 	var got []Kind
@@ -248,7 +248,7 @@ func (shapedOrg) For(a Audience) (string, any) {
 func TestAShapedPayloadReachesEachAudienceInItsOwnShape(t *testing.T) {
 	t.Parallel()
 	h := NewHub()
-	reader := NewClient(NewAudience(trackerPrincipal, nil))
+	reader := NewClient(NewAudience(workletPrincipal, nil))
 	admin := NewClient(NewAudience(adminPrincipal, nil))
 	// The admin registers FIRST, so a cache keyed on the posture alone
 	// would hand the reader the admin's encoding.
@@ -264,8 +264,8 @@ func TestAShapedPayloadReachesEachAudienceInItsOwnShape(t *testing.T) {
 		client *Client
 		holds  bool
 	}{
-		"the tracker alone": {reader, false},
-		"an admin":          {admin, true},
+		"Worklet alone": {reader, false},
+		"an admin":      {admin, true},
 	} {
 		frames := drainClient(tc.client)
 		if len(frames) != 2 {
@@ -328,7 +328,7 @@ func TestAnAudienceReadsTheTrailOfTheSeatsTheTableAdmits(t *testing.T) {
 	chart := leadsAgent{seats: map[string]bool{"eng-bot": true}}
 	svc := build(chart)
 	lead := iam.Principal{Login: "lee.lead", Stage: iam.StageActive, Seat: "lead",
-		Grants: []iam.Grant{iam.GrantTracker}}
+		Grants: []iam.Grant{iam.GrantWorklet}}
 
 	for _, tc := range []struct {
 		name string
@@ -339,7 +339,7 @@ func TestAnAudienceReadsTheTrailOfTheSeatsTheTableAdmits(t *testing.T) {
 			map[string]bool{"agent-eng": true, "agent-ops": true}},
 		{"the eng seat's lead", svc.AudienceFor(t.Context(), lead),
 			map[string]bool{"agent-eng": true, "agent-ops": false}},
-		{"anybody else", svc.AudienceFor(t.Context(), trackerPrincipal),
+		{"anybody else", svc.AudienceFor(t.Context(), workletPrincipal),
 			map[string]bool{"agent-eng": false, "agent-ops": false}},
 		{"a lead on a node whose chart cannot answer",
 			build(authz.NoChart{}).AudienceFor(t.Context(), lead),
@@ -361,10 +361,10 @@ func TestAnAudienceReadsTheTrailOfTheSeatsTheTableAdmits(t *testing.T) {
 // lead's frame reaches somebody outside their team.
 func TestAudiencesThatReadDifferentlyNeverShareAVariant(t *testing.T) {
 	t.Parallel()
-	lead := NewAudience(trackerPrincipal, []string{"agent-eng"})
-	otherLead := NewAudience(trackerPrincipal, []string{"agent-ops"})
+	lead := NewAudience(workletPrincipal, []string{"agent-eng"})
+	otherLead := NewAudience(workletPrincipal, []string{"agent-ops"})
 	overview := NewAudience(overviewPrincipal, nil)
-	trackerOnly := NewAudience(trackerPrincipal, nil)
+	trackerOnly := NewAudience(workletPrincipal, nil)
 	for _, pair := range [][2]Audience{{lead, otherLead}, {lead, trackerOnly},
 		{trackerOnly, overview}} {
 		if pair[0].variant(false) == pair[1].variant(false) {
@@ -373,11 +373,61 @@ func TestAudiencesThatReadDifferentlyNeverShareAVariant(t *testing.T) {
 		}
 	}
 	twin := NewAudience(iam.Principal{Login: "sam.other", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker}}, []string{"agent-eng"})
+		Grants: []iam.Grant{iam.GrantWorklet}}, []string{"agent-eng"})
 	if lead.variant(false) != twin.variant(false) {
 		t.Errorf("two readers of exactly one seat's body were given two variants, "+
 			"%q and %q, which costs an encode each", lead.variant(false),
 			twin.variant(false))
+	}
+}
+
+// EVERY APP IS A NEED AN AUDIENCE MEETS, and each one apart from the others.
+//
+// The app terms are derived from [iam.Apps] rather than written out per app,
+// so the next app needs no edit here — which holds only if every one of them
+// is a need this build declares, a holder of exactly that app has it and no
+// other, the refusal of its kinds names it, and two readers differing only in
+// it are two audiences with two variants: compared equal they would keep a
+// socket whose grants moved, and sharing a variant one encode would hand one
+// reader the other's frame.
+//
+// Mutation: drop an app from [NewAudience]'s loop, from [Audience.Equal] or
+// from the variant's name, or answer [Audience.Has] from the first app, and
+// this fails.
+func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
+	t.Parallel()
+	nobody := NewAudience(overviewPrincipal, nil)
+	for _, app := range iam.Apps {
+		need := NeedFor(app)
+		if !need.Valid() {
+			t.Errorf("the %s app is not a need this build declares", app)
+		}
+		if got := need.Grants(); !slices.Equal(got, []iam.Grant{app}) {
+			t.Errorf("a refusal of a %s kind names %v, want %s", app, got, app)
+		}
+		holder := NewAudience(iam.Principal{Login: "holder", Stage: iam.StageActive,
+			Seat: "holder", Grants: []iam.Grant{app}}, nil)
+		for _, other := range iam.Apps {
+			if got := holder.Has(other); got != (other == app) {
+				t.Errorf("a holder of %s alone has %s = %v", app, other, got)
+			}
+		}
+		if holder.Equal(nobody) {
+			t.Errorf("a holder of %s is the same audience as a holder of nothing", app)
+		}
+		if holder.variant(false) == nobody.variant(false) {
+			t.Errorf("a holder of %s shares the variant %q with a holder of nothing",
+				app, holder.variant(false))
+		}
+	}
+	admin := NewAudience(adminPrincipal, nil)
+	for _, app := range iam.Apps {
+		if !admin.Has(app) {
+			t.Errorf("an administrator does not have %s", app)
+		}
+	}
+	if admin.Has(iam.Grant("timesheets")) || nobody.Has(iam.GrantAdmin) {
+		t.Error("an audience has something that is not an app it holds")
 	}
 }
 
@@ -398,7 +448,7 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 	person := func(login, seat string) Audience {
 		return NewAudience(iam.Principal{Login: login, Kind: iam.KindPerson,
 			Seat: seat, Stage: iam.StageActive,
-			Grants: []iam.Grant{iam.GrantTracker}}, nil)
+			Grants: []iam.Grant{iam.GrantWorklet}}, nil)
 	}
 	asked, bystander := person("sam.lee", "analyst"), person("kim.ray", "auditor")
 
@@ -429,6 +479,41 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 func runningName(rows SandboxRows, audience Audience) string {
 	name, _ := rows.For(audience)
 	return name
+}
+
+// THE SANDBOXES PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
+// Which `providers.llm` entry a coding run spends, the chain's head or the
+// fallback a launch took, is the company's configuration: everybody else, the
+// seat's lead included, is sent the run and the model it runs under without
+// it. The push and the snapshot both shape the rows through here.
+//
+// Mutation: drop the configuration rule from the coding run's mask, or reach
+// it with no Config for an admin, and a reader is handed the entry or an
+// admin is not.
+func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
+	t.Parallel()
+	rows := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+		ProviderKey: "plan-zulu", Model: "opus"}}
+	lead := iam.Principal{Login: "ana.ruiz", Stage: iam.StageActive, Seat: "eng-lead",
+		Grants: []iam.Grant{iam.GrantWorklet}}
+	for name, tc := range map[string]struct {
+		audience Audience
+		entry    bool
+	}{
+		"an admin":        {NewAudience(adminPrincipal, nil), true},
+		"the seat's lead": {NewAudience(lead, []string{"agent-eng"}), false},
+		"a tracker user":  {NewAudience(workletPrincipal, nil), false},
+		"the overview":    {NewAudience(overviewPrincipal, nil), false},
+	} {
+		_, data := rows.For(tc.audience)
+		got := data.([]livestate.SandboxEntry)
+		if len(got) != 1 || (got[0].ProviderKey == "plan-zulu") != tc.entry || got[0].Model != "opus" {
+			t.Errorf("%s is sent %+v, want the entry shown %v and the model always", name, got, tc.entry)
+		}
+	}
+	if rows[0].ProviderKey != "plan-zulu" {
+		t.Error("shaping the push wrote through to the rows the broadcast shares")
+	}
 }
 
 // THE AUDIENCE HOLDS EXACTLY THE APPS THE PRINCIPAL CAN.
@@ -506,7 +591,7 @@ func TestTheAudienceHoldsExactlyTheAppsThePrincipalCan(t *testing.T) {
 			}
 		}
 	}
-	if (Audience{}).Has(iam.GrantTracker) {
+	if (Audience{}).Has(iam.GrantWorklet) {
 		t.Error("the zero audience uses an app")
 	}
 }
@@ -523,7 +608,7 @@ func TestTheAudienceHoldsExactlyTheAppsThePrincipalCan(t *testing.T) {
 func TestTheAudienceKeepsItsPrincipalAndComparesIt(t *testing.T) {
 	t.Parallel()
 	p := iam.Principal{Login: "sam.lee", Kind: iam.KindPerson, Stage: iam.StageActive,
-		Seat: "analyst", Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "analyst", Grants: []iam.Grant{iam.GrantWorklet}}
 	a := NewAudience(p, nil)
 	if got := a.Principal(); got.Login != p.Login || got.Seat != p.Seat ||
 		!slices.Equal(got.Grants, p.Grants) {
@@ -531,14 +616,14 @@ func TestTheAudienceKeepsItsPrincipalAndComparesIt(t *testing.T) {
 	}
 	held := a.Principal()
 	held.Grants = append(held.Grants[:0], iam.GrantAdmin)
-	if a.Principal().Grants[0] != iam.GrantTracker {
+	if a.Principal().Grants[0] != iam.GrantWorklet {
 		t.Error("editing the grants a caller was handed reached the audience")
 	}
 	p.Grants[0] = iam.GrantAdmin
-	if a.Principal().Grants[0] != iam.GrantTracker {
+	if a.Principal().Grants[0] != iam.GrantWorklet {
 		t.Error("editing the caller's own principal reached the audience it built")
 	}
-	p.Grants[0] = iam.GrantTracker
+	p.Grants[0] = iam.GrantWorklet
 
 	stepped := p
 	stepped.ReauthAt = time.Date(2026, 6, 14, 13, 0, 0, 0, time.UTC)

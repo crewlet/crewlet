@@ -8,11 +8,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0049.
+// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0072.
 //
 // The verdict the router serves by holds an entry for every registered domain,
 // read from that domain's own health, and carries the domain's own
@@ -178,7 +178,7 @@ func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 // of service; the tracker's and the knowledge base's keep answering, the seat
 // copy is still this node's, its seats stay and its claims go on — and a
 // single node's own tracker read is still answered from its own copy. Before
-// ADR-0049 the vectors copy was never judged, so it stayed in service with its
+// ADR-0072 the vectors copy was never judged, so it stayed in service with its
 // hole.
 func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	t.Parallel()
@@ -218,7 +218,7 @@ func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("a vectors copy below its log withheld the node's seat claims")
 	}
-	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{Level: statelog.ReadLinearizable}, time.Now()); err != nil {
+	if _, err := e.router.Work().Tasks(t.Context(), worklet.Query{Level: statelog.ReadLinearizable}, time.Now()); err != nil {
 		t.Fatalf("a single node whose vectors copy is wrong refused its own tracker read: %v", err)
 	}
 }

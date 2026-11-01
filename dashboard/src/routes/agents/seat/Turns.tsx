@@ -13,8 +13,7 @@
  * # The list is paged, and its count is what is loaded
  *
  * A page is fifty turns over the whole thirty days the event store keeps,
- * and "Load older" follows the engine's cursor back past it, holding the
- * newest page still from the press (`lib/usePaged.ts`). The header
+ * and "Load older" follows the engine's cursor back past it. The header
  * counts the rows loaded — "50+" while an older page exists — because the
  * read counts nothing: it was `.length` of the first page under "the newest
  * 50 this seat took", which a seat with twelve turns contradicted and a seat
@@ -46,7 +45,7 @@ import {
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -65,7 +64,7 @@ import { useSettled } from "~/lib/settled.ts";
 import { phaseColor, spentOnly } from "~/lib/spend.ts";
 import { useClient, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { MAX_TURN_DAYS, openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, EventRecord, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
@@ -111,19 +110,15 @@ export function Turns({
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
   // and a seat's record is the whole of what can still be read.
   const asked = { seat: handle, days: MAX_TURN_DAYS, limit: TURN_PAGE };
-  // THE NEWEST PAGE IS HELD from the press of "Load older turns"
-  // (`lib/usePaged.ts`): read again under turns that ended since, it would
-  // push its last ones out of both pages.
-  const hold = usePageHold<TurnsAnswer>(asked);
   const list = usePaged(
-    hold,
     useQuery(
       "turns",
       asked,
       // TWENTY SECONDS, the cadence `routes/live/Turns.tsx` gives the same
       // question — a store aggregate with no push behind it.
-      { enabled: handle !== "", pollMs: 20_000, hold: hold.holding },
+      { enabled: handle !== "", pollMs: 20_000 },
     ),
+    asked,
     (before) => socket.query("turns", withFloor("turns", JSON.stringify({ ...asked, before }))),
     pickTurns,
     turnRowId,
@@ -308,6 +303,7 @@ export function Turns({
             columns={[
               {
                 key: "started",
+                align: "right",
                 header: "Started",
                 shrink: true,
                 sortValue: (t) => tsKey(t.started_at),
@@ -333,6 +329,7 @@ export function Turns({
               },
               {
                 key: "iterations",
+                align: "right",
                 // SELF-ITERATE ROUNDS, and the word says so: a phase's TOOL
                 // rounds are on its own card, under their own word.
                 header: <span title="Self-iterate rounds">Iterations</span>,
@@ -348,6 +345,7 @@ export function Turns({
               },
               {
                 key: "tokens",
+                align: "right",
                 header: "Tokens",
                 shrink: true,
                 sortValue: (t) => (t.complete ? t.total_tokens : null),
@@ -405,19 +403,15 @@ export function Turns({
         </QueryState>
         {/* OLDER TURNS ARE FETCHED, from the cursor the engine answered —
             never reached by a wider page. */}
-        {(list.more || list.paging || list.pageError || list.held) && (
+        {(list.more || list.paging || list.pageError) && (
           <footer className="panel-foot">
             {list.more || list.paging ? (
-              <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
+              <Button size="small" variant="secondary" onClick={list.next} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
               </Button>
             ) : null}
             {/* BESIDE THE CONTROL, which asks the page again. */}
             {list.pageError && <PageFailed error={list.pageError} />}
-            <span className="spacer" />
-            {/* SAID ONLY ONCE IT IS TRUE: until then the newest page is read
-                again every twenty seconds. */}
-            {list.held && <span>Paused while you page back.</span>}
           </footer>
         )}
       </Card>

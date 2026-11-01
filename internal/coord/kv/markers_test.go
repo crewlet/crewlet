@@ -176,7 +176,7 @@ func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 		t.Fatalf("the sweep covers %v, and the buckets the broker never ages "+
 			"are %v", swept, ageless)
 	}
-	for _, must := range []string{"sandbox_runs", "secrets", "channels", "mailboxes", "statelog_positions"} {
+	for _, must := range []string{"sandbox_runs", "secrets", "channels", "mailboxes", "chat_reads", "statelog_positions"} {
 		if !slices.Contains(swept, must) {
 			t.Errorf("the %s bucket removes records and has no age, and the sweep does not cover it", must)
 		}
@@ -310,6 +310,64 @@ func TestACreateAsksTheLeaderWhatTheKeyHolds(t *testing.T) {
 // to a method named Create or PurgeDeletes anywhere in this package's own code.
 func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing.T) {
 	t.Parallel()
+	found := callsInPackage(t, func(method string, _ *ast.CallExpr) bool {
+		return method == "Create" || method == "PurgeDeletes"
+	})
+	if len(found) > 0 {
+		t.Errorf("these calls reach past createKey or sweepMarkers:\n  %s\n"+
+			"a create goes through createKey and a marker sweep through "+
+			"sweepMarkers — see markers.go for what each of these costs",
+			strings.Join(found, "\n  "))
+	}
+}
+
+// NOTHING IN THIS PACKAGE READS A KEY THROUGH A DIRECT GET.
+//
+// kv.go's rule — every single-key read is the stream LEADER's, through
+// [getLatest] or a [leaderReader] — is one behaviour holds only in part: a
+// direct get answers from whichever replica the broker picks, and that
+// replica is current on one server, through a leaf, and on every member of a
+// cluster that is not mid-write, which is every conformance case. The
+// partition case in shared_cluster_test.go cuts a member off so its copy is
+// behind for certain and reads a lease (Get, Renew, Release) and one fleet
+// record, a mailbox, through it — which holds the lease store's reader and
+// [FleetStore.get] itself, the one function every fleet record is read
+// through. What no behaviour holds is a CALL SITE stepping off them: every
+// other keyed read — fleet.go's records (the secrets among them), the
+// positions, follows, counters, object-store records and seat pauses, the
+// epoch and hint reads — is a call of its own, and one moved onto its bucket
+// handle's Get passes every behavioural case here and answers a record the
+// quorum holds as absent on the first fleet whose replica is behind. So the
+// source is read, as for the create above: no call to the bucket handle's Get
+// (which takes a context and a key — the one-argument Gets here are a
+// header's and the logger's) or GetRevision, and none to the stream's GetMsg
+// or GetLastMsgForSubject, which are the same direct get by another name.
+func TestNothingReadsAKeyThroughADirectGet(t *testing.T) {
+	t.Parallel()
+	found := callsInPackage(t, func(method string, call *ast.CallExpr) bool {
+		switch method {
+		case "Get":
+			return len(call.Args) > 1
+		case "GetRevision", "GetMsg", "GetLastMsgForSubject":
+			return true
+		}
+		return false
+	})
+	if len(found) > 0 {
+		t.Errorf("these calls read a key from whichever replica answers:\n  %s\n"+
+			"a single-key read goes through FleetStore.get, getLatest or a "+
+			"leaderReader — see kv.go, \"Every single-key read is the leader's\"",
+			strings.Join(found, "\n  "))
+	}
+}
+
+// callsInPackage parses this package's own non-test source and answers the
+// position of every method call match accepts, by the method's name.
+//
+// It fails the case outright when it read too few files to be this package,
+// because a gate that parsed nothing reports nothing and certifies nothing.
+func callsInPackage(t *testing.T, match func(method string, call *ast.CallExpr) bool) []string {
+	t.Helper()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -335,11 +393,8 @@ func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing
 			if !ok {
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-				switch sel.Sel.Name {
-				case "Create", "PurgeDeletes":
-					found = append(found, fmt.Sprintf("%s: .%s(", fset.Position(call.Pos()), sel.Sel.Name))
-				}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && match(sel.Sel.Name, call) {
+				found = append(found, fmt.Sprintf("%s: .%s(", fset.Position(call.Pos()), sel.Sel.Name))
 			}
 			return true
 		})
@@ -347,10 +402,5 @@ func TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient(t *testing
 	if read < 5 {
 		t.Fatalf("read %d source files, which is not this package — the check certified nothing", read)
 	}
-	if len(found) > 0 {
-		t.Errorf("these calls reach past createKey or sweepMarkers:\n  %s\n"+
-			"a create goes through createKey and a marker sweep through "+
-			"sweepMarkers — see markers.go for what each of these costs",
-			strings.Join(found, "\n  "))
-	}
+	return found
 }

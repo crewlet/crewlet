@@ -9,7 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Folding one work item into another.
@@ -40,11 +41,14 @@ import (
 
 // ---- merge_work_item ---------------------------------------------------- //
 
-type mergeWorkItem struct{ deps WorkDeps }
+type mergeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*mergeWorkItem)(nil)
 
-func (t *mergeWorkItem) Name() string { return tracker.MergeWorkItemTool }
+func (t *mergeWorkItem) Name() string { return worklet.MergeWorkItemTool }
 
 func (t *mergeWorkItem) Description() string {
 	return "Fold a duplicate work item into the one that survives: the " +
@@ -53,7 +57,7 @@ func (t *mergeWorkItem) Description() string {
 		"and the duplicate stays readable, so the history of both is intact. " +
 		"Use this rather than closing by hand — a cancelled item with " +
 		"subtasks still under it hides work nobody will find. Say what you " +
-		"folded and why with comment_on_work_item."
+		"folded and why with " + worklet.CommentOnWorkTool + "."
 }
 
 func (t *mergeWorkItem) Parameters() map[string]any {
@@ -92,12 +96,12 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.MergeWorkItemTool), nil
+		return notInATurn(worklet.MergeWorkItemTool), nil
 	}
 	if t.deps.Merges == nil || t.deps.Reader == nil {
-		return unconfigured(tracker.MergeWorkItemTool), nil
+		return unconfigured(worklet.MergeWorkItemTool), nil
 	}
-	actor, denied := t.deps.bindOperation(actor, tracker.MergeWorkItemTool, args)
+	actor, denied := t.deps.bindOperation(actor, worklet.MergeWorkItemTool, args)
 	if denied != "" {
 		return failed(denied), nil
 	}
@@ -105,22 +109,22 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	into := strings.TrimSpace(argString(args, "into"))
 	switch {
 	case ref == "":
-		return failed("merge_work_item needs an `item` — the duplicate, by " +
+		return failed(MergeWorkItemTool + " needs an `item` — the duplicate, by " +
 			"key like ENG-42 or by id."), nil
 	case into == "":
-		return failed("merge_work_item needs an `into` — the item that " +
+		return failed(MergeWorkItemTool + " needs an `into` — the item that " +
 			"survives. Without it the call would close the duplicate and " +
 			"say nothing about where the work went."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
 			clip(ref))), nil
 	case err != nil:
-		return readFailure(ctx, tracker.MergeWorkItemTool, err), nil
+		return readFailure(ctx, worklet.MergeWorkItemTool, err), nil
 	}
-	survivor, refusal := t.deps.resolveRef(ctx, tracker.MergeWorkItemTool, "`into`", into)
+	survivor, refusal := t.deps.resolveRef(ctx, worklet.MergeWorkItemTool, "`into`", into)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -135,35 +139,35 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// closing, and the close is the last append so nothing after it corrects
 	// the picture.
 	cancelled := before.Task
-	cancelled.Status = tracker.StatusCancelled
-	cancelled.StatusGroup = tracker.StatusCancelled.Group()
+	cancelled.Status = worklet.StatusCancelled
+	cancelled.StatusGroup = worklet.StatusCancelled.Group()
 	opID := opIDFor(actor, t.Name(), "merge", before.Task.ID, args)
 	got, err := t.deps.Merges(actor).MergeDuplicates(ctx, opID, before.Task.ID, survivor,
-		moveSubtasks(args), tracker.Wake{
-			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
+		moveSubtasks(args), worklet.Wake{
+			Kind: worklet.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
-	if errors.Is(err, tracker.ErrReparentAcrossProjects) {
+	if errors.Is(err, worklet.ErrReparentAcrossProjects) {
 		// THE REFUSAL NAMES BOTH WAYS OUT, in this surface's own words:
 		// the tracker knows the gesture that clears it and not the tool
 		// or the argument a caller reaches it by.
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("merge_work_item "+
-			"was refused: %v. Move %s "+
-			"into the surviving item's project with move_work_item first — its "+
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(MergeWorkItemTool+" "+
+			"was refused: %s. Move %s "+
+			"into the surviving item's project with "+worklet.MoveWorkItemTool+" first — its "+
 			"subtasks go with it — or merge with `move_subtasks: false`, which "+
-			"leaves them under the duplicate.", err, before.Address())), nil
+			"leaves them under the duplicate.", worklet.Sentence(err), before.Address())), nil
 	}
 	if err != nil {
-		return writeFailure(ctx, actor, tracker.MergeWorkItemTool, err), nil
+		return writeFailure(ctx, actor, worklet.MergeWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A RECEIPT FOR A MERGE NOBODY CAN SAY LANDED — see
 		// [unknownWrite]. The sequence stops at an unknown step with an
 		// error of its own, so this is the seam's contract held here
 		// rather than an implementation's habit trusted.
-		return unknownWrite(actor, tracker.MergeWorkItemTool,
+		return unknownWrite(actor, worklet.MergeWorkItemTool,
 			fmt.Sprintf("%s was merged", before.Named()), opID, got.Unvouched,
-			unknownNext(got.Unvouched, sameCall(actor, tracker.MergeWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — a merged item is "+
+			unknownNext(got.Unvouched, sameCall(actor, worklet.MergeWorkItemTool),
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — a merged item is "+
 					"cancelled and links the one it was folded into", before.Address()),
 				"it merges it a second time")), nil
 	}
@@ -171,7 +175,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return jsonResult(withOperation(ReceiptOf(map[string]any{
 		"merged_into":    survivor,
 		"subtasks_moved": moveSubtasks(args),
-		"status":         string(tracker.StatusCancelled),
+		"status":         string(worklet.StatusCancelled),
 		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	}, before), actor))
 }
@@ -183,6 +187,6 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // that said nothing gets the safe outcome and only an explicit `false` keeps
 // them where they are.
 func moveSubtasks(args map[string]any) bool {
-	raw, held := args["move_subtasks"].(bool)
+	raw, held := argval.Bool(args["move_subtasks"])
 	return !held || raw
 }

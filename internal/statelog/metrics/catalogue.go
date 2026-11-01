@@ -35,7 +35,11 @@
 // one that stops matching.
 package metrics
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // Kind is what an instrument measures.
 type Kind string
@@ -449,9 +453,9 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left — on every log that claims identity (the tracker, the " +
-				"pages, the identity estate, the artifacts, their datastores " +
-				"and the code log), the ceiling " +
+				"left on every log that claims identity (Worklet's, Doclet's, " +
+				"the code log's, the identity estate's, the artifacts log's, the " +
+				"artifact datastore's, Ask Crewlet's and Chatlet's): the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -468,7 +472,7 @@ func Catalogue() []Instrument {
 			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Arbitration anchors this node's applier removed under the " +
-				"trim's `trimmed` records (ADR-0050), counted once the " +
+				"trim's `trimmed` records (ADR-0073), counted once the " +
 				"transaction that removed them commits. Every node applies " +
 				"every record, so every data node counts the same removals. " +
 				"Flat is the normal reading of a log whose purged objects all " +
@@ -483,19 +487,25 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupAge, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: nil,
-			Shows: "How long ago the newest COMPLETE backup finished, read " +
-				"from the manifests on disk rather than from a counter this " +
-				"process keeps. A counter records that a process believed it " +
-				"took a backup; the disk records that one exists, and they " +
-				"differ in exactly the cases the alarm is for — a copy " +
-				"deleted, a volume never mounted, a schedule pointing at a " +
-				"path nobody ships from. A node holding no manifest reports " +
-				"NO SERIES rather than a value: zero is the freshest backup " +
-				"imaginable and every other number is an age nobody " +
-				"measured, so neither can stand for an absence. The absence " +
-				"is what the `backup_age` alarm says in words, and an " +
-				"`absent()` rule over this gauge is what a collector alerts " +
-				"on.",
+			Shows: "How long ago the newest COMPLETE backup THIS NODE took " +
+				"finished, read from the manifests in the directories it " +
+				"announced rather than from the fleet's register. The " +
+				"register records that a copy was announced; the disk " +
+				"records that it still exists, and they differ in exactly " +
+				"the cases worth catching — a copy deleted, a volume never " +
+				"mounted, a schedule pointing at a path nobody ships from. A " +
+				"node holding no manifest of its own reports NO SERIES " +
+				"rather than a value: zero is the freshest backup imaginable " +
+				"and every other number is an age nobody measured, so " +
+				"neither can stand for an absence, and an `absent()` rule " +
+				"over this gauge is what a collector alerts on. It is NOT " +
+				"what the `backup_age` alarm reads: the alarm ages, per log " +
+				"and fleet-wide, the newest verified point the trim counts " +
+				"in the register (under `backup_floor: operator`, the " +
+				"operator's acknowledgement of that log), so the two answer " +
+				"different questions and can disagree — a copy deleted " +
+				"after it was announced still counts for the alarm and the " +
+				"trim, and leaves this gauge.",
 		},
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -508,9 +518,13 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupHolds, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
-			Shows: "Live trim holds. A pin that outlives its owner stops the " +
-				"trim until the stale bound expires it, so a count that does " +
-				"not return to zero is a backup that crashed mid-copy.",
+			Shows: "Trim holds in the register: a backup copying the log, or " +
+				"a joining node fetching a snapshot and replaying its tail. A " +
+				"holder renews its pin every fifteen seconds and removes it " +
+				"when it is done, and the trim ignores one nobody has renewed " +
+				"for a minute; nothing else removes it, so a count that does " +
+				"not return to zero is a holder that crashed — a backup " +
+				"mid-copy, or a join before its node published a position.",
 		},
 
 		// ---- the embedded broker ---------------------------------------
@@ -535,11 +549,11 @@ func Catalogue() []Instrument {
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"question", "coverage"},
 			Shows: "What each fleet history read covered: `complete` when " +
-				"every live node answered inside the fleet read budget, " +
+				"every live data node answered inside the fleet read budget, " +
 				"`partial` when one did not. Turn-level detail lives only " +
-				"on the node that published it, so a partial answer is " +
-				"missing that node's rows — and the history_partial alarm " +
-				"is a fraction of this counter.",
+				"on the data node that published it or keeps it in custody, " +
+				"so a partial answer is missing that node's rows — and the " +
+				"history_partial alarm is a fraction of this counter.",
 		},
 
 		// ---- the store ------------------------------------------------
@@ -615,36 +629,12 @@ func Catalogue() []Instrument {
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
-				"wake. Both domain consumers are deliberately uncapped, so " +
+				"wake. Every domain feed's consumer is deliberately uncapped, so " +
 				"such a record is never dropped — it redelivers for ever at " +
 				"the head of the consumer with every wake behind it " +
 				"waiting, which has no other symptom at all.",
 		},
 
-		// ---- bulk -----------------------------------------------------
-		{
-			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"result"},
-			Shows: "How often a bulk edit is issued, by `result`: " +
-				"`admitted` under the fleet's bulk lease, `refused` because " +
-				"another is applying, and `fail_open` — let through with NO " +
-				"lease, because the coordination store did not answer the " +
-				"admission or the mixed-version gate refused it. The refusal " +
-				"arithmetic rested on an assumed ten a day, a number with " +
-				"no counter behind it; this is that number. A `fail_open` " +
-				"is a bulk the fleet-wide bound did not cover, and counted " +
-				"as `admitted` it left no trace: a store that refused every " +
-				"admission looked exactly like a fleet whose bulks never " +
-				"collided.",
-		},
-		{
-			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
-			Attributes: nil,
-			Shows: "Seconds of applier occupancy bulk edits projected, " +
-				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
-				"budget: every second here is a second in which reads are " +
-				"behind and writes are pending on every node.",
-		},
 		// ---- the object store's S3 requests ---------------------------
 		{
 			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,
@@ -2181,10 +2171,10 @@ func Catalogue() []Instrument {
 		{
 			Name: AlarmTransitionsDropped, Kind: KindCounter, Unit: UnitCount,
 			Shows: "Alarm transitions this node dropped unpublished: its outbox " +
-				"holds 1024 while the broker refuses them and drops the oldest " +
+				"holds 2048 while the broker refuses them and drops the oldest " +
 				"past that, so no seat is woken by those. Any rise is a broker " +
 				"this node could not publish to for a long while; " +
-				"`fleet_health` still reads what is firing now.",
+				"`" + toolname.FleetHealth + "` still reads what is firing now.",
 		},
 		// ---- the object store's bucket ----------------------------------
 		{
@@ -2333,6 +2323,86 @@ func Catalogue() []Instrument {
 				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
 				"a store or a company at its limit refuses every write that grows it.",
 		},
+		// ---- the Dashboard Assistant -------------------------------------
+		{
+			Name: AssistantTurns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Ask Crewlet turn segments this node ran, by how each ended " +
+				"(`completed`, `waiting_for_approval`, `stopped`, `failed`, " +
+				"`interrupted`, `budget_exhausted`). A climb in `failed` is a model " +
+				"chain or a tool route failing people; in `budget_exhausted`, the " +
+				"company's windows refusing Ask Crewlet.",
+		},
+		{
+			Name: AssistantTurnDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long an Ask Crewlet turn segment runs from the question to its " +
+				"end, by outcome. A three-step read is held to 15 s at the median; a " +
+				"distribution reaching the turn's own timeout is a model or a CLI too " +
+				"slow for an interactive drawer.",
+		},
+		{
+			Name: AssistantFirstOutputLatency, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Shows: "How long a person waits from asking to the first step or text the " +
+				"drawer shows. Held to 4 s at the median; a rise is a CLI's cold start " +
+				"or its slots queued behind other turns.",
+		},
+		{
+			Name: AssistantSteps, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"state"},
+			Shows: "Ask Crewlet tool steps by how each ended (`done`, `failed`, " +
+				"`refused`, `stopped`, `waiting`). A climb in `refused` is the model " +
+				"asking for what its people may not read; in `failed`, a route or the " +
+				"dispatcher breaking under Ask Crewlet.",
+		},
+		{
+			Name: AssistantBriefs, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Brief answers Ask Crewlet's model wrote, by what the engine did with " +
+				"each (`written`, `refused`). A `refused` answer is written again once; a " +
+				"climb in it is a model that cannot keep to the brief's shape.",
+		},
+		{
+			Name: ToolPolicyRefusalLoops, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Runs of policy refusals a seat's or a worker's write tool answered in a " +
+				"row on one target until it reached the limit (internal/tools." +
+				"PolicyRefusalLimit), each counted once when it did, by `tool`: the model was " +
+				"told to stop retrying and raise a blocker. A climb names a tool whose " +
+				"contract the model cannot see or cannot meet.",
+		},
+		{
+			Name: ToolArgsOutsideSchema, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Calls a first-party tool answered successfully although their arguments " +
+				"were outside the schema it advertises (an argument it does not take, a value " +
+				"outside its closed set or its bounds), by `tool`. The model was told on the " +
+				"answer. A tool that keeps climbing here is one whose schema and reading " +
+				"disagree, and the drift a later refusal at the surface would have to fix first.",
+		},
+		{
+			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Records a brief cited (a row, or its recommendation's press) that the " +
+				"engine left out because the record was not in what its turn read, or " +
+				"the person may not open it. A steady climb is a model citing records " +
+				"it did not read.",
+		},
+		{
+			Name: AssistantCardsShownAsNotice, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"type"},
+			Shows: "Stored Ask Crewlet cards read back as a plain notice because this build's " +
+				"contract refuses their shape, by card `type`. Expected for briefs recorded " +
+				"before the brief's current shape, and during a rolling upgrade when an older " +
+				"node reads a newer node's card. A climb outside both is a card written past " +
+				"its own validation.",
+		},
+		{
+			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Ask Crewlet live streams this node is serving. Each holds a " +
+				"connection and a subscription to one turn's frame log; a count that " +
+				"never falls is streams whose clients went away without the " +
+				"connection closing.",
+		},
 		// ---- presence and the artifact rooms' pushes ----------------------
 		{
 			Name: PresenceFrames, Kind: KindCounter, Unit: UnitCount,
@@ -2353,13 +2423,13 @@ func Catalogue() []Instrument {
 		{
 			Name: ArtifactsPushLag, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"kind"},
-			Shows: "How long after the broker stored a committed datastore batch's newest " +
-				"record its `artifact_data` push was handed to this node's sockets " +
-				"(`kind` `data`): the applier's lag plus the fan-out. A datastore " +
-				"change is held to reach the socket within a second. An artifacts " +
-				"movement carries no broker instant, so `artifact_changed` is not " +
-				"measured here; its lag is the artifacts applier's own, in the state " +
-				"log's apply instruments.",
+			Shows: "How long after the broker stored a committed record its push was " +
+				"handed to this node's sockets, by `kind`: `changed` for an artifact's " +
+				"movement (`artifact_changed`) and `data` for a datastore's documents " +
+				"(`artifact_data`) — the applier's lag plus the fan-out, measured " +
+				"whether or not a socket is in the room. A change is held to reach " +
+				"the sockets watching it within a second (the `change_visibility` " +
+				"objective, which counts only the pushes some socket was handed).",
 		},
 		// ---- service objectives -------------------------------------------
 		{

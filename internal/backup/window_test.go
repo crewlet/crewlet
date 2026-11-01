@@ -28,11 +28,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // trackerLogStream is the tracker's log, as a backup's declaration names it.
-var trackerLogStream = tracker.Domain{}.Stream().Name
+var trackerLogStream = worklet.Domain{}.Stream().Name
 
 // trackerLog creates the tracker's log on nc's broker.
 func trackerLog(t *testing.T, nc *nats.Conn) jetstream.Stream {
@@ -42,7 +42,7 @@ func trackerLog(t *testing.T, nc *nats.Conn) jetstream.Stream {
 		t.Fatal(err)
 	}
 	stream, err := js.CreateOrUpdateStream(t.Context(), jetstream.StreamConfig{
-		Name: trackerLogStream, Subjects: tracker.Domain{}.Stream().Subjects,
+		Name: trackerLogStream, Subjects: worklet.Domain{}.Stream().Subjects,
 		Storage: jetstream.FileStorage,
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ var suiteRing = statelog.OneKey("suite", "backup-suite-material")
 // ring's active key.
 func seal(t *testing.T, ring statelog.Keyring, body []byte) []byte {
 	t.Helper()
-	signer, err := statelog.NewSigner(tracker.Domain{}.Name(), ring)
+	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func appendFrame(t *testing.T, nc *nats.Conn, framed []byte) uint64 {
 func appendBarriers(t *testing.T, nc *nats.Conn, n int) {
 	t.Helper()
 	for range n {
-		payload, err := tracker.EncodeBarrier(statelog.Envelope{Kind: statelog.BarrierKind})
+		payload, err := worklet.EncodeBarrier(statelog.Envelope{Kind: statelog.BarrierKind})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func appendBarriers(t *testing.T, nc *nats.Conn, n int) {
 // log: naming o, or — o nil — removing the file.
 func fileRecord(t *testing.T, project, path string, o *stored) []byte {
 	t.Helper()
-	file := tracker.File{V: tracker.DocumentVersion, Project: project, Path: path,
+	file := worklet.File{V: worklet.DocumentVersion, Project: project, Path: path,
 		CreatedAt: clock, UpdatedAt: clock}
 	if o != nil {
 		file.Hash, file.Size, file.Object = o.object.Hash, o.object.Size, o.object.Key
@@ -119,14 +119,14 @@ func fileRecord(t *testing.T, project, path string, o *stored) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := tracker.MutationRecord{
-		RecordEnvelope: tracker.RecordEnvelope{
-			Subject: tracker.FileSubject(project, path), Op: tracker.OpPatch,
+	payload, err := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			Subject: worklet.FileSubject(project, path), Op: worklet.OpPatch,
 			CreatedAt: clock, Gen: 1, Writer: "n",
-			Scope: tracker.ScopeSet{Subject: true, Container: project},
+			Scope: worklet.ScopeSet{Subject: true, Container: project},
 			OpID:  fmt.Sprintf("op-%s-%d", path, time.Now().UnixNano()),
 		},
-		Kind: tracker.ChangeFileWritten, Actor: "dev", ActorKind: tracker.AuthorAgent,
+		Kind: worklet.ChangeFileWritten, Actor: "dev", ActorKind: worklet.AuthorAgent,
 		Mutation: body,
 	}.Encode()
 	if err != nil {
@@ -168,7 +168,7 @@ func noManifest(t *testing.T, dir string) {
 	}
 }
 
-// A BACKUP CARRIES AN OBJECT NAMED AFTER ITS COPY (ADR-0052). A restore brings
+// A BACKUP CARRIES AN OBJECT NAMED AFTER ITS COPY (ADR-0075). A restore brings
 // the store copy back at its position and replays the tracker's log from there
 // to the last record the snapshot captured — so a file written while the
 // backup ran, uploaded and named after the copy was taken, is a row the
@@ -413,7 +413,7 @@ func deferRecord(t *testing.T, db *store.DB, seq int64, body []byte) {
 // is what the framework retains (statelog's deferred-record table).
 func deferFrame(t *testing.T, db *store.DB, seq int64, body, framed []byte) {
 	t.Helper()
-	env, err := tracker.DecodeEnvelope(body)
+	env, err := worklet.DecodeEnvelope(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +490,7 @@ func TestABackupRefusesALogRecordItCannotRead(t *testing.T) {
 				if err := json.Unmarshal(fileRecord(t, "ENG", "new.md", &held[0]), &doc); err != nil {
 					t.Fatal(err)
 				}
-				doc["v"] = tracker.RecordVersion + 1
+				doc["v"] = worklet.RecordVersion + 1
 				rewrite(doc)
 				newer, err := json.Marshal(doc)
 				if err != nil {
@@ -778,7 +778,7 @@ func restoredTrackerLog(t *testing.T, nc *nats.Conn, original time.Time) jetstre
 		t.Fatalf("delete the tracker's log: %v", err)
 	}
 	stream, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
-		Name: trackerLogStream, Subjects: tracker.Domain{}.Stream().Subjects,
+		Name: trackerLogStream, Subjects: worklet.Domain{}.Stream().Subjects,
 		Storage:  jetstream.FileStorage,
 		Metadata: statelog.StampCreatedAt(nil, original),
 	})

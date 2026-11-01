@@ -317,6 +317,7 @@ func validateDoc(t *testing.T, block, fields string, declared atlassianhost.Depl
 	c, err := config.ParseCompanyDocument([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     fast:
       model: claude-golden

@@ -15,9 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S MERGE, AS ONE RECORD ITS GATE DECIDES (ADR-0066): a change merges
+// A CHANGE'S MERGE, AS ONE RECORD ITS GATE DECIDES (ADR-0089): a change merges
 // into its target by a MERGE RECORD ([Merge]) on the REPOSITORY's own subject,
 // the one its pushes, its changes' lifecycles and its merge queues are on,
 // decided by its committer alone ([Committer.ProposeMerge]) — so a change's
@@ -276,7 +277,7 @@ func (p MergeProposal) validFields() error {
 		return badField("merge.target_ref", "%s", why)
 	}
 	if !m.Method.Valid() {
-		return badField("merge.method", "%q is not one of %v", m.Method, MergeMethods())
+		return badField("merge.method", "%q is not one of %s", m.Method, words.Or(MergeMethods()))
 	}
 	for _, oid := range []struct{ field, value string }{
 		{"merge.base_oid", m.BaseOID}, {"merge.head_oid", m.HeadOID}, {"merge.commit_oid", m.CommitOID},

@@ -73,7 +73,7 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 			box := rig.provider.Box(res.SandboxID)
 
 			// PAUSED FOR AN HOUR — a snapshot runs no timer — and then reused
-			// by the turn's next run_sandbox call, which gives it every
+			// by the job that continues the turn's run, which is given every
 			// repository: its reconnect sets it a timer of its own.
 			if err := box.Pause(t.Context()); err != nil {
 				t.Fatal(err)
@@ -82,7 +82,7 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 			boxes.slow(slowStep)
 			second := withRepos(t, launchReq("t1"), repos...)
 			second.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
-			second.ReuseBox = res.SandboxID
+			resumeInItsBox(t, rig)
 			began := time.Now()
 			if _, err := rig.launchVia(t.Context(), manager, second); err != nil {
 				t.Fatalf("a reused box's clones outlasting its timer: %v", err)

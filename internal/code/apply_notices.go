@@ -15,7 +15,7 @@ import (
 // every record about a change carries ([ChangeRouting], concerns.go) down as
 // ONE ROW PER (record, recipient) it reached — every handle its routing's
 // precedence keeps ([Concerns]) but the record's own actor — in
-// code_notifications (replicated 0081), as the tracker writes
+// code_notifications (replicated 0104), as the tracker writes
 // tracker_notifications from its records. A person's code inbox is read from
 // these rows, a change's "whom did this wake" is answered from them, and each
 // committed batch announces whose inbox its rows moved ([inbox.Movement],
@@ -104,7 +104,7 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 		if n, _ := res.RowsAffected(); n > 0 {
 			written++
 			a.inboxed.Note(inbox.Note{Record: record, Handle: c.Handle, Subject: c.Change.ChangeID,
-				Reason: string(c.Reason), Position: at.packed})
+				Reason: string(c.Reason), Position: at.packed, At: at.brokerAt})
 		}
 	}
 	return written, nil
@@ -151,9 +151,10 @@ func excerptOf(payload any) string {
 }
 
 // removeNotices deletes the notices of changeIDs — changes a purge removes —
-// noting each for the batch's movements, and answers how many it deleted,
-// WHICH NO PURGE COUNTS against its bound (this file's head).
-func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, changeIDs []string) (int, error) {
+// noting each for the batch's movements, timed at the purge's own broker
+// instant ([inbox.Movement.At]: the record that deleted it), and answers how
+// many it deleted, WHICH NO PURGE COUNTS against its bound (this file's head).
+func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeIDs []string) (int, error) {
 	if len(changeIDs) == 0 {
 		return 0, nil
 	}
@@ -171,7 +172,7 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, changeIDs []str
 			_ = rows.Close()
 			return 0, fmt.Errorf("code: read the notices of the changes a purge removes: %w", err)
 		}
-		n.Removed = true
+		n.Removed, n.At = true, at.brokerAt
 		a.inboxed.Note(n)
 	}
 	if err := rows.Err(); err != nil {

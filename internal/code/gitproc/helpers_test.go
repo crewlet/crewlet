@@ -82,7 +82,7 @@ func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
 // environment keeps from git — is a claim about every git a git node may
 // run, and measured on the pin alone it was a claim about one of them: the
 // floor's own expectations were wrong in three arms of the format table, and
-// nothing ran them (ADR-0057, "each floor is a measured claim"). Under every
+// nothing ran them (ADR-0080, "each floor is a measured claim"). Under every
 // make target the floor's build is required (CREWLET_REQUIRE_GIT_FLOOR=1);
 // a bare `go test` without it skips the floor's arm alone.
 func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {

@@ -1,24 +1,28 @@
 package operator
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
-	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/modelnote"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
@@ -51,17 +55,17 @@ const ActPathPrefix = "/operator/act/"
 // sixty-four kibibytes for everything else a request carries.
 //
 // DERIVED FROM THE LARGEST THING ANY ACT CARRIES, which is a page body on
-// `write_page` or `save_page`. A page is capped at [pages.MaxBody] as TEXT,
+// `write_page` or `save_page`. A page is capped at [doclet.MaxBody] as TEXT,
 // and the request carries it as a JSON STRING, where every quote, backslash
 // and newline is two bytes — so a legal page of nothing but those encodes to
 // twice its length, and a cap at the page's own size refused the page the
 // knowledge base would have accepted. The browser's JSON.stringify escapes
 // nothing else to more than two bytes but the other C0 controls, which are
 // six, and a document is not made of them. The sixty-four kibibytes cover the
-// envelope, a title at [pages.MaxTitle], labels, a message and a parent, with
+// envelope, a title at [doclet.MaxTitle], labels, a message and a parent, with
 // room to spare: every other tool's arguments are bounded far below it (a work
 // item's description is 64 KiB of text).
-const MaxActBody = 2*pages.MaxBody + 64<<10
+const MaxActBody = 2*doclet.MaxBody + 64<<10
 
 // ActTransportCodes is every `error` the act transport can answer with that
 // is NOT a tool's refusal class: its own three, the operation key's, the
@@ -82,9 +86,10 @@ const MaxActBody = 2*pages.MaxBody + 64<<10
 var ActTransportCodes = []httpjson.Code{
 	// The request guard's: nobody, an identity this node could not read, a
 	// seat the chart no longer holds, a session that may only enrol a
-	// second factor.
+	// second factor, and a request made for a reader the credential is not.
 	httpjson.CodeInvalidToken, httpjson.CodeIdentityUnavailable,
 	httpjson.CodeSeatUnavailable, httpjson.CodeSecondFactorEnrolmentRequired,
+	httpjson.CodeReaderChanged,
 	// The cross-site write gate's.
 	httpjson.CodeCSRFOrigin,
 	// The authority table's, through the one refusal mapping.
@@ -111,13 +116,26 @@ var ActTransportCodes = []httpjson.Code{
 // change) answers `applied` at no position: the state asked for already
 // holds, and there is nothing to wait for. OpID is the operation the request
 // was made under — the key a retry sends back. Receipt is the tool's own
-// answer, verbatim.
+// answer, verbatim but for its `warnings`, and Caveats is what those warnings
+// say, in a person's words.
+//
+// # Caveats, never the receipt's warnings (ADR-0060)
+//
+// The tools are shared: a seat's model calls them too, and a tool's answer
+// carries its caveats under `warnings` in the MODEL'S words, naming the tool
+// and the argument it would call next ("Use ask: ana"). This route answers a
+// person, so it answers each caveat's PERSON phrasing ([caveat.Caveat.Person])
+// with the action it asks of them, and takes the model's list off the receipt
+// ([builtin.WarningsKey]): a screen reading the receipt can then never show a
+// person advice written for a model, however it is written. Caveats is always
+// a list, empty when the write has nothing to add.
 type ActAnswer struct {
 	Tool     string           `json:"tool"`
 	Outcome  statelog.Outcome `json:"outcome"`
 	Position *string          `json:"position"`
 	OpID     string           `json:"op_id"`
 	Receipt  json.RawMessage  `json:"receipt"`
+	Caveats  []caveat.Shown   `json:"caveats"`
 }
 
 // actRequest is the body: the tool's arguments, and nothing else.
@@ -126,8 +144,11 @@ type ActAnswer struct {
 // `Idempotency-Key`, which every surface that takes one reads it from — so a
 // retry is one script whichever route it wrote to, and the key is held to one
 // grammar and scoped by one rule.
+//
+// THE ARGUMENTS ARE HELD RAW and read by the one decode every transport into
+// a tool shares ([toolargs.Decode]), never by this envelope's decoder.
 type actRequest struct {
-	Args map[string]any `json:"args"`
+	Args json.RawMessage `json:"args"`
 }
 
 // Acts names the tools the act transport would serve this principal: the
@@ -187,37 +208,30 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.Caller(w, r); !ok {
 		return
 	}
+	// THE ROUTE'S OWN REFUSALS NAME THE TOOL AND SAY NOTHING ELSE: each is
+	// a request the client built wrong or a node not ready, which its code
+	// says whole, and a person reads that code's sentence (ADR-0060). What a
+	// developer needs beyond it is logged.
 	name := r.PathValue("tool")
+	about := httpjson.Detail{"tool": name}
 	cat, up := s.catalogueFor()
 	if !up {
-		httpjson.NoActiveRevision(w, httpjson.Detail{
-			"tool": name, "detail": httpjson.NativeHalvesNotUp})
+		httpjson.NoActiveRevision(w, about)
 		return
 	}
 	if _, served := cat.lookup(name); !served {
-		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeUnknownTool,
-			httpjson.Detail{"tool": name, "detail": fmt.Sprintf(
-				"this company's operator catalogue serves no tool %q", name)})
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeUnknownTool, about)
 		return
 	}
 	if readOnly(name) {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeReadOnlyTool,
-			httpjson.Detail{"tool": name, "detail": fmt.Sprintf("%s is a read, and "+
-				"this transport only writes — ask the question over the live "+
-				"socket or its REST route", name)})
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeReadOnlyTool, about)
 		return
 	}
-	// JSON AND NOTHING ELSE, which is what shuts the door a browser leaves
-	// open: a cross-site HTML form can post `text/plain`,
-	// `application/x-www-form-urlencoded` or `multipart/form-data` without a
-	// preflight, and a body that happens to parse as JSON would otherwise
-	// reach a write. `application/json` from another origin needs a
-	// preflight, which the CORS allow-list answers — and the cross-site
-	// write gate in front of every guarded route refuses its Origin anyway.
-	if !declaresJSON(r.Header.Get("Content-Type")) {
+	// JSON AND NOTHING ELSE, which shuts the door a cross-site form leaves
+	// open ([httpjson.DeclaresJSON]).
+	if !httpjson.DeclaresJSON(r.Header.Get("Content-Type")) {
 		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
-			httpjson.CodeUnsupportedMediaType, httpjson.Detail{"tool": name,
-				"detail": "the body must be declared Content-Type: application/json"})
+			httpjson.CodeUnsupportedMediaType, about)
 		return
 	}
 	raw, err := httpjson.ReadBody(w, r, MaxActBody)
@@ -225,10 +239,11 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	req, err := decodeAct(raw)
+	args, err := decodeAct(raw)
 	if err != nil {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"tool": name, "detail": err.Error()})
+		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
+			"error", err.Error())
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody, about)
 		return
 	}
 	// THE OPERATION IS REQUIRED: the dashboard mints one per gesture and
@@ -240,20 +255,29 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	args := req.Args
-	if args == nil {
-		args = map[string]any{}
-	}
 	if !NoOperationArg(args) {
-		RefuseOperationArg(w, name)
+		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
+			"error", "the arguments name "+OperationArg)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"tool": name, "field": OperationArg})
 		return
 	}
 	logged := []any{"tool", name, "op_id", key}
+	transport, refusal := actTransport(r.Context(), name)
+	if refusal != "" {
+		AuditRefusal(r.Context(), s.audit, transport, name, key, false)
+		log.WarnContext(r.Context(), "operator_act_assist_refused", append(logged,
+			"detail", refusal)...)
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonAssistRefused})
+		httpjson.FailWithFields(w, status, code, fields)
+		return
+	}
 	// THROUGH THE DISPATCH, which publishes the call's runtime audit
 	// record whatever becomes of it — an interrupted call included, since
 	// that is the one whose write nobody can vouch for.
 	result, err := s.run(r.Context(), cat, Call{
-		Transport: types.TransportAct, Key: key, Tool: name, Args: args,
+		Transport: transport, Key: key, Tool: name, Args: args,
 	})
 	if err != nil {
 		Interrupted(w, r, key, name, err)
@@ -261,15 +285,44 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.Failed {
 		log.InfoContext(r.Context(), "operator_act", append(logged,
-			"refused", true)...)
-		Fail(w, result.Cause, result.Output, key, About(name, args))
+			"refused", true, "refusal", string(classOf(result.Cause)))...)
+		FailTool(w, r, result, key, About(name, args))
 		return
 	}
-	answer := receiptOf(name, result.Output)
+	answer := receiptOf(name, result)
 	answer.OpID = key
+	TellNote(r, result)
 	log.InfoContext(r.Context(), "operator_act",
 		append(logged, "outcome", string(answer.Outcome))...)
 	httpjson.Write(w, http.StatusOK, answer)
+}
+
+// actTransport is the transport an act call arrives on, and why an assistant
+// call may not be made, or "".
+//
+// AN ASSISTANT CALL IS ONE APPROVED WRITE (ADR-0051). The request guard
+// already admits an assistant grant here only as an exec grant carrying the
+// one request its approval bound, once; this is the second lock, on the one
+// surface every server write goes through: the grant must name the proposal
+// the person approved and the tool it was approved for, so a human-only verb
+// (pausing a seat, steering a turn, answering a run) is never carried by a
+// grant that was not derived from that verb's own approval. A refusal is
+// audited under the assistant transport.
+func actTransport(ctx context.Context, tool string) (string, string) {
+	claims, assisted := auth.AssistOf(ctx)
+	if !assisted {
+		return types.TransportAct, ""
+	}
+	switch {
+	case claims.Scope != iam.AssistScopeExec:
+		return types.TransportAssistant, "an assistant read grant never writes"
+	case claims.Proposal == uuid.Nil:
+		return types.TransportAssistant, "the grant names no approved proposal"
+	case string(claims.Action) != tool:
+		return types.TransportAssistant, fmt.Sprintf("the grant was approved for %q, "+
+			"not %q", claims.Action, tool)
+	}
+	return types.TransportAssistant, ""
 }
 
 // RefuseOperationArg answers a call that names its operation in the header and
@@ -284,42 +337,39 @@ func RefuseOperationArg(w http.ResponseWriter, tool string) {
 			"returned as the header"})
 }
 
-// declaresJSON reports whether a Content-Type is JSON in UTF-8, which is the
-// only charset JSON has.
-func declaresJSON(header string) bool {
-	media, params, err := mime.ParseMediaType(header)
-	if err != nil || media != "application/json" {
-		return false
-	}
-	charset, named := params["charset"]
-	return !named || strings.EqualFold(charset, "utf-8")
-}
-
 // decodeAct reads the body as exactly one JSON object naming only the field the
-// transport takes.
+// transport takes, and answers the tool's arguments it carries — never nil.
 //
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a client
 // naming its operation in the body (`op_id`) rather than in the
 // Idempotency-Key header would otherwise send every write believing it named
 // an operation it did not, and its retry would be a second write.
-func decodeAct(raw []byte) (actRequest, error) {
+//
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number ([toolargs.Decode]), as
+// they do on every other path into these tools. Decoded by this envelope's
+// own decoder they were float64s, so an integer past 2^53 — a vendor's
+// 19-digit id, a whole-number custom-field value — was rounded before any tool
+// saw it, and a person's press recorded a value they never sent.
+func decodeAct(raw []byte) (map[string]any, error) {
 	var req actRequest
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
-			"{\"args\": {…}}, with the operation in the %s header: %w",
-			opkey.Header, err)
+	switch err := httpjson.DecodeStrict(raw, &req); {
+	case errors.Is(err, httpjson.ErrTrailingData):
+		return nil, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
+	case err != nil:
+		return nil, fmt.Errorf("%s. Send one JSON object, {\"args\": {…}}, "+
+			"with the operation in the %s header",
+			plainjson.Unreadable("the body", err), opkey.Header)
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return actRequest{}, errors.New("the body carries something after its " +
-			"JSON object; send exactly one")
+	args, err := toolargs.Decode(req.Args)
+	if err != nil {
+		return nil, errors.New(plainjson.Unreadable(`"args" in the body`, err))
 	}
-	return req, nil
+	return args, nil
 }
 
-// receiptOf is a successful call's answer: the tool's own, verbatim, with the
-// outcome and position every write tool's answer states lifted beside it.
+// receiptOf is a successful call's answer: the tool's own, with the outcome and
+// position every write tool's answer states lifted beside it, and its caveats
+// in a person's words in place of the model's ([ActAnswer]).
 //
 // READ FROM THE TOOL'S ANSWER rather than a second channel, because those two
 // keys are already the tools' wire contract for read-your-writes — the same
@@ -327,20 +377,22 @@ func decodeAct(raw []byte) (actRequest, error) {
 // build does not know is reported `unknown`, never `applied`: it is the one
 // answer that cannot tell a caller to stop looking at a write it cannot vouch
 // for.
-func receiptOf(name, output string) ActAnswer {
-	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied}
-	if !json.Valid([]byte(output)) {
-		// Every first-party write answers JSON; a sentence is carried as a
-		// string rather than dropped.
-		answer.Receipt, _ = json.Marshal(output)
+func receiptOf(name string, result tools.Result) ActAnswer {
+	receipt, caveats, readable := PersonsReceipt(name, result)
+	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied,
+		Caveats: caveats, Receipt: json.RawMessage("null")}
+	if !readable {
+		// THE WRITE LANDED, and its tool answered something that is not a
+		// receipt: the outcome stands, and the tool's words, written for
+		// a model, are in this node's log and not in the answer.
 		return answer
 	}
-	answer.Receipt = json.RawMessage(output)
+	answer.Receipt = receipt
 	var stated struct {
 		Outcome  *string `json:"outcome"`
 		Position *string `json:"position"`
 	}
-	if err := json.Unmarshal([]byte(output), &stated); err != nil {
+	if err := json.Unmarshal(receipt, &stated); err != nil {
 		return answer
 	}
 	if stated.Outcome != nil && *stated.Outcome != "" {
@@ -353,4 +405,73 @@ func receiptOf(name, output string) ActAnswer {
 		answer.Position = stated.Position
 	}
 	return answer
+}
+
+// PersonsReceipt is a tool call that landed, as every surface answering a
+// PERSON answers it (ADR-0060): the tool's receipt with every key that holds
+// its model's words taken off ([builtin.ModelOnlyKeys]: its caveats under
+// `warnings`, a partial outcome's sentence under its own key, and the
+// `provenance` envelope a fenced answer carries for its model), the rest
+// as the tool wrote it, and its caveats in a person's words, always a list. The act route and the
+// human write surface both answer through it, so neither can come to hand a
+// person what the other strips.
+//
+// A RECEIPT THAT IS NOT A JSON OBJECT is not readable: every first-party
+// write answers one, so this is a tool that changed shape, and what it said
+// instead is written for a model. It is logged here, under the tool's name,
+// and never answered; the caller says what the write came to without it.
+//
+// THE WORDS OTHER PRINCIPALS WROTE, AS THEY WERE STORED: where the tool wrote
+// its answer for a person apart ([tools.Result.PersonReceipt]), that is the
+// receipt answered, never Output, whose fences, escapes and envelope are a
+// model's framing of those words (ADR-0040). Read off Output, a room's topic
+// reached a person between a fence's two lines.
+func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
+	caveats := caveat.ForPeople(result.Caveats)
+	receipt, readable := builtin.ForPerson(result)
+	if !readable {
+		log.Warn("operator_receipt_unreadable", "tool", tool, "output", result.Output)
+		return nil, caveats, false
+	}
+	return receipt, caveats, true
+}
+
+// FailTool answers a refused tool call to a person, as every surface answering
+// one does (ADR-0060): in the person's words the refusal carries, or its
+// code's own sentence ([Fail]), and never the tool's sentence, which is
+// written for a model. That sentence is told in process to the one reader
+// that can act on it, an assistant's model executing what its person approved
+// (internal/modelnote), and to nobody else.
+func FailTool(w http.ResponseWriter, r *http.Request, result tools.Result, key string,
+	about httpjson.Detail) {
+
+	Fail(w, result.Cause, result.PersonRefusal, key, about)
+	modelnote.Tell(r.Context(), result.Output)
+}
+
+// FailToolIfMatched is [FailTool] for a call whose version the request stated
+// in its If-Match HEADER, which the route folded into the tool's version: a
+// stale version is HTTP's failed precondition ([FailIfMatched]), every other
+// refusal is FailTool's answer, and the tool's sentence is told to the model
+// that made the call as FailTool tells it. ONE FUNCTION for both halves, so a
+// route that folds the header cannot answer its status and forget the model:
+// the header moves the status of a stale version, and nothing about who hears
+// which words.
+func FailToolIfMatched(w http.ResponseWriter, r *http.Request, result tools.Result,
+	key string, about httpjson.Detail) {
+
+	FailIfMatched(w, result.Cause, result.PersonRefusal, key, about)
+	modelnote.Tell(r.Context(), result.Output)
+}
+
+// TellNote tells the note on a successful call's arguments ([tools.Result.Note])
+// to the one reader it is worded for, the model that wrote the call, in
+// process (internal/modelnote), as [FailTool] tells a refusal's sentence. A
+// person's answer never carries it (ADR-0059, ADR-0060): the act route and the
+// human write surface answer the receipt through [PersonsReceipt], which reads
+// only the tool's answer, and call this beside it.
+func TellNote(r *http.Request, result tools.Result) {
+	if result.Note != "" {
+		modelnote.Tell(r.Context(), result.Note)
+	}
 }

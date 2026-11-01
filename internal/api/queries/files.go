@@ -4,14 +4,14 @@ import (
 	"context"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // FileReader is the read side of a project's files this surface calls: the
 // listing, and nothing else — one file and its object are read by the byte
 // route, which is the only thing that opens them.
 type FileReader interface {
-	Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error)
+	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
 }
 
 // workFiles answers a page of one project's files.
@@ -24,7 +24,7 @@ func (s Sources) workFiles(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	listing, err := s.Files.Files(ctx, tracker.FileQuery{
+	listing, err := s.Files.Files(ctx, worklet.FileQuery{
 		Project: project, Folder: p.String("folder"), After: p.String("after"),
 		Limit: p.Int("limit", 0), Removed: p.Bool("removed", false), Freshness: fresh,
 	})
@@ -32,7 +32,7 @@ func (s Sources) workFiles(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out := map[string]any{
-		"project": tracker.ProjectKey(project), "files": listing.Files,
+		"project": worklet.ProjectKey(project), "files": listing.Files,
 		"read_level": listing.Level, "log_seq": listing.LogSeq,
 		"applied_through": listing.AppliedThrough, "complete": listing.Complete,
 	}

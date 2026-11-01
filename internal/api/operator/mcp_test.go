@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -19,57 +20,141 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
 // refusal names the field. A surface with nothing to read its catalogue from,
-// one wired with no authority decision, and one that would write to the
-// company and record nothing about who called it are each a wiring mistake
-// that would otherwise look exactly like a surface that worked.
+// one wired with no authority decision, one that would write to the company
+// and record nothing about who called it, and one without a seat control — or
+// without any seam a control is required with, its announcer, its chart, its
+// signed wire, its run records — are each a wiring mistake that would
+// otherwise look exactly like a surface that worked: the last two a company
+// told it cannot pause a seat that every node could pause, or offered a
+// control that refuses every call as unavailable.
+//
+// AND EVERY SEAM OF A CONTROL'S DEPENDENCIES HAS ITS ROW, read off builtin's
+// types themselves, but the actor the surface sets per call and a pause's
+// clock, whose nil is the wall clock. New's refusals are a list written beside
+// builtin's, and it missed the run records a note to a turn's coding run is
+// filed on: steer_turn was listed, and refused every call, on a surface New
+// built without them.
+//
+// Mutation: drop any one of New's refusals and its row is built; drop a seam's
+// row and the walk over the types names it.
 func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 	t.Parallel()
 	halves := fixed(operator.Halves{})
 	decide := builtin.Decide(authz.NoChart{})
 	audit := &auditLog{}
-	for name, tc := range map[string]struct {
-		opts operator.Options
-		want error
+	whole := operator.Options{Halves: halves, Authorize: decide, Audit: audit,
+		Runs: builtin.RunDeps{Desk: nowhere{}},
+		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}, Announce: nowhere{},
+			Org: nowhereChart},
+		Steer: builtin.SteerDeps{Asker: nowhere{}, Wire: nowhereWire, Runs: nowhere{}}}
+	without := func(drop func(*operator.Options)) operator.Options {
+		opts := whole
+		drop(&opts)
+		return opts
+	}
+	rows := map[string]struct {
+		opts  operator.Options
+		want  error
+		names string
 	}{
-		"no halves":   {operator.Options{Authorize: decide, Audit: audit}, operator.ErrNoHalves},
-		"no decision": {operator.Options{Halves: halves, Audit: audit}, operator.ErrNoAuthorize},
-		"no audit":    {operator.Options{Halves: halves, Authorize: decide}, operator.ErrNoAudit},
-	} {
+		"no halves": {without(func(o *operator.Options) { o.Halves = nil }),
+			operator.ErrNoHalves, "Options.Halves"},
+		"no decision": {without(func(o *operator.Options) { o.Authorize = nil }),
+			operator.ErrNoAuthorize, "Options.Authorize"},
+		"no audit": {without(func(o *operator.Options) { o.Audit = nil }),
+			operator.ErrNoAudit, "Options.Audit"},
+		"no run desk": {without(func(o *operator.Options) { o.Runs.Desk = nil }),
+			operator.ErrNoSeatControls, "Options.Runs.Desk"},
+		"no pause record": {without(func(o *operator.Options) { o.Pauses.Pauses = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Pauses"},
+		"no pause announcer": {without(func(o *operator.Options) { o.Pauses.Announce = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Announce"},
+		"no pause chart": {without(func(o *operator.Options) { o.Pauses.Org = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Org"},
+		"no fleet asker": {without(func(o *operator.Options) { o.Steer.Asker = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Asker"},
+		"no steer wire": {without(func(o *operator.Options) { o.Steer.Wire = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Wire"},
+		"no run records": {without(func(o *operator.Options) { o.Steer.Runs = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Runs"},
+	}
+	held := make(map[string]bool, len(rows))
+	for name, tc := range rows {
+		held[tc.names] = true
 		s, err := operator.New(tc.opts)
 		if !errors.Is(err, tc.want) || s != nil {
 			t.Errorf("%s: answered (%v, %v), want %v", name, s, err, tc.want)
+			continue
 		}
+		if !strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s: refused %q, which does not name %s", name, err, tc.names)
+		}
+	}
+	perCall := map[string]bool{"Runs.Actor": true, "Pauses.Actor": true,
+		"Pauses.Now": true, "Steer.Actor": true}
+	for control, deps := range map[string]any{"Runs": whole.Runs,
+		"Pauses": whole.Pauses, "Steer": whole.Steer} {
+
+		fields := reflect.TypeOf(deps)
+		for i := range fields.NumField() {
+			seam := control + "." + fields.Field(i).Name
+			if !perCall[seam] && !held["Options."+seam] {
+				t.Errorf("Options.%s is a seam of a seat control no row holds New to", seam)
+			}
+		}
+	}
+	// THE CONTROL: with every requirement met the surface is built, so each
+	// refusal above is its own field's doing.
+	if s, err := operator.New(whole); err != nil || s == nil {
+		t.Fatalf("a surface with every requirement was refused: %v", err)
 	}
 }
 
-// A COMPANY THAT KEEPS NEITHER HALF HERE IS ANSWERED AS THE ROUTE'S ABSENCE.
-// An endpoint that exists and lists no tools reads to an operator as broken;
-// one that is not there matches what their config says.
-func TestAnEmptyCatalogueAnswersAsTheRoutesAbsence(t *testing.T) {
+// A COMPANY THAT KEEPS NEITHER HALF HERE IS STILL SERVED ITS SEAT CONTROLS.
+//
+// Answering a parked run, pausing and resuming a seat and steering a running
+// turn read and write the fleet's own records, which every node reaches
+// whatever its company runs: a company on Jira and Confluence pauses a seat
+// here exactly as a native one does. So once the company is up the catalogue
+// is never empty — the surface used to answer an empty one as the route's
+// absence, a branch no engine could reach once these were wired — and an
+// assistant connected to such a company is offered exactly these.
+func TestACompanyWithNoNativeHalfIsStillServedItsSeatControls(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{})})
-	if got := s.Tools(); len(got) != 0 {
-		t.Fatalf("a company with no native backend is served %v", got)
+	want := []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool}
+	slices.Sort(want)
+	got := s.Tools()
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("a company with no native half is served %v, want the seat controls %v",
+			got, want)
 	}
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, operator.MCPPath, strings.NewReader(`{}`))
-	r = r.WithContext(iam.WithPrincipal(r.Context(), machine("token:ops", iam.GrantTracker)))
-	s.MCPHandler().ServeHTTP(rec, r)
-	if code := errorCode(t, rec); rec.Code != http.StatusNotFound ||
-		code != string(httpjson.CodeNoRoute) {
-
-		t.Errorf("an empty catalogue answered %d %q, want the mux's own 404 no_route",
-			rec.Code, code)
+	sess := dialOperator(t, s, machine("token:ops", iam.GrantWorklet))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, want) {
+		t.Errorf("over MCP the surface lists %v, want %v", names, want)
 	}
 }
 
@@ -96,20 +181,20 @@ func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
 			}}, true
 		},
 	})
-	founder := machine("token:founder", iam.GrantTracker)
+	founder := machine("token:founder", iam.GrantWorklet)
 	serve := func(h http.Handler, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Accept", "application/json, text/event-stream")
 		r.Header.Set("Idempotency-Key", statelog.NewOpID(time.Now(), ""))
-		r.SetPathValue("tool", tracker.CreateWorkItemTool)
+		r.SetPathValue("tool", worklet.CreateWorkItemTool)
 		r = r.WithContext(iam.WithPrincipal(r.Context(), founder))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
 		return rec
 	}
-	act := operator.ActPathPrefix + tracker.CreateWorkItemTool
+	act := operator.ActPathPrefix + worklet.CreateWorkItemTool
 	create := `{"args":{"title":"x","project":"ENG"}}`
 
 	if got := s.Tools(); got != nil {
@@ -132,7 +217,7 @@ func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
 	}
 
 	up.Store(true)
-	if !slices.Contains(s.Tools(), tracker.CreateWorkItemTool) {
+	if !slices.Contains(s.Tools(), worklet.CreateWorkItemTool) {
 		t.Fatalf("the company arrived and the surface still lists %v", s.Tools())
 	}
 	if rec := serve(s.ActHandler(), act, create); rec.Code != http.StatusOK {
@@ -141,7 +226,7 @@ func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
 }
 
 // THE TRACKER AND THE KNOWLEDGE BASE ARE SEPARATE HALVES. A company can run
-// the native tracker on Confluence, or the native wiki on Jira, and a surface
+// Worklet on Confluence, or Doclet on Jira, and a surface
 // that offered both halves whenever it had one would hand an assistant tools
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
@@ -153,12 +238,12 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 		},
 	})})
 	names := only.Tools()
-	if !slices.Contains(names, tracker.CreateWorkItemTool) {
+	if !slices.Contains(names, worklet.CreateWorkItemTool) {
 		t.Errorf("the tracker half serves %v, without create_work_item", names)
 	}
 	for _, name := range names {
 		if strings.Contains(name, "page") {
-			t.Errorf("a company with no native knowledge base was offered %q", name)
+			t.Errorf("a company with no Doclet was offered %q", name)
 		}
 	}
 }
@@ -175,7 +260,7 @@ func TestAnOperatorWriteIsAttributedToItsPrincipal(t *testing.T) {
 	for name, tc := range map[string]struct {
 		principal iam.Principal
 		author    string
-		kind      tracker.AuthorKind
+		kind      worklet.AuthorKind
 		operator  string
 	}{
 		// A TIER A TOKEN, composed as the guard composes one: its whole
@@ -187,14 +272,14 @@ func TestAnOperatorWriteIsAttributedToItsPrincipal(t *testing.T) {
 				Login: iam.TokenLogin("ops-bot"), Kind: iam.KindMachine,
 				Stage: iam.StageActive,
 			},
-			author: "token:ops-bot", kind: tracker.AuthorOperator, operator: "token:ops-bot",
+			author: "token:ops-bot", kind: worklet.AuthorOperator, operator: "token:ops-bot",
 		},
 		// A PERSON THE DIRECTORY BINDS TO A SEAT writes as that seat, with
 		// kind human — what lets the tracker leave them out of the wake
 		// their own change sends — and the credential beside it.
 		"a bound person": {
-			principal: person("jane.founder", "jane-founder", iam.GrantTracker),
-			author:    "jane-founder", kind: tracker.AuthorHuman, operator: "jane.founder",
+			principal: person("jane.founder", "jane-founder", iam.GrantWorklet),
+			author:    "jane-founder", kind: worklet.AuthorHuman, operator: "jane.founder",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -262,7 +347,7 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{
 		operator.MCPPath, operator.MCPPath + "/", operator.MCPPath + "/tools",
-		operator.ActPathPrefix + tracker.CreateWorkItemTool,
+		operator.ActPathPrefix + worklet.CreateWorkItemTool,
 	} {
 		if auth.Unguarded(path) {
 			t.Errorf("%s is exempt from the guard, so a surface that files "+
@@ -293,7 +378,7 @@ func TestARequestTheGuardDidNotAdmitIsRefusedAsJSON(t *testing.T) {
 		path    string
 	}{
 		"mcp": {s.MCPHandler(), operator.MCPPath},
-		"act": {s.ActHandler(), operator.ActPathPrefix + tracker.CreateWorkItemTool},
+		"act": {s.ActHandler(), operator.ActPathPrefix + worklet.CreateWorkItemTool},
 	} {
 		for name, tc := range map[string]struct {
 			ctx    func(context.Context) context.Context
@@ -305,7 +390,7 @@ func TestARequestTheGuardDidNotAdmitIsRefusedAsJSON(t *testing.T) {
 		} {
 			r := httptest.NewRequest(http.MethodPost, h.path, strings.NewReader(`{}`))
 			r.Header.Set("Content-Type", "application/json")
-			r.SetPathValue("tool", tracker.CreateWorkItemTool)
+			r.SetPathValue("tool", worklet.CreateWorkItemTool)
 			r = r.WithContext(tc.ctx(r.Context()))
 			rec := httptest.NewRecorder()
 			h.handler.ServeHTTP(rec, r)
@@ -333,8 +418,8 @@ func TestTheLargestPageFitsOneMCPRequest(t *testing.T) {
 	t.Parallel()
 	if operator.MaxActBody > operator.MCPMaxBody {
 		t.Errorf("an MCP request holds %d bytes and the largest page call takes %d "+
-			"(twice pages.MaxBody, %d, escaped, and the rest of the call)",
-			operator.MCPMaxBody, operator.MaxActBody, pages.MaxBody)
+			"(twice doclet.MaxBody, %d, escaped, and the rest of the call)",
+			operator.MCPMaxBody, operator.MaxActBody, doclet.MaxBody)
 	}
 }
 
@@ -359,7 +444,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	// AND THE TURN-ONLY TOOLS ARE ABSENT. A diary belongs to a seat, a
 	// skill is loaded into a phase, and a colleague ask is answered by
 	// waking a seat — there is nobody here for any of the three.
-	for _, name := range []string{"reflect_and_persist", "use_skill", "a2a_ask", "run_sandbox"} {
+	for _, name := range []string{"reflect_and_persist", "use_skill", "a2a_ask"} {
 		if slices.Contains(s.Tools(), name) {
 			t.Errorf("the operator surface offers %q, which only means something inside a turn", name)
 		}
@@ -390,19 +475,19 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 
 	// AND THE TWO ENDS OF THE RANGE ARE WHAT THEY CLAIM, or the check
 	// above would pass on a surface that annotated everything the same.
-	if got := s.Annotations(tracker.ListWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
+	if got := s.Annotations(worklet.ListWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
 		t.Errorf("the board read advertises %+v, which is not a proven read", got)
 	}
 	// AND A VERB THIS COMPANY IS NOT SERVED ADVERTISES NOTHING: answering
 	// the hints for any name at all reported a verb that is not listed as
 	// annotated, so a check for what is advertised passed on what is not.
-	if slices.Contains(s.Tools(), tracker.SearchWorkItemsTool) {
+	if slices.Contains(s.Tools(), worklet.SearchWorkItemsTool) {
 		t.Fatalf("the ranked search is served with no search backend wired")
 	}
-	if got := s.Annotations(tracker.SearchWorkItemsTool); got != (tools.Annotations{}) {
+	if got := s.Annotations(worklet.SearchWorkItemsTool); got != (tools.Annotations{}) {
 		t.Errorf("a verb this surface does not serve is reported with hints %+v", got)
 	}
-	if got := s.Annotations(tracker.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
+	if got := s.Annotations(worklet.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
 		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+
 			"board and moves its subtasks, which is what the flag asks", got)
 	}
@@ -425,37 +510,37 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 // reaches a store — so the stubs answer the shapes and nothing else.
 type stubWorkReader struct{}
 
-func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{}, nil
+func (stubWorkReader) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{}, nil
 }
 
-func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
+func (stubWorkReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
 
-	return tracker.TaskDetail{}, tracker.ErrNoTask
+	return worklet.TaskDetail{}, worklet.ErrNoTask
 }
 
-func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (stubWorkReader) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
 func (stubWorkReader) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	_ worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	return worklet.ParseQuery(worklet.MapParams(params), now, loc)
 }
 
-func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (stubWorkReader) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (stubWorkReader) Person(context.Context, worklet.PersonQuery, time.Time) (worklet.PersonState, error) {
+	return worklet.PersonState{}, nil
 }
 
-func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
-	statelog.Freshness) (tracker.ResolvedThread, error) {
-	return tracker.ResolvedThread{}, nil
+func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,
+	statelog.Freshness) (worklet.ResolvedThread, error) {
+	return worklet.ResolvedThread{}, nil
 }
 
 type stubWorkWriterT struct{}
@@ -467,71 +552,71 @@ func stubWorkWriter(builtin.Actor) builtin.WorkWriter { return stubWorkWriterT{}
 func stubWorkMerger(builtin.Actor) builtin.WorkMerger { return stubWorkWriterT{} }
 
 func (stubWorkWriterT) MergeDuplicates(context.Context, string, string, string,
-	bool, *tracker.Notify) (tracker.WriteResult, error) {
+	bool, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
-func (stubWorkWriterT) CreateTaskAsking(context.Context, string, tracker.Task,
-	tracker.Comment, *tracker.Notify) (tracker.WriteResult, error) {
+func (stubWorkWriterT) CreateTaskAsking(context.Context, string, worklet.Task,
+	worklet.Comment, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 // stubWorkMover is its third shape, for the cross-project move.
 func stubWorkMover(builtin.Actor) builtin.WorkMover { return stubWorkWriterT{} }
 
 func (stubWorkWriterT) MoveTaskToProject(context.Context, string, string, string,
-	*tracker.Notify) (tracker.WriteResult, error) {
+	*worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
-func (stubWorkWriterT) CreateTask(context.Context, string, tracker.Task,
-	*tracker.Notify) (tracker.WriteResult, error) {
+func (stubWorkWriterT) CreateTask(context.Context, string, worklet.Task,
+	*worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 func (stubWorkWriterT) UpdateTask(context.Context, string, string, string, uint64,
-	tracker.TaskPatch, tracker.ChangeKind, *tracker.Notify) (tracker.WriteResult, error) {
+	worklet.TaskPatch, worklet.ChangeKind, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 type stubPageReader struct{}
 
-func (stubPageReader) List(context.Context, pages.Filter,
-	statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (stubPageReader) List(context.Context, doclet.Filter,
+	statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
 func (stubPageReader) Get(context.Context, string,
-	statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{}, pages.ErrNotFound
+	statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{}, doclet.ErrNotFound
 }
 
 // stubPageWriter is the knowledge base's write surface as this catalogue
 // check needs it: present, so the surface is built, and never called.
 type stubPageWriter struct{}
 
-func (stubPageWriter) Create(context.Context, pages.Actor, pages.NewPage) (pages.Written, error) {
-	return pages.Written{}, nil
+func (stubPageWriter) Create(context.Context, doclet.Actor, doclet.NewPage) (doclet.Written, error) {
+	return doclet.Written{}, nil
 }
 
-func (stubPageWriter) SavePage(context.Context, pages.Actor, string, pages.Save) (pages.Written, error) {
-	return pages.Written{}, nil
+func (stubPageWriter) SavePage(context.Context, doclet.Actor, string, doclet.Save) (doclet.Written, error) {
+	return doclet.Written{}, nil
 }
 
-func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool) (pages.Written, error) {
-	return pages.Written{}, nil
+func (stubPageWriter) Rename(context.Context, doclet.Actor, string, string, bool) (doclet.Written, error) {
+	return doclet.Written{}, nil
 }
 
-func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewComment) (pages.Comment, pages.Written, error) {
-	return pages.Comment{}, pages.Written{}, nil
+func (stubPageWriter) Comment(context.Context, doclet.Actor, string, doclet.NewComment) (doclet.Comment, doclet.Written, error) {
+	return doclet.Comment{}, doclet.Written{}, nil
 }
 
-func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string,
-	string) (pages.Comment, pages.Written, error) {
-	return pages.Comment{}, pages.Written{}, nil
+func (stubPageWriter) EditComment(context.Context, doclet.Actor, string, string,
+	string) (doclet.Comment, doclet.Written, error) {
+	return doclet.Comment{}, doclet.Written{}, nil
 }

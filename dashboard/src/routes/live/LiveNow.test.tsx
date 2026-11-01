@@ -23,7 +23,6 @@ import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
@@ -47,7 +46,7 @@ afterEach(() => {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -103,14 +102,16 @@ function mount({
   hash = "#/live",
   agents = [],
   answers = {},
+  health = healthFrame(),
 }: {
   hash?: string;
   agents?: Record<string, unknown>[];
   answers?: Record<string, Answer>;
+  health?: ReturnType<typeof healthFrame>;
 } = {}) {
   location.hash = hash;
   const store = new Store();
-  store.applyHealth(healthFrame());
+  store.applyHealth(health);
   store.applyOrg(withDerived(ORG) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
@@ -396,6 +397,27 @@ test("the Activity card names a node missing from the seat's events", async () =
   expect(note.closest(".coverage-note")?.textContent).toContain("node-b");
 });
 
+// THE LATEST EVENTS ARE THE PUSH when no seat is chosen, seeded at this node's
+// boot from every node it could reach: a node the seed missed is named.
+//
+// Mutation: hand the note the seat's coverage alone, and node-c is not named.
+test("the Activity card names a node the live feed was seeded without", async () => {
+  mount({
+    health: healthFrame({
+      seeded_from: {
+        complete: false,
+        nodes: [
+          { id: "node-a", answered: true, error: "" },
+          { id: "node-c", answered: false, error: "no answer inside the read budget" },
+        ],
+      },
+    }),
+  });
+  const card = cardOf("Activity");
+  const note = await within(card).findByText(/is missing 1 node\./);
+  expect(note.closest(".coverage-note")?.textContent).toContain("node-c");
+});
+
 // OLDER IS THE ENGINE'S CURSOR. It paged the event LIST and read every row
 // back one `event` at a time — sixty-one round trips for sixty rows.
 test("Load older asks phases again with the cursor the page carried", async () => {
@@ -412,16 +434,12 @@ test("Load older asks phases again with the cursor the page carried", async () =
     },
   });
   const card = await phasesCard(asked);
-  // THE BUTTON IS DRAWN HELD until the first page answers with the cursor it
-  // continues from, and a press on a held button does nothing: waited for
-  // until it lets go, not found and pressed at once.
-  const more = await waitFor(() => {
-    const button = within(card).getByRole<HTMLButtonElement>("button", {
-      name: `Load ${PHASE_PAGE} older`,
-    });
-    expect(button.disabled).toBe(false);
-    return button;
-  });
+  const more = await within(card).findByRole("button", { name: `Load ${PHASE_PAGE} older` });
+  // PRESSED ONCE IT CAN BE: the button is drawn, disabled, before the first
+  // page has answered with the cursor it continues from, and a press then
+  // asks nothing — which a loaded runner reached, and waited out its bound
+  // for an older page nobody had asked for.
+  await waitFor(() => expect(more.getAttribute("aria-disabled")).not.toBe("true"));
   act(() => more.click());
   await within(card).findByText("Start of the record.");
   const pages = asked.filter((q) => q.kind === "phases");
@@ -431,44 +449,6 @@ test("Load older asks phases again with the cursor the page carried", async () =
     limit: PHASE_PAGE,
   });
   expect(asked.some((q) => q.kind === "event")).toBe(false);
-});
-
-// FROM THE PRESS OF "OLDER" THE FIRST PAGE IS HELD: it polls nothing, but a
-// reconnect read it again, and under phases that finished since it pushed its
-// last ones out of both pages — finished before the tab opened, they are not
-// among those the push brings either. Mutation: ask the phases without the
-// pager's hold, and the reconnect asks the first page again.
-test("after Load older, a reconnect asks nothing of the first page of phases", async () => {
-  const { asked, store } = mount({
-    answers: {
-      phases: (p: Record<string, unknown>) =>
-        p.before_id
-          ? { phases: [phaseEvent("p-2", "t-2", "id")], next: {}, exhausted: true }
-          : {
-              phases: [phaseEvent("p-1", "t-1", "id")],
-              next: { before_time: "2026-09-28T10:00:00Z", before_id: "p-1" },
-              exhausted: false,
-            },
-    },
-  });
-  const card = await phasesCard(asked);
-  const more = await waitFor(() => {
-    const button = within(card).getByRole<HTMLButtonElement>("button", {
-      name: `Load ${PHASE_PAGE} older`,
-    });
-    expect(button.disabled).toBe(false);
-    return button;
-  });
-  act(() => more.click());
-  await within(card).findByText("Start of the record.");
-  const firsts = () => asked.filter((q) => q.kind === "phases" && !q.params.before_id).length;
-  const before = firsts();
-  act(() => store.setConnected(false));
-  act(() => store.setConnected(true));
-  await afterMicrotasks();
-  await afterMicrotasks();
-  expect(firsts()).toBe(before);
-  expect(within(card).getByText("Paused while you page back.")).toBeTruthy();
 });
 
 // AN OLDER PAGE OF PHASES THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN,
@@ -535,6 +515,7 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             role: "Engineer",
             status: "awaiting_clarification",
             question: "Drop the polling fallback?",
+            question_context: "",
             audience: "jane",
             audience_handles: ["jane"],
             started_at: ago(3_000_000),

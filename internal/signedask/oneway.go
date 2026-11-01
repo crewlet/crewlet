@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // # One way: a frame nobody answers
@@ -107,7 +108,7 @@ func (w *OneWay[M]) Open(sealed []byte, now time.Time) (M, Disposition, error) {
 		return zero, Tampered, errors.New("signedask: the frame is not sealed by this fleet")
 	case statelog.KeyUnknown:
 		return zero, KeyUnknown, fmt.Errorf("signedask: the frame is sealed under a key "+
-			"this node does not hold (it holds %v); add the key to secrets.keys", w.HeldKeys())
+			"this node does not hold (it holds %s); add the key to secrets.keys", words.And(w.HeldKeys()))
 	}
 	var m M
 	if err := json.Unmarshal(body, &m); err != nil {

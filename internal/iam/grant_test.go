@@ -58,14 +58,14 @@ func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
 		{"admin alone", []Grant{GrantAdmin},
 			append([]Grant{GrantAdmin}, Apps...)},
 		{"admin beside an app it already includes",
-			[]Grant{GrantKnowledge, GrantAdmin},
-			[]Grant{GrantKnowledge, GrantAdmin, GrantTracker, GrantArtifacts}},
+			[]Grant{GrantDoclet, GrantAdmin},
+			[]Grant{GrantDoclet, GrantAdmin, GrantWorklet, GrantArtifacts, GrantChatlet}},
 		{"an unknown name is carried through", []Grant{future, GrantAdmin},
-			[]Grant{future, GrantAdmin, GrantTracker, GrantKnowledge, GrantArtifacts}},
-		{"duplicates in the row stay as given", []Grant{GrantTracker, GrantTracker},
-			[]Grant{GrantTracker, GrantTracker}},
+			[]Grant{future, GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet}},
+		{"duplicates in the row stay as given", []Grant{GrantWorklet, GrantWorklet},
+			[]Grant{GrantWorklet, GrantWorklet}},
 		// THE CONTROL: no admin, nothing added.
-		{"an app alone", []Grant{GrantTracker}, []Grant{GrantTracker}},
+		{"an app alone", []Grant{GrantWorklet}, []Grant{GrantWorklet}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

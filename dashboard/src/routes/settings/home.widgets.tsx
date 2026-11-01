@@ -25,12 +25,12 @@ import {
   WrenchGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
 import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { authWords, modelLine, usesOf } from "~/lib/models.ts";
+import { configStanding, offRevision } from "~/lib/configStanding.ts";
+import { standingCaption } from "./standingWords.ts";
 import { SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -40,14 +40,21 @@ import { OPERATOR_SOURCE } from "~/contract/audit.ts";
 import { CATALOG, entryState } from "~/routes/settings/integrations/catalogue.tsx";
 import { ADMIN } from "~/lib/access.ts";
 import { useRetentionReport } from "~/routes/settings/Retention.tsx";
-import { useModels } from "~/routes/settings/Models.tsx";
+import { MODELS_POLL_MS } from "~/routes/settings/models/data.ts";
+import { HEALTH, product } from "~/routes/settings/models/words.ts";
 import {
   FINDING_WORDS,
-  type DirectoryFinding,
+  type DirectoryCheck,
   type DirectoryRow,
 } from "~/routes/settings/Access.tsx";
 import { FINDING_KINDS } from "~/contract/identity.ts";
-import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetNote,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+} from "~/routes/home/board/kit.tsx";
 
 /** The rows a widget lists before it says how many more its page holds. */
 const ROWS = 4;
@@ -74,16 +81,18 @@ function Backups() {
   // THE ALARMS ARE THE RETENTION REPORT'S, decided on admin as the page asks it.
   const retention = useRetentionReport(viewer.admin);
   const newest = backups.data?.points.find((p) => p.newest);
-  const failed = backups.data?.history.filter((r) => r.outcome === "failed").length ?? 0;
+  const history = backups.data?.history ?? [];
+  const failed = history.filter((r) => r.outcome === "failed").length;
   const alarms = retention.data?.alarms ?? [];
   const link = alarmsLink();
   return (
     <WidgetCard title="Backups" from="settings-backups">
-      <QueryState
+      <WidgetQuery
         error={backups.error}
         refusal={backups.refusal}
         detail={backups.detail ?? undefined}
         loading={backups.loading && !backups.data}
+        gaps={gapsOf([backups.data])}
       >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard
@@ -91,7 +100,13 @@ function Backups() {
             value={newest ? relTime(newest.taken_at, now) : EMPTY_VALUE}
             sub={newest ? (newest.verified ? "verified" : "not verified") : "none yet"}
           />
-          <StatCard label="Failed runs" value={failed} sub="in the recent history" />
+          {/* COUNTED OVER THE PAGE THE HISTORY HOLDS, and said to be: past it
+              the count is of the newest runs, as the Backups page says. */}
+          <StatCard
+            label="Failed runs"
+            value={failed}
+            sub={backups.data?.more ? `in the newest ${history.length}` : "in the recent history"}
+          />
           <StatCard
             label="Alarms"
             value={retention.data ? alarms.length : EMPTY_VALUE}
@@ -111,7 +126,7 @@ function Backups() {
             ))}
           </List>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -123,17 +138,30 @@ function Nodes() {
   const fleet = useQuery("fleet", undefined, { pollMs: 15_000 });
   const data = fleet.data;
   const nodes = data?.nodes ?? [];
-  const behind = nodes.filter((n) => data && (n.config_epoch ?? 0) < data.target_epoch);
+  // NOT RUNNING THE ACTIVATED REVISION, the Nodes screen's own rule: a node
+  // that refused the target reports the target's epoch (`configStanding`).
+  const behind = data
+    ? nodes
+        .filter((n) => offRevision(data, n))
+        .map((n) => ({ node: n, caption: standingCaption(configStanding(data, n)) }))
+    : [];
   const stranded = data?.unplaceable ?? [];
   return (
     <WidgetCard title="Nodes" from="settings-nodes">
-      <QueryState error={fleet.error} refusal={fleet.refusal} loading={fleet.loading && !data}>
+      <WidgetQuery
+        error={fleet.error}
+        refusal={fleet.refusal}
+        loading={fleet.loading && !data}
+        // NOTHING TO READ A GAP FROM: the fleet's answer carries no flag
+        // saying what it could not account for.
+        gaps={[]}
+      >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard label="Live nodes" value={nodes.length} sub="holding a lease" />
           <StatCard
             label="Behind on config"
             value={behind.length}
-            sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target yet"}
+            sub={data?.activation ? `target epoch ${data.activation.epoch}` : "no target yet"}
           />
           <StatCard
             label="Unplaceable"
@@ -143,11 +171,11 @@ function Nodes() {
         </StatGroup>
         {(behind.length > 0 || stranded.length > 0) && (
           <List className="home-admin-list">
-            {behind.slice(0, ROWS).map((n) => (
+            {behind.slice(0, ROWS).map(({ node: n, caption }) => (
               <ListItem
                 key={`node:${n.id}`}
                 href={href(["settings", "nodes", n.id])}
-                leading={<Tag variant="warning">Behind</Tag>}
+                leading={<StandingTag caption={caption} />}
               >
                 {n.id}
               </ListItem>
@@ -163,8 +191,21 @@ function Nodes() {
             ))}
           </List>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
+  );
+}
+
+/**
+ * Why a node is listed under Nodes: its standing's caption as a tag, a refusal
+ * in the danger tone because it is the one a reader has to act on.
+ */
+function StandingTag({ caption }: { caption: string }) {
+  const failed = caption === "refused" || caption === "partial";
+  return (
+    <Tag variant={failed ? "danger" : "warning"}>
+      {caption ? caption.charAt(0).toUpperCase() + caption.slice(1) : "Behind"}
+    </Tag>
   );
 }
 
@@ -182,10 +223,13 @@ function Integrations() {
   const working = states.length - owed.length;
   return (
     <WidgetCard title="Integrations" from="integrations">
-      <QueryState
+      <WidgetQuery
         error={read.error}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        // THE ANSWER'S COVERAGE IS ITS TRAFFIC COUNTS', which this card does
+        // not draw: whether a tool is connected and working is no fleet read.
+        gaps={[]}
         empty={
           read.data && states.length === 0
             ? { title: "No tools connected", hint: "Connect one from Integrations." }
@@ -212,7 +256,7 @@ function Integrations() {
             {working > 0 && <WidgetNote>{`${plural(working, "other tool")} working.`}</WidgetNote>}
           </>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -231,10 +275,11 @@ function McpServers() {
   const failing = servers.filter((s) => s.state !== "running").length;
   return (
     <WidgetCard title="MCP servers" from="settings-mcp-tools">
-      <QueryState
+      <WidgetQuery
         error={status.error}
         refusal={status.refusal}
         loading={status.loading && !status.data}
+        gaps={[]}
         empty={
           status.data && servers.length === 0
             ? { title: "No MCP servers yet", hint: "Add one to give agents more tools." }
@@ -259,66 +304,69 @@ function McpServers() {
         {failing === 0 && servers.length > 0 && (
           <WidgetNote>{`${plural(servers.length, "server")}, all running.`}</WidgetNote>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
 
-// ---- Models & keys ----------------------------------------------------------------------
+// ---- Models ----------------------------------------------------------------------------
 
 function Models() {
-  // THE PAGE'S OWN QUESTION, read the way the page reads it. A model no seat
-  // names is the one thing here that drifts, so it leads.
-  const models = useModels();
+  // THE PAGE'S OWN QUESTION, every member's: the engine's reading of each
+  // model. A model that cannot answer leads, then one nothing runs on, which
+  // is the one thing here that drifts.
+  const models = useQuery("llm_entries", undefined, { pollMs: MODELS_POLL_MS });
   const entries = useMemo(() => {
-    const all = models.entries.map((entry) => ({
-      entry,
-      seats: usesOf(models.seats, entry.key).length,
-    }));
-    return [...all.filter((m) => m.seats === 0), ...all.filter((m) => m.seats > 0)];
-  }, [models.entries, models.seats]);
-  const unused = entries.filter((m) => m.seats === 0).length;
+    const all = models.data?.entries ?? [];
+    const rank = (e: (typeof all)[number]) =>
+      e.health === "ready" || e.health === "untested" ? (e.used_by.length === 0 ? 1 : 2) : 0;
+    return [...all].sort((a, b) => rank(a) - rank(b));
+  }, [models.data]);
+  const unused = entries.filter((e) => e.used_by.length === 0).length;
+  const stopped = entries.filter((e) => e.health !== "ready" && e.health !== "untested").length;
   return (
-    <WidgetCard title="Models & keys" from="settings">
-      <QueryState
+    <WidgetCard title="Models" from="settings">
+      <WidgetQuery
         error={models.error}
         refusal={models.refusal}
-        // NOT "AND NO DATA": a company with nothing configured answers null,
-        // which is an answer, and would otherwise read as loading for ever.
         loading={models.loading}
+        gaps={[]}
         empty={
           !models.loading && !models.error && entries.length === 0
-            ? { title: "No models configured", hint: "Add one under providers.llm." }
+            ? { title: "No models yet", hint: "Add one under Settings, Models." }
             : undefined
         }
       >
         <List>
-          {entries.slice(0, ROWS).map(({ entry, seats: n }) => {
-            const sign = authWords(entry.authMode);
+          {entries.slice(0, ROWS).map((entry) => {
+            const health = HEALTH[entry.health];
             return (
               <ListItem
                 key={entry.key}
                 href={href(["settings", "models", entry.key])}
                 trailing={
-                  n === 0 ? (
-                    <Tag variant="warning" title="No seat’s chain names this model.">
+                  entry.used_by.length === 0 && health.tone === "success" ? (
+                    <Tag
+                      variant="warning"
+                      title="Neither a seat nor Ask Crewlet runs on this model."
+                    >
                       Unused
                     </Tag>
                   ) : (
-                    <Tag title={sign.hint}>{sign.label}</Tag>
+                    <Tag variant={health.tone}>{health.label}</Tag>
                   )
                 }
               >
-                {modelLine(entry)}
+                {`${entry.key}: ${product(entry.agent)}, ${entry.model}`}
               </ListItem>
             );
           })}
         </List>
         <More total={entries.length} to={["settings", "models"]} />
-        {unused === 0 && entries.length > 0 && (
-          <WidgetNote>{`${plural(entries.length, "model")}, each run by a seat.`}</WidgetNote>
+        {stopped === 0 && unused === 0 && entries.length > 0 && (
+          <WidgetNote>{`${plural(entries.length, "model")}, each ready and in use.`}</WidgetNote>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -361,10 +409,11 @@ function Secrets() {
   const newest = [...rows].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
   return (
     <WidgetCard title="Secrets" from="settings-secrets">
-      <QueryState
+      <WidgetQuery
         error={read.code}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        gaps={[]}
         empty={
           read.data && rows.length === 0
             ? { title: "No secrets stored", hint: "Store one from Secrets." }
@@ -400,7 +449,7 @@ function Secrets() {
             <More total={unused.length} to={["settings", "secrets"]} />
           </>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -414,13 +463,14 @@ function Configuration() {
   const revisions = audit.data ?? [];
   const active = revisions.find((r) => r.is_active);
   const nodes = fleet.data?.nodes ?? [];
-  const behind = nodes.filter((n) => fleet.data && (n.config_epoch ?? 0) < fleet.data.target_epoch);
+  const behind = nodes.filter((n) => fleet.data && offRevision(fleet.data, n));
   return (
     <WidgetCard title="Configuration" from="settings-config">
-      <QueryState
+      <WidgetQuery
         error={audit.error}
         refusal={audit.refusal}
         loading={audit.loading && !audit.data}
+        gaps={[]}
         empty={
           audit.data && revisions.length === 0
             ? { title: "No configuration yet", hint: "Import one with crewlet config import." }
@@ -456,7 +506,7 @@ function Configuration() {
             </ListItem>
           ))}
         </List>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -500,10 +550,13 @@ function AuditLog() {
   const failed = config.error ? config : runtime.error ? runtime : null;
   return (
     <WidgetCard title="Audit log" from="settings-audit">
-      <QueryState
+      <WidgetQuery
         error={failed?.error ?? null}
         refusal={failed?.refusal ?? null}
         loading={(config.loading && !config.data) || (runtime.loading && !runtime.data)}
+        // THE RUNTIME HALF IS A FLEET READ, so a node that did not answer is
+        // a change that may be missing; the revisions are one replicated table.
+        gaps={gapsOf([runtime.data])}
         empty={
           changes.length === 0
             ? { title: "No changes recorded", hint: "Changes people make appear here." }
@@ -521,17 +574,12 @@ function AuditLog() {
             </ListItem>
           ))}
         </List>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
 
 // ---- People ---------------------------------------------------------------------------------
-
-interface DirectoryCheck {
-  findings: DirectoryFinding[] | null;
-  people_with_admin: number;
-}
 
 const findingWords = (kind: string) =>
   (FINDING_KINDS as readonly string[]).includes(kind)
@@ -559,12 +607,22 @@ function PeopleWidget() {
   const active = people.filter((p) => p.stage === "active").length;
   const invited = (seats.data ?? []).filter((s) => !s.holder && s.invitation).length;
   const findings = check.data?.findings ?? [];
+  // A BINDING THIS NODE COULD NOT CHECK is "could not say", which the
+  // directory's own page says as well, never "no access problems found".
+  const unchecked = check.data?.bindings_unchecked ?? 0;
   return (
     <WidgetCard title="People" from="settings-people">
-      <QueryState
+      <WidgetQuery
         error={directory.code}
         refusal={directory.refusal}
         loading={directory.loading && !directory.data}
+        gaps={
+          unchecked > 0
+            ? [
+                `${plural(unchecked, "binding")} couldn’t be checked just now, so this may be incomplete.`,
+              ]
+            : []
+        }
       >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard
@@ -585,7 +643,9 @@ function PeopleWidget() {
         </StatGroup>
         {check.data &&
           (findings.length === 0 ? (
-            <WidgetNote>No access problems found.</WidgetNote>
+            unchecked > 0 ? null : (
+              <WidgetNote>No access problems found.</WidgetNote>
+            )
           ) : (
             <>
               <List className="home-admin-list">
@@ -607,7 +667,7 @@ function PeopleWidget() {
               <More total={findings.length} to={["settings", "people"]} />
             </>
           ))}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -662,8 +722,8 @@ export const widgets = defineWidgets([
   {
     key: "settings.models",
     from: "settings",
-    label: "Models & keys",
-    description: "Each model’s CLI, how it signs in, and any no seat runs",
+    label: "Models",
+    description: "Each model's condition, and any that nothing runs on",
     icon: CpuGlyph,
     hue: "blue",
     size: { w: 4, minW: 3, minH: 6, vertical: true },

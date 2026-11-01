@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // ---- a code host that takes writes ----------------------------------------- //
@@ -187,7 +188,9 @@ func commitArgs(text string) map[string]any {
 }
 
 // callWrite calls a seat's write tool in turn under ctx, recording the call in
-// the turn's log as the tool loop does.
+// the turn's log as the seat's surface does: by the canonical arguments the
+// tool is handed ([toolargs.Of] over its own schema), which is the form the
+// log counts a repeat in.
 func callWrite(t *testing.T, ctx context.Context, reg *tools.Registry, turn *turnctx.Turn, name string,
 	args map[string]any) tools.Result {
 
@@ -196,11 +199,12 @@ func callWrite(t *testing.T, ctx context.Context, reg *tools.Registry, turn *tur
 	if !ok {
 		t.Fatalf("%s is not registered", name)
 	}
-	got, err := entry.Tool.(tools.SeatCallable).CallForTurn(ctx, turn, args)
+	canonical := toolargs.Of(entry.Tool.Parameters(), args)
+	got, err := entry.Tool.(tools.SeatCallable).CallForTurn(ctx, turn, canonical.Map())
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
-	turn.CallLog().Record(name, args)
+	turn.CallLog().Record(name, canonical)
 	return got
 }
 
@@ -210,7 +214,7 @@ func callWrite(t *testing.T, ctx context.Context, reg *tools.Registry, turn *tur
 // delivers anywhere: a turn woken about work on a repository that answered by
 // moving a branch is a turn that delivered, on the surface the work came from.
 //
-// Mutation: the delivery switch giving a code write tracker.Source → red.
+// Mutation: the delivery switch giving a code write worklet.Source → red.
 func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 	t.Parallel()
 	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
@@ -1109,7 +1113,7 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeLogTool:         {"repo": repo, "rev": mainOID, "path": "README.md"},
 		builtin.CodeBlameTool:       {"repo": repo, "rev": mainOID, "path": "README.md"},
 		builtin.CodeListChangesTool: {"repo": repo},
-		builtin.CodeGetChangeTool:   {"repo": repo, "change": 7, "part": "findings"},
+		builtin.CodeGetChangeTool:   {"repo": repo, "change": 7.0, "part": "findings"},
 		builtin.CodeCommitFilesTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
 			"message": "m", "files": []any{map[string]any{"op": "delete", "path": "a"}}},
 		builtin.CodeRevertTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
@@ -1125,16 +1129,16 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeProtectBranchTool: {"repo": repo, "pattern": "refs/heads/main"},
 		builtin.CodeOpenChangeTool: {"repo": repo, "branch": "fix", "title": "Fix the lab",
 			"reviewers": []any{"agent-ceo"}},
-		builtin.CodeUpdateChangeTool:    {"repo": repo, "change": 7, "expected_version": 1, "title": "Fix the lab"},
-		builtin.CodeCloseChangeTool:     {"repo": repo, "change": 7, "expected_version": 1},
-		builtin.CodeRequestReviewTool:   {"repo": repo, "change": 7, "reviewers": []any{"agent-ceo"}},
-		builtin.CodeReviewChangeTool:    {"repo": repo, "change": 7, "verdict": "approve"},
-		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7, "body": "Looks right."},
-		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7, "findings": []any{standingFinding},
+		builtin.CodeUpdateChangeTool:    {"repo": repo, "change": 7.0, "expected_version": 1, "title": "Fix the lab"},
+		builtin.CodeCloseChangeTool:     {"repo": repo, "change": 7.0, "expected_version": 1},
+		builtin.CodeRequestReviewTool:   {"repo": repo, "change": 7.0, "reviewers": []any{"agent-ceo"}},
+		builtin.CodeReviewChangeTool:    {"repo": repo, "change": 7.0, "verdict": "approve"},
+		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7.0, "body": "Looks right."},
+		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7.0, "findings": []any{standingFinding},
 			"resolution": "dismissed"},
-		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7, "findings": []any{suggestedA},
+		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7.0, "findings": []any{suggestedA},
 			"expected_head": revHead(3)},
-		builtin.CodeRebaseChangeTool: {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeRebaseChangeTool: {"repo": repo, "change": 7.0, "expected_head": revHead(3)},
 	}
 	args, ok := rows[name]
 	return args, ok

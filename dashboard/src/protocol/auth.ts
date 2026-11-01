@@ -14,8 +14,9 @@
  */
 
 import type { EngineHealth } from "../contract/health.ts";
+import { INVITE_SECRET_HEADER, RESET_SECRET_HEADER } from "../contract/identity.ts";
 import type { ResetView } from "../contract/identity.ts";
-import { rest } from "./rest.ts";
+import { pathSegment, rest } from "./rest.ts";
 import type {
   AuthConfig,
   InvitationView,
@@ -27,20 +28,6 @@ import type {
   SessionAnswer,
   SignedIn,
 } from "./types.ts";
-
-/**
- * The header an invitation's secret travels in to the view.
- *
- * A HEADER, because the view is a GET and a GET has no body — and never the
- * query string, which every access log between the browser and the engine
- * records. The link carries the secret in its FRAGMENT precisely so that no
- * server sees it on the way to this page.
- */
-const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
-
-/** The header a password reset link's secret travels in to its view, for
- *  [INVITE_SECRET_HEADER]'s reason. */
-const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 
 export const auth = {
   /**
@@ -69,14 +56,24 @@ export const auth = {
    * THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
    * the `Authorization` header, which is how the engine takes it, and the
    * session that comes back is a cookie. Nothing here holds it afterwards.
+   *
+   * MADE FOR NOBODY ([RequestOptions.forReader]): it signs somebody in, who
+   * may be anybody but the person this tab was read by, and the screen that
+   * made it hands the tab to them on the answer (`lib/session.ts`).
    */
   exchangeToken: async (token: string): Promise<SignedIn> =>
-    (await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` })) as SignedIn,
+    (
+      await rest.request("POST", "/auth/token", {
+        body: {},
+        headers: { Authorization: `Bearer ${token}` },
+        forReader: false,
+      })
+    ).body as SignedIn,
 
   /** Render an invitation without spending it. */
   viewInvite: async (id: string, secret: string): Promise<InvitationView> =>
     (
-      await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, {
+      await rest.request("GET", `/auth/invite/${pathSegment(id)}`, {
         headers: { [INVITE_SECRET_HEADER]: secret },
       })
     ).body as InvitationView,
@@ -85,13 +82,12 @@ export const auth = {
   redeemInvite: async (
     id: string,
     body: { secret: string; login: string; name: string; password: string },
-  ): Promise<SignedIn> =>
-    (await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body)) as SignedIn,
+  ): Promise<SignedIn> => (await rest.post(`/auth/invite/${pathSegment(id)}`, body)) as SignedIn,
 
   /** Say whose password a reset link sets, without spending it. */
   viewReset: async (id: string, secret: string): Promise<ResetView> =>
     (
-      await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, {
+      await rest.request("GET", `/auth/reset/${pathSegment(id)}`, {
         headers: { [RESET_SECRET_HEADER]: secret },
       })
     ).body as ResetView,
@@ -104,7 +100,7 @@ export const auth = {
     id: string,
     body: { secret: string; password: string },
   ): Promise<PasswordSet> =>
-    (await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body)) as PasswordSet,
+    (await rest.post(`/auth/reset/${pathSegment(id)}`, body)) as PasswordSet,
 
   /**
    * Enrolment's first leg: a seed, and nothing stored. A person who never
@@ -147,9 +143,25 @@ export const auth = {
   /**
    * Who this browser is signed in as — ended by `signal` where the caller
    * passes one, for a read a newer one has superseded.
+   *
+   * MADE FOR NOBODY ([RequestOptions.forReader]), because it is how a tab
+   * LEARNS who the session is: the frame's read and the hand-over a
+   * `reader_changed` asks for both take its answer (`lib/session.ts`), and a
+   * read refused for naming the last reader would leave the tab nothing to be
+   * handed over with.
    */
   session: async (signal?: AbortSignal): Promise<SessionAnswer> =>
-    (await rest.get("/auth/session", signal)) as SessionAnswer,
+    (await rest.request("GET", "/auth/session", { signal, forReader: false }))
+      .body as SessionAnswer,
+
+  /**
+   * The same read, made FOR THE TAB'S READER — what the keepalive asks
+   * (`keepalive.ts`). It re-issues the cookie exactly as [session] does, and
+   * it is how a tab nobody is using learns that the browser changed hands
+   * under it: refused `reader_changed`, it is handed to whoever the session
+   * is now, within two keepalive intervals of the sign-in that moved it.
+   */
+  keepAlive: async (): Promise<SessionAnswer> => (await rest.get("/auth/session")) as SessionAnswer,
 
   /**
    * End this browser's session. The engine clears the cookie whatever its
@@ -164,7 +176,7 @@ export const auth = {
    * without ending this browser's.
    */
   logoutOne: async (lineage: string): Promise<void> => {
-    await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
+    await rest.post(`/auth/logout/${pathSegment(lineage)}`, {});
   },
 
   /**

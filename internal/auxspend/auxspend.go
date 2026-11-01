@@ -77,6 +77,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Use is who an auxiliary call is made for and why: the attribution every
@@ -154,7 +155,7 @@ var ErrUnattributed = errors.New("auxspend: the auxiliary call states no valid a
 func (u Use) Validate() error {
 	switch {
 	case !u.Stage.Valid():
-		return fmt.Errorf("%w: stage %q is not one of %v", ErrUnattributed, u.Stage, types.AuxStages)
+		return fmt.Errorf("%w: stage %q is not one of %s", ErrUnattributed, u.Stage, words.Or(types.AuxStages))
 	case !u.Purpose.Valid():
 		return fmt.Errorf("%w: purpose %q is not a purpose this build publishes", ErrUnattributed, u.Purpose)
 	case u.Tally != nil && u.Stage != types.AuxStageTurn:

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -32,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // ---- a code host the cases read ---------------------------------------- //
@@ -1475,6 +1477,11 @@ func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
 	}
 }
 
+// branchesPastAnAnswer is how many of the longest branches the listing case
+// gives a repository: at about 490 bytes each as an answer writes them, two
+// hundred are half again one answer.
+const branchesPastAnAnswer = 200
+
 // A LISTING IS CUT WHOLE-ROW AT THE ANSWER: a page of repositories the reader
 // served that would outgrow one tool answer is answered with the rows that fit
 // — every one whole — and `next` naming the last kept, where the reader's own
@@ -1487,11 +1494,14 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	host := newCodeHost()
 	for i := range 100 {
 		s := siteDetail().RepoSummary
-		s.Name, s.Description = fmt.Sprintf("repo-%03d", i), strings.Repeat("<", code.MaxDescriptionBytes)
+		s.Name, s.Description = fmt.Sprintf("repo-%03d", i), strings.Repeat(`"`, code.MaxDescriptionBytes)
 		host.listing = append(host.listing, s)
 	}
-	for i := range 100 {
-		host.refs[fmt.Sprintf("refs/heads/%s-%03d", strings.Repeat("<", 200), i)] = mainOID
+	// BRANCHES AT THEIR LONGEST, in the byte JSON writes as two (`"`): the
+	// answers are encoded plainly, so `<` weighs one byte and a hundred
+	// branches of it fit in one answer with room to spare.
+	for i := range branchesPastAnAnswer {
+		host.refs[fmt.Sprintf("refs/heads/%03d-", i)+strings.Repeat(`"`, gitref.MaxBranchBytes-4)] = mainOID
 	}
 	reg := codeRegistry(t, codeDeps(host))
 	got, listing := callCode(t, reg, codeTurn(t), builtin.CodeListReposTool, map[string]any{"limit": 100})
@@ -1506,7 +1516,7 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 
 	got, detail := callCode(t, reg, codeTurn(t), builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 	branches, _ := detail["branches"].([]any)
-	if len(branches) == 0 || len(branches) >= 100 || len(got.Output) > builtin.ToolAnswerBytes {
+	if len(branches) == 0 || len(branches) >= branchesPastAnAnswer || len(got.Output) > builtin.ToolAnswerBytes {
 		t.Fatalf("the detail kept %d branches in %d bytes", len(branches), len(got.Output))
 	}
 	lastBranch, _ := branches[len(branches)-1].(map[string]any)
@@ -1518,7 +1528,10 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 
 // widestGate is a merge gate as wide as a record may carry one: within a few
 // bytes of code.MaxGateBytes of JSON, its required checks at their count and
-// length and its human paths spelled in a byte JSON writes as six.
+// length and its human paths spelled in a byte every JSON encoder writes as two
+// (`"`). Not `&`: the record's encoder writes it as six and the answers' plain
+// one as one, so a gate filled with it reaches the record's bound while its
+// answer is a fraction of it.
 func widestGate(t *testing.T) code.MergeGate {
 	t.Helper()
 	g := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
@@ -1540,12 +1553,12 @@ func widestGate(t *testing.T) code.MergeGate {
 	const frame = 30
 	for len(g.HumanPaths) < code.MaxHumanPaths {
 		room := code.MaxGateBytes - weigh() - frame
-		if room < 6 {
+		if room < 2 {
 			break
 		}
-		amps := min(room/6, gitref.MaxPathGlobBytes-2)
+		quotes := min(room/2, gitref.MaxPathGlobBytes-2)
 		g.HumanPaths = append(g.HumanPaths, code.HumanPath{
-			Glob: fmt.Sprintf("%02d", len(g.HumanPaths)) + strings.Repeat("&", amps)})
+			Glob: fmt.Sprintf("%02d", len(g.HumanPaths)) + strings.Repeat(`"`, quotes)})
 	}
 	if n := weigh(); n > code.MaxGateBytes || n < code.MaxGateBytes-64 {
 		t.Fatalf("the widest gate weighs %d bytes, want just short of %d", n, code.MaxGateBytes)
@@ -1555,14 +1568,18 @@ func widestGate(t *testing.T) code.MergeGate {
 
 // EVERY REPOSITORY AT THE DOMAIN'S BOUNDS IS ANSWERED BY THE TOOLS. A
 // repository may carry code.MaxProtectionsPerRepo rules, each a pattern at
-// gitref's longest — every byte one JSON writes as six — with a merge gate of
-// code.MaxGateBytes: half a mebibyte, eight tool answers. code_list_repos
-// lists such a repository without its rules, saying where they are read, and
-// lists every repository after it; code_get_repo answers its detail, a page of
+// gitref's longest — every byte one that any JSON encoder writes as two — with
+// a merge gate of code.MaxGateBytes: half a mebibyte, eight tool answers.
+// code_list_repos lists such a repository with its rules, which carry no gate
+// there, and lists every repository after it; code_get_repo answers its detail, a page of
 // its branches and as many of its rules as fit, and the rest of the rules a
 // page at a time through protections_next, every rule once, in order and with
 // its gate — each answer within ToolAnswerBytes, and each making progress on
 // its list.
+//
+// A row whose rules alone are past an answer, which the bounds no longer make
+// at today's limits, is held with rules past them, as a raised limit would
+// make one.
 //
 // Mutations: refuse a row whose rules alone are past an answer, with no
 // `next`, as code_list_repos did — zed is listed by nobody, red; drop
@@ -1571,7 +1588,7 @@ func widestGate(t *testing.T) code.MergeGate {
 // no branch, red.
 func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	t.Parallel()
-	wide := func(n int) string { return strings.Repeat("&", n) }
+	wide := func(n int) string { return strings.Repeat(`"`, n) }
 	gate := widestGate(t)
 	host := newCodeHost()
 	d := siteDetail()
@@ -1595,43 +1612,70 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	reg := codeRegistry(t, codeDeps(host))
 	turn := codeTurn(t)
 
-	// THE LISTING, page after page: every repository once, big's rules left
-	// out and said so.
-	var listed []string
-	for cursor, pages := "", 0; ; pages++ {
-		if pages > 3 {
-			t.Fatalf("the listing took more than %d pages: %v", pages, listed)
-		}
-		got, _ := callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{"cursor": cursor, "limit": 100})
-		if len(got.Output) > builtin.ToolAnswerBytes {
-			t.Fatalf("a listing page is %d bytes, past one answer", len(got.Output))
-		}
-		var page struct {
-			Repos []struct {
-				Name               string            `json:"name"`
-				Protections        []json.RawMessage `json:"protections"`
-				ProtectionsLeftOut string            `json:"protections_left_out"`
-			} `json:"repos"`
-			Next string `json:"next"`
-		}
-		if err := json.Unmarshal([]byte(got.Output), &page); err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range page.Repos {
-			listed = append(listed, r.Name)
-			if r.Name == "big" && (r.Protections != nil || !strings.Contains(r.ProtectionsLeftOut,
-				builtin.CodeGetRepoTool)) {
-				t.Errorf("big is listed with %d rules and %q, want its rules left out and where they are "+
-					"read said", len(r.Protections), r.ProtectionsLeftOut)
-			}
-		}
-		if page.Next == "" {
-			break
-		}
-		cursor = page.Next
+	// THE LISTING, page after page: every repository once, and big's rules
+	// either whole or left out with where they are read said.
+	type listedRow struct {
+		Name               string            `json:"name"`
+		Protections        []json.RawMessage `json:"protections"`
+		ProtectionsLeftOut string            `json:"protections_left_out"`
 	}
+	list := func(reg *tools.Registry) (listed []string, big listedRow) {
+		t.Helper()
+		for cursor, pages := "", 0; ; pages++ {
+			if pages > 3 {
+				t.Fatalf("the listing took more than %d pages: %v", pages, listed)
+			}
+			got, _ := callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{"cursor": cursor,
+				"limit": 100})
+			if len(got.Output) > builtin.ToolAnswerBytes {
+				t.Fatalf("a listing page is %d bytes, past one answer", len(got.Output))
+			}
+			var page struct {
+				Repos []listedRow `json:"repos"`
+				Next  string      `json:"next"`
+			}
+			if err := json.Unmarshal([]byte(got.Output), &page); err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range page.Repos {
+				listed = append(listed, r.Name)
+				if r.Name == "big" {
+					big = r
+				}
+			}
+			if page.Next == "" {
+				return listed, big
+			}
+			cursor = page.Next
+		}
+	}
+	// AT THE BOUNDS, A ROW FITS WHOLE: the answers are written plainly, so a
+	// rule's pattern weighs at most twice its bytes, and the row's rules
+	// carry no gate, which is what makes them half a mebibyte on the detail.
+	listed, big := list(reg)
 	if want := []string{"alpha", "big", "zed"}; !slices.Equal(listed, want) {
 		t.Errorf("the listing answered %v, want %v", listed, want)
+	}
+	if len(big.Protections) != len(d.Protections) || big.ProtectionsLeftOut != "" {
+		t.Errorf("big is listed with %d of its %d rules and %q, want them whole", len(big.Protections),
+			len(d.Protections), big.ProtectionsLeftOut)
+	}
+	// AND A ROW PAST ONE ANSWER, as no record the domain takes today carries
+	// one, is listed without its rules, saying where they are read, and every
+	// repository after it is listed too.
+	past := wideRow
+	for len(past.Protections)*2*gitref.MaxRefNameBytes <= builtin.ToolAnswerBytes {
+		past.Protections = append(slices.Clone(past.Protections), d.Protections...)
+	}
+	overHost := newCodeHost()
+	overHost.listing = []code.RepoSummary{alpha, past, zed}
+	listed, big = list(codeRegistry(t, codeDeps(overHost)))
+	if want := []string{"alpha", "big", "zed"}; !slices.Equal(listed, want) {
+		t.Errorf("past one answer, the listing answered %v, want %v", listed, want)
+	}
+	if big.Protections != nil || !strings.Contains(big.ProtectionsLeftOut, builtin.CodeGetRepoTool) {
+		t.Errorf("big past one answer is listed with %d rules and %q, want its rules left out and where "+
+			"they are read said", len(big.Protections), big.ProtectionsLeftOut)
 	}
 
 	// THE DETAIL: its first page, then its rules a page at a time.
@@ -1711,10 +1755,15 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
 // codeCatalogueBudget is the most bytes the thirty code tools'
-// definitions may add to a tool catalogue as a CLI's prompt renders it: what
-// a seat at full_access carries, the one tier offered the writes
-// (CodeWritesWithheld); every other seat carries the reads alone
+// definitions may add to the tool list a run's session serves its CLI
+// ([listedBytes]): what a seat at full_access carries, the one tier offered
+// the writes (CodeWritesWithheld); every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
+//
+// THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A CLI'S PROMPT ONCE CARRIED
+// (indented, HTML-escaped, in the user text), which is larger than the compact
+// JSON of a tools/list answer, so each budget held there holds here; the
+// history is kept because each step in it was a deliberate cost.
 //
 // 43 200: measured at 40 680 (~10 170 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
@@ -1765,7 +1814,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 const codeCatalogueBudget = 43_200
 
 // codeReadsCatalogueBudget is the most bytes the eleven code reads'
-// definitions may add to a tool catalogue as a CLI's prompt renders it: what
+// definitions may add to the tool list a run's session serves its CLI: what
 // every seat of a company hosting code carries on every round, whatever its
 // tier, since a seat below full_access is offered the reads alone
 // (CodeWritesWithheld).
@@ -1781,52 +1830,95 @@ const codeCatalogueBudget = 43_200
 const codeReadsCatalogueBudget = 18_600
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the nineteen writes' beside them: a CLI's catalogue
-// rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
-// each byte is paid again every round. Measured as that catalogue renders them
-// — indented, HTML-escaped, added to a catalogue already holding a tool, so
-// each one's separator and indentation count — the reads alone and all
-// thirty, each held to a budget, so a later description edit is a
-// decision rather than drift, as the executor prompt's budgets make a sentence
-// one (internal/agent/prompts budget_test.go).
+// code is offered the eleven reads on every run of every turn, and a seat at
+// full_access the nineteen writes beside them: the CLI lists them from the
+// run's tool session (internal/toolsession) and carries every listed tool's
+// name, description, schema and hints into its model's context, each byte
+// paid again on every request it makes. Measured as that list reaches a
+// client — the SDK's own serialisation, through a real MCP session, since what
+// a CLI is handed is what arrives rather than what was registered — the reads
+// alone and all thirty, each held to a budget, so a later description edit is
+// a decision rather than drift, as the executor prompt's budgets make a
+// sentence one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	t.Parallel()
-	rendered := func(defs []llm.ToolDef) int {
-		t.Helper()
-		text, err := cliagent.RenderPrompt(llm.Request{Tools: defs})
-		if err != nil {
-			t.Fatalf("render the catalogue: %v", err)
-		}
-		return len(text)
-	}
-	other := llm.ToolDef{Name: "lookup_colleague", Description: "Who to ask.",
-		Parameters: map[string]any{"type": "object"}}
-	added := func(deps builtin.CodeDeps) int {
-		with := []llm.ToolDef{other}
-		for _, tool := range builtin.CodeTools(deps) {
-			with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
-				Parameters: tool.Parameters()})
-		}
-		return rendered(with) - rendered([]llm.ToolDef{other})
-	}
 	for _, c := range []struct {
 		what        string
 		got, budget int
 	}{
-		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
-			codeCatalogueBudget},
+		{"the eleven code reads (every seat's)", listedBytes(t, builtin.CodeTools(codeDeps(newCodeHost()))),
+			codeReadsCatalogueBudget},
+		{"all thirty code tools (a full_access seat's)",
+			listedBytes(t, builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{}))), codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))
 		if c.got > c.budget {
-			t.Errorf("%s add %d bytes (~%d tokens) to every round's catalogue, past their budget of %d", c.what,
+			t.Errorf("%s add %d bytes (~%d tokens) to every run's tool list, past their budget of %d", c.what,
 				c.got, tokens, c.budget)
 			continue
 		}
-		t.Logf("%s add %d bytes (~%d tokens) to every round's catalogue (budget %d, headroom %d)", c.what, c.got,
+		t.Logf("%s add %d bytes (~%d tokens) to every run's tool list (budget %d, headroom %d)", c.what, c.got,
 			tokens, c.budget, c.budget-c.got)
 	}
+}
+
+// listedBytes is what offered costs in the tools/list answer a run's tool
+// session serves: each listed tool's JSON as an MCP client receives it, its
+// name, description, input schema and hints, summed. Served by the session's
+// own server over the SDK's in-memory transport, with the hints the seat's
+// registry advertises (builtin.AnnotationsFor), so the bytes are the ones a
+// CLI is handed.
+func listedBytes(t *testing.T, offered []tools.Callable) int {
+	t.Helper()
+	catalogue := make(listedOnly, 0, len(offered))
+	for _, tool := range offered {
+		catalogue = append(catalogue, toolsession.Tool{
+			Def:         llm.ToolDef{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()},
+			Annotations: builtin.AnnotationsFor(tool.Name())})
+	}
+	srv := toolsession.NewServer("crewlet", "Crewlet", catalogue)
+	srv.Sync()
+	ctx := t.Context()
+	serverEnd, clientEnd := sdkmcp.NewInMemoryTransports()
+	served, err := srv.MCP().Connect(ctx, serverEnd, nil)
+	if err != nil {
+		t.Fatalf("serve the tool list: %v", err)
+	}
+	t.Cleanup(func() { _ = served.Close() })
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "catalogue", Version: "1"}, nil)
+	session, err := client.Connect(ctx, clientEnd, nil)
+	if err != nil {
+		t.Fatalf("connect to the tool list: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list the tools: %v", err)
+	}
+	if len(listed.Tools) != len(offered) {
+		t.Fatalf("the session listed %d tools of the %d offered", len(listed.Tools), len(offered))
+	}
+	total := 0
+	for _, tool := range listed.Tools {
+		raw, err := json.Marshal(tool)
+		if err != nil {
+			t.Fatalf("encode %s as it was listed: %v", tool.Name, err)
+		}
+		total += len(raw)
+	}
+	return total
+}
+
+// listedOnly is a tool session's dispatcher that offers a fixed catalogue and
+// runs nothing: what [listedBytes] measures is the list, never a call.
+type listedOnly []toolsession.Tool
+
+func (l listedOnly) Offered() []toolsession.Tool { return l }
+
+func (listedOnly) Revision() uint64 { return 1 }
+
+func (listedOnly) Call(toolsession.Call) toolsession.Result {
+	return toolsession.Result{Output: "this session lists tools and runs none", Failed: true}
 }
 
 // ---- the guidance and the docs ------------------------------------------ //

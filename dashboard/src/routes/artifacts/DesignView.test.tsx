@@ -14,6 +14,7 @@ import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { DesignView, PRINT_TEARDOWN_MS } from "./DesignView.tsx";
+import { context, draftField, openFrame, setDraft } from "./draftTesting.ts";
 
 vi.mock("./FrameView.tsx", async () => {
   const { useEffect } = await import("react");
@@ -364,4 +365,28 @@ test("an opened board fits the dialog, letterboxed, and shows at its own size on
   expect(actual.classList.contains("design-opened--actual")).toBe(true);
   expect((actual.firstElementChild as HTMLElement).style.width).toBe("1440px");
   expect(dialog.querySelector(".crewlet-slide-stage")).toBeNull();
+});
+
+// THE CANVAS BEING EDITED IS THE ASSISTANT'S TO READ, and a change it proposes
+// retypes a note as typing on the canvas would; read, it holds no draft.
+test("the canvas being edited is the assistant's to read, and a draft.set retypes a note", async () => {
+  openFrame("artifact");
+  await mount();
+  expect(context().draft).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Edit layout" }));
+  expect(context().draft).toMatchObject({ kind: "client", id: ID, revision: "3" });
+  expect(draftField("boards")).toMatchObject({
+    kind: "list",
+    value: expect.stringMatching(/Hero/),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Sticky note" }));
+  fireEvent.click(document.querySelector(".crewlet-canvas__viewport")!, { clientX: 0, clientY: 0 });
+  fireEvent.blur(screen.getByRole("textbox", { name: "Note text" }));
+  await waitFor(() => expect(draftField("notes.1")).toMatchObject({ editable: true }));
+  expect(setDraft({ "notes.1": "Check the pricing copy" })).toMatchObject({ outcome: "applied" });
+  run.mockResolvedValueOnce({ kind: "done", pending: false, body: { number: 4 } });
+  fireEvent.click(screen.getByRole("button", { name: "Save version" }));
+  await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+  const req = run.mock.calls[0]![0] as { body: { edits: { new_str: string }[] } };
+  expect(JSON.parse(req.body.edits[0]!.new_str).notes[0].text).toBe("Check the pricing copy");
 });

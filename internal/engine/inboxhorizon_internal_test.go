@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE TRACKER READS THE COMPANY'S INBOX HORIZON: the one at the top of the
@@ -49,7 +49,7 @@ roles:
 	e := &Engine{}
 	var heard []inbox.Movement
 	e.SetOnInboxMoved(func(moved []inbox.Movement) { heard = append(heard, moved...) })
-	entry, ok := registrationFor(tracker.Domain{}.Name())
+	entry, ok := registrationFor(worklet.Domain{}.Name())
 	if !ok {
 		t.Fatal("the register has no tracker domain")
 	}
@@ -63,24 +63,24 @@ roles:
 	// counted back from when the log stored it.
 	stored := time.Unix(1_800_000_000, 0).UTC()
 	day := 24 * time.Hour
-	task := tracker.Task{
-		V: tracker.DocumentVersion, ID: "t-1", Key: "ENG-1", Project: "ENG",
-		Type: "task", Title: "a task", Status: tracker.StatusTodo,
-		StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
-		Rank: tracker.RankOrigin, CreatedAt: stored.Add(-60 * day),
+	task := worklet.Task{
+		V: worklet.DocumentVersion, ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Type: "task", Title: "a task", Status: worklet.StatusTodo,
+		StatusGroup: worklet.GroupNotStarted, Priority: worklet.PriorityNormal,
+		Rank: worklet.RankOrigin, CreatedAt: stored.Add(-60 * day),
 		UpdatedAt: stored.Add(-60 * day),
 	}
-	said := func(op, assignee string, ago time.Duration) tracker.MutationRecord {
+	said := func(op, assignee string, ago time.Duration) worklet.MutationRecord {
 		title := op
-		rec := inboxRecord(t, tracker.OpPatch, tracker.TaskPatch{Title: &title},
-			&tracker.Notify{Kind: tracker.ChangeStatus,
-				Snapshot: tracker.Snapshot{Key: "ENG-1", Assignee: assignee}})
+		rec := inboxRecord(t, worklet.OpPatch, worklet.TaskPatch{Title: &title},
+			&worklet.Notify{Kind: worklet.ChangeStatus,
+				Snapshot: worklet.Snapshot{Key: "ENG-1", Assignee: assignee}})
 		rec.OpID, rec.CreatedAt = "t-1-"+op, stored.Add(-ago)
 		return rec
 	}
-	create := inboxRecord(t, tracker.OpCreate, task, nil)
+	create := inboxRecord(t, worklet.OpCreate, task, nil)
 	create.CreatedAt = stored.Add(-60 * day)
-	for seq, rec := range []tracker.MutationRecord{
+	for seq, rec := range []worklet.MutationRecord{
 		create,
 		said("forty-days-ago", "past-the-horizon", 40*day),
 		said("twenty-days-ago", "inside-it", 20*day),
@@ -95,7 +95,7 @@ roles:
 				Subject: statelog.Subject{Kind: string(rec.Subject.Kind), ID: rec.Subject.ID},
 				Op:      string(rec.Op), OpID: rec.OpID, Writer: rec.Writer,
 			},
-			Position: statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: uint64(seq + 1)},
+			Position: statelog.Position{Stream: worklet.Domain{}.Stream().Name, Seq: uint64(seq + 1)},
 			Payload:  body,
 			StoredAt: stored.Add(time.Duration(seq) * time.Second),
 		}

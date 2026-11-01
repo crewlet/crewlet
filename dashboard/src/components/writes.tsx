@@ -18,13 +18,14 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
-  ChoiceButtons,
   ChoiceList,
   Combobox,
   Composer,
   FormField,
   Input,
   Modal,
+  Prose,
+  ReadingPaneReasoning,
   Select,
   Stack,
   Textarea,
@@ -47,6 +48,8 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { AnswerChoices } from "./AnswerChoices.tsx";
+import { Recommendation } from "./Recommendation.tsx";
 import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -55,8 +58,14 @@ import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
+import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
+import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
+import { RunQuestion } from "./RunQuestion.tsx";
+import { TokenScope } from "./InlineToken.tsx";
+import type { SandboxRun } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
 /**
@@ -623,10 +632,12 @@ function SaveViewDialog({
  * How an ask was answered, for the line that replaces its controls.
  *
  * `recommended` is set on a choice that was the asker's own recommendation,
- * which the line says beside it.
+ * which the line says beside it, and `id` names the option, which the options
+ * drawn under an answer mark as chosen.
  */
 export type AskAnswer =
-  { kind: "choice"; label: string; recommended: boolean } | { kind: "reply"; text: string };
+  | { kind: "choice"; id: string; label: string; recommended: boolean }
+  | { kind: "reply"; text: string };
 
 /** The value the "Something else" choice carries in the list of options. */
 const OTHER = "\u0000other";
@@ -661,13 +672,18 @@ const DECISION_REPLY_MAX = 2000;
  * THE OPEN STATE IS THE CALLER'S, so a card that lists several asks keeps one
  * open at a time: opening one closes whichever was.
  *
- * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
- * is one row among others. `buttons` is for a screen where the question is
- * the whole of what is open (the Inbox's pane): every option is a button that
- * sends it with one press, the recommended one first and filled, and
+ * THREE LAYOUTS OF ONE ANSWER. `line` is the one above, for a thread where
+ * an ask is one entry among others. `row` is for a list of decisions, where
+ * the row already says the recommendation beside the ask's key
+ * ([Recommendation]): at rest it draws only Accept and Change, Change as a
+ * quiet button so Accept is the one filled control on the row, and open it is
+ * `line`'s open state. `buttons` is for a screen where the question is the
+ * whole of what is open (the Inbox's pane): every option is a button that
+ * sends it with one press (`AnswerChoices`, which a coding run's options are
+ * drawn with too), the recommended one first and filled, and
  * "Something else" opens the field in their place. An ask with no options is
- * answered in that field from the start. Either way the answer goes through
- * this one write, so the rules above hold for both.
+ * answered in that field from the start. Whichever the layout, the answer
+ * goes through this one write, so the rules above hold for all three.
  */
 export function AnswerAsk({
   item,
@@ -701,7 +717,7 @@ export function AnswerAsk({
   /** Called once the engine has the answer. */
   onAnswered: (answer: AskAnswer) => void;
   /** How the answer is laid out; see above. */
-  layout?: "line" | "buttons";
+  layout?: "line" | "row" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
   const named = label || item;
@@ -731,7 +747,12 @@ export function AnswerAsk({
     if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
     onAnswered(
       option
-        ? { kind: "choice", label: option.label, recommended: option.id === recommended }
+        ? {
+            kind: "choice",
+            id: option.id,
+            label: option.label,
+            recommended: option.id === recommended,
+          }
         : { kind: "reply", text: body },
     );
   };
@@ -820,52 +841,28 @@ export function AnswerAsk({
       );
     }
     return (
-      <Stack gap={2}>
-        <ChoiceButtons
-          label="Answers"
-          options={options.map((o) => ({ value: o.id, label: o.label, detail: o.detail }))}
-          recommended={recommended}
-          pending={write.busy ? chosen : null}
-          disabledReason={write.access.can ? undefined : write.access.reason}
-          onChoose={(choice) => {
-            if (!pressable(write)) return;
-            setChosen(choice);
-            void send(choice);
-          }}
-        />
-        <WriteButton
-          write={write}
-          size="small"
-          variant="ghost"
-          pressing={false}
-          showRefusal={false}
-          blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
-          onPress={() => {
-            setChosen(OTHER);
-            onOpenChange(true);
-          }}
-        >
-          Something else
-        </WriteButton>
-        <RefusalNote write={write} />
-      </Stack>
+      <AnswerChoices
+        write={write}
+        options={options}
+        recommended={recommended}
+        pending={write.busy ? chosen : null}
+        onChoose={(choice) => {
+          setChosen(choice);
+          void send(choice);
+        }}
+        onSomethingElse={() => {
+          setChosen(OTHER);
+          onOpenChange(true);
+        }}
+      />
     );
   }
 
   if (!open) {
+    const row = layout === "row";
     return (
-      <div className="decision-answer">
-        <span className="decision-rec">
-          {rec ? (
-            <>
-              Recommended: <strong>{rec.label}</strong>
-            </>
-          ) : words ? (
-            "Answered in words"
-          ) : (
-            "No recommendation"
-          )}
-        </span>
+      <div className={row ? "decision-answer decision-answer--row" : "decision-answer"}>
+        {!row && <Recommendation options={options} recommended={recommended} />}
         <span className="decision-answer-actions">
           {rec && (
             <WriteButton
@@ -881,7 +878,7 @@ export function AnswerAsk({
           <WriteButton
             write={write}
             size="small"
-            variant={rec ? "secondary" : "primary"}
+            variant={rec ? (row ? "ghost" : "secondary") : "primary"}
             showRefusal={false}
             pressing={false}
             blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
@@ -929,7 +926,7 @@ export function AnswerAsk({
 }
 
 /**
- * Answer a coding run that stopped to ask a person something, by its turn —
+ * Answer a coding run that stopped to ask a person something, by its turn,
  * which reaches a run whatever woke the turn that launched it, chat thread or
  * none.
  *
@@ -938,15 +935,13 @@ export function AnswerAsk({
  * says once it has.
  */
 export function AnswerRunButton({
-  turnId,
+  run,
   seat,
-  question,
 }: {
-  turnId: string;
+  /** The parked run: its turn and the question it asks, which the answer names. */
+  run: AnsweredRun;
   /** Whose run it is, by name, for the dialog's title. */
   seat: string;
-  /** What the run asked, quoted above the answer. */
-  question: string;
 }) {
   const write = useAct("answer_run");
   const [open, setOpen] = useState(false);
@@ -964,9 +959,8 @@ export function AnswerRunButton({
       </WriteButton>
       {open && (
         <AnswerRunDialog
-          turnId={turnId}
+          run={run}
           seat={seat}
-          question={question}
           write={write}
           onClose={() => {
             write.dismiss();
@@ -978,30 +972,67 @@ export function AnswerRunButton({
   );
 }
 
+/**
+ * What the answer dialog is handed of a parked run: a durable row, or a live
+ * entry, which carries no launch.
+ */
+type AnsweredRun = Pick<
+  SandboxRun,
+  "turn_id" | "launch_id" | "question" | "question_context" | "decision"
+>;
+
+/**
+ * The run's question as the Inbox reads it: its title (`RunQuestion`), its
+ * context as Markdown, the run's recommendation, and, for a run that asked to
+ * choose, its options as the buttons an ask's are (`AnswerChoices`), each
+ * answering with one press. "Something else", and an open question from the
+ * start, answers in words.
+ *
+ * READ OFF THE RUN'S DURABLE ROW where the dialog has it, because THE ANSWER
+ * NAMES THE QUESTION DRAWN (`launch_id`), and the live projection a seat's
+ * page draws from carries no launch: until the row is read, nothing is sent
+ * ([unanswerable]). A run that has moved on to another question refuses the
+ * answer `conflict`, in the engine's words, and the refusal asks the durable
+ * row again, so the dialog then draws the question the run asks now under
+ * that sentence.
+ */
 function AnswerRunDialog({
-  turnId,
+  run,
   seat,
-  question,
   write,
   onClose,
 }: {
-  turnId: string;
+  run: AnsweredRun;
   seat: string;
-  question: string;
   write: ReturnType<typeof useAct<"answer_run">>;
   onClose: () => void;
 }) {
+  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const shown = runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run;
+  const question = (shown.question ?? "").trim();
+  const context = shown.question_context.trim();
+  const decision = shown.decision;
+  const options = decision?.options ?? [];
+  const recommended = options.find((o) => o.id === decision?.recommended);
+  // "SOMETHING ELSE" OPENED THE FIELD in the options' place; a question with
+  // no options is answered in it from the start.
+  const [open, setOpen] = useState(false);
+  const inWords = options.length === 0 || open;
+  const [chosen, setChosen] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
-  const blocked = answer.trim() ? undefined : "Write the answer first.";
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit.
-    if (!pressable(write, blocked)) return;
-    const text = answer.trim();
+  const notYet = unanswerable(shown);
+  const blocked = notYet ?? (answer.trim() ? undefined : "Write the answer first.");
+  const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
-      { turn_id: turnId, answer: text },
-      { done: `Answered ${seat}'s coding run` },
+      { turn_id: run.turn_id, launch_id: shown.launch_id, ...args },
+      { done: `Sent your answer to ${seat}'s coding run` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  const submit = () => {
+    // THE BUTTON'S OWN GATE, for the dialog's submit.
+    if (!pressable(write, blocked)) return;
+    void send({ answer: answer.trim() });
   };
   return (
     <Modal
@@ -1010,41 +1041,80 @@ function AnswerRunDialog({
       title={`Answer ${seat}'s coding run`}
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={inWords ? submit : undefined}
       closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
             Cancel
           </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            showRefusal={false}
-            onPress={() => void submit()}
-            blocked={blocked}
-          >
-            Send answer
-          </WriteButton>
+          {inWords && (
+            <WriteButton
+              write={write}
+              variant="primary"
+              showRefusal={false}
+              onPress={submit}
+              blocked={blocked}
+            >
+              Send answer
+            </WriteButton>
+          )}
         </>
       }
     >
-      <div className="col gap-3">
-        {question && <blockquote className="answer-run-question">{question}</blockquote>}
-        <FormField
-          label="Your answer"
-          htmlFor="answer-run-text"
-          helper="The run resumes with your answer."
-        >
-          <Textarea
-            id="answer-run-text"
-            rows={5}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-          />
-        </FormField>
-        <RefusalNote write={write} />
-      </div>
+      <TokenScope texts={runAskTexts(shown)}>
+        <div className="col gap-3">
+          {question && <RunQuestion question={question} as="dialog" />}
+          {context && (
+            <Prose as="div" measure="none" className="prose md">
+              {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+            </Prose>
+          )}
+          {recommended && decision?.rationale && (
+            <ReadingPaneReasoning
+              title={
+                <>
+                  {`${seat} recommends `}
+                  <strong>{renderTokens(recommended.label, "recommended", "text", true)}</strong>
+                </>
+              }
+            >
+              <p>{renderTokens(decision.rationale, "reasoning", "checked", true)}</p>
+            </ReadingPaneReasoning>
+          )}
+          {inWords ? (
+            <>
+              <FormField
+                label="Your answer"
+                htmlFor="answer-run-text"
+                helper="The run resumes with your answer."
+              >
+                <Textarea
+                  id="answer-run-text"
+                  rows={5}
+                  value={answer}
+                  autoFocus={open}
+                  onChange={(event) => setAnswer(event.target.value)}
+                />
+              </FormField>
+              <RefusalNote write={write} />
+            </>
+          ) : (
+            <AnswerChoices
+              write={write}
+              options={options}
+              recommended={decision?.recommended}
+              pending={write.busy ? chosen : null}
+              blocked={notYet}
+              onChoose={(choice) => {
+                setChosen(choice);
+                void send({ choice });
+              }}
+              onSomethingElse={() => setOpen(true)}
+            />
+          )}
+        </div>
+      </TokenScope>
     </Modal>
   );
 }
@@ -1056,13 +1126,16 @@ function AnswerRunDialog({
 /**
  * Message a seat — as a task that ASKS it.
  *
- * THERE IS NO PERSON-TO-SEAT CHAT CHANNEL. Message opens the one New task
- * sheet with the seat as assignee and `ask` naming it, so the question is
- * filed as work the seat owes an answer on, and the answer lands in the
- * asker's Inbox. The sheet's Create is the write; this button opens it, and is
- * held with the reason where the reader could not file one — a door that
- * opened onto a sheet that then refused would teach the reason one press too
- * late.
+ * MESSAGE IS THE TRACKER'S ASK, and it stays that wherever chat is. It opens
+ * the one New task sheet with the seat as assignee and `ask` naming it, so the
+ * question is filed as work the seat owes an answer on, and the answer lands
+ * in the asker's Inbox. A company on the engine's own chat also offers a
+ * DIRECT conversation with the seat beside it (`routes/agents/DirectMessage.
+ * tsx`) — a remark that obliges nothing — and the two are different gestures,
+ * so neither stands in for the other. The sheet's Create is the write; this
+ * button opens it, and is held with the reason where the reader could not
+ * file one — a door that opened onto a sheet that then refused would teach
+ * the reason one press too late.
  *
  * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
  * ask of your own seat is a question only you could answer. Decided here
@@ -1079,8 +1152,8 @@ export function MessageSeatButton({
   const write = useAct("create_work_item");
   const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
-  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no Crewlet
-  // Works there is nothing to file it in and no button (`lib/services.ts`).
+  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no
+  // Worklet there is nothing to file it in and no button (`lib/services.ts`).
   const runs = useServicesRun();
   if (!runs.tracker) return null;
   return (
@@ -1192,7 +1265,7 @@ export function AssignToSeatButton({
     setOwn(next);
     onOpenChange?.(next);
   };
-  // A TASK TO ASSIGN IS CREWLET WORKS', so where the company runs none there
+  // A TASK TO ASSIGN IS WORKLET'S, so where the company runs none there
   // is no button (`lib/services.ts`).
   const runs = useServicesRun();
   if (!runs.tracker) return null;
@@ -1441,12 +1514,13 @@ const PAUSE_REASON_MAX = 500;
  * no new turn, what is sent to it waits on its inbox in order, its scheduled
  * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
  * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round loses what it had not done and is not run
- * again; `stop_running` is sent only when it is ticked. The same choice is the
- * emergency stop of the seat's detached coding runs' writes — the code host
- * refuses their boxes' pushes, and the tool bridge their calls of the seat's
- * tools that write, until the seat is resumed — which its description says
- * whether or not a turn is running, since a detached run outlives its turn.
+ * turn stopped at its next round — and a coding run it has out, which the stop
+ * ends at once with its box — loses what it had not done and is not run again;
+ * `stop_running` is sent only when it is ticked. The pause itself is the
+ * emergency stop of the seat's coding runs' writes — the code host refuses
+ * their boxes' pushes, and the tool bridge their calls of the seat's tools that
+ * write, until the seat is resumed — which its description says whether or not
+ * a turn is running, since a run the pause does not stop keeps working.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
  * that waited is delivered first, in order.
@@ -1602,7 +1676,9 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Otherwise the current turn finishes first. Unfinished work is lost, and its coding runs can’t push or change anything until it is resumed."
+              ? "Otherwise the current turn finishes first. A stop also ends a coding run " +
+                "it has out, at once. Unfinished work is lost, and its coding runs can’t " +
+                "push or change anything until it is resumed."
               : "It isn’t on a turn now. Its coding runs can’t push or change anything until it is resumed."
           }
         />
@@ -1613,48 +1689,43 @@ function PauseSeatDialog({
 }
 
 // ---------------------------------------------------------------------------
-// A running turn's own control: a note it reads at its next round
+// A running turn's own control: a note it reads at its next step
 // ---------------------------------------------------------------------------
 
 /**
  * Why a turn cannot take a note now, or undefined when it can.
  *
- * A NOTE REACHES A TURN AT THE TOP OF ITS NEXT ROUND IN THE ENGINE'S OWN LOOP
- * (`internal/agent/steer`), so it is offered only while that loop is running.
- * A turn parked on a coding run is inside somebody else's loop — a run it
- * launched, or an executor that runs as a coding agent — which reads no notes,
- * and the engine would answer `steer_unsupported` or `not_running` one press
- * too late. A parked turn's reason names what to do instead.
+ * EVERY TURN THAT IS STILL GOING TAKES ONE (`internal/agent/steer`): a turn in
+ * the engine's own loop reads it at its next round, one whose coding run is out
+ * keeps it on the run's record — read by the run at its next step, or after its
+ * question is answered, or by the review that follows it. Only a turn that has
+ * ended is held, because nothing would ever read the note.
  */
-function steerBlocked(state: { running: boolean; parked: boolean }): string | undefined {
-  if (state.parked) {
-    return "A coding run is working. Answer it, or comment on the task.";
-  }
-  if (!state.running) return "The turn has ended.";
-  return undefined;
+function steerBlocked(running: boolean): string | undefined {
+  return running ? undefined : "The turn has ended.";
 }
 
 /**
- * Steer a running turn: a short note the turn reads at its next round, after
- * the tool call in flight returns, and keeps to for the rest of the turn.
+ * Steer a running turn: a short note the turn reads at its next step — a round
+ * of the engine's own loop, or a step of the coding run it has out — and keeps
+ * to for the rest of the turn.
  *
- * WHAT A PRESS PROMISES IS `pending`: the node running the turn took the note.
- * What became of it — read at a round, or expired because the turn ended first
- * — is the turn's own `agent_turn_steered`, which the trace draws at the round
- * that read it. A retry of an unknown answer reuses the request id, and the
- * request id IS the note's id, so the turn takes it once.
+ * WHAT A PRESS PROMISES IS `pending`: the engine took the note, and says when
+ * the turn will read it (`reads`), which the toast says. What became of it —
+ * read at a round or by the run, or expired because the turn ended first — is
+ * the turn's own `agent_turn_steered`, which the trace draws where it was read.
+ * A retry of an unknown answer reuses the request id, and the request id IS
+ * the note's id, so the turn takes it once.
  */
 export function SteerTurnButton({
   turnId,
   seat,
   running,
-  parked,
 }: {
   turnId: string;
   /** Whose turn it is, by name, for the dialog's title and the toast. */
   seat: string;
   running: boolean;
-  parked: boolean;
 }) {
   const write = useAct("steer_turn");
   const [open, setOpen] = useState(false);
@@ -1666,7 +1737,7 @@ export function SteerTurnButton({
         variant="secondary"
         leadingIcon={<CompassGlyph />}
         showRefusal={false}
-        blocked={steerBlocked({ running, parked })}
+        blocked={steerBlocked(running)}
         onPress={() => setOpen(true)}
       >
         Steer
@@ -1709,7 +1780,7 @@ function SteerTurnDialog({
     if (!pressable(write, blocked)) return;
     const result = await write.run(
       { turn_id: turnId, note: note.trim() },
-      { done: `Sent your note to ${seat}'s turn` },
+      { done: `Sent your note to ${seat}'s turn`, landed: steerReadsSentence },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1743,7 +1814,7 @@ function SteerTurnDialog({
         <FormField
           label="Note"
           htmlFor="steer-turn-note"
-          helper={`Read at the next round. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
+          helper={`The turn reads it at its next step. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
         >
           <Textarea
             id="steer-turn-note"

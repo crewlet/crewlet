@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -45,8 +46,8 @@ const (
 	// The judge's question is "is this phase repeating itself?", which is
 	// answered by the RECENT calls: a phase thrashing does it in its last
 	// handful of rounds, and the early ones are the part that worked. The
-	// whole log of a 20-round Execute would also be the largest thing in a
-	// prompt whose point is being cheap.
+	// whole log of a phase that ran its full budget would also be the
+	// largest thing in a prompt whose point is being cheap.
 	judgeCallsShown = 12
 
 	// JudgeTaskBudget is the size the task is REWRITTEN to past it — never
@@ -165,7 +166,12 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	if j == nil || j.model == nil {
 		return Decision{}, ErrNoVerdict
 	}
-	evidence := j.render(ctx, req)
+	// UNDER A TOKEN OF THE CALL'S OWN (ADR-0040): the task's fences are moved
+	// off the turn's token onto one minted here, and everything else the
+	// evidence carries — the calls, what the phase last said, a rewrite — is
+	// neutralised under it, so the judge reads somebody else's
+	// words as theirs and never meets the turn's token to echo.
+	evidence := provenance.Rekey(j.render(ctx, req), req.Boundary, provenance.NewBoundary())
 	if j.hold != nil {
 		if held := j.hold.Held(ctx); held != nil {
 			// NOT ASKED: no call was made, so there is nothing to report
@@ -256,7 +262,9 @@ or
 
 <rounds> is how many more tool-call rounds you believe finish the work.
 
-You are shown the phase's task, its tool-call log and what it last said. Answer EXTEND only when the phase is making PROGRESS: each call builds on the last, converging on the task. Answer RESCUE when it is REPEATING itself (the same call again with the same or near-identical arguments, two calls alternating, retrying what has already failed the same way more than twice), and when in doubt: more rounds cost real money, and a phase that is looping will loop in them too.`
+You are shown the phase's task, its tool-call log and what it last said. Answer EXTEND only when the phase is making PROGRESS: each call builds on the last, converging on the task. Answer RESCUE when it is REPEATING itself (the same call again with the same or near-identical arguments, two calls alternating, retrying what has already failed the same way more than twice), and when in doubt: more rounds cost real money, and a phase that is looping will loop in them too.
+
+` + provenance.StandingInstruction
 
 // render turns the evidence into the user message.
 //

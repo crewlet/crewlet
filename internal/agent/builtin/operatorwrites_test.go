@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN OPERATOR'S SECOND WRITE TO ONE OBJECT IS A SECOND WRITE.
@@ -57,7 +57,7 @@ import (
 // whole point of the case.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 	return builtin.Actor{
-		Handle: "token:founder", Kind: tracker.AuthorOperator,
+		Handle: "token:founder", Kind: worklet.AuthorOperator,
 		OperatorID: "token:founder",
 	}, nil
 }
@@ -261,7 +261,7 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 
 		t.Helper()
 		actor := builtin.Actor{
-			Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder",
+			Handle: "founder", Kind: worklet.AuthorOperator, OperatorID: "founder",
 		}
 		if request != "" {
 			actor.WorkKey = requests[request]
@@ -353,9 +353,9 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 			tool string
 			args map[string]any
 		}{
-			{tracker.SetPrioritiesTool, map[string]any{"items": []any{"ENG-1"}}},
-			{tracker.SetPinsTool, map[string]any{"views": map[string]any{"add": []any{"v-1"}}}},
-			{tracker.MarkInboxTool, map[string]any{"read": []any{"r-1"}}},
+			{worklet.SetPrioritiesTool, map[string]any{"items": []any{"ENG-1"}}},
+			{worklet.SetPinsTool, map[string]any{"views": map[string]any{"add": []any{"v-1"}}}},
+			{worklet.MarkInboxTool, map[string]any{"read": []any{"r-1"}}},
 		} {
 			opID := func(request string) string {
 				person := &personSpy{}
@@ -383,7 +383,7 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 
 // opName is the part of an operation id that names the write — its LAST
 // segment. A seat's write is `<uuid>.<name>`; an operator's is a step of the
-// call's own operation, `<uuid>.<tool>.<digest>.<name>` (see
+// call's own operation, `<uuid>.<tool>-<digest>.<name>` (see
 // builtin.Actor.Operation), and the write's own name is what comes last in
 // both.
 func opName(id string) string {

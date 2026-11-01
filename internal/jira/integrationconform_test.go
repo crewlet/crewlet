@@ -136,7 +136,7 @@ func convergedCompany() *org.Organization {
 //   - WebhookBase is set. Left empty the pass skips the webhook half
 //     entirely and every clause passes VACUOUSLY, which is the failure this
 //     whole file exists to end. assertConverged below refuses that fixture.
-//   - RecreateWebhook stays false: it is the operator's rotate gesture and
+//   - RecreateWebhook stays unasked: it is the operator's rotate gesture and
 //     forces a delete and a create by design.
 //
 // The DEPLOYMENT is the one knob deliberately left underived, and that is
@@ -417,7 +417,7 @@ func TestTheWriteCounterSeesEveryWriteAJiraPassCanMake(t *testing.T) {
 		},
 		{
 			name:  "recreating one, which is a delete and a create",
-			world: func(_ *instance, opts *jira.Options) { opts.RecreateWebhook = true },
+			world: func(_ *instance, opts *jira.Options) { opts.RecreateWebhook = "-recreate-webhook" },
 			want:  2,
 		},
 	} {

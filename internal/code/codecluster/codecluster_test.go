@@ -41,7 +41,7 @@ func TestTheCodeHostPassesTheFleetSuiteOnS3(t *testing.T) {
 // repository would contend at the broker between three committers. And a
 // COMPACTION of a repository, keyed by the same repository id, meets the same
 // committer whichever member proposes it: asked through every member at once,
-// it is appended once, by the committer alone (ADR-0060).
+// it is appended once, by the committer alone (ADR-0083).
 func TestEveryMemberRoutesARepositoryToOneCommitter(t *testing.T) {
 	const repos = 16
 	c := startCluster(t, "nats")
@@ -242,7 +242,7 @@ func TestTwoNodesQueueOneCheck(t *testing.T) {
 	}
 }
 
-// EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0059): a read of a
+// EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0082): a read of a
 // repository by object id through any member's router is answered by the
 // repository's home — the first of its rendezvous order over the running
 // members, which every member computes alike — and by no other member, the

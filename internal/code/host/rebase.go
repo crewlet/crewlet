@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A CHANGE REBASED ONTO ITS TARGET, ON THE GIT NODE (code.WriteRebaseChange):
@@ -205,10 +206,10 @@ func (b *building) toReplay(ctx context.Context, named, target string) ([]replay
 	case merge != "":
 		return nil, wr.changeRefused(code.WriteMergeCommit, fmt.Sprintf("%s's commit %s merges others: a "+
 			"rebase replays each commit onto the one before it, and a merge needs a mainline to replay — rebase "+
-			"it in a coding box (run_sandbox)", named, shortID(merge))), true, nil
+			"it in a checkout of the repository ("+toolname.CodeCheckout+")", named, shortID(merge))), true, nil
 	case n > code.MaxRebaseCommits:
 		return nil, wr.changeRefused(code.WriteTooManyCommits, fmt.Sprintf("%s holds more than %d commits its "+
-			"target does not (code.MaxRebaseCommits): rebase it in a coding box (run_sandbox)", named,
+			"target does not (code.MaxRebaseCommits): rebase it in a checkout of the repository ("+toolname.CodeCheckout+")", named,
 			code.MaxRebaseCommits)), true, nil
 	}
 	slices.Reverse(out)
@@ -229,11 +230,11 @@ func (r *rebasing) replay(ctx context.Context, named string, cm replayed, h *com
 	switch {
 	case why != "":
 		detail := fmt.Sprintf("%s's commit %s %s, so it cannot be replayed as it was written: rebase it in a "+
-			"coding box (run_sandbox)", named, shortID(cm.id), why)
+			"checkout of the repository ("+toolname.CodeCheckout+")", named, shortID(cm.id), why)
 		return wr.changeRefused(code.WriteRejectedObject, detail), true, nil
 	case h.cut:
 		return wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("%s's commit %s carries a message past the %s one "+
-			"engine write carries (code.MaxCommitPayloadBytes): rebase it in a coding box (run_sandbox)", named,
+			"engine write carries (code.MaxCommitPayloadBytes): rebase it in a checkout of the repository ("+toolname.CodeCheckout+")", named,
 			shortID(cm.id), humanBytes(code.MaxCommitPayloadBytes))), true, nil
 	}
 	m, err := b.merge(ctx, cm.parent, r.tip, cm.id)
@@ -242,8 +243,8 @@ func (r *rebasing) replay(ctx context.Context, named string, cm replayed, h *com
 	}
 	if !m.clean {
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s's commit %s (%d of %d) does not apply cleanly on %s: %d "+
-			"paths conflict, and the rebase stops there with nothing stored; resolve them in a coding box "+
-			"(run_sandbox)", named, shortID(cm.id), i+1, n, shortID(r.tip), len(m.conflicts)+m.omitted))
+			"paths conflict, and the rebase stops there with nothing stored; resolve them in a checkout of the repository "+
+			"("+toolname.CodeCheckout+")", named, shortID(cm.id), i+1, n, shortID(r.tip), len(m.conflicts)+m.omitted))
 		return res, true, err
 	}
 	if m.tree == r.tree {

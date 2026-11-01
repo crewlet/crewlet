@@ -18,7 +18,7 @@ import (
 // identity claim compares, where an anchor is written, whether an unknown
 // version stops the applier or is filed for later.
 //
-// THE FRAMEWORK'S EIGHTH DOMAIN, its sixth strict one and its sixth that claims
+// THE FRAMEWORK'S TENTH DOMAIN, its eighth strict one and its eighth that claims
 // identity.
 type Domain struct{}
 
@@ -158,7 +158,7 @@ func (Domain) OpsTable() string { return "code_ops" }
 //
 // FALSE. A wrong or stalled code copy takes only CODE operations out of
 // service: they go to peers — the router asks each operation's own domain's
-// verdict (ADR-0049) — and git requests are answered from them. A seat whose
+// verdict (ADR-0072) — and git requests are answered from them. A seat whose
 // node's code copy stalls still runs, because nothing a seat does reads code
 // until seats push, and then a seat's code tools route to peers like any other
 // operation. Gating admission on it would shed a company's seats for a fault

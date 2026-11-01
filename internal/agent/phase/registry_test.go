@@ -128,41 +128,22 @@ func TestARepeatedKeyIsCollapsed(t *testing.T) {
 	}
 }
 
-func TestSandboxTakesItsOwnKeyThenTheRoleDefault(t *testing.T) {
-	t.Parallel()
-	// Sandboxed work IS this seat's own work, done somewhere else. There is
-	// no executor key to inherit — `llm` is the executor's chain — so its
-	// own key overrides and the role default is the only fallback.
-	r := reg(t, "default", "coder")
-	role := &org.Role{Name: "Eng", LLM: org.ProviderKeys{"default"}}
-
-	if got := chainKeys(t)(r.Chain(role, phase.Sandbox)); !slices.Equal(got, []string{"default"}) {
-		t.Errorf("sandbox chain = %v, want the role default [default]", got)
-	}
-	role.LLMSandbox = org.ProviderKeys{"coder"}
-	if got := chainKeys(t)(r.Chain(role, phase.Sandbox)); !slices.Equal(got, []string{"coder"}) {
-		t.Errorf("sandbox chain = %v, want its own [coder]", got)
-	}
-}
-
 func TestEveryPhaseReadsItsOwnField(t *testing.T) {
 	t.Parallel()
 	// A switch that returns the wrong field for one phase is invisible: the
 	// seat still runs, on the wrong model. Each phase gets a uniquely-named
 	// provider so a crossed wire has somewhere to show up.
-	r := reg(t, "default", "r", "s", "a", "j", "sb")
+	r := reg(t, "default", "r", "s", "a", "j")
 	role := &org.Role{
 		Name: "CTO", LLM: org.ProviderKeys{"default"},
 		LLMReview: org.ProviderKeys{"r"}, LLMSubagent: org.ProviderKeys{"s"},
 		LLMAuxiliary: org.ProviderKeys{"a"}, LLMJudge: org.ProviderKeys{"j"},
-		LLMSandbox: org.ProviderKeys{"sb"},
 	}
 	// The executor has no field of its own: `llm` IS its chain, so it must
 	// resolve to the role default here rather than to any satellite's key.
 	want := map[phase.Phase]string{
 		phase.Execute: "default", phase.Review: "r",
 		phase.Subagent: "s", phase.Auxiliary: "a", phase.Judge: "j",
-		phase.Sandbox: "sb",
 		// ONBOARDING HAS NO FIELD OF ITS OWN and resolves to the role
 		// default — asserted rather than omitted, so adding an
 		// `llm_onboarding:` without wiring it here fails loudly.
@@ -296,7 +277,7 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 	t.Parallel()
 	roles := []*org.Role{
 		{Name: "per-phase", LLM: org.ProviderKeys{"alpha"}, LLMReview: org.ProviderKeys{"beta", "alpha"},
-			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMSandbox: org.ProviderKeys{"typo"}},
+			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMAuxiliary: org.ProviderKeys{"typo"}},
 		{Name: "names nothing"},
 		{Name: "only unknown", LLM: org.ProviderKeys{"typo"}},
 	}
@@ -324,5 +305,60 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 	}
 	if got := phase.Resolve(nil, phase.Execute, []string{"alpha"}); got != nil {
 		t.Errorf("Resolve of no role = %v, want nil", got)
+	}
+}
+
+// RESOLUTION REPORTS WHICH LEVEL DECIDED, in turn-engine.md's order for a
+// satellite: the seat's per-phase chain, then its own `llm`, then the entry
+// keyed "default", then the first entry configured. The executor's own field
+// IS `llm`, so `llm` deciding the executor is the seat's choice; only a
+// satellite that named nothing reads as its executor's chain. A field naming
+// only keys the company lacks decided nothing, whatever it wrote.
+func TestResolveWithSourceNamesTheLevelThatDecided(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "seat", LLM: org.ProviderKeys{"alpha"},
+		LLMReview: org.ProviderKeys{"beta"}, LLMJudge: org.ProviderKeys{"typo"}}
+	for _, tc := range []struct {
+		name   string
+		role   *org.Role
+		ph     phase.Phase
+		order  []string
+		keys   []string
+		source phase.Source
+	}{
+		{"a satellite's own field", seat, phase.Review, []string{"default", "alpha", "beta"},
+			[]string{"beta"}, phase.SourceSeat},
+		{"the executor's own llm", seat, phase.Execute, []string{"default", "alpha", "beta"},
+			[]string{"alpha"}, phase.SourceSeat},
+		{"a satellite that names nothing falls to llm", seat, phase.Subagent, []string{"default", "alpha"},
+			[]string{"alpha"}, phase.SourceExecutor},
+		{"onboarding, which has no field, runs on llm", seat, phase.Onboarding, []string{"alpha"},
+			[]string{"alpha"}, phase.SourceExecutor},
+		// A per-phase field that misses does NOT fall to llm: it lands
+		// on the company's fallback, as Chain does.
+		{"a satellite naming only a missing key", seat, phase.Judge, []string{"alpha", "default"},
+			[]string{"default"}, phase.SourceDefaultEntry},
+		{"a seat naming nothing, with a default entry", &org.Role{Name: "none"}, phase.Execute,
+			[]string{"alpha", "default"}, []string{"default"}, phase.SourceDefaultEntry},
+		{"a seat naming nothing, with no default entry", &org.Role{Name: "none"}, phase.Review,
+			[]string{"gamma", "alpha"}, []string{"gamma"}, phase.SourceFirstEntry},
+		{"an executor whose llm misses", &org.Role{Name: "typo", LLM: org.ProviderKeys{"typo"}}, phase.Execute,
+			[]string{"gamma", "alpha"}, []string{"gamma"}, phase.SourceFirstEntry},
+		{"no providers", seat, phase.Execute, nil, nil, ""},
+		{"no role", nil, phase.Execute, []string{"alpha"}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			keys, source := phase.ResolveWithSource(tc.role, tc.ph, tc.order)
+			if !slices.Equal(keys, tc.keys) || source != tc.source {
+				t.Errorf("ResolveWithSource = %v, %q; want %v, %q", keys, source, tc.keys, tc.source)
+			}
+			if tc.source != "" && !source.Valid() {
+				t.Errorf("source %q is outside the closed set", source)
+			}
+			if got := phase.Resolve(tc.role, tc.ph, tc.order); !slices.Equal(got, keys) {
+				t.Errorf("Resolve = %v, ResolveWithSource = %v: one resolution answers both", got, keys)
+			}
+		})
 	}
 }

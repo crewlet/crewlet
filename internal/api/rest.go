@@ -90,72 +90,146 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
+	// WHERE THE COMPANY'S APPS LIVE IN A BROWSER, everybody's where
+	// `/integrations` is an administrator's: a kind and a base address per app.
+	{method: "GET", pattern: "/link-hosts", what: "link_hosts"},
 	// WHAT EACH MCP SERVER DID ON EACH NODE. Not under /config/mcp-servers,
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
 	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
+	// WHAT EACH MODEL IS DOING, and what Settings › Models offers: the
+	// runners a model can be placed on, the models a step suggests, and one
+	// device sign-in while its record lingers. The writes beside them are
+	// llmapi's own routes under /llm/providers/.
+	{method: "GET", pattern: "/llm/entries", what: "llm_entries"},
+	{method: "GET", pattern: "/llm/runners", what: "llm_runners"},
+	{method: "GET", pattern: "/llm/models", what: "llm_models"},
+	{method: "GET", pattern: "/llm/device-sign-ins/{id}", what: "llm_device_sign_in", path: map[string]string{"id": "id"}},
 	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
 	// Plural beside `POST /backup`, which TAKES one: the read is a
 	// collection and the write is one act, and neither is the other's
 	// method on one path.
 	{method: "GET", pattern: "/backups", what: "backups"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
-	// above, so /work/counters is not read as an item whose key is
+	// above, so /worklet/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather
 	// than the first registered.
-	{method: "GET", pattern: "/work/retention", what: "retention"},
-	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
-	{method: "GET", pattern: "/work/projects", what: "work_projects"},
-	{method: "GET", pattern: "/work/workload", what: "work_workload"},
+	{method: "GET", pattern: "/worklet/retention", what: "retention"},
+	{method: "GET", pattern: "/worklet/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
+	{method: "GET", pattern: "/worklet/projects", what: "work_projects"},
+	{method: "GET", pattern: "/worklet/workload", what: "work_workload"},
 	// THE LANDING SCREEN'S SERIES AND WHAT WAITS ON THE CALLER, both
-	// literal segments above /work/{id} for the reason given there.
-	{method: "GET", pattern: "/work/flow", what: "work_flow"},
-	{method: "GET", pattern: "/work/decisions", what: "decisions"},
-	{method: "GET", pattern: "/work/activity", what: "work_activity"},
-	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
-	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// literal segments above /worklet/{id} for the reason given there.
+	{method: "GET", pattern: "/worklet/flow", what: "work_flow"},
+	{method: "GET", pattern: "/worklet/decisions", what: "decisions"},
+	{method: "GET", pattern: "/worklet/decisions/answered", what: "answered_decisions"},
+	{method: "GET", pattern: "/worklet/activity", what: "work_activity"},
+	{method: "GET", pattern: "/worklet/my-work", what: "work_my_work"},
+	{method: "GET", pattern: "/worklet/inbox", what: "work_inbox"},
 	// AND THE COMPOSED INBOX, every native domain's notices in one list —
 	// no domain's path, since it is no domain's (queries' composedInbox).
 	{method: "GET", pattern: "/inbox", what: "inbox"},
 	// A TASK'S THREAD, deeper than the detail's own page, with the task as
-	// `item=`. A literal segment rather than /work/{id}/comments, which
-	// net/http refuses beside /work/projects/{key}: neither is more specific
-	// for "/work/projects/comments", so the mux would not start.
-	{method: "GET", pattern: "/work/comments", what: "work_comments"},
+	// `item=`. A literal segment rather than /worklet/{id}/comments, which
+	// net/http refuses beside /worklet/projects/{key}: neither is more specific
+	// for "/worklet/projects/comments", so the mux would not start.
+	{method: "GET", pattern: "/worklet/comments", what: "work_comments"},
 	// A TASK'S TURNS, beside its thread and for the same reason: a literal
-	// segment with `id=` rather than /work/{id}/turns.
-	{method: "GET", pattern: "/work/turns", what: "work_item_turns"},
-	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
+	// segment with `id=` rather than /worklet/{id}/turns.
+	{method: "GET", pattern: "/worklet/turns", what: "work_item_turns"},
+	// SEARCH AND ROUTING, both above /worklet/{id} for the reason the comment
 	// there gives: a literal segment beats the wildcard, so neither is read
 	// as a task whose key is "search" or "routing".
-	{method: "GET", pattern: "/work/search", what: "work_search"},
-	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
-	{method: "GET", pattern: "/work/views", what: "work_views"},
+	{method: "GET", pattern: "/worklet/search", what: "work_search"},
+	{method: "GET", pattern: "/worklet/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
+	{method: "GET", pattern: "/worklet/views", what: "work_views"},
 	// A PROJECT'S FILES. The listing is a question like every other here;
 	// one file's BYTES are not, and stream from the human write surface's
 	// own route beside it (internal/api/workapi's files.go), which the
-	// literal segment keeps apart from /work/{id}.
-	{method: "GET", pattern: "/work/files", what: "work_files"},
-	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
-	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
-	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
-	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
-	{method: "GET", pattern: "/work", what: "work_items"},
-	// The page ACTIVITY and one REVISION's body. Both above /pages/{id},
+	// literal segment keeps apart from /worklet/{id}.
+	{method: "GET", pattern: "/worklet/files", what: "work_files"},
+	{method: "GET", pattern: "/worklet/views/saved", what: "work_saved_views"},
+	{method: "GET", pattern: "/worklet/catalogue", what: "work_catalogue"},
+	{method: "GET", pattern: "/worklet/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
+	{method: "GET", pattern: "/worklet/{id}", what: "work_item", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/worklet", what: "work_items"},
+	// The page ACTIVITY and one REVISION's body. Both above /doclet/pages/{id},
 	// for the reason the work routes give: a literal segment beats the
 	// wildcard, so neither is read as a page whose id is "activity".
-	{method: "GET", pattern: "/pages/activity", what: "page_activity"},
-	{method: "GET", pattern: "/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
-	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
-	{method: "GET", pattern: "/pages", what: "pages"},
+	{method: "GET", pattern: "/doclet/pages/activity", what: "page_activity"},
+	{method: "GET", pattern: "/doclet/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
+	{method: "GET", pattern: "/doclet/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/doclet/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
-	// WHAT THE COMPANY DID, merged across the tracker, the pages and the
-	// schedules — not under /work/, since two of its three sources are
-	// not the tracker's.
+	// WHAT THE COMPANY DID, merged across Worklet, Doclet and the schedules,
+	// and not under /worklet/, since two of its three sources are not
+	// Worklet's.
 	{method: "GET", pattern: "/feed", what: "company_feed"},
-	// WHO IS ASKING. Not under /work/: the answer is the caller's own
+	// THE COMPANY'S OWN CHAT. Reads only — a write is not a question and
+	// the registry answers questions: every ordinary chat write is a tool
+	// the dashboard calls through /operator/act (ADR-0024), and the three
+	// that destroy or set a room's horizon are the human write surface's
+	// (internal/api/workapi/chat.go).
+	//
+	// The path values are named `channel_id` and `root_id`, which are the
+	// names the QUESTIONS take — and those are the domain's own, because
+	// [chatlet.Reader]'s refusals name the field they refused and those
+	// sentences reach the caller unchanged. A shorter spelling here would
+	// send somebody looking for a key this surface does not accept.
+	{method: "GET", pattern: "/chatlet/channels", what: "chat_channels"},
+	// THE LITERAL SEGMENTS BEAT THE WILDCARD, as they do under /worklet/ and
+	// /doclet/pages/: /chatlet/channels/{channel_id}/messages is not read as a room
+	// whose id is "messages", and net/http resolves the more specific
+	// pattern rather than the first registered.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages", what: "chat_messages",
+		path: map[string]string{"channel_id": "channel_id"}},
+	// ONE THREAD, addressed by the message it hangs off. A thread here is
+	// one level deep by construction, so this is a range in one room
+	// rather than a walk — and it is a route of its own rather than a
+	// filter on the transcript because the two answers have different
+	// shapes: this one carries the root and who has spoken in it.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/threads/{root_id}", what: "chat_thread",
+		path: map[string]string{"channel_id": "channel_id", "root_id": "root_id"}},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}", what: "chat_channel",
+		path: map[string]string{"channel_id": "channel_id"}},
+	// WHAT NAMED ME. About the caller rather than about a room, which is
+	// why it is not under /chatlet/channels/ — and resolved to a seat by the
+	// server, because a caller may never name one.
+	//
+	// THERE IS NO `GET /chatlet/read` beside it. Where somebody has read to
+	// is not a question of its own: it rides the rail, whose every room
+	// carries this viewer's unread count and mute, because a badge and
+	// the room it belongs to are read together or not at all. The WRITE
+	// half is the `mark_chat_read` tool, which the dashboard calls through
+	// /operator/act like every other write.
+	// THE READER'S OWN VIEWS, each about the caller rather than a room
+	// (Activity, the threads they follow, what they saved and what they
+	// sent), and a room's shared links and one of its messages, which are
+	// under the room they read.
+	{method: "GET", pattern: "/chatlet/activity", what: "chat_activity"},
+	{method: "GET", pattern: "/chatlet/threads", what: "chat_threads"},
+	{method: "GET", pattern: "/chatlet/saved", what: "chat_saved"},
+	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
+		path: map[string]string{"channel_id": "channel_id"}},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
+		what: "chat_message",
+		path: map[string]string{"channel_id": "channel_id", "message_id": "message_id"}},
+	// RANKED, over every room the caller may read. Its own route beside
+	// the transcript for the reason the board's search is one beside the
+	// board: a transcript is a position in one room and keeps that room's
+	// order, while a search ranks a corpus, so its answer IS the order.
+	{method: "GET", pattern: "/chatlet/search", what: "chat_search"},
+	// THE NAME OF EVERY ROOM THE CALLER MAY READ, joined or not: what prose
+	// names a room by, which a reader cannot tell from a colour or an
+	// issue's number without knowing the rooms.
+	{method: "GET", pattern: "/chatlet/room-names", what: "chat_room_names"},
+	// EVERY ROOM THE CALLER MAY BROWSE, with what a person chooses one by:
+	// its member count, whether they are in it and when it was last active.
+	{method: "GET", pattern: "/chatlet/rooms", what: "chat_rooms"},
+	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
-	// native tracker still has a viewer.
+	// Worklet still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
 	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
 	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other
@@ -190,7 +264,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
-	// the serving node derives (code.GrantOf, ADR-0058) — and who read a
+	// the serving node derives (code.GrantOf, ADR-0081) — and who read a
 	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
 	// ALONE: they were the code host's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second
@@ -240,14 +314,28 @@ func (a *App) mountReads(mux httpjson.Router) {
 	// everybody's, and a seat's live call reaches a reader the seat's
 	// trail is not open to as its status alone, exactly as the push hands
 	// it to them.
-	mux.Handle("GET /agents", a.serveFrom(stream.KindAgents,
-		func(stream.Audience) any { return a.stream.Roster() }))
-	mux.Handle("GET /org", a.serveFrom(stream.KindOrg,
-		func(stream.Audience) any { return a.stream.Org() }))
-	mux.Handle("GET /tools", a.serveFrom(stream.KindTools,
-		func(stream.Audience) any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", a.serveFrom(stream.KindSnapshot,
-		func(audience stream.Audience) any { return a.stream.Snapshot(audience) }))
+	for _, route := range a.overviewRoutes() {
+		mux.Handle(route.pattern, a.serveFrom(route.kind, route.build))
+	}
+}
+
+// overviewRoute is one of the reads served from the stream service.
+type overviewRoute struct {
+	pattern string
+	kind    stream.Kind
+	build   func(stream.Audience) any
+}
+
+// overviewRoutes are the four reads served from the stream service rather than
+// the registry, in mount order.
+func (a *App) overviewRoutes() []overviewRoute {
+	return []overviewRoute{
+		{"GET /agents", stream.KindAgents, func(stream.Audience) any { return a.stream.Roster() }},
+		{"GET /org", stream.KindOrg, func(stream.Audience) any { return a.stream.Org() }},
+		{"GET /tools", stream.KindTools, func(stream.Audience) any { return a.stream.Tools() }},
+		{"GET /stream/snapshot", stream.KindSnapshot,
+			func(audience stream.Audience) any { return a.stream.Snapshot(audience) }},
+	}
 }
 
 // serveNamed answers one registry question from a named route.
@@ -274,6 +362,10 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 // with ([stream.Service.AudienceFor]), and what build returns is shaped for it
 // ([stream.ShapeFor]), so the whole bundle carries only what that caller may
 // read.
+//
+// A PRINCIPAL ACTING THROUGH THE ASSISTANT reads them as its person does
+// (ADR-0052's parity): each is the overview its person's socket is pushed,
+// shaped for the same audience, and none carries a credential.
 func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.Caller(w, r)
@@ -283,12 +375,11 @@ func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.
 		out, err := a.overview(r.Context(), principal, kind, build)
 		var refusal *queries.Refusal
 		if errors.As(err, &refusal) {
-			// THE SAME TWO FIELDS every refusal on authority carries,
+			// THE ENVELOPE every refusal on authority is answered in,
 			// rather than a sentence naming the permission: a client
 			// reading `grants` off a refused question reads it off this
-			// too.
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(refusal.Reason, refusal.Grants))
+			// too, worded by the table's one mapping.
+			authz.EnvelopeRefusal(w, r, authz.Policy{}, refusal.Decision)
 			return
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -305,7 +396,7 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 	// identity for the two to disagree about.
 	data, err := a.queries.AnswerWith(r.Context(), what, params)
 	if err != nil {
-		writeQueryError(w, what, err)
+		writeQueryError(w, r, what, err)
 		return
 	}
 	writeAnswer(w, r, data)

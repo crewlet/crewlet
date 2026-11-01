@@ -87,7 +87,7 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 // a compaction names each output's row and tells each input's removed; every
 // other record this build reads — a sweep of retired packs among them — names
 // none; and a record this build cannot read that may reach a repository
-// refuses — the backup's ADR-0052 contract.
+// refuses — the backup's ADR-0075 contract.
 func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	t.Parallel()
 	records := code.PackReferences.Records

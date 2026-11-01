@@ -8,21 +8,22 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE NATIVE HALVES, AS EACH REQUEST FINDS THEM.
 //
 // # Why nothing here is captured when the API is built
 //
-// A node's own tracker and knowledge base come up with its FIRST COMPANY, and
+// A node's own Worklet, Doclet and Chatlet come up with its FIRST COMPANY, and
 // a node that booted with none meets that at an apply — after its API has been
 // serving for as long as it took somebody to import one. The API used to take
 // every native source from the engine ONCE, while it was being wired: the read
@@ -60,43 +61,82 @@ import (
 // [httpjson.NativeHalvesNotUp] as its words.
 var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoCompany)
 
-// NativeSources are the read surface's five native sources — the board, the
-// knowledge base, the links between its pages, ranked item search and a
-// project's file listing — each resolved per question.
+// NativeReads are the read surface's native sources — the board, the knowledge
+// base, the links between its pages, ranked item search, a project's file
+// listing, the company's chat and its search, and a person's chat read state —
+// each resolved per question. Built by [NativeSources] and handed to the
+// read surface by [NativeReads.Into].
+//
+// THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
+// ([engine.OperatorWork], [engine.OperatorPages], [engine.OperatorChat],
+// [engine.WorkSearcher]), so an operator and an agent looking at one item see
+// one item: answered from this node's copy while it serves and from another
+// data node's while it does not. Read off this node's copy directly, a data
+// node whose copy was out of service — wrong rather than behind, or its file
+// shut — went on drawing its operator's board from rows it would not vouch for
+// to its own seats. The links between pages too ([estate.Pages.LinkedFrom]):
+// they are a data node's own lexical index, named from its copies of Doclet
+// AND Worklet, so they are answered by a data node whose copies of both serve
+// (ADR-0072) — read off this node's index, a node whose pages or tracker copy
+// had stopped serving listed links derived from rows it no longer answered
+// for, beside a page a peer had answered. And a person's read cursors are the
+// fleet's coordination record, which every node reads directly.
+type NativeReads struct {
+	Work       queries.WorkReader
+	Pages      queries.PageReader
+	Backlinks  queries.PageBacklinks
+	WorkSearch queries.WorkSearcher
+	Files      queries.FileReader
+	Chat       queries.ChatReader
+	ChatSearch queries.ChatSearcher
+	ChatReads  queries.ChatReads
+
+	// PullRequests reads a pull request for a chat link's preview through
+	// the company's GitHub wiring.
+	PullRequests queries.PullRequestReader
+}
+
+// NativeSources are this engine's native read sources.
 //
 // ONE CONSTRUCTOR for `crewlet run` and the end-to-end suite, for
 // [NewHumanSurfaces]' reason: a copy of the rule in either would be a harness
 // agreeing with itself.
-//
-// THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
-// ([engine.OperatorWork], [engine.OperatorPages], [engine.WorkSearcher]), so an
-// operator and an agent looking at one item see one item: answered from this
-// node's copy while it serves and from another data node's while it does not.
-// Read off this node's copy directly, a data node whose copy was out of
-// service — wrong rather than behind, or its file shut — went on drawing its
-// operator's board from rows it would not vouch for to its own seats. The
-// links between pages too ([estate.Pages.LinkedFrom]): they are a data node's
-// own lexical index, named from its copies of the knowledge base AND the
-// tracker, so they are answered by a data node whose copies of both serve
-// (ADR-0049) — read off this node's index, a node whose pages or tracker copy
-// had stopped serving listed links derived from rows it no longer answered
-// for, beside a page a peer had answered.
-func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
-	queries.PageBacklinks, queries.WorkSearcher, queries.FileReader) {
+func NativeSources(e *engine.Engine) NativeReads {
+	return NativeReads{
+		Work: liveWork{engine: e}, Pages: livePages{engine: e},
+		Backlinks: liveBacklinks{engine: e}, WorkSearch: liveWorkSearch{engine: e},
+		Files: liveFiles{engine: e},
+		Chat:  liveChat{engine: e}, ChatSearch: liveChatSearch{engine: e},
+		// THE FLEET'S OWN RECORD, which every node reaches whatever its
+		// company runs, and which a chat question reads only after it has
+		// read rooms — a company with no Chatlet never asks it.
+		ChatReads: e.Backends().Fleet,
+		// THE ENGINE'S OWN GITHUB WIRING, the one a thread's participants
+		// are read through, rebuilt on every apply.
+		PullRequests: e,
+	}
+}
 
-	return liveWork{engine: e}, livePages{engine: e}, liveBacklinks{engine: e},
-		liveWorkSearch{engine: e}, liveFiles{engine: e}
+// Into sets every native source on s — ALL OF THEM, so a caller cannot wire
+// the board and forget the rooms beside it. A field set before the call is
+// overwritten: these are the native sources, and there is one answer to what
+// they are.
+func (n NativeReads) Into(s *queries.Sources) {
+	s.Work, s.Pages, s.Backlinks, s.WorkSearch, s.Files =
+		n.Work, n.Pages, n.Backlinks, n.WorkSearch, n.Files
+	s.Chat, s.ChatSearch, s.ChatReads = n.Chat, n.ChatSearch, n.ChatReads
+	s.PullRequests = n.PullRequests
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
-// yet, or the company does not keep this half in the engine. See the file
-// comment for why the two are different answers.
+// yet, or the company does not run this half (Worklet, Doclet or Chatlet,
+// named by half). See the file comment for why the two are different
+// answers.
 func nativeAbsent(started bool, half string) error {
 	if !started {
 		return errNoCompanyYet
 	}
-	return fmt.Errorf("%w: this company's %s is not the engine's own",
-		queries.ErrUnknown, half)
+	return fmt.Errorf("%w: this company does not run %s", queries.ErrUnknown, half)
 }
 
 // liveWork is the tracker's read side, resolved per question.
@@ -107,7 +147,7 @@ func (l liveWork) reader() (estate.Work, error) {
 	if r, ok := engine.OperatorWork(l.engine); ok {
 		return r, nil
 	}
-	return estate.Work{}, nativeAbsent(started, "tracker")
+	return estate.Work{}, nativeAbsent(started, "Worklet")
 }
 
 // Kept answers whether this node serves the tracker half, by the same
@@ -117,168 +157,177 @@ func (l liveWork) Kept() error {
 	return err
 }
 
-func (l liveWork) Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error) {
+func (l liveWork) Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.Answer{}, err
+		return worklet.Answer{}, err
 	}
 	return r.Tasks(ctx, q, now)
 }
 
-func (l liveWork) Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-	fresh statelog.Freshness) (tracker.TaskDetail, error) {
+func (l liveWork) Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+	fresh statelog.Freshness) (worklet.TaskDetail, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.TaskDetail{}, err
+		return worklet.TaskDetail{}, err
 	}
 	return r.Task(ctx, idOrKey, want, fresh)
 }
 
 func (l liveWork) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+	fresh statelog.Freshness) (worklet.TaskTurns, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.TaskTurns{}, err
+		return worklet.TaskTurns{}, err
 	}
 	return r.TurnsOf(ctx, idOrKey, cursor, limit, fresh)
 }
 
-func (l liveWork) Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+func (l liveWork) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ViewListing{}, err
+		return worklet.ViewListing{}, err
 	}
 	return r.Views(ctx, q)
 }
 
-func (l liveWork) EveryView(ctx context.Context, q tracker.EveryViewQuery) (
-	tracker.ViewListing, error) {
+func (l liveWork) EveryView(ctx context.Context, q worklet.EveryViewQuery) (
+	worklet.ViewListing, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ViewListing{}, err
+		return worklet.ViewListing{}, err
 	}
 	return r.EveryView(ctx, q)
 }
 
 func (l liveWork) ExpandedQuery(ctx context.Context, params map[string]any,
-	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.Query{}, err
+		return worklet.Query{}, err
 	}
 	return r.ExpandedQuery(ctx, params, viewer, now, loc)
 }
 
-func (l liveWork) Catalogue(ctx context.Context, q tracker.CatalogueQuery) (
-	tracker.CatalogueAnswer, error) {
+func (l liveWork) Catalogue(ctx context.Context, q worklet.CatalogueQuery) (
+	worklet.CatalogueAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.CatalogueAnswer{}, err
+		return worklet.CatalogueAnswer{}, err
 	}
 	return r.Catalogue(ctx, q)
 }
 
-func (l liveWork) Projects(ctx context.Context, q tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
+func (l liveWork) Projects(ctx context.Context, q worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ProjectListing{}, err
+		return worklet.ProjectListing{}, err
 	}
 	return r.Projects(ctx, q)
 }
 
-func (l liveWork) Project(ctx context.Context, q tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (l liveWork) Project(ctx context.Context, q worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ProjectDetail{}, err
+		return worklet.ProjectDetail{}, err
 	}
 	return r.Project(ctx, q)
 }
 
-func (l liveWork) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
-	loc *time.Location) (tracker.WorkloadAnswer, error) {
+func (l liveWork) Workload(ctx context.Context, q worklet.WorkloadQuery, now time.Time,
+	loc *time.Location) (worklet.WorkloadAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.WorkloadAnswer{}, err
+		return worklet.WorkloadAnswer{}, err
 	}
 	return r.Workload(ctx, q, now, loc)
 }
 
-func (l liveWork) Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
-	tracker.ActivityAnswer, error) {
+func (l liveWork) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
+	worklet.ActivityAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ActivityAnswer{}, err
+		return worklet.ActivityAnswer{}, err
 	}
 	return r.Activity(ctx, q, now)
 }
 
-func (l liveWork) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
-	loc *time.Location) (tracker.MyWork, error) {
+func (l liveWork) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
+	loc *time.Location) (worklet.MyWork, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.MyWork{}, err
+		return worklet.MyWork{}, err
 	}
 	return r.MyWork(ctx, q, now, loc)
 }
 
-func (l liveWork) Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (
-	tracker.PersonState, error) {
+func (l liveWork) Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (
+	worklet.PersonState, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.PersonState{}, err
+		return worklet.PersonState{}, err
 	}
 	return r.Person(ctx, q, now)
 }
 
-func (l liveWork) Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
-	tracker.InboxAnswer, error) {
+func (l liveWork) Inbox(ctx context.Context, q worklet.InboxQuery, now time.Time) (
+	worklet.InboxAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.InboxAnswer{}, err
+		return worklet.InboxAnswer{}, err
 	}
 	return r.Inbox(ctx, q, now)
 }
 
-func (l liveWork) Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
-	tracker.RoutingAnswer, error) {
+func (l liveWork) Routing(ctx context.Context, q worklet.RoutingQuery, now time.Time) (
+	worklet.RoutingAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.RoutingAnswer{}, err
+		return worklet.RoutingAnswer{}, err
 	}
 	return r.Routing(ctx, q, now)
 }
 
-func (l liveWork) Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
-	loc *time.Location) (tracker.FlowAnswer, error) {
+func (l liveWork) Flow(ctx context.Context, q worklet.FlowQuery, now time.Time,
+	loc *time.Location) (worklet.FlowAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.FlowAnswer{}, err
+		return worklet.FlowAnswer{}, err
 	}
 	return r.Flow(ctx, q, now, loc)
 }
 
-func (l liveWork) CompanyFeed(ctx context.Context, q tracker.FeedQuery) (
-	tracker.FeedPage, error) {
+func (l liveWork) CompanyFeed(ctx context.Context, q worklet.FeedQuery) (
+	worklet.FeedPage, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.FeedPage{}, err
+		return worklet.FeedPage{}, err
 	}
 	return r.CompanyFeed(ctx, q)
 }
 
-func (l liveWork) Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
-	loc *time.Location) (tracker.DecisionsAnswer, error) {
+func (l liveWork) Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.DecisionsAnswer, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.DecisionsAnswer{}, err
+		return worklet.DecisionsAnswer{}, err
 	}
 	return r.Decisions(ctx, q, now, loc)
 }
 
+func (l liveWork) AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	r, err := l.reader()
+	if err != nil {
+		return worklet.AnsweredAnswer{}, err
+	}
+	return r.AnsweredAsks(ctx, q, now, loc)
+}
+
 func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
-	fresh statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	fresh statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 	r, err := l.reader()
 	if err != nil {
 		return nil, err
@@ -286,15 +335,15 @@ func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
 	return r.TurnPlaces(ctx, runs, fresh)
 }
 
-// Thread is the read `work_item` asks [tracker.AskedOn] through — whether an
-// open ask on an item names somebody without the tracker — routed like every
+// Thread is the read `work_item` asks [worklet.AskedOn] through (whether an
+// open ask on an item names somebody without Worklet), routed like every
 // other tracker read, so the probe and the comment that would answer the ask
 // are resolved by one data node's rows under the same session floors.
-func (l liveWork) Thread(ctx context.Context, q tracker.ThreadQuery,
-	fresh statelog.Freshness) (tracker.ResolvedThread, error) {
+func (l liveWork) Thread(ctx context.Context, q worklet.ThreadQuery,
+	fresh statelog.Freshness) (worklet.ResolvedThread, error) {
 	r, err := l.reader()
 	if err != nil {
-		return tracker.ResolvedThread{}, err
+		return worklet.ResolvedThread{}, err
 	}
 	return r.Thread(ctx, q, fresh)
 }
@@ -314,7 +363,7 @@ func (l livePages) reader() (estate.Pages, error) {
 	if r, ok := engine.OperatorPages(l.engine); ok {
 		return r, nil
 	}
-	return estate.Pages{}, nativeAbsent(started, "knowledge base")
+	return estate.Pages{}, nativeAbsent(started, "Doclet")
 }
 
 // Kept answers whether this node serves the knowledge half, by the same
@@ -324,26 +373,26 @@ func (l livePages) Kept() error {
 	return err
 }
 
-func (l livePages) List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (
-	pages.Listing, error) {
+func (l livePages) List(ctx context.Context, f doclet.Filter, fresh statelog.Freshness) (
+	doclet.Listing, error) {
 	r, err := l.reader()
 	if err != nil {
-		return pages.Listing{}, err
+		return doclet.Listing{}, err
 	}
 	return r.List(ctx, f, fresh)
 }
 
 func (l livePages) Get(ctx context.Context, ref string, fresh statelog.Freshness) (
-	pages.Detail, error) {
+	doclet.Detail, error) {
 	r, err := l.reader()
 	if err != nil {
-		return pages.Detail{}, err
+		return doclet.Detail{}, err
 	}
 	return r.Get(ctx, ref, fresh)
 }
 
 func (l livePages) Containers(ctx context.Context, fresh statelog.Freshness) (
-	[]pages.ContainerListing, error) {
+	[]doclet.ContainerListing, error) {
 	r, err := l.reader()
 	if err != nil {
 		return nil, err
@@ -351,20 +400,20 @@ func (l livePages) Containers(ctx context.Context, fresh statelog.Freshness) (
 	return r.Containers(ctx, fresh)
 }
 
-func (l livePages) Activity(ctx context.Context, q pages.PageActivityQuery) (
-	pages.PageActivity, error) {
+func (l livePages) Activity(ctx context.Context, q doclet.PageActivityQuery) (
+	doclet.PageActivity, error) {
 	r, err := l.reader()
 	if err != nil {
-		return pages.PageActivity{}, err
+		return doclet.PageActivity{}, err
 	}
 	return r.Activity(ctx, q)
 }
 
 func (l livePages) Revision(ctx context.Context, pageID string, version int,
-	fresh statelog.Freshness) (pages.Revision, bool, error) {
+	fresh statelog.Freshness) (doclet.Revision, bool, error) {
 	r, err := l.reader()
 	if err != nil {
-		return pages.Revision{}, false, err
+		return doclet.Revision{}, false, err
 	}
 	return r.Revision(ctx, pageID, version, fresh)
 }
@@ -372,11 +421,10 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 // liveBacklinks is which pages link to a page, resolved per question.
 //
 // ITS OWN SOURCE, and a native-half one: the links are an index the engine
-// keeps over its own knowledge base's pages, which comes up with the node's
-// first company and is absent for a company whose wiki is a vendor's. Read
-// through the knowledge base's routed reader, as [livePages] is, so the data
-// node that answers is one whose copies of both domains the links are named
-// from serve — see [NativeSources].
+// keeps over Doclet's pages, which comes up with the node's first company
+// and is absent for a company whose wiki is a vendor's. Read through Doclet's
+// routed reader, as [livePages] is, so the data node that answers is one whose
+// copies of both domains the links are named from serve — see [NativeReads].
 type liveBacklinks struct{ engine *engine.Engine }
 
 func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
@@ -384,7 +432,7 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 	started := l.engine.NativeStarted()
 	p, ok := engine.OperatorPages(l.engine)
 	if !ok {
-		return search.Backlinks{}, nativeAbsent(started, "knowledge base")
+		return search.Backlinks{}, nativeAbsent(started, "Doclet")
 	}
 	return p.LinkedFrom(ctx, pageID)
 }
@@ -392,19 +440,109 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 // liveWorkSearch is ranked item search, resolved per question.
 //
 // ITS OWN SOURCE, as [queries.Sources.WorkSearch] is, and present exactly
-// where the tracker is: the index is built for either native backend, but the
+// where the tracker is: the index is built for Worklet or Doclet, but the
 // search reads the tracker's corpus alone, so the engine serves it only for a
 // company that keeps its tracker here ([engine.WorkSearcher]) — through the
 // router, where a node holding no index of its own is answered by one that
 // does.
 type liveWorkSearch struct{ engine *engine.Engine }
 
-func (l liveWorkSearch) Search(ctx context.Context, q tracker.SearchQuery) (
-	tracker.SearchAnswer, error) {
+func (l liveWorkSearch) Search(ctx context.Context, q worklet.SearchQuery) (
+	worklet.SearchAnswer, error) {
 	started := l.engine.NativeStarted()
 	s := engine.WorkSearcher(l.engine)
 	if s == nil {
-		return tracker.SearchAnswer{}, nativeAbsent(started, "tracker")
+		return worklet.SearchAnswer{}, nativeAbsent(started, "Worklet")
+	}
+	return s.Search(ctx, q)
+}
+
+// liveChat is chat's read side, resolved per question, from the router's rooms
+// for [liveWork]'s reason.
+type liveChat struct{ engine *engine.Engine }
+
+func (l liveChat) reader() (estate.Chat, error) {
+	started := l.engine.NativeStarted()
+	if r, ok := engine.OperatorChat(l.engine); ok {
+		return r, nil
+	}
+	return estate.Chat{}, nativeAbsent(started, "Chatlet")
+}
+
+func (l liveChat) Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
+	fresh statelog.Freshness) (chatlet.ChannelListing, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.ChannelListing{}, err
+	}
+	return r.Channels(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.ChannelDetail{}, err
+	}
+	return r.Channel(ctx, viewer, channelID, fresh)
+}
+
+func (l liveChat) ChannelNamed(ctx context.Context, viewer, name string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.ChannelDetail{}, err
+	}
+	return r.ChannelNamed(ctx, viewer, name, fresh)
+}
+
+func (l liveChat) Messages(ctx context.Context, viewer string, q chatlet.TranscriptQuery,
+	fresh statelog.Freshness) (chatlet.Transcript, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Transcript{}, err
+	}
+	return r.Messages(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.Thread, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Thread{}, err
+	}
+	return r.Thread(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) RoomNames(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.RoomNames{}, err
+	}
+	return r.RoomNames(ctx, viewer, fresh)
+}
+
+func (l liveChat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Directory{}, err
+	}
+	return r.Directory(ctx, viewer, fresh)
+}
+
+// liveChatSearch is chat's ranked search, resolved per question: the router's,
+// whose serving data node resolves the viewer's rooms beside the index it
+// reads.
+type liveChatSearch struct{ engine *engine.Engine }
+
+func (l liveChatSearch) Search(ctx context.Context, q estate.ChatQuery) (
+	estate.ChatSearchAnswer, error) {
+	started := l.engine.NativeStarted()
+	s, ok := engine.OperatorChatSearch(l.engine)
+	if !ok {
+		return estate.ChatSearchAnswer{}, nativeAbsent(started, "Chatlet")
 	}
 	return s.Search(ctx, q)
 }
@@ -414,10 +552,10 @@ func (l liveWorkSearch) Search(ctx context.Context, q tracker.SearchQuery) (
 // tracker's own half for [liveWork]'s reason.
 type liveFiles struct{ engine *engine.Engine }
 
-func (l liveFiles) Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error) {
+func (l liveFiles) Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error) {
 	r, err := liveWork(l).reader()
 	if err != nil {
-		return tracker.FileListing{}, err
+		return worklet.FileListing{}, err
 	}
 	return r.Files(ctx, q)
 }
@@ -430,7 +568,7 @@ func (l liveFiles) Files(ctx context.Context, q tracker.FileQuery) (tracker.File
 // so a half read as absent after it said "started" is one this company does
 // not run rather than one not published yet — see the file comment.
 //
-// THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, native or not:
+// THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, Doclet or not:
 // ranked search over the company's own wiki is exactly as useful to an
 // operator's assistant on Confluence, and an apply can add one — so it is read
 // per call too, and present exactly where the engine has a searcher.
@@ -441,6 +579,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		var halves operator.Halves
 		halves.Work, halves.Pages = NativeToolDeps(e)
+		halves.Chat = ChatletDeps(e)
 		if e.Knowledge() != nil {
 			halves.Knowledge = operatorKnowledge{engine: e}
 		}

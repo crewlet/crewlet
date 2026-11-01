@@ -1,0 +1,44 @@
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.1
+event: conversation
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":1,"at":"2026-10-24T09:41:00Z","kind":"conversation","conversation":{"title":"","created_at":"2026-10-24T09:41:00Z","resumed":false}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.2
+event: page_context
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":2,"at":"2026-10-24T09:41:00Z","kind":"page_context","page_context":{"used":false,"trimmed":false}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.3
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":3,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":0}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.4
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":4,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"working","steps_done":0}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.5
+event: step
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":5,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"/worklet/ENG-7"},"state":"running","started_at":"2026-10-24T09:41:00Z"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.6
+event: step
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":6,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"get_task","label":"Reading ENG-7","request":{"method":"GET","route":"/worklet/ENG-7"},"state":"done","started_at":"2026-10-24T09:41:00Z","summary":"1 record"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.7
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":7,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":1}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.8
+event: delta
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":8,"at":"2026-10-24T09:41:00Z","kind":"delta","delta":{"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","text":""}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.9
+event: card
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":9,"at":"2026-10-24T09:41:00Z","kind":"card","card":{"card_id":"8c4a178c-def3-523b-841b-e303f30c1a6c","message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","card":{"type":"entity","entity":{"kind":"task","id":"ENG-7","key":"ENG-7","title":"Rotate keys","subtitle":"ENG-7","facts":[{"label":"Status","value":"todo","type":"label"},{"label":"Priority","value":"none","type":"label"},{"label":"Assignee","value":"ada"},{"label":"Reporter","value":"grace","detail":true},{"label":"Project","value":"ENG"},{"label":"Type","value":"task","type":"label"},{"label":"Updated","value":"2026-10-24T09:41:00Z","type":"datetime"},{"label":"Version","value":"3","type":"number","mono":true,"detail":true}],"text":"Rotate the signing keys before Friday.","open":{"label":"ENG-7","screen":"item","href":"#/worklet/d3e481ad-ddb8-537f-92db-1498bdf192f4"}}}}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.10
+event: delta
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"delta","delta":{"message_id":"055110e6-3c1a-5040-92aa-dcb652f8db40","text":"ENG-7 is to rotate the signing keys before Friday."}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.11
+event: done
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":11,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"completed","duration_ms":0,"steps":1,"message_id":"055110e6-3c1a-5040-92aa-dcb652f8db40","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+

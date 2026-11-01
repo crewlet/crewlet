@@ -39,9 +39,9 @@ import (
 // its credentials or every prompt every other agent was given, is the blast
 // radius the vocabulary exists to bound — and the one permission a company
 // might reasonably want to give a seat is precisely the one it must not be
-// able to take. The two verbs only a seat makes — asking a colleague and a
-// detached coding run — are the table's `seatOnly` rows rather than a
-// permission a seat carries, so nothing beside the apps is needed here.
+// able to take. The one verb only a seat makes — asking a colleague
+// (`a2a_ask`) — is the table's `seatOnly` row rather than a permission a seat
+// carries, so nothing beside the apps is needed here.
 //
 // A CLONE, so a decision that appends to the principal's grants can never
 // reach the list of apps every other turn reads.

@@ -302,7 +302,7 @@ const backfillWorkers = 16
 // the second git node — which never read the repository — emptied, its first
 // round reading the repository whole and its history then wanted.
 func benchBackfill(b *testing.B, pushes int) {
-	var pages, readNs, readBytes atomic.Int64
+	var pagesRead, readNs, readBytes atomic.Int64
 	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, People: []string{"ceo"},
 		LogBytes: backfillLogBytes,
 		// What the router reads for each of the backfill's pages: its time
@@ -316,7 +316,7 @@ func benchBackfill(b *testing.B, pushes int) {
 					return a, err
 				}
 				readNs.Add(int64(time.Since(began)))
-				pages.Add(1)
+				pagesRead.Add(1)
 				if enc, merr := json.Marshal(a); merr == nil {
 					readBytes.Add(int64(len(enc)))
 				}
@@ -352,7 +352,7 @@ func benchBackfill(b *testing.B, pushes int) {
 			b.Fatalf("the cold node's first round: %v", serr)
 		}
 		s.Release()
-		pages.Store(0)
+		pagesRead.Store(0)
 		readNs.Store(0)
 		readBytes.Store(0)
 		b.StartTimer()
@@ -367,7 +367,7 @@ func benchBackfill(b *testing.B, pushes int) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	n := float64(pages.Load())
+	n := float64(pagesRead.Load())
 	if n == 0 {
 		b.Fatal("the backfill read no page")
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 )
 
@@ -28,11 +29,13 @@ import (
 // underneath appliers that were still committing into it, and a caller that
 // retried ran a second runtime beside the first.
 
-// nativeCleanupCompany is the smallest company that runs both native backends,
-// which is what puts every construction below the state log on the path.
+// nativeCleanupCompany is the smallest company that runs every native backend —
+// the tracker, the knowledge base and chat, none of them on a vendor — which is
+// what puts every construction below the state log on the path.
 const nativeCleanupCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -129,7 +132,7 @@ func TestAFailedNativeStartStopsTheStateLogItStarted(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

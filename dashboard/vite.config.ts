@@ -375,11 +375,16 @@ export default defineConfig({
       "/stream": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
       "/secrets": { target: "http://localhost:8000" },
+      // Every model route Settings › Models writes through: a credential, a
+      // test, a retry, a host login's check and a device sign-in
+      // (routes/settings/models/api.ts). The models themselves are the
+      // socket's questions.
+      "/llm": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they
       // sit beside is read over the socket.
-      "/work": { target: "http://localhost:8000" },
+      "/worklet": { target: "http://localhost:8000" },
       // Every change a screen makes, as the signed-in person
       // (protocol/act.ts). Only the act route: /operator/mcp is a person's
       // assistant's surface, and nothing in the dashboard dials it.
@@ -413,6 +418,10 @@ export default defineConfig({
       // The code host's questions, asked on the query registry's generic REST
       // form rather than the socket (lib/useCodeQuery.ts).
       "/query": { target: "http://localhost:8000" },
+      // The Dashboard Assistant: its conversations, a turn's stream of
+      // server-sent events, a stop, an approval and a table card's export
+      // (protocol/assistant.ts).
+      "/assistant": { target: "http://localhost:8000" },
     },
   },
 });

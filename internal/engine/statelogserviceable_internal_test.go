@@ -8,8 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE THAT IS BEHIND KEEPS ITS SEATS.
@@ -38,7 +39,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -59,13 +60,13 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := worklet.Domain{}.Stream()
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -85,7 +86,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// write leaves behind between the append and the apply.
 	s.haltAppliers()
 	at := running.runner.Committed()
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
 		Scope: statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
@@ -156,7 +157,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	case served.Admits == nil || served.Admits(t.Context()):
 		t.Fatal("a copy one record behind admits a seat, which the gate above refused")
 	}
-	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{Level: statelog.ReadStale},
+	if _, err := e.router.Work().Tasks(t.Context(), worklet.Query{Level: statelog.ReadStale},
 		time.Now()); err != nil {
 		t.Fatalf("a single node one record behind refused its own seat's read: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// reporting the node as caught up would be the opposite error, and is
 	// how an operator watching a node fall behind would see nothing.
 	for _, row := range e.StateLogStatus(t.Context()) {
-		if row.Name != (tracker.Domain{}).Name() {
+		if row.Name != (worklet.Domain{}).Name() {
 			continue
 		}
 		if row.Ready {

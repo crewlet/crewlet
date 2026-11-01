@@ -64,7 +64,7 @@ import (
 // # A duty declined while its work runs
 //
 // A duty that decides from a domain's rows is DECLINED by a node whose copy of
-// one of them is out of service (ADR-0049, [dutyDecline]) — and the
+// one of them is out of service (ADR-0072, [dutyDecline]) — and the
 // code-retention duty also by a node that does not serve the revision the
 // fleet's activation pointer names ([Engine.servedFleetRevision]) — and either
 // can become true while the work runs: a training tick of the embedding duty
@@ -97,7 +97,7 @@ var errDutyLost = errors.New("engine: another node holds the duty now")
 
 // errDutyDeclined is the cause work holding a duty is ended with when this
 // node declines the duty as the work runs ([dutyRenewal.declining]): a copy
-// the work decides from has gone out of service (ADR-0049), or — for a duty
+// the work decides from has gone out of service (ADR-0072), or — for a duty
 // that waits for it — this node no longer serves the revision the fleet's
 // activation pointer names. The duty's `_declined` line says which.
 var errDutyDeclined = errors.New("engine: this node declines the duty now")

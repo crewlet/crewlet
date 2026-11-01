@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -77,7 +78,9 @@ func newForeignRead(turn *turnctx.Turn, self string) *foreignRead {
 // item's body author, a file's writer) is resolved against the turn's chart;
 // a handle the chart does not hold is a seat that has left it when it is
 // shaped like a seat handle, and a credential's login otherwise. An empty
-// handle with no kind is a writer nobody recorded, which nothing vouches for.
+// handle with no kind is a writer nobody recorded: on the surfaces these reads
+// are of, that is a colleague nobody named ([foreignRead.label]), never an
+// outside party.
 func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Author {
 	handle = strings.TrimSpace(handle)
 	switch kind {
@@ -103,22 +106,39 @@ func (r *foreignRead) writer(handle string, kind iam.ActorKind) provenance.Autho
 	return provenance.Author{Kind: iam.ActorOperator}
 }
 
-// trustOf is the trust text by writers earns from this reader: [provenance.TrustFor],
-// or [provenance.TrustForPartial] when the record says other writers it does
-// not name had a hand in it.
-func (r *foreignRead) trustOf(writers []provenance.Author, partial bool) provenance.Trust {
-	if partial {
-		return provenance.TrustForPartial(r.self, writers)
-	}
-	return provenance.TrustFor(r.self, writers)
+// label is what text by writers, read from src, is fenced under for this
+// reader: partial when the record says other writers it does not name had a
+// hand in it.
+//
+// EVERY READ HERE IS OF A SURFACE THE ENGINE HOSTS — its own tracker, knowledge
+// base, chat, artifacts and project files — so the label is the one rule every
+// door to such a surface reads by ([provenance.LabelForHosted]): a writer the
+// record does not name is a colleague, never an outside party, exactly as the
+// same text reads when it wakes a seat or comes back as a search hit.
+func (r *foreignRead) label(src provenance.Source, writers []provenance.Author,
+	partial bool) provenance.Label {
+
+	return provenance.LabelForHosted(r.self, src, writers, !partial)
 }
 
 // attribute records that the answer carries text by writers without fencing
 // it: content the answer holds in a form a model does not read as prose (a
 // file's bytes as base64), which still needs its label on the envelope.
 func (r *foreignRead) attribute(writers []provenance.Author, partial bool) {
-	r.trusts = append(r.trusts, r.trustOf(writers, partial))
-	for _, w := range writers {
+	label := r.label("", writers, partial)
+	r.trusts = append(r.trusts, label.Trust)
+	for _, w := range label.Authors {
+		r.name(w)
+	}
+}
+
+// adopt records text another door labelled — a knowledge hit, which the
+// backend that found it labels, a vendor's as a vendor's — on the envelope as
+// that label says, rather than deciding again here as though every source were
+// a surface the engine hosts.
+func (r *foreignRead) adopt(label provenance.Label) {
+	r.trusts = append(r.trusts, label.Trust)
+	for _, w := range label.Authors {
 		r.name(w)
 	}
 }
@@ -153,7 +173,21 @@ func (r *foreignRead) fence(path fieldPath, src provenance.Source,
 		return
 	}
 	r.attribute(writers, partial)
-	r.fences[path.id()] = provenance.Fence(r.boundary, src, r.trustOf(writers, partial), writers, text)
+	r.fences[path.id()] = r.label(src, writers, partial).Fence(r.boundary, text)
+}
+
+// fenceRepository registers the string at path in the answer as text read
+// out of a repository, from src, by [provenance.Repository]: naming nobody, at
+// the least trust. Never [foreignRead.fence], whose rule is a hosted
+// surface's, which reads a text nobody named as a colleague's. Empty text is
+// not fenced.
+func (r *foreignRead) fenceRepository(path fieldPath, src provenance.Source, text string) {
+	if text == "" {
+		return
+	}
+	label := provenance.Repository(src)
+	r.trusts = append(r.trusts, label.Trust)
+	r.fences[path.id()] = label.Fence(r.boundary, text)
 }
 
 // fenceAt registers the string at path in the answer as text by writers, read
@@ -184,12 +218,30 @@ func (r *foreignRead) envelope() (provenance.Envelope, bool) {
 // answer renders v as the tool's answer: every string neutralised, every
 // registered field fenced, and the envelope beside the top-level fields. v
 // must encode as a JSON object.
+//
+// AND v AS A PERSON READS IT, beside the model's answer
+// ([tools.Result.PersonReceipt]): the same fields as they were stored, with no
+// fence, no escape and no envelope, encoded as every other answer is
+// ([encodeAnswer]). The labels are for a model, which reads every word as a
+// possible instruction (ADR-0040); a person's surface answering the receipt
+// shows the words, and could not take the labels back off the model's answer,
+// whose escapes do not undo. Here rather than at each tool, and on a read's
+// answer as on a write's, so a receipt that comes to echo somebody's words
+// carries it without anybody remembering to add it.
 func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
-	rendered, err := r.render(v)
+	plain, err := encodeAnswer(v)
+	var rendered json.RawMessage
+	if err == nil {
+		rendered, err = r.render(v)
+	}
 	if err != nil {
 		return labelFault(ctx, tool, err), nil
 	}
-	return jsonAnswer(rendered, narrowWith)
+	res, err := jsonAnswer(rendered, narrowWith)
+	if err == nil && !res.Failed {
+		res.PersonReceipt = plain
+	}
+	return res, err
 }
 
 // page is [foreignRead.answer] for a code tool's answer, sent COMPACT
@@ -213,8 +265,16 @@ func labelFault(ctx context.Context, tool string, err error) tools.Result {
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are
 // errors a caller can wrap.
+//
+// EVERY STRING IT WRITES IS WRITTEN AS [encodeAnswer] WRITES ONE, through
+// [plainjson]: a fenced answer is the same tool answer as any other, and the
+// encoder it is finally handed to compacts a raw value rather than decoding
+// it, so a body written here with `json.Marshal`'s `\u003c` reached the model
+// as the escape — a fenced page of markup read as escape soup, and weighed
+// against [ToolAnswerBytes] at six bytes a bracket, exactly what the plain
+// encoding exists to stop.
 func (r *foreignRead) render(v any) (json.RawMessage, error) {
-	data, err := json.Marshal(v)
+	data, err := plainjson.Marshal(v, "")
 	if err != nil {
 		return nil, fmt.Errorf("builtin: encode a read answer: %w", err)
 	}
@@ -233,7 +293,41 @@ func (r *foreignRead) render(v any) (json.RawMessage, error) {
 				"the answer does not hold as a string", readablePath(path))
 		}
 	}
+	if err := r.labelsDeclared(v, w.written); err != nil {
+		return nil, err
+	}
 	return w.out.Bytes(), nil
+}
+
+// labelsDeclared refuses an answer v that leaves a field its records declare
+// somebody's words unlabelled: one to fence must be among the fenced paths
+// written, and one that is a name needs an envelope saying whose it is. A
+// tool that answers a record without labelling what the record declares is
+// refused here rather than heard from in a transcript ([declaredIn]).
+func (r *foreignRead) labelsDeclared(v any, written map[string]bool) error {
+	declared, err := declaredIn(v)
+	if err != nil {
+		return err
+	}
+	_, labelled := r.envelope()
+	for _, f := range declared {
+		switch f.kind {
+		case provenance.FieldFence:
+			if !written[f.path.id()] {
+				return fmt.Errorf("builtin: the answer carries %q, which its record "+
+					"declares somebody's words, outside a fence", readablePath(f.path.id()))
+			}
+		case provenance.FieldName:
+			if !labelled {
+				return fmt.Errorf("builtin: the answer carries %q, which its record "+
+					"declares somebody's words, and says nobody wrote it", readablePath(f.path.id()))
+			}
+		default:
+			return fmt.Errorf("builtin: %q is declared %s:%q, which is no kind of field "+
+				"this package knows", readablePath(f.path.id()), provenance.FieldTag, f.kind)
+		}
+	}
+	return nil
 }
 
 // pathSep joins the steps of a path; a byte no JSON key a record writes holds.
@@ -344,7 +438,7 @@ func (w *fenceWriter) object(path fieldPath, top bool) error {
 	}
 	if top {
 		if env, ok := w.read.envelope(); ok {
-			label, err := json.Marshal(env)
+			label, err := plainjson.Marshal(env, "")
 			if err != nil {
 				return fmt.Errorf("builtin: encode a read answer's provenance: %w", err)
 			}
@@ -380,7 +474,7 @@ func (w *fenceWriter) array(path fieldPath) error {
 }
 
 func (w *fenceWriter) str(s string) error {
-	data, err := json.Marshal(s)
+	data, err := plainjson.Marshal(s, "")
 	if err != nil {
 		return fmt.Errorf("builtin: encode a string in a read answer: %w", err)
 	}

@@ -6,22 +6,24 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The asking half: the seams every node's tools are handed, each answered by a
 // data node whose copy of the operation's domain serves — this one where it
-// does (ADR-0049).
+// does (ADR-0072).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -35,13 +37,13 @@ type Work struct{ r *Router }
 func (r *Router) Work() Work { return Work{r: r} }
 
 // Tasks answers a board query.
-func (w Work) Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error) {
+func (w Work) Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error) {
 	return call(ctx, w.r, opTasks, nil, tasksArgs{Query: q, Now: now})
 }
 
 // Task answers one task, whole.
-func (w Work) Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-	fresh statelog.Freshness) (tracker.TaskDetail, error) {
+func (w Work) Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+	fresh statelog.Freshness) (worklet.TaskDetail, error) {
 	args := taskArgs{IDOrKey: idOrKey, Want: want, Fresh: fresh}
 	if want.Clock != nil {
 		args.Zone = zoneArg(want.Clock.Zone)
@@ -50,128 +52,134 @@ func (w Work) Task(ctx context.Context, idOrKey string, want tracker.DetailWants
 }
 
 // Files answers a page of a project's files.
-func (w Work) Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error) {
+func (w Work) Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error) {
 	return call(ctx, w.r, opFiles, nil, q)
 }
 
 // File answers one file with the object holding its bytes.
 func (w Work) File(ctx context.Context, project, path string,
-	fresh statelog.Freshness) (tracker.FileDetail, error) {
+	fresh statelog.Freshness) (worklet.FileDetail, error) {
 	return call(ctx, w.r, opFile, nil, fileArgs{Project: project, Path: path, Fresh: fresh})
 }
 
 // Views answers the saved views.
-func (w Work) Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+func (w Work) Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	return call(ctx, w.r, opViews, nil, viewsArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // ExpandedQuery resolves a saved view's parameters into a query.
 func (w Work) ExpandedQuery(ctx context.Context, params map[string]any,
-	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 	return call(ctx, w.r, opExpandedQuery, nil,
 		expandArgs{Params: params, Viewer: viewer, Now: now, Zone: zoneArg(loc)})
 }
 
 // Catalogue answers the workspace catalogue.
-func (w Work) Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+func (w Work) Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 	return call(ctx, w.r, opCatalogue, nil, q)
 }
 
 // Person answers one person's own record.
-func (w Work) Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error) {
+func (w Work) Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error) {
 	return call(ctx, w.r, opPerson, nil, personArgs{Query: q, Now: now})
 }
 
 // Thread answers one ask-and-answer thread on a task.
-func (w Work) Thread(ctx context.Context, q tracker.ThreadQuery,
-	fresh statelog.Freshness) (tracker.ResolvedThread, error) {
+func (w Work) Thread(ctx context.Context, q worklet.ThreadQuery,
+	fresh statelog.Freshness) (worklet.ResolvedThread, error) {
 	return call(ctx, w.r, opThread, nil, threadArgs{Query: q, Fresh: fresh})
 }
 
 // Activity answers what happened to a task or a project.
-func (w Work) Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
-	tracker.ActivityAnswer, error) {
+func (w Work) Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
+	worklet.ActivityAnswer, error) {
 	return call(ctx, w.r, opActivity, nil, activityArgs{Query: q, Now: now})
 }
 
 // MyWork answers what is on one seat's plate, "today" cut on loc.
-func (w Work) MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
-	loc *time.Location) (tracker.MyWork, error) {
+func (w Work) MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
+	loc *time.Location) (worklet.MyWork, error) {
 	return call(ctx, w.r, opMyWork, nil, myWorkArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // Projects lists the company's projects.
-func (w Work) Projects(ctx context.Context, q tracker.ProjectQuery) (tracker.ProjectListing, error) {
+func (w Work) Projects(ctx context.Context, q worklet.ProjectQuery) (worklet.ProjectListing, error) {
 	return call(ctx, w.r, opProjects, nil, q)
 }
 
 // Project describes one project.
-func (w Work) Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracker.ProjectDetail, error) {
+func (w Work) Project(ctx context.Context, q worklet.ProjectDetailQuery) (worklet.ProjectDetail, error) {
 	return call(ctx, w.r, opProject, nil, q)
 }
 
 // Search is the tracker's ranked search, answered by a data node's index. A
 // search no node could run is its error, never an empty answer: "nothing
 // matched" would send the seat off to file what it was looking for.
-func (w Work) Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+func (w Work) Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	if !q.Mode.Valid() {
-		return tracker.SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
+		return worklet.SearchAnswer{}, fmt.Errorf("worklet: unknown search mode %q; "+
 			"the modes are hybrid, keyword and semantic", q.Mode)
 	}
 	return call(ctx, w.r, opWorkSearch, nil, workSearchArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode})
 }
 
 // Workload answers a unit's workload, its days cut on loc.
-func (w Work) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
-	loc *time.Location) (tracker.WorkloadAnswer, error) {
+func (w Work) Workload(ctx context.Context, q worklet.WorkloadQuery, now time.Time,
+	loc *time.Location) (worklet.WorkloadAnswer, error) {
 	return call(ctx, w.r, opWorkload, nil, workloadArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // Inbox answers what the company has asked of one person.
-func (w Work) Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
-	tracker.InboxAnswer, error) {
+func (w Work) Inbox(ctx context.Context, q worklet.InboxQuery, now time.Time) (
+	worklet.InboxAnswer, error) {
 	return call(ctx, w.r, opInbox, nil, inboxArgs{Query: q, Now: now})
 }
 
 // Routing answers who a change reached, and why.
-func (w Work) Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
-	tracker.RoutingAnswer, error) {
+func (w Work) Routing(ctx context.Context, q worklet.RoutingQuery, now time.Time) (
+	worklet.RoutingAnswer, error) {
 	return call(ctx, w.r, opRouting, nil, routingArgs{Query: q, Now: now})
 }
 
 // TurnsOf answers a page of the turns charged to one task.
 func (w Work) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+	fresh statelog.Freshness) (worklet.TaskTurns, error) {
 	return call(ctx, w.r, opTurnsOf, nil,
 		turnsOfArgs{IDOrKey: idOrKey, Cursor: cursor, Limit: limit, Fresh: fresh})
 }
 
 // EveryView answers every saved view, whoever owns it.
-func (w Work) EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
+func (w Work) EveryView(ctx context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error) {
 	return call(ctx, w.r, opEveryView, nil, everyViewArgs{Query: q, Zone: zoneArg(q.Zone)})
 }
 
 // Flow answers how work moved through the company, its days cut on loc.
-func (w Work) Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
-	loc *time.Location) (tracker.FlowAnswer, error) {
+func (w Work) Flow(ctx context.Context, q worklet.FlowQuery, now time.Time,
+	loc *time.Location) (worklet.FlowAnswer, error) {
 	return call(ctx, w.r, opFlow, nil, flowArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // CompanyFeed answers a page of the company's feed.
-func (w Work) CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
+func (w Work) CompanyFeed(ctx context.Context, q worklet.FeedQuery) (worklet.FeedPage, error) {
 	return call(ctx, w.r, opCompanyFeed, nil, q)
 }
 
 // Decisions answers the structured asks waiting on a decision, "overdue" cut
 // on loc.
-func (w Work) Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
-	loc *time.Location) (tracker.DecisionsAnswer, error) {
+func (w Work) Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.DecisionsAnswer, error) {
 	return call(ctx, w.r, opDecisions, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
+}
+
+// AnsweredAsks answers the asks put to a person and closed lately.
+func (w Work) AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	return call(ctx, w.r, opAnsweredAsks, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
 // TurnPlaces answers which task each run was charged to.
 func (w Work) TurnPlaces(ctx context.Context, runs []string,
-	fresh statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	fresh statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 	return call(ctx, w.r, opTurnPlaces, nil, turnPlacesArgs{Runs: runs, Fresh: fresh})
 }
 
@@ -189,8 +197,8 @@ func (r *Router) WriterAs(actor Actor) WorkWriter { return WorkWriter{r: r, acto
 func (w WorkWriter) settled(res statelog.Result) { w.r.Observe(res.Position) }
 
 // CreateTask files a task.
-func (w WorkWriter) CreateTask(ctx context.Context, opID string, task tracker.Task,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+func (w WorkWriter) CreateTask(ctx context.Context, opID string, task worklet.Task,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opCreateTask, &w.actor,
 		createTaskArgs{OpID: opID, Task: task, Notify: notify})
 	w.settled(out.Result)
@@ -198,8 +206,8 @@ func (w WorkWriter) CreateTask(ctx context.Context, opID string, task tracker.Ta
 }
 
 // CreateTaskAsking files a task with a structured ask on it, in one gesture.
-func (w WorkWriter) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-	ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+func (w WorkWriter) CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+	ask worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opCreateTaskAsking, &w.actor,
 		createTaskAskingArgs{OpID: opID, Task: task, Ask: ask, Notify: notify})
 	w.settled(out.Result)
@@ -207,8 +215,8 @@ func (w WorkWriter) CreateTaskAsking(ctx context.Context, opID string, task trac
 }
 
 // PlaceTask drops a card on the board: its lane, then its place.
-func (w WorkWriter) PlaceTask(ctx context.Context, opID string, place tracker.Place,
-	notify *tracker.Notify) (tracker.PlaceResult, error) {
+func (w WorkWriter) PlaceTask(ctx context.Context, opID string, place worklet.Place,
+	notify *worklet.Notify) (worklet.PlaceResult, error) {
 	out, err := call(ctx, w.r, opPlaceTask, &w.actor,
 		placeTaskArgs{OpID: opID, Place: place, Notify: notify})
 	res := out.Result
@@ -220,8 +228,8 @@ func (w WorkWriter) PlaceTask(ctx context.Context, opID string, place tracker.Pl
 
 // UpdateTask patches a task, gestures included.
 func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, ifMatch uint64,
-	patch tracker.TaskPatch, kind tracker.ChangeKind,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	patch worklet.TaskPatch, kind worklet.ChangeKind,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opUpdateTask, &w.actor, updateTaskArgs{
 		OpID: opID, ID: id, Project: project, IfMatch: ifMatch, Patch: patch,
 		Watch: patch.Watch, Relate: patch.Relate, Depend: patch.Depend,
@@ -233,8 +241,8 @@ func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, if
 
 // Depend writes a dependency. The lead map is the SERVING node's — see the
 // package doc — so the one passed here does not cross.
-func (w WorkWriter) Depend(ctx context.Context, opID string, change tracker.DependencyChange,
-	_ tracker.Leads) (tracker.DependencyResult, error) {
+func (w WorkWriter) Depend(ctx context.Context, opID string, change worklet.DependencyChange,
+	_ worklet.Leads) (worklet.DependencyResult, error) {
 	out, err := call(ctx, w.r, opDepend, &w.actor, dependArgs{OpID: opID, Change: change})
 	w.settled(out.Result)
 	return out, err
@@ -242,7 +250,7 @@ func (w WorkWriter) Depend(ctx context.Context, opID string, change tracker.Depe
 
 // MergeDuplicates folds one task into another.
 func (w WorkWriter) MergeDuplicates(ctx context.Context, opID, duplicate, into string,
-	reparent bool, notify *tracker.Notify) (tracker.WriteResult, error) {
+	reparent bool, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opMergeDuplicates, &w.actor, mergeArgs{
 		OpID: opID, Duplicate: duplicate, Into: into, Reparent: reparent, Notify: notify,
 	})
@@ -252,7 +260,7 @@ func (w WorkWriter) MergeDuplicates(ctx context.Context, opID, duplicate, into s
 
 // MoveTaskToProject moves a task and its subtree to another project.
 func (w WorkWriter) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opMoveTaskToProject, &w.actor, moveArgs{
 		OpID: opID, TaskID: taskID, Target: target, Notify: notify,
 	})
@@ -261,8 +269,8 @@ func (w WorkWriter) MoveTaskToProject(ctx context.Context, opID, taskID, target 
 }
 
 // WriteProject edits a project's own settings.
-func (w WorkWriter) WriteProject(ctx context.Context, opID, key string, edit tracker.ProjectEdit,
-	authority tracker.ProjectAuthority) (tracker.WriteResult, error) {
+func (w WorkWriter) WriteProject(ctx context.Context, opID, key string, edit worklet.ProjectEdit,
+	authority worklet.ProjectAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWriteProject, &w.actor, writeProjectArgs{
 		OpID: opID, Key: key, Edit: edit, Authority: authority,
 	})
@@ -271,8 +279,8 @@ func (w WorkWriter) WriteProject(ctx context.Context, opID, key string, edit tra
 }
 
 // WriteTags edits a project's declared tags.
-func (w WorkWriter) WriteTags(ctx context.Context, opID, project string, edit tracker.TagEdit,
-	authority tracker.TagAuthority) (tracker.WriteResult, error) {
+func (w WorkWriter) WriteTags(ctx context.Context, opID, project string, edit worklet.TagEdit,
+	authority worklet.TagAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWriteTags, &w.actor, writeTagsArgs{
 		OpID: opID, Project: project, Edit: edit, Authority: authority,
 	})
@@ -282,17 +290,17 @@ func (w WorkWriter) WriteTags(ctx context.Context, opID, project string, edit tr
 
 // EnsureTags declares the tags a write is about to use.
 func (w WorkWriter) EnsureTags(ctx context.Context, opID, project string, tags []string) (
-	[]string, []string, error) {
+	[]string, []caveat.Caveat, error) {
 	out, err := call(ctx, w.r, opEnsureTags, &w.actor, ensureTagsArgs{
 		OpID: opID, Project: project, Tags: tags,
 	})
-	return out.Created, out.Warnings, err
+	return out.Created, out.Caveats, err
 }
 
 // PutFile writes a project's file — its row, naming the object the caller has
 // already uploaded through its own object client.
-func (w WorkWriter) PutFile(ctx context.Context, opID string, put tracker.FilePut) (
-	tracker.WriteResult, error) {
+func (w WorkWriter) PutFile(ctx context.Context, opID string, put worklet.FilePut) (
+	worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opPutFile, &w.actor, putFileArgs{OpID: opID, Put: put})
 	w.settled(out.Result)
 	return out, err
@@ -300,7 +308,7 @@ func (w WorkWriter) PutFile(ctx context.Context, opID string, put tracker.FilePu
 
 // RemoveFile takes a file out of its project.
 func (w WorkWriter) RemoveFile(ctx context.Context, opID, project, path string,
-	ifMatch uint64) (tracker.WriteResult, error) {
+	ifMatch uint64) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opRemoveFile, &w.actor, removeFileArgs{
 		OpID: opID, Project: project, Path: path, IfMatch: ifMatch,
 	})
@@ -310,7 +318,7 @@ func (w WorkWriter) RemoveFile(ctx context.Context, opID, project, path string,
 
 // RecordTurn records one turn's spend on the task it worked on.
 func (w WorkWriter) RecordTurn(ctx context.Context, opID string,
-	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	turn worklet.TurnRecord) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opRecordTurn, &w.actor, recordTurnArgs{OpID: opID, Turn: turn})
 	w.settled(out.Result)
 	return out, err
@@ -318,13 +326,13 @@ func (w WorkWriter) RecordTurn(ctx context.Context, opID string,
 
 // ViewPrior reads what a save of view id would replace, for the caller to
 // decide its authority on and hand back to [WorkWriter.WriteView].
-func (w WorkWriter) ViewPrior(ctx context.Context, id string) (tracker.ViewPrior, error) {
+func (w WorkWriter) ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error) {
 	return call(ctx, w.r, opViewPrior, &w.actor, viewPriorArgs{ID: id})
 }
 
 // WriteView saves a view, refused where the stored view is no longer prior.
-func (w WorkWriter) WriteView(ctx context.Context, opID string, view tracker.View,
-	prior tracker.ViewPrior) (tracker.WriteResult, error) {
+func (w WorkWriter) WriteView(ctx context.Context, opID string, view worklet.View,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWriteView, &w.actor,
 		writeViewArgs{OpID: opID, View: view, Prior: prior})
 	w.settled(out.Result)
@@ -332,16 +340,16 @@ func (w WorkWriter) WriteView(ctx context.Context, opID string, view tracker.Vie
 }
 
 // WriteTypes sets the company's task types.
-func (w WorkWriter) WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (
-	tracker.WriteResult, error) {
+func (w WorkWriter) WriteTypes(ctx context.Context, opID string, types []worklet.TaskType) (
+	worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWriteTypes, &w.actor, writeTypesArgs{OpID: opID, Types: types})
 	w.settled(out.Result)
 	return out, err
 }
 
 // WriteFields sets the company's custom fields.
-func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (
-	tracker.WriteResult, error) {
+func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []worklet.FieldDef) (
+	worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWriteFields, &w.actor, writeFieldsArgs{OpID: opID, Fields: fields})
 	w.settled(out.Result)
 	return out, err
@@ -350,7 +358,7 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []track
 // MarkInbox applies one gesture to a person's inbox, under the authority the
 // caller's table decided.
 func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
-	gesture inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opMarkInbox, &w.actor, markInboxArgs{
 		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
 	})
@@ -361,7 +369,7 @@ func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
 // WritePins applies one gesture to a person's pinned views and favourites,
 // under the authority the caller's table decided.
 func (w WorkWriter) WritePins(ctx context.Context, opID, handle string,
-	gesture tracker.PinGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	gesture worklet.PinGesture, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWritePins, &w.actor, writePinsArgs{
 		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
 	})
@@ -371,7 +379,7 @@ func (w WorkWriter) WritePins(ctx context.Context, opID, handle string,
 
 // EditComment rewrites the writer's own remark on a work item.
 func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, commentID,
-	body string, notify *tracker.Notify) (tracker.WriteResult, error) {
+	body string, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opEditTaskComment, &w.actor, editCommentOnTaskArgs{
 		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Body: body,
 		Notify: notify,
@@ -382,7 +390,7 @@ func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, comm
 
 // WritePriorities sets a person's priority order, conditioned on ifMatch.
 func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
-	priorities []string, ifMatch *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	priorities []string, ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opWritePriorities, &w.actor, writePrioritiesArgs{
 		OpID: opID, Handle: handle, Priorities: priorities, IfMatch: ifMatch, Authority: authority,
 	})
@@ -392,7 +400,7 @@ func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
 
 // RemoveTask moves a task, or its subtree, to the trash.
 func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opRemoveTask, &w.actor, removeTaskArgs{
 		OpID: opID, ID: id, Project: project, Subtree: subtree, Notify: notify,
 	})
@@ -401,9 +409,9 @@ func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, su
 }
 
 // RestoreTask brings a task back out of the trash — alone, refused with
-// [tracker.ErrRestoresOthers] when its removal took others, if alone is set.
+// [worklet.ErrRestoresOthers] when its removal took others, if alone is set.
 func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
-	alone bool, notify *tracker.Notify) (tracker.WriteResult, error) {
+	alone bool, notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opRestoreTask, &w.actor, restoreTaskArgs{
 		OpID: opID, ID: id, Project: project, Alone: alone, Notify: notify,
 	})
@@ -413,7 +421,7 @@ func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
 
 // PurgeTask destroys a task and everything derived from it.
 func (w WorkWriter) PurgeTask(ctx context.Context, opID, id, project, reason string) (
-	tracker.WriteResult, error) {
+	worklet.WriteResult, error) {
 	out, err := call(ctx, w.r, opPurgeTask, &w.actor, purgeTaskArgs{
 		OpID: opID, ID: id, Project: project, Reason: reason,
 	})
@@ -428,30 +436,30 @@ type Pages struct{ r *Router }
 func (r *Router) Pages() Pages { return Pages{r: r} }
 
 // List answers a listing of pages.
-func (p Pages) List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error) {
+func (p Pages) List(ctx context.Context, f doclet.Filter, fresh statelog.Freshness) (doclet.Listing, error) {
 	return call(ctx, p.r, opListPages, nil, listPagesArgs{Filter: f, Fresh: fresh})
 }
 
 // Get answers one page.
-func (p Pages) Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error) {
+func (p Pages) Get(ctx context.Context, ref string, fresh statelog.Freshness) (doclet.Detail, error) {
 	return call(ctx, p.r, opGetPage, nil, getPageArgs{Ref: ref, Fresh: fresh})
 }
 
 // SkillPages is the tool-skill container, for the skill sync.
 func (p Pages) SkillPages(ctx context.Context, container string,
-	fresh statelog.Freshness) ([]pages.Page, error) {
+	fresh statelog.Freshness) ([]doclet.Page, error) {
 	return call(ctx, p.r, opSkillPages, nil, skillPagesArgs{Container: container, Fresh: fresh})
 }
 
 // Containers lists every container.
 func (p Pages) Containers(ctx context.Context, fresh statelog.Freshness) (
-	[]pages.ContainerListing, error) {
+	[]doclet.ContainerListing, error) {
 	return call(ctx, p.r, opContainers, nil, containersArgs{Fresh: fresh})
 }
 
 // Activity answers what happened to a page, a container or the whole
 // knowledge base.
-func (p Pages) Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error) {
+func (p Pages) Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error) {
 	return call(ctx, p.r, opPageActivity, nil, q)
 }
 
@@ -466,7 +474,7 @@ func (p Pages) LinkedFrom(ctx context.Context, pageID string) (search.Backlinks,
 // Revision answers one revision of a page's body, and false where the page
 // has none at that version.
 func (p Pages) Revision(ctx context.Context, pageID string, version int,
-	fresh statelog.Freshness) (pages.Revision, bool, error) {
+	fresh statelog.Freshness) (doclet.Revision, bool, error) {
 	out, err := call(ctx, p.r, opRevision, nil, revisionArgs{PageID: pageID, Version: version, Fresh: fresh})
 	return out.Revision, out.Found, err
 }
@@ -475,23 +483,23 @@ func (p Pages) Revision(ctx context.Context, pageID string, version int,
 // [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
 // under which a repeat is the same operation ([op.repeatableWhen]). So for
 // every page write below; a comment may carry its turn's key instead.
-func (p Pages) Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error) {
+func (p Pages) Create(ctx context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opCreatePage, nil, createPageArgs{Actor: actor, Page: in})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
 // SavePage saves a page's body.
-func (p Pages) SavePage(ctx context.Context, actor pages.Actor, pageID string,
-	save pages.Save) (pages.Written, error) {
+func (p Pages) SavePage(ctx context.Context, actor doclet.Actor, pageID string,
+	save doclet.Save) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opSavePage, nil, savePageArgs{Actor: actor, PageID: pageID, Save: save})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
 // Rename moves a page to a new title.
-func (p Pages) Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-	quiet bool) (pages.Written, error) {
+func (p Pages) Rename(ctx context.Context, actor doclet.Actor, pageID, title string,
+	quiet bool) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opRenamePage, nil, renamePageArgs{
 		Actor: actor, PageID: pageID, Title: title, Quiet: quiet,
 	})
@@ -500,16 +508,16 @@ func (p Pages) Rename(ctx context.Context, actor pages.Actor, pageID, title stri
 }
 
 // Comment adds a comment.
-func (p Pages) Comment(ctx context.Context, actor pages.Actor, pageID string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p Pages) Comment(ctx context.Context, actor doclet.Actor, pageID string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	out, err := call(ctx, p.r, opCommentPage, nil, commentArgs{Actor: actor, PageID: pageID, Comment: in})
 	p.r.Observe(out.Written.Outcome.Position)
 	return out.Comment, out.Written, err
 }
 
 // EditComment rewrites a comment.
-func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-	body string) (pages.Comment, pages.Written, error) {
+func (p Pages) EditComment(ctx context.Context, actor doclet.Actor, pageID, commentID,
+	body string) (doclet.Comment, doclet.Written, error) {
 	out, err := call(ctx, p.r, opEditComment, nil, editCommentArgs{
 		Actor: actor, PageID: pageID, CommentID: commentID, Body: body,
 	})
@@ -518,22 +526,22 @@ func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, comme
 }
 
 // Trash moves a page to the trash.
-func (p Pages) Trash(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error) {
+func (p Pages) Trash(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opTrashPage, nil, pageRefArgs{Actor: actor, PageID: pageID})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
 // Restore brings a page back out of the trash.
-func (p Pages) Restore(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error) {
+func (p Pages) Restore(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opRestorePage, nil, pageRefArgs{Actor: actor, PageID: pageID})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
 // Purge destroys a page and everything derived from it.
-func (p Pages) Purge(ctx context.Context, actor pages.Actor, pageID, reason string) (
-	pages.Written, error) {
+func (p Pages) Purge(ctx context.Context, actor doclet.Actor, pageID, reason string) (
+	doclet.Written, error) {
 	out, err := call(ctx, p.r, opPurgePage, nil, purgePageArgs{
 		Actor: actor, PageID: pageID, Reason: reason,
 	})
@@ -543,13 +551,272 @@ func (p Pages) Purge(ctx context.Context, actor pages.Actor, pageID, reason stri
 
 // RemoveComment takes one remark down, under the authority the caller's table
 // decided.
-func (p Pages) RemoveComment(ctx context.Context, actor pages.Actor, pageID, commentID string,
-	authority pages.CommentAuthority) (pages.Written, error) {
+func (p Pages) RemoveComment(ctx context.Context, actor doclet.Actor, pageID, commentID string,
+	authority doclet.CommentAuthority) (doclet.Written, error) {
 	out, err := call(ctx, p.r, opRemoveComment, nil, removeCommentArgs{
 		Actor: actor, PageID: pageID, CommentID: commentID, Authority: authority,
 	})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
+}
+
+// Chat is the engine's own chat, read and written: every read answered for one
+// viewer, every write as the actor it names.
+//
+// THE KNOWLEDGE BASE'S SHAPE rather than the tracker's, because it is the
+// store's own: one node's chat serves every seat and every person through one
+// store, so the party a write acts as — and the caller's key it carries
+// ([chatlet.Actor.OpKey]) — travels per call rather than being derived into a
+// writer ([WorkWriter]).
+//
+// EVERY WRITE RAISES THIS NODE'S FLOOR ON THE CHAT LOG to the position it
+// reported, an error included — an unvouched or a refused answer can still
+// carry the position the next read must include — so the seat's next chat read,
+// on whichever node answers it, includes what it just wrote, and nothing it
+// reads of the tracker or the knowledge base waits on it.
+type Chat struct{ r *Router }
+
+// Chat answers the engine's own chat.
+func (r *Router) Chat() Chat { return Chat{r: r} }
+
+var _ chatlet.ThreadSource = Chat{}
+
+// Channels answers the rooms a viewer is in.
+func (c Chat) Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
+	fresh statelog.Freshness) (chatlet.ChannelListing, error) {
+	return call(ctx, c.r, opChatChannels, nil, chatChannelsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Channel answers one room, for a viewer who may read it.
+func (c Chat) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelHere is [Chat.Channel] asked of THIS node's own copy first, even
+// while that copy lags its log — see [callHere].
+//
+// FOR THE LIVE CHANNEL'S DECISION ABOUT A RECORD THIS NODE'S APPLIER HAS JUST
+// COMMITTED: whether one viewer may be shown it. That copy holds the record by
+// construction, while the ordinary walk would ask a peer first whenever the
+// copy lags — during the very burst that makes it lag — turning every
+// decision into a round trip to a node that may not have applied the record
+// yet. A copy out of service is passed over as ever, and the caller's floor
+// ([statelog.Freshness.Floors]) holds whichever copy answers to the
+// record being announced.
+func (c Chat) ChannelHere(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return callHere(ctx, c.r, opChatChannel, nil,
+		chatChannelArgs{Viewer: viewer, ChannelID: channelID, Fresh: fresh})
+}
+
+// ChannelNamed answers the room a name addresses, for a viewer who may read it.
+func (c Chat) ChannelNamed(ctx context.Context, viewer, name string,
+	fresh statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return call(ctx, c.r, opChatChannelNamed, nil,
+		chatChannelNamedArgs{Viewer: viewer, Name: name, Fresh: fresh})
+}
+
+// Messages answers a page of one room's transcript.
+func (c Chat) Messages(ctx context.Context, viewer string, q chatlet.TranscriptQuery,
+	fresh statelog.Freshness) (chatlet.Transcript, error) {
+	return call(ctx, c.r, opChatMessages, nil, chatMessagesArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// Thread answers one thread, its root and its replies.
+func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
+	fresh statelog.Freshness) (chatlet.Thread, error) {
+	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// RoomNames answers the names of every room a viewer may read.
+func (c Chat) RoomNames(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+	return call(ctx, c.r, opChatRoomNames, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
+}
+
+// Directory answers every named room a viewer may browse.
+func (c Chat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	return call(ctx, c.r, opChatDirectory, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
+}
+
+// settled raises the session floor to what a chat write reported.
+func (c Chat) settled(w chatlet.Written) { c.r.Observe(w.Outcome.Position) }
+
+// CreateChannel opens a room. Never repeated when unanswered — see
+// [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
+// under which a repeat is the same operation ([op.repeatableWhen]). So for every
+// chat write below but the erase and the prune, which take the caller's
+// operation id.
+func (c Chat) CreateChannel(ctx context.Context, actor chatlet.Actor, in chatlet.NewChannel) (
+	chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatCreateChannel, nil, chatCreateChannelArgs{Actor: actor, Channel: in})
+	c.settled(out)
+	return out, err
+}
+
+// OpenDirect opens the direct conversation between the actor and the
+// participants, reporting whether this call created it.
+func (c Chat) OpenDirect(ctx context.Context, actor chatlet.Actor, participants []string) (
+	chatlet.Written, bool, error) {
+	out, err := call(ctx, c.r, opChatOpenDirect, nil,
+		chatOpenDirectArgs{Actor: actor, Participants: participants})
+	c.settled(out.Written)
+	return out.Written, out.Created, err
+}
+
+// PatchChannel changes a room's topic, purpose or archive, under the authority
+// the caller's table decided.
+func (c Chat) PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string,
+	patch chatlet.ChannelPatch, authority chatlet.ChannelAuthority) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPatchChannel, nil, chatPatchChannelArgs{
+		Actor: actor, ChannelID: channelID, Patch: patch, Authority: authority,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// SetMembers replaces a room's members.
+func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+	members []chatlet.Member) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetMembers, nil,
+		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members})
+	c.settled(out)
+	return out, err
+}
+
+// AddMembers puts people in a room, answering who it put there.
+func (c Chat) AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+	handles []string) (chatlet.Written, []string, error) {
+	out, err := call(ctx, c.r, opChatAddMembers, nil,
+		chatAddMembersArgs{Actor: actor, ChannelID: channelID, Handles: handles})
+	c.settled(out.Written)
+	return out.Written, out.Added, err
+}
+
+// Join puts the actor in a room.
+func (c Chat) Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatJoin, nil, chatMembershipArgs{Actor: actor, ChannelID: channelID})
+	c.settled(out)
+	return out, err
+}
+
+// Leave takes the actor out of a room.
+func (c Chat) Leave(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatLeave, nil, chatMembershipArgs{Actor: actor, ChannelID: channelID})
+	c.settled(out)
+	return out, err
+}
+
+// Post says something in a room.
+func (c Chat) Post(ctx context.Context, actor chatlet.Actor, channelID string,
+	in chatlet.NewMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPost, nil,
+		chatPostArgs{Actor: actor, ChannelID: channelID, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Reply says something in a message's thread.
+func (c Chat) Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReply, nil,
+		chatReplyArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Edit rewrites a message its actor wrote.
+func (c Chat) Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
+	in chatlet.EditMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatEdit, nil,
+		chatEditArgs{Actor: actor, ChannelID: channelID, MessageID: messageID, Edit: in})
+	c.settled(out)
+	return out, err
+}
+
+// Delete takes a message down, leaving its tombstone, under the authority the
+// caller's table decided.
+func (c Chat) Delete(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
+	authority chatlet.MessageAuthority) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatDelete, nil, chatDeleteArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Authority: authority,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// React adds the actor's reaction to a message.
+func (c Chat) React(ctx context.Context, actor chatlet.Actor, channelID, messageID,
+	emoji string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Unreact takes the actor's reaction back.
+func (c Chat) Unreact(ctx context.Context, actor chatlet.Actor, channelID, messageID,
+	emoji string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji, Remove: true,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// SetRetention states how long a room keeps what is said in it: days, or nil
+// for the company's default.
+func (c Chat) SetRetention(ctx context.Context, actor chatlet.Actor, channelID string,
+	days *int) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetRetention, nil,
+		chatSetRetentionArgs{Actor: actor, ChannelID: channelID, Days: days})
+	c.settled(out)
+	return out, err
+}
+
+// Erase removes messages for good, under the operation id the caller derived —
+// repeated under it when unanswered, as a purge is.
+func (c Chat) Erase(ctx context.Context, actor chatlet.Actor, opID, channelID string,
+	messageIDs []string, reason string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatErase, nil, chatEraseArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, MessageIDs: messageIDs, Reason: reason,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Prune drops a room's messages older than cutoff, under the operation id the
+// caller derived.
+func (c Chat) Prune(ctx context.Context, actor chatlet.Actor, opID, channelID string,
+	cutoff time.Time) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPrune, nil, chatPruneArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, Cutoff: cutoff,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// ChatSearch is the chat keyword search, answered for one viewer by a data
+// node that holds both the rooms the viewer may read and the index.
+type ChatSearch struct{ r *Router }
+
+// ChatSearch answers the chat keyword search.
+func (r *Router) ChatSearch() ChatSearch { return ChatSearch{r: r} }
+
+// Search ranks the company's chat for one viewer, over the rooms that viewer
+// may read.
+//
+// AN ERROR, NEVER AN EMPTY ANSWER, where no data node could run it — unlike the
+// knowledge search, which is best effort by its seam's own contract. Nothing
+// here is best effort: a seat told "nobody said that" acts on it, and a person
+// searching a screen is shown the refusal rather than an empty list. An index
+// still catching up says so on the answer ([ChatSearchAnswer.Building]).
+func (s ChatSearch) Search(ctx context.Context, q ChatQuery) (ChatSearchAnswer, error) {
+	return call(ctx, s.r, opChatSearch, nil, q)
 }
 
 // Identity is the identity directory's read side, answered by a data node:
@@ -632,7 +899,7 @@ func (i Identity) MachineToken(ctx context.Context, presented credential.Token) 
 	return facts.rowFor(presented, key, nonce), nil
 }
 
-// Knowledge is the native knowledge search, answered by a data node's index.
+// Knowledge is the Doclet knowledge search, answered by a data node's index.
 type Knowledge struct{ r *Router }
 
 // Knowledge answers the knowledge search.
@@ -640,11 +907,10 @@ func (r *Router) Knowledge() Knowledge { return Knowledge{r: r} }
 
 var _ knowledge.Searcher = Knowledge{}
 
-// Backend is the native one: the engine's own knowledge base, searched on a
-// node that holds it.
-func (Knowledge) Backend() string { return "native" }
+// Backend is Doclet's, searched on a node that holds it.
+func (Knowledge) Backend() string { return doclet.Backend }
 
-// CanSearch is the no-I/O pre-gate, and on the native backend every seat can
+// CanSearch is the no-I/O pre-gate, and on Doclet every seat can
 // read every page — so it is true, and a data node that answers nothing is
 // the empty result a best-effort search already is.
 func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
@@ -698,7 +964,7 @@ func (k Knowledge) Building(ctx context.Context) bool {
 }
 
 // Usage is the usage domain's reads (ADR-0020), answered by a data node whose
-// usage copy is in service — this node's own where it is one (ADR-0049).
+// usage copy is in service — this node's own where it is one (ADR-0072).
 type Usage struct{ r *Router }
 
 // Usage answers the usage domain.
@@ -769,7 +1035,7 @@ func allPages[R any](ctx context.Context,
 			return out, nil
 		}
 		if !after.Before(p.Next) {
-			return nil, fmt.Errorf("estate: a usage page ended at %v, which is not after %v — "+
+			return nil, fmt.Errorf("estate: a usage page ended at %s, which is not after %s — "+
 				"the answering node pages by another rule", p.Next, after)
 		}
 		after = p.Next
@@ -824,8 +1090,8 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 	out := RepoReadersAnswer{Readers: page.Rows}
 	if !page.Done {
 		if !after.Before(page.Next) {
-			return RepoReadersAnswer{}, fmt.Errorf("estate: a page of readers ended at %v, which is not "+
-				"after %v — the answering node pages by another rule", page.Next, after)
+			return RepoReadersAnswer{}, fmt.Errorf("estate: a page of readers ended at %s, which is not "+
+				"after %s — the answering node pages by another rule", page.Next, after)
 		}
 		out.Next = page.Next.Cursor()
 	}
@@ -1043,7 +1309,7 @@ func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnsw
 }
 
 // GitRead asks the repository's home git node for one read of its content by
-// object id, and its runner-up when the home cannot answer (ADR-0059). Its
+// object id, and its runner-up when the home cannot answer (ADR-0082). Its
 // floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.FloorOf]
 // supplies where the reader's own writes must be in the copy it reads.
 func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -1052,7 +1318,7 @@ func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 
 // MergePreview asks the repository's home git node what merging q.Head into
 // q.Base would do — by the merge the home records a change's mergeability by
-// — and its runner-up when the home cannot answer (ADR-0059), as a read by
+// — and its runner-up when the home cannot answer (ADR-0082), as a read by
 // object id is asked. Its floor is the query's own
 // (code.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
 // asker's own pushes must be in the copy it merges. It never raises this
@@ -1062,8 +1328,8 @@ func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (c
 }
 
 // GitWrite asks the repository's home git node to build one engine write and
-// land it as a push (ADR-0062), and its runner-up with the same write — the
-// same push — where the home ran nothing or went silent (ADR-0059). Its floor
+// land it as a push (ADR-0085), and its runner-up with the same write — the
+// same push — where the home ran nothing or went silent (ADR-0082). Its floor
 // is the write's own (code.EngineWrite.Fresh), as a read's is.
 //
 // THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it

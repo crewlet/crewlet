@@ -117,8 +117,13 @@ func TestTheFinalPassMovesTheFleetOnlyOnceEveryObjectIsCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := e.migrateTo(t.Context(), true, objects, collect.References{src}, report); !errors.Is(err, ErrMigrationRefused) ||
-		!strings.Contains(err.Error(), "data-b") {
+		!strings.Contains(err.Error(), `"data-b"`) {
 		t.Fatalf("a final pass beside an admitted node answered %v, want a refusal naming it", err)
+	} else if strings.Contains(err.Error(), "exclude") {
+		// NO EXCLUSION IS OFFERED: it is a gesture on an open capacity
+		// window, which a final pass is not, so the command it named
+		// answered that there was none. Mutation: name it again.
+		t.Fatalf("a final pass beside an admitted node offered an exclusion: %v", err)
 	}
 	if err := fleet.ForgetAdmission(t.Context(), "data-b", "x"); err != nil {
 		t.Fatal(err)

@@ -16,7 +16,7 @@ declare module "*.md?raw" {
 /**
  * A screen's own source, for a gate whose subject IS the source.
  *
- * `routes/work/toolbar/grammar.test.tsx` reads every URL key `ItemsView`
+ * `routes/worklet/toolbar/grammar.test.tsx` reads every URL key `ItemsView`
  * writes out of the component itself, the way `internal/clientsource` reads a
  * declaration out of this tree for the engine's own gates — because a list of
  * twenty strings copied into a test is a list that goes stale silently. A

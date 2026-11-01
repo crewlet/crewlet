@@ -78,11 +78,13 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     eventId: "ev-1",
     stage: "",
     timedRounds: [],
+    invocations: [],
     hostRound: 0,
     cacheReadTokens: 0,
     maxRounds: 0,
     roundStartedAt: "",
-    runningCall: null,
+    runStartedAt: "",
+    runningCalls: [],
     bodyWithheld: false,
     steers: [],
     node: "",
@@ -108,6 +110,7 @@ const TWO_ROUNDS = phase({
       origin: "builtin",
       server: "",
       startedAt: "",
+      callId: "",
     },
     {
       name: "submit_work",
@@ -119,6 +122,7 @@ const TWO_ROUNDS = phase({
       origin: "builtin",
       server: "",
       startedAt: "",
+      callId: "",
     },
   ],
 });
@@ -226,6 +230,7 @@ describe("a round is one block", () => {
               origin: "builtin",
               server: "",
               startedAt: "",
+              callId: "",
             },
             {
               name: "submit_work",
@@ -237,6 +242,7 @@ describe("a round is one block", () => {
               origin: "builtin",
               server: "",
               startedAt: "",
+              callId: "",
             },
           ],
         })}
@@ -268,6 +274,7 @@ describe("a failed tool call", () => {
         origin: "builtin",
         server: "",
         startedAt: "",
+        callId: "",
       },
       {
         name: "submit_work",
@@ -279,6 +286,7 @@ describe("a failed tool call", () => {
         origin: "builtin",
         server: "",
         startedAt: "",
+        callId: "",
       },
     ],
   });
@@ -471,6 +479,7 @@ describe("a tool call's arguments", () => {
           origin: "builtin",
           server: "",
           startedAt: "",
+          callId: "",
         },
       ],
     });
@@ -623,6 +632,7 @@ describe("a round that answered in prose", () => {
     origin: "builtin",
     server: "",
     startedAt: "",
+    callId: "",
   });
   const SUBMISSION = '```json\n{"outcome": "delivered"}\n```';
 
@@ -843,7 +853,8 @@ describe("a running phase's transcript", () => {
     const scroller = box(container)!;
     const observed = Watching.live.flatMap((w) => w.observed);
     expect(observed).toContain(scroller);
-    expect(observed).toContain(scroller.querySelector(".round-ledger"));
+    // The ledger the box holds — a live phase's runs, each heading its rounds.
+    expect(observed).toContain(scroller.firstElementChild);
     geometry(scroller);
     resize();
     expect(scroller.scrollTop).toBe(800);
@@ -910,7 +921,7 @@ describe("a failed phase", () => {
         defaultOpen
       />,
     );
-    expect(container.querySelector(".phase-head")?.textContent).toContain("rate_limit");
+    expect(container.querySelector(".phase-head")?.textContent).toContain("Rate limited");
     expect(container.querySelector(".phase-body")?.textContent).toContain(
       "cli-agent/claude-code: sitting out until 14:05",
     );
@@ -1009,6 +1020,7 @@ describe("a publishing call", () => {
           origin: "builtin",
           server: "",
           startedAt: "",
+          callId: "",
         },
       ],
     });
@@ -1023,5 +1035,232 @@ describe("a publishing call", () => {
   test("links nothing when it failed", () => {
     render(<PhaseCard record={publishing(true)} defaultOpen />);
     expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
+  });
+});
+
+/**
+ * EVERY CALL IN FLIGHT IS IN ITS ROUND, named running, after the calls of that
+ * round that have answered. A CLI runs a response's calls side by side, so a
+ * round can have several out at once; a card that drew none of them showed a
+ * model's words and nothing after them for as long as the calls took, which
+ * reads as a seat that stalled. And a call that answers is the SAME row, open
+ * if the reader opened it — keyed by the call's own id, which its running entry
+ * and its answered row share.
+ *
+ * Mutation: drop the running calls from the ledger, give a running call a
+ * component of its own, or key the rows by position, and this fails.
+ */
+describe("the calls a running phase is making", () => {
+  const answered = (name: string, callId: string, result: string) => ({
+    name,
+    round: 1,
+    args: "{}",
+    result,
+    failed: false,
+    durationMs: 0,
+    origin: "builtin",
+    server: "",
+    startedAt: "",
+    callId,
+  });
+  const running = (name: string, id: string, args: string) => ({
+    id,
+    round: 1,
+    name,
+    arguments: args,
+    startedAt: "2026-09-02T10:00:00Z",
+  });
+  const live = (over: Partial<PhaseRecord>) =>
+    phase({
+      live: true,
+      roundsUsed: 1,
+      narration: [{ round: 1, content: "Reading all three.", declined: false }],
+      ...over,
+    });
+
+  test("are drawn in their round, each named running, after the calls that answered", () => {
+    const { container } = render(
+      <PhaseCard
+        record={live({
+          tools: [answered("read_file", "c1", "contents a")],
+          runningCalls: [
+            running("read_file", "c2", '{"path":"b.go"}'),
+            running("run_tests", "c3", '{"pkg":"./..."}'),
+          ],
+        })}
+        defaultOpen
+      />,
+    );
+    const round = container.querySelector(".round") as HTMLElement;
+    const rows = within(round).getAllByRole("button");
+    expect(rows.map((b) => b.textContent)).toEqual([
+      expect.not.stringMatching(/running/),
+      expect.stringMatching(/^read_file.*running/),
+      expect.stringMatching(/^run_tests.*running/),
+    ]);
+    expect(round.querySelectorAll(".tool-row.running")).toHaveLength(2);
+  });
+
+  test("a call that answers keeps its row, open where the reader opened it", () => {
+    const before = live({
+      tools: [answered("read_file", "c1", "contents a")],
+      runningCalls: [running("read_file", "c2", '{"path":"b.go"}')],
+    });
+    const { container, rerender } = render(<PhaseCard record={before} defaultOpen />);
+    const row = () => container.querySelectorAll(".tool-row")[1] as HTMLElement;
+    const held = row();
+    fireEvent.click(within(held).getByRole("button"));
+    expect(within(held).getByText(/Still running/)).toBeDefined();
+    rerender(
+      <PhaseCard
+        record={live({
+          tools: [
+            answered("read_file", "c1", "contents a"),
+            answered("read_file", "c2", "the text of b"),
+          ],
+          runningCalls: [],
+        })}
+        defaultOpen
+      />,
+    );
+    expect(row()).toBe(held);
+    expect(held.classList.contains("running")).toBe(false);
+    expect(within(held).getByText(/the text of b/)).toBeDefined();
+  });
+});
+
+/**
+ * A PHASE'S CLI RUNS HEAD THE ROUNDS EACH MADE: which entry served it, the
+ * rounds it made, how it ended — filed by the round span the run names. A run
+ * whose CLI showed no requests says its one round is the whole run; a run that
+ * made none says so; and on a live phase the rounds past every ended run are
+ * the run in flight's.
+ *
+ * Mutation: file every round under the first run, drop a run that made no
+ * request, or stop heading a live phase's rounds, and this fails.
+ */
+describe("a phase's CLI runs", () => {
+  const narrated = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      round: i + 1,
+      content: `Round ${i + 1} said this.`,
+      declined: false,
+    }));
+  const run = (over: Partial<PhaseRecord["invocations"][number]>) => ({
+    run: 1,
+    startedAt: "2026-09-02T10:00:00Z",
+    durationMs: 4_000,
+    providerKey: "claude-max",
+    model: "scripted",
+    outcome: "end",
+    firstRound: 1,
+    lastRound: 1,
+    requestsObserved: true,
+    inputTokens: 1_000,
+    outputTokens: 100,
+    cacheReadTokens: 0,
+    toolCalls: 0,
+    ...over,
+  });
+  const roundsIn = (el: Element) =>
+    [...el.querySelectorAll(".round .round-node")].map((n) => n.textContent);
+
+  test("each run heads the rounds it names, and says how it ended", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 4,
+          narration: narrated(4),
+          invocations: [
+            run({ run: 1, firstRound: 1, lastRound: 2, outcome: "stopped" }),
+            run({ run: 2, firstRound: 0, lastRound: 0, outcome: "failed", providerKey: "codex" }),
+            run({ run: 3, firstRound: 3, lastRound: 3, requestsObserved: false }),
+            run({ run: 4, firstRound: 4, lastRound: 4, outcome: "cap" }),
+          ],
+        })}
+        defaultOpen
+      />,
+    );
+    const runs = [...container.querySelectorAll(".run")];
+    expect(runs.map(roundsIn)).toEqual([["1", "2"], [], ["3"], ["4"]]);
+    const heads = runs.map((r) => r.querySelector(".run-head")?.textContent ?? "");
+    expect(heads[0]).toMatch(/CLI run 1.*claude-max.*rounds 1–2.*the engine ended it/);
+    expect(heads[1]).toMatch(/CLI run 2.*codex.*no request.*failed/);
+    expect(heads[3]).toMatch(/CLI run 4.*round 4.*turn cap/);
+    expect(runs[2]!.textContent).toContain("the whole run is one round");
+    // THE CONTROL: a run whose CLI showed its requests says nothing of it.
+    expect(runs[0]!.textContent).not.toContain("the whole run is one round");
+  });
+
+  test("a live phase's rounds past every ended run are the run in flight's", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          live: true,
+          roundsUsed: 3,
+          narration: narrated(3),
+          invocations: [run({ run: 1, firstRound: 1, lastRound: 2 })],
+        })}
+        defaultOpen
+      />,
+    );
+    const runs = [...container.querySelectorAll(".run")];
+    expect(runs.map(roundsIn)).toEqual([["1", "2"], ["3"]]);
+    expect(runs[1]!.querySelector(".run-head")?.textContent).toMatch(/CLI run 2.*running/);
+  });
+
+  test("a live phase whose first run has not ended is headed as that run", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({ live: true, roundsUsed: 1, narration: narrated(1) })}
+        defaultOpen
+      />,
+    );
+    expect(container.querySelector(".run-head")?.textContent).toMatch(/CLI run 1.*running/);
+  });
+
+  // THE CONTROL: a settled phase that recorded no runs draws its rounds as
+  // ever, with no head claiming a run nothing recorded.
+  test("a settled phase with no runs on its record draws no head", () => {
+    const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    expect(container.querySelector(".run-head")).toBeNull();
+    expect(container.querySelectorAll(".round")).toHaveLength(2);
+  });
+});
+
+/**
+ * A ROUND THE CLI'S OWN TURN CAP ENDED SAYS SO under its words — the one stop
+ * reason that ends a round unfinished (`contract/stops.ts`). The CONTROL is a
+ * round that ended because its model was done, which says nothing.
+ *
+ * Mutation: drop the note, or draw it on every round, and this fails.
+ */
+describe("a round the CLI's turn cap ended", () => {
+  test("says the cap ended its run with the model still working", () => {
+    const timed = (round: number, stopReason: string) => ({
+      round,
+      startedAt: "2026-09-02T10:00:00Z",
+      durationMs: 1_000,
+      model: "scripted",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      toolCalls: 0,
+      stopReason,
+    });
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          ...TWO_ROUNDS,
+          timedRounds: [timed(1, "end"), timed(2, "cap")],
+        })}
+        defaultOpen
+      />,
+    );
+    const [first, second] = [...container.querySelectorAll(".round")];
+    expect(first!.querySelector(".round-note")).toBeNull();
+    expect(second!.querySelector(".round-note.caution")?.textContent).toMatch(
+      /CLI’s own turn cap ended its run here, with the model still working/,
+    );
   });
 });

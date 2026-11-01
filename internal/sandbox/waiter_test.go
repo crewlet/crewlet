@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,6 +91,23 @@ func (r *waiterRig) managers() *Manager { return r.current.Load() }
 
 func newWaiterRig(t *testing.T) *waiterRig {
 	t.Helper()
+	return newWaiterRigIn(t, Direct)
+}
+
+// rigDrives is the waiter that drives a rig's runs in cell: the node's own for
+// a box on the engine's host — the rig's runs name no node, and neither does
+// its waiter — and the fleet's for one every node reaches.
+func rigDrives(cell Placement) Drives {
+	if cell.OnEngineHost() {
+		return DrivesLocal
+	}
+	return DrivesRemote
+}
+
+// newWaiterRigIn is a rig whose one backend, and so every run it launches, is
+// in cell.
+func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
+	t.Helper()
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
@@ -103,7 +121,7 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	// a test advances to and no age assertion below would mean anything.
 	rig.pending = NewCoordStore(memory.NewFleet()).WithClock(func() time.Time { return rig.now })
 	manager, err := NewManager(ManagerOptions{
-		Providers: map[Placement]Provider{Direct: rig.provider},
+		Providers: map[Placement]Provider{cell: rig.provider},
 		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
@@ -113,7 +131,8 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	rig.current.Store(manager)
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Now: func() time.Time { return rig.now },
+		Drives: rigDrives(cell),
+		Now:    func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -145,21 +164,23 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
-	return r.launchingWith(turnID, lease, nil)
+	return r.launchingAs(turnID, lease, func(*PendingRun) {})
 }
 
 // launchWith is [waiterRig.launch] of a run the case edits before it is
 // written — given repositories on the code host, say, as a launch writes them.
 func (r *waiterRig) launchWith(turnID string, edit func(*PendingRun)) PendingRun {
 	r.t.Helper()
-	r.launchingWith(turnID, rigLease, edit)
+	r.launchingAs(turnID, rigLease, edit)
 	r.suspend(turnID)
 	return r.get(turnID)
 }
 
-// launchingWith is [waiterRig.launchingUnder] of a run edit changes before it is
-// written; nil changes nothing.
-func (r *waiterRig) launchingWith(turnID string, lease Fence, edit func(*PendingRun)) PendingRun {
+// launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
+// the write that opens it — a turn a colleague's ask woke, say, whose row the
+// launch writes the ask onto, or one given repositories on the code host, as
+// a launch writes them.
+func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
 	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
@@ -184,9 +205,7 @@ func (r *waiterRig) launchingWith(turnID string, lease Fence, edit func(*Pending
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
-	if edit != nil {
-		edit(&run)
-	}
+	shape(&run)
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -220,7 +239,7 @@ func leased(fence Fence) func(string) (Fence, bool) {
 func notLeased(string) (Fence, bool) { return Fence{}, false }
 
 // rigItem is the work item every rig launch is charged to.
-var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+var rigItem = types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 
 // rigWorkKey is the unit of work every rig launch was dispatched for —
 // distinct from every turn id a case launches under, so an announcement that
@@ -239,7 +258,7 @@ func (r *waiterRig) suspend(turnID string) {
 func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 	r.t.Helper()
 	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
+		`{"version":4,"iteration":1}`),
 		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
@@ -247,6 +266,26 @@ func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 	if !suspended {
 		r.t.Fatalf("MarkSuspended %s: the launch did not open to the poll", turnID)
 	}
+}
+
+// ask records ask as the question the job the row holds now asked, the way the
+// run's ask tool does over its bridge ([PendingStore.RecordAsk]), failing the
+// case unless it was recorded. A collection parks a run on what its row holds,
+// so a case whose run asks records the ask while the job is running and then
+// finishes the runner with the rest of what it reports.
+func (r *waiterRig) ask(turnID string, ask Ask) {
+	r.t.Helper()
+	run := r.get(turnID)
+	got, err := r.pending.RecordAsk(r.t.Context(), turnID, run.LaunchID, ask)
+	if err != nil || got != AskRecorded {
+		r.t.Fatalf("RecordAsk on %s (%s) = %q, %v; want it recorded", turnID, run.Status, got, err)
+	}
+}
+
+// whichBranch is the question a rig's run asks where the case is about the
+// park rather than what was asked: put to the requester, as most are.
+func whichBranch() Ask {
+	return Ask{Question: "which branch?", To: AskToRequester}
 }
 
 func (r *waiterRig) get(turnID string) PendingRun {
@@ -302,6 +341,29 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 	rig.runner.Finish(Result{Success: true})
 	if fired := rig.tick(); fired != 1 {
 		t.Fatalf("fired %d, want 1", fired)
+	}
+}
+
+// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN ON THE NEXT TICK.
+//
+// The announcement is a signal, not the work: the run's row is. So a completion
+// whose delivery was acked without a claim (a node that may not start the turn
+// yet, on a condition that clears by waiting) loses nothing, because the run is
+// still running and the next tick fires it again. That is what lets the control
+// topic hand such a completion back without spending a delivery.
+//
+// Mutation: fire a run's completion once and remember it, and the second tick
+// fires nothing for a run that is still waiting for its claim.
+func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	for tick := 1; tick <= 2; tick++ {
+		if fired := rig.tick(); fired != 1 {
+			t.Fatalf("tick %d fired %d completions for a finished run nobody claimed, want 1",
+				tick, fired)
+		}
 	}
 }
 
@@ -405,10 +467,10 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	// Two failures, but no time has passed: giving up is TERMINAL — the
-	// completion fires, collect cannot reconnect either, and the run is
-	// settled failed — so a burst of probes must not be able to spend the
-	// window on its own.
+	// Two failures, but no time has passed: giving up is TERMINAL for the
+	// job — the completion fires, and a box that is gone has its job lost
+	// and its round started again — so a burst of probes must not be able to
+	// spend the window on its own.
 	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
 			t.Fatalf("gave up on probe %d with no time elapsed", i+1)
@@ -430,8 +492,8 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 100 * time.Millisecond,
-		Now:      func() time.Time { return rig.now },
+		Drives: DrivesLocal, Interval: 100 * time.Millisecond,
+		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -559,13 +621,15 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 	}
 }
 
-// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
-// box again: a collection that read and paused it and then could not resume
-// the turn hands the claim back to running, and the box has to be kept alive
-// and collected anew. The read-only attach must not cost that.
+// A PAUSED BOX UNDER A RUN STILL RUNNING A JOB NO COLLECTION READ BACK IS
+// WOKEN, because that is the run's box and only the poll can say whether its
+// job finished: it has to be kept alive and polled. The read-only attach must
+// not cost that. (A job a collection read back and handed back to running is
+// announced with its box left asleep instead, since it is over:
+// TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain.)
 //
-// Mutation: leave every paused box alone, and the handed-back run's box is
-// never heart-beaten or polled again.
+// Mutation: leave every paused box alone, and this run's box is never
+// heart-beaten or polled again.
 func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -577,7 +641,7 @@ func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	rig.runner.Finish(Result{Text: "done", Success: true})
 
 	if fired := rig.tick(); fired != 1 {
-		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+		t.Errorf("the run fired %d completion(s); want its finished job announced", fired)
 	}
 	if box.Paused() || box.Keepalives() != 1 {
 		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
@@ -592,10 +656,8 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-		Question: "which branch?", Audience: "requester",
-		AskedAt: rig.now,
-	}); err != nil {
+	rig.ask("t1", whichBranch())
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	rig.runner.Finish(Result{Success: true})
@@ -658,14 +720,13 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 // the pause reaper
 // ---------------------------------------------------------------------
 
-// park moves a launched run onto a question with its box snapshotted.
+// park has a launched run ask a question and moves it onto it, with its box
+// snapshotted.
 func (r *waiterRig) park(turnID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{
-		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
-		AskedAt: r.now,
-	}); err != nil {
+	r.ask(turnID, Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{AskedAt: r.now}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := r.pending.MarkBoxPaused(ctx, turnID, r.now); err != nil {
@@ -731,9 +792,10 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
-	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
-	}, rigLease); err != nil || !ok {
+	parked := rig.get("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", parked.LaunchID, sealedOnto(t, rigAnswers(),
+		parked, chatWords("use main"), RecordedAnswer{EventIDs: []string{"r1"}, RecordedAt: rig.now},
+	), rigLease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 
@@ -852,10 +914,8 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
-		AskedAt: rig.now,
-	}); err != nil {
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if rig.get("t1").Paused() {
@@ -922,12 +982,12 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 // N nodes polling means N reconnects per box per tick and N racing reapers.
 func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
@@ -947,12 +1007,12 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 // costs one interval.
 func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -977,7 +1037,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 5 * time.Millisecond,
+		Drives: DrivesLocal, Interval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -1004,10 +1064,10 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // with the deadline's, and every pass leaves one child registered.
 func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Now:       func() time.Time { return rig.now },
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		DutyTTL:   time.Minute,
@@ -1177,5 +1237,66 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 	}
 	if payload.WorkKey != rigWorkKey {
 		t.Errorf("WorkKey = %q, want the run's unit of work %q", payload.WorkKey, rigWorkKey)
+	}
+}
+
+// A RUNNING BOX'S EXPIRING CREDENTIALS ARE REFRESHED ON EVERY POLL THAT
+// REACHES IT, and a box its run has moved on from is never handed over.
+//
+// The poll is the only thing that reaches a running box for as long as its
+// job runs, so it is what keeps a credential issued at launch, which expires
+// within the hour, current in the box for a job that runs for hours. A box the
+// run no longer runs is not the run's to refresh.
+//
+// ON BOTH WAITERS, since each box is polled by one of them alone ([Drives]):
+// a box on the engine host by its launching node's own, and one every node
+// reaches by the fleet's. A refresh only one of them made would leave every
+// box of the other kind with the credential it launched with.
+func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
+	t.Parallel()
+	for _, cell := range []Placement{Direct, E2B} {
+		t.Run(string(cell), func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRigIn(t, cell)
+			var (
+				mu     sync.Mutex
+				handed []string
+			)
+			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox) {
+				mu.Lock()
+				defer mu.Unlock()
+				if manager != rig.manager {
+					t.Error("the refresh was handed a manager other than the one that reached the box")
+				}
+				handed = append(handed, run.TurnID+"@"+box.ID())
+			}
+			run := rig.launch("t1")
+			for range 3 {
+				rig.tick()
+			}
+			mu.Lock()
+			got := slices.Clone(handed)
+			mu.Unlock()
+			if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
+				t.Fatalf("%s waiter: refreshes = %v, want the running box on each of three polls",
+					rig.waiter.drives, got)
+			}
+
+			moved := newWaiterRigIn(t, cell)
+			calls := 0
+			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox) { calls++ }
+			listed := moved.launch("t2")
+			moved.runner.Finish(Result{Text: "done", Success: true})
+			if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+				t.Fatalf("claim = %v, %v", ok, err)
+			}
+			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			moved.waiter.pollOne(t.Context(), moved.manager, listed)
+			if calls != 0 {
+				t.Error("a box its run has moved on from was handed to the refresh")
+			}
+		})
 	}
 }

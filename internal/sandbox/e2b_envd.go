@@ -3,6 +3,8 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -337,7 +339,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	resp, err := c.http.Do(req)
 	if err != nil {
 		cancel()
-		return e2bProcessResult{}, fmt.Errorf("e2b: start: %w", err)
+		return e2bProcessResult{}, unanswered(ctx, fmt.Errorf("e2b: start: %w", err))
 	}
 	defer resp.Body.Close()
 	stream := newIdleReader(resp.Body, cancel, e2bStreamIdleTimeout)
@@ -345,10 +347,10 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	// above, where a linter can see it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
-		return e2bProcessResult{}, fmt.Errorf("e2b: start: %d: %s",
-			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream))
+		return e2bProcessResult{}, envdRefused(resp.StatusCode, fmt.Errorf("e2b: start: %d: %s",
+			resp.StatusCode, httpx.ReadRefusalFrom(resp.Header.Get("Content-Type"), stream)))
 	}
-	return foldStream(stream, background)
+	return foldStream(ctx, stream, background)
 }
 
 // foldStream reads Connect frames and folds them into one result.
@@ -359,7 +361,7 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 // raising instead would turn an ordinary pause into a failed run. What the
 // stream did say — an end event, the trailer's error — is kept apart in the
 // result, and the caller decides what the command's status is.
-func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
+func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessResult, error) {
 	var (
 		out    e2bProcessResult
 		stdout strings.Builder
@@ -372,7 +374,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			return out, fmt.Errorf("e2b: read stream: %w", err)
+			return out, unanswered(ctx, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		length := binary.BigEndian.Uint32(header[1:])
 		if length > maxEnvdFrame {
@@ -385,7 +387,7 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return out, fmt.Errorf("e2b: read stream: %w", err)
+			return out, unanswered(ctx, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		if header[0]&connectEndFlag != 0 {
 			// The trailer, whose error is how a stream envd ended on a
@@ -520,6 +522,17 @@ const e2bFileIdleTimeout = E2BClientTimeout
 func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	body []byte, header http.Header,
 ) (*http.Response, *idleReader, error) {
+	return c.exchange(ctx, method, c.host+"/files?"+filesQuery(path), body, header)
+}
+
+// exchange is one request to envd about the box's files — a /files transfer
+// ([envdClient.fileExchange]) or a call of its filesystem service
+// ([envdClient.filesystem]) — under the one bound every such request has:
+// [e2bFileIdleTimeout] between bytes, re-armed by each one sent or received.
+// The caller owns both returns, as [envdClient.fileExchange] says.
+func (c *envdClient) exchange(ctx context.Context, method, target string,
+	body []byte, header http.Header,
+) (*http.Response, *idleReader, error) {
 	reqCtx, cancel := context.WithCancel(ctx)
 	// ARMED NOW, before the request is sent, so a connection that is never
 	// answered is abandoned exactly as one that stops mid-body is.
@@ -528,7 +541,7 @@ func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	if body != nil {
 		reader = sendProgress{inner: bytes.NewReader(body), idle: idle}
 	}
-	req, err := http.NewRequestWithContext(reqCtx, method, c.host+"/files?"+filesQuery(path), reader)
+	req, err := http.NewRequestWithContext(reqCtx, method, target, reader)
 	if err != nil {
 		idle.stop()
 		return nil, nil, err
@@ -553,7 +566,7 @@ func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	resp, err := c.http.Do(req)
 	if err != nil {
 		idle.stop()
-		return nil, nil, idle.silent(err)
+		return nil, nil, unanswered(ctx, idle.silent(err))
 	}
 	idle.inner = resp.Body
 	return resp, idle, nil
@@ -591,12 +604,12 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, nil
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: read %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	raw, err := readCapped(idle, path, MaxFileBytes)
 	if err != nil {
-		return nil, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err))
+		return nil, unanswered(ctx, fmt.Errorf("e2b: read %s: %w", path, idle.silent(err)))
 	}
 	return raw, nil
 }
@@ -617,10 +630,11 @@ func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, 
 	case resp.StatusCode >= 400:
 		defer idle.stop()
 		defer resp.Body.Close()
-		return nil, fmt.Errorf("e2b: open %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
-	return &envdStream{body: resp.Body, idle: idle, path: path}, nil
+	return &envdStream{body: resp.Body, idle: idle, path: path,
+		cancelled: func() bool { return cancelledBy(ctx) }}, nil
 }
 
 // envdStream is an open file's body, read through its idle bound.
@@ -628,12 +642,19 @@ type envdStream struct {
 	body io.ReadCloser
 	idle *idleReader
 	path string
+	// cancelled reports whether the caller that opened the file cancelled
+	// it: an io.Reader's Read takes no context, and a read the caller
+	// cancelled is no class at all ([unanswered]).
+	cancelled func() bool
 }
 
 func (s *envdStream) Read(p []byte) (int, error) {
 	n, err := s.idle.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
 		err = fmt.Errorf("e2b: read %s: %w", s.path, s.idle.silent(err))
+		if !s.cancelled() {
+			err = Because(WhyProviderUnavailable, err)
+		}
 	}
 	return n, err
 }
@@ -681,21 +702,21 @@ func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail
 		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		data, readErr := io.ReadAll(io.LimitReader(idle, int64(max(want, 1))))
 		if readErr != nil {
-			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
-				path, idle.silent(readErr))
+			return FileTail{}, unanswered(ctx, fmt.Errorf(
+				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		if !ok || total < 0 {
 			total = start + int64(len(data))
 		}
 		tail = FileTail{Data: data, Size: max(total, start+int64(len(data)))}
 	case resp.StatusCode >= 400:
-		return FileTail{}, fmt.Errorf("e2b: read the end of %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return FileTail{}, envdRefused(resp.StatusCode, fmt.Errorf(
+			"e2b: read the end of %s: %d: %s", path, resp.StatusCode, httpx.ReadRefusal(resp)))
 	default:
 		data, total, readErr := keepLast(idle, max(want, 1))
 		if readErr != nil {
-			return FileTail{}, fmt.Errorf("e2b: read the end of %s: %w",
-				path, idle.silent(readErr))
+			return FileTail{}, unanswered(ctx, fmt.Errorf(
+				"e2b: read the end of %s: %w", path, idle.silent(readErr)))
 		}
 		tail = FileTail{Data: data, Size: total}
 	}
@@ -769,9 +790,44 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 	return buf, total, nil
 }
 
-// writeFile puts a file into the box.
+// writeFile puts a file into the box WHOLE ([Sandbox.WriteFile]): uploaded
+// under a fresh name beside the path, then moved over it.
+//
+// ENVD WRITES AN UPLOAD IN PLACE. Its /files handler opens the destination
+// with O_TRUNC and copies the request's body into it as the body arrives
+// (processFile in packages/envd/internal/api/upload.go, e2b-dev/infra), so a
+// file uploaded over one a run is using — a seat's GitHub App token file, which
+// the completion poll rewrites under the running job and its git credential
+// helper reads at every call — was empty, and then part written, for as long
+// as the body took to cross the network, and a push that read it then
+// authenticated with nothing. Uploaded under another name, the file the box
+// reads changes in one step: envd's own Move, which is a rename
+// (packages/envd/internal/services/filesystem/move.go), so a reader opens the
+// old file or the new one.
+//
+// THE STAGED FILE LIES BESIDE THE PATH, in the directory envd resolves the
+// path in, so the rename never crosses a filesystem ([stagedBeside]). NONE
+// OUTLIVES A WRITE THAT FAILED: an upload or a move that failed removes it
+// ([envdClient.discard]).
+//
+// What is at the path is REPLACED, a link included: the box is the VM, so
+// nothing written there reaches the engine host, and the rename writes through
+// no link. The new file has the mode and owner envd gives every upload.
 func (c *envdClient) writeFile(ctx context.Context, path string, content []byte) error {
 	path = envdPath(path)
+	staged := stagedBeside(path)
+	if err := c.upload(ctx, staged, content); err != nil {
+		return c.discard(ctx, staged, fmt.Errorf("e2b: write %s: %w", path, err))
+	}
+	if err := c.filesystem(ctx, "Move", envdMove{Source: staged, Destination: path}); err != nil {
+		return c.discard(ctx, staged, fmt.Errorf("e2b: write %s: %w", path, err))
+	}
+	return nil
+}
+
+// upload puts content at path through envd's /files, which writes it there in
+// place ([envdClient.writeFile] says why nothing the box reads is uploaded over).
+func (c *envdClient) upload(ctx context.Context, path string, content []byte) error {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	// THE PART NAME IS THE PATH'S BASENAME and envd reads the destination
@@ -779,28 +835,136 @@ func (c *envdClient) writeFile(ctx context.Context, path string, content []byte)
 	// full path in the part would write to the wrong place with no error.
 	part, err := form.CreateFormFile("file", baseName(path))
 	if err != nil {
-		return fmt.Errorf("e2b: write %s: %w", path, err)
+		return err
 	}
 	if _, writeErr := part.Write(content); writeErr != nil {
-		return fmt.Errorf("e2b: write %s: %w", path, writeErr)
+		return writeErr
 	}
 	if closeErr := form.Close(); closeErr != nil {
-		return fmt.Errorf("e2b: write %s: %w", path, closeErr)
+		return closeErr
 	}
 
 	header := http.Header{"Content-Type": {form.FormDataContentType()}}
 	resp, idle, err := c.fileExchange(ctx, http.MethodPost, path, body.Bytes(), header)
 	if err != nil {
-		return fmt.Errorf("e2b: write %s: %w", path, err)
+		return fmt.Errorf("upload: %w", err)
 	}
 	defer resp.Body.Close()
 	defer idle.stop()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("e2b: write %s: %d: %s", path,
-			resp.StatusCode, httpx.ReadRefusal(resp))
+		return envdRefused(resp.StatusCode, fmt.Errorf("upload: %d: %s", resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(idle, 1<<20))
 	return nil
+}
+
+// discard removes the file a write staged and could not move over its path,
+// and returns failed — the write's own error — saying so where the removal
+// failed too, since the staged file then holds the content in the box under a
+// name nothing reads.
+//
+// A ROLLBACK, so it takes [context.WithoutCancel] of the write's context: the
+// write often failed because that context ended, and a removal inheriting it
+// would remove nothing. It is bounded as every envd file exchange is
+// ([e2bFileIdleTimeout]). envd removes a path that is not there without
+// complaint, so a staged file the failed upload never created costs one
+// request.
+func (c *envdClient) discard(ctx context.Context, staged string, failed error) error {
+	err := c.filesystem(context.WithoutCancel(ctx), "Remove", envdRemove{Path: staged})
+	if err != nil {
+		return fmt.Errorf("%w (and the file staged for it, %s, could not be removed: %w)", failed, staged, err)
+	}
+	return failed
+}
+
+// stagedBeside is the name a write to path stages its content under: a fresh
+// one in path's own directory, as envd resolves it.
+//
+// THE PATH'S LAST ELEMENT IS REPLACED AS WRITTEN, never cleaned: envd joins a
+// relative or `~/` path onto the account's home and cleans only then, so the
+// directory a lexical clean names here is not always the one envd writes the
+// path in ([envdPath] keeps `a/../~/x` as written for that reason, and its
+// directory is `a/../~/`, which envd resolves to <home>/~). A trailing slash
+// is dropped first, as envd's join drops it from the path itself.
+//
+// UNGUESSABLE, as the local cells' staged files are ([hostbox.ReplaceFileIn]):
+// the box's own processes write the directory, and a name one of them could
+// make first would fail the upload, or be moved over the file in place of the
+// write's own content.
+func stagedBeside(path string) string {
+	dir := ""
+	if i := strings.LastIndex(strings.TrimRight(path, "/"), "/"); i >= 0 {
+		dir = path[:i+1]
+	}
+	return dir + stagedPrefix + rand.Text()
+}
+
+// stagedPrefix begins the name a box file's new content is staged under before
+// it replaces the file — on E2B as on the engine host ([hostbox.ReplaceFileIn]).
+const stagedPrefix = ".crewlet-tmp-"
+
+// envdMove and envdRemove are the requests of envd's filesystem Move and
+// Remove, in the JSON Connect reads a protobuf message from
+// (packages/envd/spec/filesystem/filesystem.proto in e2b-dev/infra).
+type (
+	envdMove struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	envdRemove struct {
+		Path string `json:"path"`
+	}
+)
+
+// filesystem makes one call of envd's filesystem service: a Connect UNARY
+// call, in JSON, answered whole — unlike Process/Start, whose answer is a
+// stream ([envdClient.start]). Only whether it succeeded is read.
+//
+// AS THE ACCOUNT EVERY /files CALL NAMES ([e2bEnvdUser]), by HTTP Basic: envd
+// reads a Connect call's user from that header alone (AuthenticateUsername in
+// packages/envd/internal/permissions/authenticate.go), and without it acts as
+// the template's default user, in whose home a relative or `~/` path would
+// then be resolved — another directory than the one the upload wrote, for a
+// template whose default user is not that account.
+func (c *envdClient) filesystem(ctx context.Context, method string, request any) error {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("%s: encode: %w", strings.ToLower(method), err)
+	}
+	header := http.Header{
+		"Content-Type":             {"application/json"},
+		"Connect-Protocol-Version": {"1"},
+		"Authorization":            {envdBasicUser},
+	}
+	resp, idle, err := c.exchange(ctx, http.MethodPost, c.host+"/filesystem.Filesystem/"+method, body, header)
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.ToLower(method), err)
+	}
+	defer resp.Body.Close()
+	defer idle.stop()
+	if resp.StatusCode >= 400 {
+		return envdRefused(resp.StatusCode, fmt.Errorf("%s: %d: %s", strings.ToLower(method),
+			resp.StatusCode, httpx.ReadRefusal(resp)))
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(idle, 1<<20))
+	return nil
+}
+
+// envdBasicUser is the Authorization a call of envd's filesystem service
+// carries: [e2bEnvdUser], with no password, which is how envd's Basic scheme
+// names an account (the token that admits the call is X-Access-Token's).
+var envdBasicUser = "Basic " + base64.StdEncoding.EncodeToString([]byte(e2bEnvdUser+":"))
+
+// envdRefused is an answer of 400 or more from a box's agent, marked by what
+// its status means where it means something ([statusWhy]): the box failing on
+// its side, or the account at a limit. A refused access token is the box's own
+// credential, handed to the engine at its create, and no person's to fix, so
+// it is left for the caller to read as the fault it is.
+func envdRefused(status int, err error) error {
+	if why, ok := statusWhy(status, false); ok {
+		return Because(why, err)
+	}
+	return err
 }
 
 // filesQuery is the path-and-user pair every /files call carries.

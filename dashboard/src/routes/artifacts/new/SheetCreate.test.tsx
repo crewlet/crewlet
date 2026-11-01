@@ -11,6 +11,7 @@ import { Router } from "~/app/router.tsx";
 import { TestClient } from "~/test/client.tsx";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { SheetCreate } from "./SheetCreate.tsx";
+import { draftField, openFrame, setDraft } from "../draftTesting.ts";
 
 vi.mock("~/lib/keyedWrite.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
@@ -265,7 +266,7 @@ test("Ask an agent opens the hand-off beside the grid, files a task with the bri
   expect(within(panel).queryByText(/columns?$/)).toBeNull();
   fireEvent.click(within(panel).getByRole("button", { name: "Hiring pipeline" }));
   fireEvent.click(ask);
-  await waitFor(() => expect(location.hash).toBe("#/work/ENG-42"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/ENG-42"));
   expect(fileArtifactTask).toHaveBeenCalledWith({
     kind: "sheet",
     title: "Hiring pipeline",
@@ -293,4 +294,24 @@ test("the columns shaped in the grid go to the agent with the brief", async () =
   await waitFor(() => expect(fileArtifactTask).toHaveBeenCalled());
   const brief = fileArtifactTask.mock.calls.at(-1)![0].brief as string;
   expect(brief.startsWith("The launch gates.\n\nStart from these columns:\n- ")).toBe(true);
+});
+
+// WHAT IS SHAPED IS THE ASSISTANT'S TO READ, and a change it proposes picks
+// the way in as a press of its card would; the grid stays the reader's.
+test("the sheet being made is the assistant's to read, and a draft.set picks its template", async () => {
+  openFrame("artifacts-new");
+  mount();
+  expect(draftField("start")).toMatchObject({ value: "blank", editable: true });
+  expect(draftField("columns")).toMatchObject({ value: "Name (Text)", kind: "list" });
+  expect(draftField("columns")).not.toHaveProperty("editable");
+  expect(setDraft({ title: "Launch tracker", start: "tracker" })).toMatchObject({
+    outcome: "applied",
+  });
+  expect(headers()).toEqual(["Task", "Owner", "Status", "Priority", "Due", "Notes"]);
+  expect(screen.getByRole("textbox", { name: "Sheet title" })).toHaveProperty(
+    "value",
+    "Launch tracker",
+  );
+  await waitFor(() => expect(draftField("start")?.value).toBe("tracker"));
+  expect(setDraft({ columns: "Task" })).toMatchObject({ outcome: "invalid" });
 });

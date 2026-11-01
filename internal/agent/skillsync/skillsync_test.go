@@ -540,8 +540,8 @@ func TestARefreshWalks(t *testing.T) {
 	serves(t, r, "deploy", "tag the release")
 }
 
-// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. The native page projection runs
-// for the life of the node, so it goes on reporting native skill pages after an
+// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. Doclet's pages applier runs
+// for the life of the node, so it goes on reporting Doclet skill pages after an
 // apply moved the company's skills to Confluence, and walking the wiki for each
 // of those is a request that can find out nothing.
 func TestARefreshFromAnotherBackendWalksNothing(t *testing.T) {
@@ -557,7 +557,7 @@ func TestARefreshFromAnotherBackendWalksNothing(t *testing.T) {
 	s.Refresh("native")
 	settle()
 	if walks, _ := w.counts(); walks != 1 {
-		t.Fatalf("a native refresh walked a Confluence source (%d walks in all)", walks)
+		t.Fatalf("a Doclet refresh walked a Confluence source (%d walks in all)", walks)
 	}
 }
 
@@ -745,10 +745,9 @@ func TestTwoNodesConvergeOnAChangeOnlyOneHeard(t *testing.T) {
 	}
 }
 
-// A CONTAINER ONE NODE SAW MOVE IS WALKED BY EVERY NODE. The native knowledge
-// base's appliers know a skill page moved but not which one, and a node that
-// holds no copy of the knowledge base runs no applier at all — so without the
-// announcement it heard of a skill edit only on its periodic walk.
+// A CONTAINER ONE NODE SAW MOVE IS WALKED BY EVERY NODE. Doclet's appliers
+// know a skill page moved but not which one, and a node that holds no copy of
+// Doclet runs no applier at all, so without the announcement it heard of a skill edit only on its periodic walk.
 func TestAnAnnouncedContainerIsWalkedByANodeThatSawNothing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()

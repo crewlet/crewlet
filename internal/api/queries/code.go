@@ -11,13 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CODE HOST'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
 // may read, a page at a time; `code_repo`, one repository in detail; and
 // `code_pushes`, one repository's push history. Each is decided PER
 // REPOSITORY, by the grant the serving node derives from its chart
-// (code.GrantOf, ADR-0058) — a listing leaves out what the asker may not read,
+// (code.GrantOf, ADR-0081) — a listing leaves out what the asker may not read,
 // and a read of one such repository is refused [NotPermitted] — so each is
 // registered [DecidedBy] the authority table's `code.read`, which admits
 // everybody the guard resolved and decides nothing a repository's grant does.
@@ -165,7 +166,7 @@ func (s Sources) codeRead(kind code.ReadKind, what string) Answer {
 // ([builtin.CodeAskerOf], the one conversion) — the credential it came
 // through, and the human seat it holds, a person's own or the one the
 // identity directory binds a token to, or none. Every principal a person
-// presents reads every repository (ADR-0058), so the answer a person gets is
+// presents reads every repository (ADR-0081), so the answer a person gets is
 // the whole listing; what the asker buys here is that the reader judges every
 // read by who asked it, so a seat's read cannot be answered as a person's, nor
 // a person's question and their assistant's tool call as two people.
@@ -242,8 +243,8 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		}
 		status := code.RepoStatus(v)
 		if !status.Valid() {
-			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %v", ErrBadParams,
-				v, code.RepoStatuses())
+			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %s", ErrBadParams,
+				v, words.Or(code.RepoStatuses()))
 		}
 		q.Status = append(q.Status, status)
 	}
@@ -362,7 +363,7 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused(what, d)
+		return nil, NewRefusal(what, d)
 	}
 	reads, err := s.Code.CodeReads()
 	if err != nil {

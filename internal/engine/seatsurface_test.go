@@ -139,13 +139,13 @@ units:
           access: review
         integrations:
           github:
+            enabled: false
             app_id: 42
             app_slug: acme-dev
             installation_id: 7
             private_key: "${DEV_PEM}"
             webhook_secret: "${DEV_HOOK}"
         sandbox:
-          enabled: true
           max_turns: 12
           setup:
             - name: fetch

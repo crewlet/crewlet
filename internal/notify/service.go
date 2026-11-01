@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -542,6 +543,11 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	}
 	meta[RecipientField] = party.Handle
 	r.Metadata = meta
+	// THE WAKE'S OWN FENCE TOKEN, minted here because this is where the
+	// trigger is built and no turn exists yet to lend one: the body is
+	// fenced under it before the prompt renders it ([Render]), and the turn
+	// that reads the trigger moves those fences onto its own token.
+	r.Fence = provenance.NewBoundary()
 
 	out := types.ExternalNotification{
 		NotificationSource:   r.Source,
@@ -551,7 +557,8 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		Sender:               r.Sender,
 		Writer:               r.Writer,
 		Subject:              r.Subject,
-		Body:                 prompt.Build(r.Inbound, reg),
+		Body:                 Render(prompt, r.Inbound, reg),
+		FenceBoundary:        string(r.Fence),
 		SalientBody:          &salient,
 		Metadata:             meta,
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),

@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A CALL IS DECIDED WHOLE BEFORE ITS FIRST WRITE.
@@ -83,7 +83,7 @@ func TestARefusedCallDeclaresNoLabelFirst(t *testing.T) {
 func TestAnUpdateWhoseDependenciesFailedReportsTheChangeItMade(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.dependErr = errors.New("tracker: ENG-2 already waits on the most items one may")
+	trk.dependErr = errors.New("worklet: ENG-2 already waits on the most items one may")
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Dependencies: trk.depends,
 	})
@@ -145,7 +145,7 @@ func TestAnUnrecordableDependencyRefusesBeforeAnyWrite(t *testing.T) {
 // Every argument naming another item — a parent, a blocker, a link, the
 // question a comment answers — is read before anything is written, and a read
 // that failed came back as a sentence alone. The HTTP write surface reads its
-// status from a result's CAUSE, so a node that could not read its own tracker
+// status from a result's CAUSE, so a node that could not read its own Worklet
 // answered 422 "refused" rather than 503, and a client never came back. The
 // read's error is the cause now; and an item that plainly does not exist
 // still carries none of the tracker's not-found errors, because it is not the
@@ -192,7 +192,7 @@ func TestAnUnreadableReferenceCarriesTheReadsError(t *testing.T) {
 	got := callWork(t, workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as}),
 		builtin.CreateWorkItemTool,
 		map[string]any{"title": "x", "project": "ENG", "parent": "ENG-404"})
-	if !got.Failed || errors.Is(got.Cause, tracker.ErrNoTask) {
+	if !got.Failed || errors.Is(got.Cause, worklet.ErrNoTask) {
 		t.Errorf("a parent nobody filed answered %q with cause %v", got.Output,
 			got.Cause)
 	}

@@ -9,18 +9,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // workInbox answers a page of one person's notices.
 //
-// THE READER HAS ALWAYS EXISTED — `tracker.Reader.Inbox`, written, tested and
-// swept on a 365-day retention — and nothing registered it as a question, so
+// THE READER HAS ALWAYS EXISTED (`worklet.Reader.Inbox`, written, tested and
+// swept on a 365-day retention), and nothing registered it as a question, so
 // the richest record this engine keeps about a person reached no screen. Each
 // notice names the ONE reason of eighteen under which it found them, whether it
 // ASKS something or merely informs, whether it arrived only because nobody
@@ -39,7 +40,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	q := tracker.InboxQuery{
+	q := worklet.InboxQuery{
 		Handle:      handle,
 		Unread:      p.Bool("unread", false),
 		PrimaryOnly: p.Bool("primary_only", false),
@@ -62,7 +63,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	// classification of the same rows, and these narrow which rows are
 	// returned at all.
 	for _, name := range splitList(p.String("reasons")) {
-		reason := tracker.Reason(name)
+		reason := worklet.Reason(name)
 		if !reason.Valid() {
 			return nil, badParams("reasons", name, reasonNames())
 		}
@@ -95,12 +96,12 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Work.Inbox(ctx, q, s.clock())
 	switch {
-	case errors.Is(err, tracker.ErrBadQuery):
+	case errors.Is(err, worklet.ErrBadQuery):
 		// THE CALLER'S, like a malformed `since` above: a cursor that is
 		// not a log position, or a position from another log. The cursor
 		// is parsed by the reader, and it used to be parsed inside the
 		// read's transaction, so a pasted-wrong cursor was a 500.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -118,8 +119,8 @@ func snoozeScopeNames() []string {
 
 // reasonNames is the eighteen, for a refusal that says what would have worked.
 func reasonNames() []string {
-	out := make([]string, 0, len(tracker.Reasons))
-	for _, r := range tracker.Reasons {
+	out := make([]string, 0, len(worklet.Reasons))
+	for _, r := range worklet.Reasons {
 		out = append(out, string(r))
 	}
 	return out
@@ -136,9 +137,9 @@ func reasonNames() []string {
 // is the owner-or-lead rule — theirs, whoever leads them, or an admin — WITH
 // NO APP, since an inbox is no app's: a person who uses no tracker still
 // hears about the changes they are asked to review. Then each source is read
-// only where its own permission holds: the tracker's notices where the
-// company keeps its tracker here and the caller holds the tracker app on that
-// record ([authz.ActionInboxRead], `work_inbox`'s own rule); the code host's
+// only where its own permission holds: Worklet's notices where the company
+// runs Worklet and the caller holds the worklet permission on that record
+// ([authz.ActionInboxRead], `work_inbox`'s own rule); the code host's
 // where the company hosts code, each notice held by the code host to the
 // caller's grant on its repository. A source the caller may not read is not
 // asked, and the answer's `sources` says which were.
@@ -209,7 +210,7 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	page, err := inbox.Compose(ctx, q, sources)
 	var refused codeReadRefused
 	switch {
-	case errors.Is(err, inbox.ErrBadCursor), errors.Is(err, tracker.ErrBadQuery):
+	case errors.Is(err, inbox.ErrBadCursor), errors.Is(err, worklet.ErrBadQuery):
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case errors.As(err, &refused):
 		return nil, codeRefusal("", refused.err)
@@ -230,7 +231,7 @@ type trackerInbox struct {
 func (trackerInbox) Name() string { return "tracker" }
 
 func (t trackerInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
-	answer, err := t.work.Inbox(ctx, tracker.InboxQuery{Handle: q.Handle, Unread: q.Unread,
+	answer, err := t.work.Inbox(ctx, worklet.InboxQuery{Handle: q.Handle, Unread: q.Unread,
 		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Limit: q.Limit, Cursor: q.Cursor,
 		Level: t.fresh.Level, MaxLag: t.fresh.MaxLag, MaxLagSeq: t.fresh.MaxLagSeq, Floors: t.fresh.Floors}, t.now)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // WHAT AN ENGINE WRITE READS AS IT STREAMS: a tree's entries, a file an edit
@@ -326,7 +327,7 @@ func (e *editStream) Close(path string) (code.WriteRefusal, string, error) {
 	switch {
 	case e.refusal == code.WriteEditBinary:
 		return e.refusal, fmt.Sprintf("%s is binary (a NUL in its first %d bytes): put it whole, or change it in a "+
-			"coding box (run_sandbox)", path, editBinaryHead), nil
+			"checkout of the repository ("+toolname.CodeCheckout+")", path, editBinaryHead), nil
 	case e.refusal == code.WriteEditLineEndings:
 		return e.refusal, fmt.Sprintf("%s holds carriage returns, and an edit spanning a line would mix its "+
 			"line endings: edit it a line at a time, or put it whole", path), nil

@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // WHAT THIS FILE EXISTS FOR.
@@ -43,7 +46,7 @@ func scheduledEngine(t *testing.T, c *config.Company) *engine.Engine {
 	t.Helper()
 	return newEngine(t, engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}),
 		Company: c,
 	})
@@ -168,5 +171,36 @@ func TestStoppingTheEngineStopsTheScheduler(t *testing.T) {
 	e.Stop(ctx)
 	if e.SchedulerRunning() {
 		t.Fatal("the tick loop outlived the engine that owns it")
+	}
+}
+
+// A SCHEDULED TURN'S DEFAULT CAP OUTLASTS WHAT THE TURN SPENDS BEFORE ITS RUN.
+//
+// A schedule that sets no timeout_seconds takes [org.DefaultScheduleTimeout],
+// measured from the moment the fire's turn begins, and the executor's run is
+// inside it. Before that run can do anything the turn has prefetched its
+// context, started its box and applied the seat's setup, each held to a bound
+// of its own: an auxiliary call's, a container's start with a cold image pull
+// inside it, and one setup command's default allowance. A cap at or under
+// their sum can end a ritual's run before it has done anything — which is
+// what the three minutes it replaced did, running out inside a single setup
+// command's allowance once every executor became a run in a box.
+//
+// THREE CONSTANTS IN THREE PACKAGES that know nothing of schedules, so only
+// the ORDER is asserted, as TestAnIdleAskOutlastsTheSilenceOfOneStillOwed
+// does: what the run itself needs is no constant anything could be compared
+// against, and a demanded multiple would fail a sound change and be edited to
+// say so. The rest of the derivation is at the definition.
+func TestADefaultScheduleCapOutlastsTheTurnBeforeItsRun(t *testing.T) {
+	t.Parallel()
+	setup := time.Duration(org.DefaultSetupTimeoutSeconds * float64(time.Second))
+	before := prefetch.AuxTimeout + sandbox.ControlTimeout + setup
+	if org.DefaultScheduleTimeout <= before {
+		t.Errorf("a schedule with no timeout_seconds is capped at %v, and its turn can spend %v "+
+			"before its executor's run starts (an auxiliary prefetch call %v, a container's "+
+			"start %v, one setup command's default allowance %v).\nThe cap would end a "+
+			"ritual's run before it had done anything. Raise DefaultScheduleTimeout, or "+
+			"shorten what it outlasts.",
+			org.DefaultScheduleTimeout, before, prefetch.AuxTimeout, sandbox.ControlTimeout, setup)
 	}
 }

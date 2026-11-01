@@ -29,7 +29,7 @@ import (
 type BrokerFloor struct {
 	// Logs is what the state logs reserve between them at their floors: an
 	// explicit ceiling as written, and an unset one at the smaller of what
-	// it asks for and [MinDomainCeiling], which is where sizing stops.
+	// it asks for and where its scaling stops ([domainCeiling.scaleFloor]).
 	Logs int64
 
 	// Bucket is the nats object bucket's reservation at Limit, zero where
@@ -88,7 +88,7 @@ func BrokerFloorFor(boot *config.Bootstrap) BrokerFloor {
 			f.Logs += ceiling.Bytes
 			continue
 		}
-		f.Logs += min(ceiling.Bytes, MinDomainCeiling)
+		f.Logs += min(ceiling.Bytes, ceiling.scaleFloor())
 	}
 	switch {
 	case boot.Store.Objects.BackendOrDefault() != config.ObjectBackendNATS:

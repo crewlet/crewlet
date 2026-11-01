@@ -487,7 +487,7 @@ func (f *fakeLog) state() fakeState {
 }
 
 // recreate is the log made again — provisioned anew, its stamp not the one
-// it had (ADR-0053) — holding an earlier state's rows: a new stream identity,
+// it had (ADR-0076) — holding an earlier state's rows: a new stream identity,
 // and the rows and the checkpoint the state held.
 func (f *fakeLog) recreate(st fakeState) {
 	f.mu.Lock()
@@ -498,7 +498,7 @@ func (f *fakeLog) recreate(st fakeState) {
 
 // restore is the log brought back from an earlier copy — a broker restored
 // from a backup's snapshot, or yesterday's volume: the SAME stream identity
-// (the stamp rides the snapshot's configuration, ADR-0053), and the rows and
+// (the stamp rides the snapshot's configuration, ADR-0076), and the rows and
 // the checkpoint the copy held, so the positions past it name other records
 // once the log is written again.
 func (f *fakeLog) restore(st fakeState) {

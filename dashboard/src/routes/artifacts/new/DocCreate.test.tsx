@@ -12,6 +12,7 @@ import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import type { KeyedAnswer, KeyedRequest } from "~/lib/keyedWrite.ts";
 import { DocCreate, docBrief } from "./DocCreate.tsx";
 import type { ArtifactTaskRequest, FiledArtifactTask } from "./fileTask.ts";
+import { context, draftField, openFrame, setDraft } from "../draftTesting.ts";
 
 const write = vi.fn<(req: KeyedRequest) => Promise<KeyedAnswer>>();
 const fileTask = vi.fn<(req: ArtifactTaskRequest) => Promise<FiledArtifactTask | null>>();
@@ -198,7 +199,7 @@ test("Ask an agent opens the hand-off beside the page and files the brief as a t
     target: { value: "  How we run incident reviews. " },
   });
   fireEvent.click(ask());
-  await waitFor(() => expect(location.hash).toBe("#/work/ENG-2"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/ENG-2"));
   expect(fileTask).toHaveBeenCalledWith({
     kind: "doc",
     title: "Incident review guide",
@@ -258,4 +259,31 @@ test("a brief carries a draft to build on, or nothing beyond the reader's words"
   expect(docBrief("Cover it.", meeting.body, meeting)).toContain(
     "Follow the meeting notes outline:",
   );
+});
+
+// WHAT IS OPEN IS THE ASSISTANT'S TO READ, and a change it proposes fills the
+// page through its own setters: the title, the body in the editor, and the
+// hand-off beside them. Create stays the writer's press.
+test("the new doc is the assistant's to read, and a draft.set fills the page", async () => {
+  openFrame("artifacts-new");
+  mount();
+  expect(context().draft).toMatchObject({ kind: "client", step: "write" });
+  expect(context().accepts).toContain("draft.set");
+  expect(draftField("title")).toMatchObject({ value: "", editable: true });
+  expect(draftField("ask.agent")).toMatchObject({ value: "sre-lead", editable: true });
+  expect(
+    setDraft({ title: "Incident reviews", body: "# Reviews\n\nHow we run them." }),
+  ).toMatchObject({ outcome: "applied" });
+  expect(title()).toHaveProperty("value", "Incident reviews");
+  await waitFor(() => expect(draftField("body")?.value).toBe("# Reviews\n\nHow we run them."));
+  expect(setDraft({ "ask.agent": "nobody" })).toMatchObject({
+    outcome: "invalid",
+    reason: "Choose one of the agents offered: sre-lead.",
+  });
+  fireEvent.click(create());
+  await waitFor(() => expect(write).toHaveBeenCalledOnce());
+  expect(sent()).toMatchObject({
+    title: "Incident reviews",
+    doc: { body: expect.stringContaining("How we run them.") },
+  });
 });

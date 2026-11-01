@@ -1,7 +1,7 @@
 /**
  * What waits on a reader's decision, composed ONE way for every surface that
  * draws or counts it: Home's Needs your decision card, the Inbox's Needs you,
- * and, where the company runs no Crewlet Works, the Inbox's badge.
+ * and, where the company runs no Worklet, the Inbox's badge.
  *
  * Pure but for the count's hook, and free of any control, so the frame can
  * count what the screens draw without carrying their write controls into the
@@ -70,7 +70,7 @@ export function decisionSubjects(
 
 /**
  * How many things wait on the reader in the Inbox's Needs you, where the
- * company runs no Crewlet Works and so no notice counts toward its badge: the
+ * company runs no Worklet and so no notice counts toward its badge: the
  * asks and parked runs `decisions` answers, the seats stopped on a spent
  * budget and the conditions a person decides. The same three readings the
  * Inbox composes Needs you from, so the badge and the list cannot disagree.

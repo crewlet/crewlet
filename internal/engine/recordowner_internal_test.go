@@ -181,7 +181,7 @@ func TestATokenLoginIsHeldByTheEntryThisNodeBootedWith(t *testing.T) {
 	e := bootDirectoryNodeWith(t, nil, func(b *config.Bootstrap) {
 		b.API.Auth.Tokens = []config.APIToken{{
 			ID: "ops", Token: "a-token-value-nobody-reads-here",
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		}}
 	})
 	if got, err := e.HolderRecord(t.Context(), "token:ops"); err != nil || got != "token:ops" {

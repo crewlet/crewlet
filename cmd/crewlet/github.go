@@ -33,12 +33,12 @@ import (
 // the company: the instance, the org token it registers hooks with and the
 // key they sign with (minted when it resolves empty), and each seat's own
 // credential, whose account it reports ([github.CredentialReads]) — the
-// names a running node is asked to reveal ([companyResolver]).
+// names a running node is asked to reveal ([companyStore.resolver]).
 func githubProvisionReads(cfg *config.GitHub, o *org.Organization) []string {
 	return unionReads(fieldReads(cfg.URL, cfg.Token, cfg.WebhookSecret), github.CredentialReads(o))
 }
 
-func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("github provision", flag.ContinueOnError)
@@ -47,7 +47,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhooks; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhooks", false,
+	recreate := addFreshSwitch(fs, "recreate-webhooks",
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
@@ -60,7 +60,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr,
 			"usage: crewlet github provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -79,14 +79,47 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		return err
 	}
 
+	// RESOLVED BEFORE ANYTHING IS PRINTED, a -dry-run's included: a dry
+	// run reads the instance with the org token and reports the webhook
+	// secret it would register, so it reads the store as a real run does
+	// and is refused where a real run would be. Its webhook secret's
+	// whole ${VAR}, which a real run's sink reads back before it mints,
+	// is in the reads already. A real run's sink is chosen before that, for
+	// the reason GitLab's command gives.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		githubProvisionReads(cfg, organization), *sinks.bootstrap,
-		*sinks.api, stdout)
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
+		"crewlet github provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, githubProvisionReads(cfg, organization), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
+	base := webhookBase(*publicURL, boot)
+	if !*dryRun {
+		// A HOOK IS REGISTERED ONLY ON WHAT integrations.github.provisioning
+		// NAMES, and with no such block the run reaches no webhook secret at
+		// all — it registers nothing, an address or not — so it mints into
+		// nothing either. Counting the secret there would refuse a run that
+		// records nothing, and send its operator to unset the key the hooks
+		// they registered by hand verify with.
+		hookAt := base
+		if cfg.Provisioning == nil {
+			hookAt = ""
+		}
+		if err = sinks.refuseOutranked(ctx, companySecrets, "GitHub",
+			webhookMintsInto(cfg.WebhookSecret, recreate.value().Asked(), env.Value, hookAt), stdout); err != nil {
+			return err
+		}
+	}
 
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
@@ -99,10 +132,10 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		// that — a run with no credential could only report the seat
 		// logins it resolved and leave the deployment delivering nothing.
 		return fmt.Errorf(
-			"github: integrations.github.token (%q) resolved empty — this run "+
-				"registers the webhooks with it, and a token that can do that "+
-				"needs admin on each repository (or admin:org_hook for one "+
-				"organization-level hook)", cfg.Token)
+			"github: integrations.github.token (%q) resolved empty. Set it: this "+
+				"run registers the webhooks with it, so it needs admin on each "+
+				"repository (or admin:org_hook for one organization-level hook)",
+			cfg.Token)
 	}
 	client, err := github.NewClient(github.ClientOptions{
 		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
@@ -112,25 +145,25 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	}
 
 	// THE SINK IS OPENED FOR A REAL RUN ONLY. A dry run reads GitHub and
-	// registers nothing, so it has nothing to record — and opening the
-	// secret store to write nothing would prompt for a passphrase on a
-	// command that promised to touch nothing.
+	// registers nothing, so it has nothing to record, and so it needs no
+	// sink flag at all — and opening one is not free: an env file is
+	// created at open, before anything is in it, which would leave an
+	// empty file behind a command that promised to touch nothing.
 	opts := github.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:            env.Value,
-		RecreateWebhooks: *recreate,
+		RecreateWebhooks: recreate.value(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBase = base
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 
@@ -189,7 +222,7 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 	if len(refused) > 0 {
 		fmt.Fprintf(w, "\n%d seat(s) name a credential this run could not resolve:\n", len(refused))
 		for _, seat := range refused {
-			fmt.Fprintf(w, "  %-16s REFUSED — %s\n", seat.Handle, seat.Reason)
+			fmt.Fprintf(w, "  %-16s REFUSED: %s\n", seat.Handle, seat.Reason)
 		}
 	}
 
@@ -205,10 +238,10 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 				// NOTHING TO HOOK, not a refusal. Printed as NOT HOOKED
 				// it reads as a problem and sends somebody to fix a
 				// repository that is finished.
-				fmt.Fprintf(w, "  %-28s skipped — %s\n",
+				fmt.Fprintf(w, "  %-28s skipped: %s\n",
 					hook.Target, orDash(hook.Detail))
 			default:
-				fmt.Fprintf(w, "  %-28s NOT HOOKED — %s\n",
+				fmt.Fprintf(w, "  %-28s NOT HOOKED: %s\n",
 					hook.Target, orDash(hook.Detail))
 			}
 		}

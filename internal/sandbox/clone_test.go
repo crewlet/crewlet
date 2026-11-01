@@ -467,11 +467,12 @@ func sameCalls(t *testing.T, got, want [][]string) {
 // set) for the host's, $STUB_NS_WATCHES and $STUB_NS_INSTANCES for the box's
 // user namespace's, failing where one is unset as a kernel without the file
 // does — so a case decides what the kernel says whatever kernel runs it;
-// anything else it reads as cat does. It is written settled
-// ([sandbox.WriteRuntime]), since the step execs it at once.
+// anything else it reads as cat does. It is written where no fork can hold it
+// open ([sandbox.WriteExecutable]), since the step execs it at once.
 func budgets(t *testing.T, dir string) {
 	t.Helper()
-	sandbox.WriteRuntime(t, filepath.Join(dir, "cat"), `case "$1" in
+	sandbox.WriteExecutable(t, filepath.Join(dir, "cat"), `#!/bin/sh
+case "$1" in
 /proc/sys/fs/inotify/max_user_watches) v=${STUB_WATCHES-} ;;
 /proc/sys/user/max_inotify_watches) v=${STUB_NS_WATCHES-} ;;
 /proc/sys/fs/inotify/max_user_instances) v=${STUB_INSTANCES-128} ;;

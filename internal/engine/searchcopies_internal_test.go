@@ -10,7 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY SEARCH SOURCE NAMES THE DOMAIN ITS ROWS COME FROM, in both directions:
@@ -64,7 +64,7 @@ func indexed(t *testing.T, e *Engine) {
 
 // A WRONG VECTORS COPY GIVES UP THE SEMANTIC HALF OF EVERY SLICE THE NODE
 // SERVES ITS PEERS, and says why, on a real node through the answerer the
-// engine registers (ADR-0049): a range's lexical half is still covered from
+// engine registers (ADR-0072): a range's lexical half is still covered from
 // copies that serve, and its semantic half is never read from vectors the node
 // has stopped serving. Before, the slice a peer asked for read them with no
 // verdict at all.
@@ -90,7 +90,7 @@ func TestAWrongVectorsCopyGivesUpTheSemanticHalfOfEverySlice(t *testing.T) {
 
 // A WRONG KNOWLEDGE-BASE COPY COVERS NONE OF A KNOWLEDGE SEARCH, NOR OF A PEER'S
 // SLICE OVER THE PAGES, on a real node through the searcher and the answerer
-// the engine wires (ADR-0049) — and a slice over the tasks alone, whose copy
+// the engine wires (ADR-0072) — and a slice over the tasks alone, whose copy
 // is sound, is answered. Before, both read the index over rows the node had
 // stopped serving and reported the range covered.
 func TestAWrongPagesCopyCoversNoneOfAKnowledgeSearch(t *testing.T) {
@@ -100,7 +100,7 @@ func TestAWrongPagesCopyCoversNoneOfAKnowledgeSearch(t *testing.T) {
 	indexed(t, e)
 	wrongCopyOf(t, e, pagesName)
 
-	result, err := e.NativeSearcher().Answer(t.Context(),
+	result, err := e.DocletSearcher().Answer(t.Context(),
 		knowledge.Query{Text: "anything", Mode: knowledge.ModeKeyword})
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -134,7 +134,7 @@ func TestAWrongPagesCopyCoversNoneOfAKnowledgeSearch(t *testing.T) {
 }
 
 // A NODE WHOSE TRACKER COPY IS WRONG COVERS NONE OF ITS SEARCH RANGE, on a
-// real node, through the scanner the engine wires (ADR-0049).
+// real node, through the scanner the engine wires (ADR-0072).
 //
 // Before, the item search's own scanner — and every slice it served its peers —
 // read the index over rows the node had stopped serving, and the coordinator
@@ -161,7 +161,7 @@ func TestAWrongTrackerCopyCoversNoneOfItsSearchRange(t *testing.T) {
 		_, serves := e.local.For(t.Context(), trackerName)
 		return !serves
 	})
-	answer, err := n.itemSearch.Search(t.Context(), tracker.SearchQuery{
+	answer, err := n.itemSearch.Search(t.Context(), worklet.SearchQuery{
 		Text: "anything", Mode: knowledge.ModeKeyword,
 	})
 	if err != nil {

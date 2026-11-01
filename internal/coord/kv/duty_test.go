@@ -64,26 +64,20 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 	}
 }
 
-// trackerClaimTTL and largestBulkTTL are the TTLs the tracker claims its walks
-// and its bulk admission at (tracker.ClaimTTL, and twice tracker.MaxBulkTasks
-// rows at the one-row-a-second drain floor the admission projects from before
-// a drain is measured), restated because this package must not import the
-// tracker.
-const (
-	trackerClaimTTL = 60 * time.Second
-	largestBulkTTL  = 2 * 64 * time.Second
-)
+// trackerClaimTTL is the TTL the tracker claims its walks at (worklet.ClaimTTL),
+// restated because this package must not import the tracker.
+const trackerClaimTTL = 60 * time.Second
 
 // TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL is the duty
 // regression's second half: a lease of a class the fleet does not own — the
-// tracker's walk and bulk claims — is honoured at the TTL its caller sized it
-// to, beside a seat lease bucket at the TTL a fleet really runs on.
+// tracker's walk claims — is honoured at the TTL its caller sized it to,
+// beside a seat lease bucket at the TTL a fleet really runs on.
 //
 // With every class but `worker:` written to the seat lease bucket, a store at
-// the shipped 45 s refused all three, so on every embedded-kv fleet a
-// cross-project move and a merge failed before their first append and a large
-// bulk edit's admission was silently waved through. The contract suite runs
-// its seat bucket at coordtest.LongTTL, which is longer than all of them.
+// the shipped 45 s refused both, so on every embedded-kv fleet a
+// cross-project move and a merge failed before their first append. The
+// contract suite runs its seat bucket at coordtest.LongTTL, which is longer
+// than either.
 func TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -95,7 +89,6 @@ func TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 	}{
 		{"move:t", trackerClaimTTL},
 		{"merge:t", trackerClaimTTL},
-		{"bulk:tracker", largestBulkTTL},
 	} {
 		lease, refused, err := s.TryAcquire(ctx, claim.resource, coord.AcquireOptions{
 			Owner: "node-a/1", TTL: claim.ttl,

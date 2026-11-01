@@ -126,6 +126,55 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 	}
 }
 
+// A READ OF SEVERAL NAMES OPENS THOSE AND NO OTHERS.
+//
+// It is how a CLI run resolving one company document through a running node
+// reads the variables its command reads that the node lists, so the answer
+// carries exactly the names asked for that are held — an absent name absent,
+// never empty — and the read fails closed on a named row it cannot open, while
+// a row nobody named that it cannot open does not fail a read that never
+// needed it.
+func TestAReadOfSeveralNamesOpensThoseAndNoOthers(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+	mustSet(t, s, "SLACK_TOKEN", "xoxb")
+	mustSet(t, s, "UNASKED", "not-for-this-reader")
+	stranger := fleetsecrets.New(fleet, ring(t, "k9"))
+	if err := stranger.Set(t.Context(), "FOREIGN", "sealed-elsewhere", sam,
+		secrets.SourceAPI, clock); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "SLACK_TOKEN",
+		"NEVER_SET", "GITLAB_TOKEN"})
+	if err != nil {
+		t.Fatalf("a row nobody asked for failed the read: %v", err)
+	}
+	if len(values) != 2 || values["GITLAB_TOKEN"] != "glpat" || values["SLACK_TOKEN"] != "xoxb" {
+		t.Fatalf("values = %v, want exactly the two held names asked for", values)
+	}
+	if _, present := values["NEVER_SET"]; present {
+		t.Error("a name nothing holds came back present, so it would resolve " +
+			"to the empty string instead of falling through")
+	}
+
+	if _, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "FOREIGN"}); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN") {
+		t.Errorf("a named row this keyring cannot open answered %v, want a "+
+			"refusal naming it", err)
+	}
+	if _, err := s.Values(t.Context(), []string{"iam/blind-index-key"}); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("a read naming the engine's own key answered %v, want "+
+			"ErrReservedName", err)
+	}
+	if _, err := fleetsecrets.New(fleet, nil).Values(t.Context(),
+		[]string{"GITLAB_TOKEN"}); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("a store with no keyring answered %v, want ErrNoKeyring", err)
+	}
+}
+
 // A LISTING NEEDS NO KEYRING AND CARRIES NO ENVELOPE. "Is X set, and when did
 // it change" is asked far more often than "what is X", and answering it must
 // not require the ability to decrypt — nor put ciphertext into a scrollback.
@@ -510,4 +559,116 @@ func TestAWriteWithAWordNoPathStampsIsRefused(t *testing.T) {
 	// AND THE PATHS' OWN WORDS PASS, or the guard is just an outage.
 	mustSet(t, s, "GITLAB_TOKEN", "glpat")
 	mustCreate(t, s.Estate(), "iam/blind-index-key", "the-key")
+}
+
+// A VALUE PAST THE SIZE EVERY STORE KEEPS IS REFUSED ON THE FLEET, BY EITHER
+// VIEW, AND NOTHING IS WRITTEN.
+//
+// The fleet's store is what every node resolves through and what both reveals
+// read back, to a length sized from [secrets.MaxValueBytes]; a row past it can
+// be longer than a reveal gives back, a credential possibly unreadable through
+// the node. The API route bounds its body to that size, but a command that
+// writes this store directly, with its node's engine stopped, has no route in
+// front of it: the store is the one place that holds every writer to the
+// limit. A value exactly at the limit is stored.
+func TestAValuePastTheSizeEveryStoreKeepsIsRefusedOnTheFleet(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	past := strings.Repeat("&", secrets.MaxValueBytes+1)
+	if err := s.Set(t.Context(), "PAST_IT", past, sam, secrets.SourceAPI, clock); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("Set of a value a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	if created, err := s.Estate().Create(t.Context(), "iam/blind-index-key", past,
+		nodeA, secrets.SourceIAM, clock); !errors.Is(err, secrets.ErrValueTooLarge) || created {
+		t.Errorf("Create of a value a byte past the limit answered %v (created %v)", err, created)
+	}
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) on the fleet", len(rows))
+	}
+	atLimit := past[1:]
+	mustSet(t, s, "AT_THE_LIMIT", atLimit)
+	if got, err := s.Get(t.Context(), "AT_THE_LIMIT"); err != nil || got != atLimit {
+		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
+	}
+}
+
+// A CREATE-ONLY WRITE OF AN OPERATOR'S SECRET NEVER SEALS OVER ONE STORED.
+//
+// A credential sent with `If-None-Match: *` is tested for up to two minutes
+// before it is sealed; a value another writer stored meanwhile is kept, and
+// the create says it lost.
+func TestACreateNeverSealsOverAStoredSecret(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _ := fleetStore(t, ring(t, "k1"))
+	mustSet(t, store, "ANTHROPIC_API_KEY", "theirs")
+	if created, err := store.Create(ctx, "ANTHROPIC_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock, ""); err != nil || created {
+		t.Fatalf("a create over a stored value = (%v, %v), want it refused", created, err)
+	}
+	if got, _ := store.Get(ctx, "ANTHROPIC_API_KEY"); got != "theirs" {
+		t.Errorf("a refused create replaced the value: %q", got)
+	}
+	if created, err := store.Create(ctx, "OPENAI_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock, ""); err != nil || !created {
+		t.Fatalf("a create of a new name = (%v, %v)", created, err)
+	}
+	if _, err := store.Create(ctx, "iam/blind-index-key", "x", nodeA, secrets.SourceModels,
+		clock, ""); err == nil {
+		t.Error("a create of the engine's own name was not refused")
+	}
+}
+
+// A CREATE'S RETRY RE-SEALS ONLY THE ROWS ITS OWN KEY SEALED, AND READS NONE.
+//
+// Reclaim writes the value it is handed over a row the keyed create sealed,
+// whatever that row holds, and refuses a row any other write left: another
+// key's, a plain write's (which clears the key), or none. OpOf answers the key
+// and never the value.
+func TestACreatesRetryReclaimsOnlyItsOwnRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _ := fleetStore(t, ring(t, "k1"))
+	if created, err := store.Create(ctx, "GATEWAY_KEY", "first", nodeA, secrets.SourceModels,
+		clock, "op-1"); err != nil || !created {
+		t.Fatalf("the keyed create = (%v, %v)", created, err)
+	}
+	if op, sealed, found, err := store.OpOf(ctx, "GATEWAY_KEY"); err != nil || !found || op != "op-1" ||
+		!sealed.Equal(clock) {
+		t.Fatalf("OpOf = (%q, %v, %v, %v), want op-1 sealed at %v", op, sealed, found, err, clock)
+	}
+	// SEALED BEFORE notBefore, by the store's own record: refused whatever
+	// the key.
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(time.Second)); err != nil || wrote {
+		t.Errorf("a reclaim of a row sealed before notBefore = (%v, %v), want it refused", wrote, err)
+	}
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
+		clock, "op-2", clock.Add(-time.Hour)); err != nil || wrote {
+		t.Errorf("another key's reclaim = (%v, %v), want it refused", wrote, err)
+	}
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(-time.Hour)); err != nil || !wrote {
+		t.Fatalf("its own key's reclaim = (%v, %v)", wrote, err)
+	}
+	if got, _ := store.Get(ctx, "GATEWAY_KEY"); got != "corrected" {
+		t.Errorf("after the reclaim the value is %q, want the retry's", got)
+	}
+	// A PLAIN WRITE CLEARS THE KEY: the row is that write's now.
+	mustSet(t, store, "GATEWAY_KEY", "rotated")
+	if op, _, _, _ := store.OpOf(ctx, "GATEWAY_KEY"); op != "" {
+		t.Errorf("a plain write left the key %q on the row", op)
+	}
+	if wrote, _ := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(-time.Hour)); wrote {
+		t.Error("a retry re-sealed over a plain write that followed its create")
+	}
+	if wrote, _ := store.Reclaim(ctx, "ABSENT", "x", nodeA, secrets.SourceModels, clock, "op-1",
+		clock.Add(-time.Hour)); wrote {
+		t.Error("a reclaim wrote a row nothing created")
+	}
 }

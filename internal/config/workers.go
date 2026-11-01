@@ -197,7 +197,7 @@ func validateOutputSchema(path Path, schema map[string]any) error {
 	var p problems
 	if t, ok := schema["type"].(string); !ok || t != "object" {
 		p.add(at(path, "type"), ErrUnknownValue,
-			`must be "object" — a submission's arguments are named fields, and a `+
+			`must be "object": a submission's arguments are named fields, and a `+
 				`provider given a non-object schema for a tool call rejects the call`)
 	}
 	props, ok := schema["properties"].(map[string]any)
@@ -529,9 +529,10 @@ type Delegation struct {
 	// MaxTurnsCeiling bounds what a TEMPLATE may ask for. The per-call
 	// request is clamped silently because it is a model's estimate; a
 	// template is a person's edit, so an over-ask is refused at load with
-	// this number named. 40 is the round-cap extension judge's ceiling for
-	// a worker — see turn_engine.execute_max_tool_rounds_ceiling for the
-	// same relationship one level up.
+	// this number named. 40 is twice max_turns, the relationship every
+	// extension ceiling in the turn engine keeps to its base: a template
+	// that genuinely needs a second budget may ask for one, and one asking
+	// for more than that is describing a different job than a worker.
 	MaxTurnsCeiling int `yaml:"max_turns_ceiling,omitempty" json:"max_turns_ceiling,omitempty" js:"min=1" desc:"Highest max_turns a worker template may declare."`
 
 	// BudgetFraction is the share of the parent turn's REMAINING tokens
@@ -545,8 +546,15 @@ type Delegation struct {
 	// MinTokensPerTask floors each worker's share. A call whose slice
 	// divided by its task count falls below this is refused UP FRONT: N
 	// workers that each die mid-round have spent the whole slice and
-	// produced nothing, which is strictly worse than not starting.
-	MinTokensPerTask int `yaml:"min_tokens_per_task,omitempty" json:"min_tokens_per_task,omitempty" js:"min=0" desc:"Floor on one worker's token share; below it the call is refused."`
+	// produced nothing, which is strictly worse than not starting. 0 turns
+	// the floor off. See [defaultMinTokensPerTask] for the default, and read
+	// it through [Delegation.PerTaskFloor].
+	//
+	// A POINTER, because an explicit 0 is a setting the defaults do not
+	// hold: a stored revision is decoded onto the defaults and every knob is
+	// written omitempty, so a plain int lost an authored 0 on its first round
+	// trip and the floor came back on.
+	MinTokensPerTask *int `yaml:"min_tokens_per_task,omitempty" json:"min_tokens_per_task,omitempty" js:"min=0" desc:"Floor on one worker's token share; below it the call is refused (default 500; 0 = no floor)."`
 
 	// TaskTimeoutSeconds bounds one worker. 300 rather than the 120 a
 	// sub-agent had, because a worker now runs a real tool loop against
@@ -562,6 +570,22 @@ type Delegation struct {
 	CallTimeoutSeconds float64 `yaml:"call_timeout_seconds,omitempty" json:"call_timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on a whole delegate call, waves included."`
 }
 
+// defaultMinTokensPerTask is 500 because that is about the smallest share a
+// worker can do anything with: its template's brief and the one task it is
+// handed are a few hundred tokens of prompt before it has made a single call,
+// so a share below this is a worker that dies on its first round having spent
+// what it was given.
+const defaultMinTokensPerTask = 500
+
+// PerTaskFloor is the floor on one worker's token share, applying the default:
+// 0 is no floor.
+func (d Delegation) PerTaskFloor() int {
+	if d.MinTokensPerTask == nil {
+		return defaultMinTokensPerTask
+	}
+	return *d.MinTokensPerTask
+}
+
 // DefaultDelegation is the shipped bounds. Each number's reasoning is at its
 // field.
 func DefaultDelegation() Delegation {
@@ -571,7 +595,6 @@ func DefaultDelegation() Delegation {
 		MaxTurns:           20,
 		MaxTurnsCeiling:    40,
 		BudgetFraction:     0.2,
-		MinTokensPerTask:   500,
 		TaskTimeoutSeconds: 300,
 		CallTimeoutSeconds: 900,
 	}
@@ -596,9 +619,9 @@ func (d Delegation) validate(path Path) error {
 					"delegate call", f.value)
 		}
 	}
-	if d.MinTokensPerTask < 0 {
+	if floor := d.PerTaskFloor(); floor < 0 {
 		p.add(at(path, "min_tokens_per_task"), ErrOutOfRange,
-			"must not be negative, got %d", d.MinTokensPerTask)
+			"must not be negative, got %d", floor)
 	}
 	timeouts := []struct {
 		name  string

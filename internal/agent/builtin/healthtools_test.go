@@ -104,6 +104,7 @@ func (*grantHost) FloorOf(string) statelog.Position { return statelog.Position{}
 const healthCompany = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -255,7 +256,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 			{Kind: "backup_age", Since: since}, {Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
 		}})
 	node(t, backend, "node-b", nil, &coord.NodeStatus{
-		InFlight: 1000, Draining: true, Posture: "stuck", ProjectionsTotal: 5, AlarmsEvaluated: true})
+		InFlight: 1000, Draining: true, Posture: "stuck", AlarmsEvaluated: true})
 	node(t, backend, "node-c", map[string]any{"roles": []string{"seats"}}, &coord.NodeStatus{InFlight: 2})
 	node(t, backend, "node-d", nil, nil)
 	_, chart := healthChart(t)
@@ -278,7 +279,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 		if status, ok := row["status"]; ok {
 			for _, key := range keysOf(t, status) {
 				if !slices.Contains([]string{"alarms", "alarms_evaluated", "draining", "in_flight",
-					"posture", "projections_ready", "projections_total", "started_at"}, key) {
+					"posture", "started_at"}, key) {
 					t.Errorf("node %s's status carries %q, which the tool does not declare",
 						row["id"], key)
 				}
@@ -448,7 +449,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 // A CODE STATUS ANSWER IS HELD TO THE SEAT'S REPOSITORY GRANT.
 //
 // The health grant opens the deployment's view and never a repository the
-// seat's own grant does not read (ADR-0058): of the hottest repositories the
+// seat's own grant does not read (ADR-0081): of the hottest repositories the
 // git nodes name, a seat's answer keeps those its grant reads, leaves out one
 // it may not read, one whose name now names nothing and one whose name now
 // names another repository, and says how many it left out; one repository
@@ -587,7 +588,7 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 // A CODE STATUS ANSWER IN A TURN SOMEBODY WOKE IS HELD TO THEIR GRANT TOO.
 //
 // Its repository reads are code reads, and the requester ceiling holds every
-// code read (ADR-0058): in a turn a colleague seat woke, each grant read names
+// code read (ADR-0081): in a turn a colleague seat woke, each grant read names
 // that seat, so the hot list also leaves out a repository the seat may read
 // and the colleague may not — counted withheld beside the one the seat itself
 // may not read — and that repository asked by name is refused as the code

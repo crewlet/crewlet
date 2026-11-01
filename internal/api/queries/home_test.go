@@ -12,14 +12,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fixedRuns is a pending-run store holding exactly these runs.
@@ -38,20 +38,6 @@ func (f fixedRuns) Get(_ context.Context, turnID string) (sandbox.PendingRun, bo
 	return sandbox.PendingRun{}, false, nil
 }
 
-// BridgeLog is one call — fixedCall — for the job of a listed run whose row
-// counts a bridged call, and none for any other.
-func (f fixedRuns) BridgeLog(_ context.Context, turnID, launch string) ([]sandbox.BridgeCall, error) {
-	for _, run := range f {
-		if run.TurnID == turnID && run.LaunchID == launch && run.Launch.BridgedCalls > 0 {
-			return []sandbox.BridgeCall{fixedCall}, nil
-		}
-	}
-	return nil, nil
-}
-
-// fixedCall is the bridged call [fixedRuns] logs for a job that made one.
-var fixedCall = sandbox.BridgeCall{Name: "get_work_item", Args: `{"id":"ENG-1"}`}
-
 // WHAT WAITS ON A PERSON IS THEIR OPEN ASKS AND THE RUNS PARKED ON A QUESTION
 // TO THEM — their own record when they name nobody, and only runs that are
 // actually waiting.
@@ -60,12 +46,12 @@ func TestDecisionsCountsAsksAndRunsForThePerson(t *testing.T) {
 	askedAt := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
 	oldest := askedAt.Add(-5 * time.Hour)
 	parkedAt := askedAt.Add(-time.Hour)
-	work := &stubWork{decisions: tracker.DecisionsAnswer{
-		Asks: []tracker.AskRow{
+	work := &stubWork{decisions: worklet.DecisionsAnswer{
+		Asks: []worklet.AskRow{
 			{Comment: "c-1", AskedAt: askedAt},
 			{Comment: "c-2", AskedAt: oldest},
 		},
-		Total:    tracker.ClaimTotal{Total: 7},
+		Total:    worklet.ClaimTotal{Total: 7},
 		OldestAt: &oldest,
 	}}
 	sources := viewerSources(t, work)
@@ -124,7 +110,7 @@ func TestDecisionsNeedsARecord(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, work))
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	_, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "decisions", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a caller with no record naming nobody = %v, want bad params", err)
@@ -141,7 +127,7 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantTracker); !errors.Is(err,
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); !errors.Is(err,
 		queries.ErrUnauthorized) {
 		t.Errorf("a colleague read bo's decisions = %v, want unauthorized", err)
 	}
@@ -152,11 +138,87 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	s := viewerSources(t, work)
 	s.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, s, "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantTracker); err != nil {
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); err != nil {
 		t.Fatalf("bo's lead was refused his decisions: %v", err)
 	}
 	if work.decisionsQuery.Handle != "bo" {
 		t.Errorf("the lead's read reached %q, want bo", work.decisionsQuery.Handle)
+	}
+}
+
+// WHAT A PERSON DECIDED LATELY IS READ FOR THEIR OWN RECORD, on the scope rule
+// `decisions` takes: a colleague is refused somebody else's, and their lead is
+// answered.
+func TestAnsweredDecisionsTakeTheDecisionsScope(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "answered_decisions", nil,
+		iam.GrantWorklet); err != nil {
+		t.Fatalf("ana's own answered decisions: %v", err)
+	}
+	if work.answeredQuery.Handle != "ana" {
+		t.Errorf("the answered asks were read for %q, want the caller's own record",
+			work.answeredQuery.Handle)
+	}
+	other := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, other), "ana", "answered_decisions",
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); !errors.Is(err,
+		queries.ErrUnauthorized) {
+		t.Errorf("a colleague read bo's answered decisions = %v, want unauthorized", err)
+	}
+	if other.answeredQuery.Handle != "" {
+		t.Errorf("a refused read still asked the tracker about %q",
+			other.answeredQuery.Handle)
+	}
+	s := viewerSources(t, other)
+	s.Chart = leadsChart{lead: "ana", report: "bo"}
+	if _, err := askHolding(t, s, "ana", "answered_decisions",
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); err != nil {
+		t.Fatalf("bo's lead was refused his answered decisions: %v", err)
+	}
+	if other.answeredQuery.Handle != "bo" {
+		t.Errorf("the lead's read reached %q, want bo", other.answeredQuery.Handle)
+	}
+}
+
+// WHAT THE ASKER DID NEXT IS THE TASK'S: a reader the tracker shows no task to
+// is answered every ask put to them and who answered it, and none of the task's
+// records beyond the question.
+func TestAnsweredDecisionsShowTheFollowUpOnlyToATrackerReader(t *testing.T) {
+	t.Parallel()
+	answered := worklet.AnsweredAnswer{Asks: []worklet.AnsweredAsk{{
+		Ask:        worklet.AskRow{Comment: "c-1"},
+		Answer:     worklet.AskAnswer{By: "ana", Body: "Ship it"},
+		FollowedUp: &worklet.AskFollowUp{Kind: worklet.ChangeStatus},
+	}}}
+	for _, c := range []struct {
+		name   string
+		grants []iam.Grant
+		shown  bool
+	}{
+		{"with the tracker", []iam.Grant{iam.GrantWorklet}, true},
+		{"without it", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{answered: answered}
+			got, err := askHolding(t, viewerSources(t, work), "ana", "answered_decisions",
+				nil, c.grants...)
+			if err != nil {
+				t.Fatalf("answered_decisions: %v", err)
+			}
+			items := got.(map[string]any)["items"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("items are %+v, want the one answered ask", items)
+			}
+			item, ok := items[0].(worklet.AnsweredAsk)
+			if !ok || item.Answer.Body != "Ship it" {
+				t.Fatalf("items are %+v, want the one answered ask", items)
+			}
+			if (item.FollowedUp != nil) != c.shown {
+				t.Errorf("the follow-up is %+v, want shown=%v", item.FollowedUp, c.shown)
+			}
+		})
 	}
 }
 
@@ -174,7 +236,7 @@ func TestWorkFlowParams(t *testing.T) {
 			work.flowQuery.Points, queries.DefaultFlowPoints)
 	}
 	for _, params := range []map[string]any{
-		{"points": tracker.MaxFlowPoints + 1},
+		{"points": worklet.MaxFlowPoints + 1},
 		{"points": 0},
 		{"bucket": "month"},
 	} {
@@ -189,14 +251,14 @@ func TestWorkFlowParams(t *testing.T) {
 func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
-		{Task: "b", Kind: tracker.FeedCreated, At: base.Add(-2 * time.Hour),
-			Cursor: tracker.FeedCursor{At: base.Add(-2 * time.Hour), Seq: 5}.String()},
+	work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+		{Task: "a", Kind: worklet.FeedCompleted, At: base,
+			Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
+		{Task: "b", Kind: worklet.FeedCreated, At: base.Add(-2 * time.Hour),
+			Cursor: worklet.FeedCursor{At: base.Add(-2 * time.Hour), Seq: 5}.String()},
 	}, Complete: true}}
-	pageStore := &stubPages{changes: []pages.PageChange{
-		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+	pageStore := &stubPages{changes: []doclet.PageChange{
+		{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
 	}}
 	sources := queries.Sources{Work: work, Pages: pageStore}
 	got, err := askNative(t, sources, "company_feed", map[string]any{"limit": 2})
@@ -246,12 +308,12 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 func TestTheCompanyFeedWaitsOnTheFloorOfEachLogItReads(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+	work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+		{Task: "a", Kind: worklet.FeedCompleted, At: base,
+			Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
-	pageStore := &stubPages{changes: []pages.PageChange{
-		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+	pageStore := &stubPages{changes: []doclet.PageChange{
+		{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
 	}}
 	sources := queries.Sources{Work: work, Pages: pageStore}
 	tracked := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
@@ -336,9 +398,9 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+	work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+		{Task: "a", Kind: worklet.FeedCompleted, At: base,
+			Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
 	sources := queries.Sources{Work: work, Usage: usage.Reader{Estate: db.Replicated()}}
 	for _, kinds := range []string{"", "schedule"} {
@@ -361,7 +423,7 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 }
 
 // EACH FEED ROW IS SHOWN BY ITS APP (ADR-0033): the work the tracker records
-// to whoever holds the tracker, the pages to whoever holds the knowledge base,
+// to whoever holds Worklet, the pages to whoever holds Doclet,
 // and the schedules' runs — the company's own machinery — to everybody, an
 // admin holding all three. A kind the caller may not see is DROPPED rather than
 // refused, named in `kinds=` or not, and its source is never read: a refusal of
@@ -395,22 +457,22 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 		// before it, the page save an hour before.
 		{"an admin", []iam.Grant{iam.GrantAdmin}, nil,
 			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule, queries.FeedPage}},
-		{"the tracker", []iam.Grant{iam.GrantTracker}, nil,
+		{"the tracker", []iam.Grant{iam.GrantWorklet}, nil,
 			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule}},
-		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, nil,
+		{"the knowledge base", []iam.Grant{iam.GrantDoclet}, nil,
 			[]queries.FeedKind{queries.FeedSchedule, queries.FeedPage}},
 		{"nothing", nil, nil, []queries.FeedKind{queries.FeedSchedule}},
-		{"the tracker, naming the pages", []iam.Grant{iam.GrantTracker},
+		{"the tracker, naming the pages", []iam.Grant{iam.GrantWorklet},
 			map[string]any{"kinds": "page"}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-				{Task: "a", Kind: tracker.FeedCompleted, At: base,
-					Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+			work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+				{Task: "a", Kind: worklet.FeedCompleted, At: base,
+					Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 			}, Complete: true}}
-			pageStore := &stubPages{changes: []pages.PageChange{
-				{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved,
+			pageStore := &stubPages{changes: []doclet.PageChange{
+				{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved,
 					At: base.Add(-time.Hour), LogSeq: 4},
 			}}
 			r := queries.NewRegistry()
@@ -443,7 +505,8 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 // still asked things, may read the item an open ask names them on and post the
 // answer without it — so the list of what waits on them is theirs to read
 // whatever they hold. A parked coding run's question put to them is shown, and
-// the task behind it, its seat's trail, is not.
+// the task behind it, its seat's trail, is not, nor the entry its job was
+// launched on, which is an admin's.
 //
 // Somebody else's list is still the tracker's: a lead without it reads no
 // report's, and is told the tracker would admit them.
@@ -452,9 +515,9 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 // record by the person-read rule, and the first half goes red.
 func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	t.Parallel()
-	work := &stubWork{decisions: tracker.DecisionsAnswer{Asks: []tracker.AskRow{
+	work := &stubWork{decisions: worklet.DecisionsAnswer{Asks: []worklet.AskRow{
 		{Comment: "c-1", AskedAt: time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)},
-	}, Total: tracker.ClaimTotal{Total: 1}}}
+	}, Total: worklet.ClaimTotal{Total: 1}}}
 	s := viewerSources(t, work)
 	s.Sandbox = fixedRuns{parkedRun()}
 	got, err := askHolding(t, s, "ana", "decisions", nil)
@@ -486,13 +549,20 @@ func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	if _, shown := run.Run["work_item"]; shown {
 		t.Error("ana, holding no tracker, was shown the run's work item")
 	}
+	// THE ENTRY THE RUN'S JOB WAS LAUNCHED ON IS THE COMPANY'S CONFIGURATION,
+	// as the board withholds it: the decisions answer serialises the run the
+	// board's way, so ana, no admin, is told the model and not the entry.
+	if _, shown := run.Run["provider_key"]; shown || run.Run["model"] != "opus" {
+		t.Errorf("ana was shown the run's entry %v, model %v: want the model alone",
+			run.Run["provider_key"], run.Run["model"])
+	}
 
 	lead := viewerSources(t, &stubWork{})
 	lead.Chart = leadsChart{lead: "ana", report: "bo"}
 	_, err = askHolding(t, lead, "ana", "decisions", map[string]any{"handle": "bo"})
 	var refusal *queries.Refusal
-	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Errorf("a lead without the tracker reading a report's decisions = %v, "+
-			"want a refusal naming [tracker]", err)
+	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Errorf("a lead without Worklet reading a report's decisions = %v, "+
+			"want a refusal naming [worklet]", err)
 	}
 }

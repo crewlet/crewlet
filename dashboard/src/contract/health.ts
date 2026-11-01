@@ -35,6 +35,26 @@ interface HealthObjects {
 }
 
 /**
+ * A node's last concluded apply attempt: `api.ConfigAttempt` in Go, held member
+ * for member by the same gate as `EngineHealth`.
+ */
+export interface ConfigAttempt {
+  /** The epoch the node attempted. */
+  epoch: number;
+  /**
+   * The revision it attempted at that epoch: an epoch number names two
+   * revisions once a rebuilt coordination store has restarted the count.
+   */
+  revision_id: string;
+  /**
+   * `ok`, `error` (refused, still serving the epoch before), or `degraded`
+   * (refused after part of the company had already been rebuilt). A value a
+   * newer engine adds arrives as itself.
+   */
+  status: "ok" | "error" | "degraded" | (string & {});
+}
+
+/**
  * What a node says about itself: the `health` push, which is `api.Health` in
  * Go, WHOLE — in the snapshot and on every five-second tick. There is no query
  * for it any more; read it with `useEngineHealth()`.
@@ -98,6 +118,15 @@ export interface EngineHealth {
   shutting_down: boolean;
   posture: string;
   applied_epoch: number;
+  /**
+   * This node's last concluded apply attempt: the epoch, the revision it tried
+   * at that epoch, and how that went (`ok`, `error`, `degraded`). ABSENT before
+   * this process has concluded one. It is what tells a refusal from an apply
+   * still running, which `applied_epoch` cannot: a failed attempt leaves that
+   * where it was. Never the reason — why a node refused is the fleet's
+   * `config_error`, Admin's.
+   */
+  config_attempt?: ConfigAttempt;
   /** The handles THIS node currently holds. */
   seats: string[];
   /**

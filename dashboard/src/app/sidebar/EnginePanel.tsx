@@ -280,6 +280,8 @@ export function EnginePanel({
   return (
     <Popover
       label="Engine"
+      // BELOW THE STATUS IN EITHER SHAPE: on the head's line in the full
+      // sidebar, and on its own row under the mark in the compact rail.
       side="bottom"
       // INTO THE ROOM BESIDE THE RAIL: the status ends on the rail's inner
       // edge, so a panel aligned to its start opens over the screen rather

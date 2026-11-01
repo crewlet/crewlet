@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE CODE DOMAIN DECLARES WHAT THE FRAMEWORK ASKS OF IT, and every answer is
@@ -92,11 +92,11 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 // reason.
 func TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers(t *testing.T) {
 	t.Parallel()
-	want, derived := config.Stream{TrackerLogMaxBytes: tracker.TrackerLogMaxBytes}.CodeMaxBytes(0)
+	want, derived := config.Stream{TrackerLogMaxBytes: worklet.TrackerLogMaxBytes}.CodeMaxBytes(0)
 	if !derived || code.CodeLogMaxBytes != want {
 		t.Errorf("the code domain declares %d bytes, and beside the tracker's declared %d "+
 			"an unset stream.code_log_max_bytes derives %d (derived %v)",
-			code.CodeLogMaxBytes, tracker.TrackerLogMaxBytes, want, derived)
+			code.CodeLogMaxBytes, worklet.TrackerLogMaxBytes, want, derived)
 	}
 }
 

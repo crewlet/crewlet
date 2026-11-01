@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 import { Callout, Stack, Tag, Textarea } from "@crewlethq/ui";
+import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { changeLive, shortOID, verdictWord } from "~/lib/code.ts";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -205,6 +206,20 @@ export function ReplyComposer({
 }) {
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useState("");
+  // EACH REPLY BOX IS A FIELD of the change page's one draft
+  // (`ChangePage.tsx`), keyed by what it answers: a draft's path is
+  // lowercase letters, digits, dots and underscores, so the id is spelled
+  // in those.
+  const answers = "thread" in target ? `thread ${target.thread}` : `finding ${target.finding}`;
+  useDraftBox({
+    path: `reply.${answers.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`.slice(0, 64),
+    label: "thread" in target ? "Reply in the thread" : "Reply to the finding",
+    hint: "Markdown",
+    rank: 2,
+    value: body,
+    set: setBody,
+    refuses: () => null,
+  });
   const send = async () => {
     const result = await write.run({ change: change.ref, body, ...target }, { done: "Replied" });
     if (result && (result.kind === "applied" || result.kind === "pending")) setBody("");
@@ -235,6 +250,15 @@ export function ReplyComposer({
 function CommentComposer({ change }: { change: CodeChangeDetail }) {
   const write = useAct("code_comment_on_change");
   const [body, setBody] = useState("");
+  useDraftBox({
+    path: "comment",
+    label: `Comment on ${change.ref}`,
+    hint: "Markdown",
+    rank: 0,
+    value: body,
+    set: setBody,
+    refuses: () => null,
+  });
   const send = async () => {
     const result = await write.run(
       { change: change.ref, body },

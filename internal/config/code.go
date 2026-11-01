@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The code host's limits that both tiers and the domain read: config VALIDATES
@@ -25,7 +26,7 @@ import (
 const (
 	// CodeMaxPushBytesCeiling is the largest pack one push may send,
 	// whatever code.limits.max_push_bytes says — equal to
-	// tracker.MaxFileBytes, the engine's one "largest object". What a
+	// worklet.MaxFileBytes, the engine's one "largest object". What a
 	// push STORES may be larger (internal/code.MaxPackBytes: a thin pack
 	// completed against the repository, with its indexes), and
 	// internal/objstore/references pins that larger figure against the
@@ -38,7 +39,7 @@ const (
 	DefaultCodeMaxPushBytes int64 = 1 << 30
 
 	// DefaultCodeMaxBlobBytes is an unset code.limits.max_blob_bytes:
-	// 50 MiB. A larger binary belongs in tracker files, and the bound is
+	// 50 MiB. A larger binary belongs in Worklet's files, and the bound is
 	// what sizes pack-objects' window memory on a git node.
 	DefaultCodeMaxBlobBytes int64 = 50 << 20
 
@@ -417,7 +418,7 @@ func (s CodeScratch) validate(scratch Path) error {
 	var p problems
 	if d := s.IdleDays; d != 0 && (d < CodeScratchIdleDaysFloor || d > CodeScratchIdleDaysCeiling) {
 		p.add(at(scratch, "idle_days"), ErrOutOfRange,
-			"%d is outside %d..%d days, or unset for the default %d — a day at least, because a "+
+			"%d is outside %d..%d days, or unset for the default %d: a day at least, because a "+
 				"live turn's hold on an idle repository is ordered against the expiry by a record "+
 				"its holder writes a day less two hours after the repository's last activity",
 			d, CodeScratchIdleDaysFloor, CodeScratchIdleDaysCeiling, DefaultCodeScratchIdleDays)
@@ -443,7 +444,7 @@ type CodeChecks struct {
 	// RunIn is the cell a check whose file names none runs in: one of
 	// [CodeCheckCells]. Unset is providers.sandbox's own default where that is
 	// one of them, else no cell ([Company.CheckRunIn]).
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct and self are refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host, and self is a seat's own executor box, which no check has."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host."`
 
 	// AllowRunIn are the cells a repository's checks file may name in a
 	// check's own run_in. Unset is the one RunIn resolves to; set, it holds
@@ -481,7 +482,7 @@ func (k CodeChecks) zero() bool {
 }
 
 // validate holds code.checks' own rules at path: each cell one a check runs in
-// ([CodeCheckCells]) — `direct` and `self` refused by name with why
+// ([CodeCheckCells]) — `direct` refused by name with why
 // ([CodeCheckCellRefusal]) — and each allowed once; each secret's key a name a
 // check can name ([ValidCodeCheckEnvName]); and the timeout inside its bounds.
 // Whether a cell it names is configured, and whether the cells it allows hold
@@ -496,7 +497,7 @@ func (k CodeChecks) validate(path Path) error {
 		case CodeCheckCellRefusal(cell) != "":
 			p.add(at, ErrUnknownValue, "a check never runs in %s: %s", cell, CodeCheckCellRefusal(cell))
 		default:
-			p.add(at, ErrUnknownValue, "%q (want %s)", cell, names(CodeCheckCells))
+			p.add(at, ErrUnknownValue, "%q (want %s)", cell, words.Or(CodeCheckCells))
 		}
 	}
 	if k.RunIn != "" {
@@ -522,8 +523,8 @@ func (k CodeChecks) validate(path Path) error {
 	if s := k.MaxTimeoutSeconds; s != 0 &&
 		(s < int(CodeMinCheckMaxTimeout/time.Second) || s > int(CodeCheckTimeoutCeiling/time.Second)) {
 		p.add(at(path, "max_timeout_seconds"), ErrOutOfRange,
-			"%d is outside %d..%d seconds — a minute, under which no build finishes its own setup, to six "+
-				"hours, the longest any checks file may ask (GitHub Actions' per-job ceiling) — or unset for "+
+			"%d is outside %d..%d seconds (a minute, under which no build finishes its own setup, to six "+
+				"hours, the longest any checks file may ask, GitHub Actions' per-job ceiling), or unset for "+
 				"the default %d", s, int(CodeMinCheckMaxTimeout/time.Second), int(CodeCheckTimeoutCeiling/time.Second),
 			int(CodeDefaultCheckMaxTimeout/time.Second))
 	}
@@ -652,7 +653,7 @@ func ValidCodeCheckEnvName(name string) bool {
 }
 
 // CodeCheckCells are the cells a check runs in, in this order: TWO OF THE
-// SANDBOX'S FOUR PLACEMENTS ([Placements]) — a container on a git node, which
+// SANDBOX'S THREE PLACEMENTS ([Placements]) — a container on a git node, which
 // holds the repository's copy beside it, or a remote e2b box, which fetches
 // the one commit it checks. A check runs a change's own code — its build, its
 // tests, whatever its author put there — so it never runs where that code
@@ -663,19 +664,15 @@ var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
 
 // CodeCheckCellRefusal is why a check never runs in p, "" for a cell of
 // [CodeCheckCells] and for a value no placement has — which its reader
-// refuses as unknown. BY NAME (M3 decision U1 a), each of the two placements
-// a check is refused with a sentence of its own: `direct` runs a box as the
-// engine's own user on the engine host, where a change's code would read what
-// the engine reads — the keyring that signs every run's token among it — and
-// `self` is a seat's own executor box, which no check, run by no seat, has.
+// refuses as unknown. BY NAME (M3 decision U1 a): `direct`, the one placement
+// a check is refused, runs a box as the engine's own user on the engine host,
+// where a change's code would read what the engine reads — the keyring that
+// signs every run's token among it.
 func CodeCheckCellRefusal(p Placement) string {
 	switch p {
 	case PlacementDirect:
 		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
 			"own code, which would read what the engine reads; run it in a container or on e2b"
-	case PlacementSelf:
-		return "self is a seat's own executor box, and a check is run by no seat; run it in a container or " +
-			"on e2b"
 	}
 	return ""
 }
@@ -722,7 +719,7 @@ const DefaultCodeBranch = "main"
 
 // CodeVisibility is who among the SEATS may read a repository. A person — a
 // bound or unbound API token — reads every repository whatever it says
-// (ADR-0058): visibility narrows the seats an AI company runs, never the
+// (ADR-0081): visibility narrows the seats an AI company runs, never the
 // people who run it.
 type CodeVisibility string
 
@@ -1108,7 +1105,7 @@ func (c CodeChangeClass) Valid() bool { return slices.Contains(CodeChangeClasses
 // takes its default ([CodeLimits.Resolved]).
 type CodeLimits struct {
 	MaxPushBytes int64 `yaml:"max_push_bytes,omitempty" json:"max_push_bytes,omitempty" js:"min=1048576;max=1073741824" desc:"The largest pack one push may send; unset is 1 GiB, the most it may be."`
-	MaxBlobBytes int64 `yaml:"max_blob_bytes,omitempty" json:"max_blob_bytes,omitempty" js:"min=1024;max=1073741824" desc:"The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in tracker files."`
+	MaxBlobBytes int64 `yaml:"max_blob_bytes,omitempty" json:"max_blob_bytes,omitempty" js:"min=1024;max=1073741824" desc:"The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in Worklet's files."`
 	RepoMaxBytes int64 `yaml:"repo_max_bytes,omitempty" json:"repo_max_bytes,omitempty" js:"min=1048576;max=1099511627776" desc:"The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole."`
 	// PushesPerSeatDay is how many pushes one seat may land in one company
 	// day, every repository together; 0 is unset, the default
@@ -1193,7 +1190,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	switch {
 	case !c.MergeByFloor.Valid():
 		p.add(at(path, "merge_by_floor"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			c.MergeByFloor, names(CodeMergeBys), CodeMergeByWriters)
+			c.MergeByFloor, words.Or(CodeMergeBys), CodeMergeByWriters)
 	case !c.Native && c.MergeByFloor != "":
 		p.add(at(path, "merge_by_floor"), ErrConflict,
 			"nothing hosts code on this company, so no merge is held to it: set code.native, or remove "+
@@ -1235,12 +1232,12 @@ func (c Code) validateAdmission(path Path) error {
 		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
 			"must be 1..%d days, or unset for the default %d, got %d: past a year a "+
 				"deleted repository is an archive nobody restores, which every backup "+
-				"carries — export it instead", CodeMaxDeletedRetentionDays,
+				"carries: export it instead", CodeMaxDeletedRetentionDays,
 			DefaultCodeDeletedRetentionDays, d)
 	}
 	if n := len(c.Repos); n > CodeMaxRepos {
 		p.add(at(path, "repos"), ErrOutOfRange,
-			"%d repositories, past the %d one document may declare — a typo guard: "+
+			"%d repositories, past the %d one document may declare, a typo guard: "+
 				"a list this long is a generated document, so check what wrote it",
 			n, CodeMaxRepos)
 	}
@@ -1359,8 +1356,8 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 		// would read as the seat's and squat the name its create would take.
 		why := ""
 		if _, scratch := gitref.ScratchName(r.Name); scratch {
-			why = " — a name with a dot is a seat's own scratch repository, which only that seat's " +
-				"tool creates"
+			why = " (a name with a dot is a seat's own scratch repository, which only that seat's " +
+				"tool creates)"
 		}
 		p.add(at(path, "name"), ErrShape,
 			"%q is not a project repository's name: one label of lowercase letters, digits and "+
@@ -1370,11 +1367,11 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	r.Owner.validate(&p, at(path, "owner"), owners)
 	if !r.Visibility.Valid() {
 		p.add(at(path, "visibility"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			r.Visibility, names(CodeVisibilities), CodeVisibilityCompany)
+			r.Visibility, words.Or(CodeVisibilities), CodeVisibilityCompany)
 	}
 	if !r.Search.Valid() {
 		p.add(at(path, "search"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			r.Search, names(CodeSearchModes), CodeSearchIndexed)
+			r.Search, words.Or(CodeSearchModes), CodeSearchIndexed)
 	}
 	switch {
 	case r.DefaultBranch == "":
@@ -1444,7 +1441,7 @@ func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *co
 	if len(list) > CodeMaxPathOwners {
 		p.add(path, ErrOutOfRange,
 			"%d path owners, past the %d one repository may name: list a team rather than each of its "+
-				"seats — a unit's owner is its effective lead", len(list), CodeMaxPathOwners)
+				"seats: a unit's owner is its effective lead", len(list), CodeMaxPathOwners)
 	}
 	first := make(map[codeRecordedOwner]int, len(list))
 	for k, po := range list {
@@ -1468,7 +1465,7 @@ func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *co
 		p.add(path, ErrOutOfRange,
 			"the path owners are %d bytes as the code log records them, past the %d one repository's path "+
 				"owners may weigh, since every record of its settings carries them whole: own a directory "+
-				"with dir/** rather than each of its files — a glob's &, < and > are six bytes each",
+				"with dir/** rather than each of its files (a glob's &, < and > are six bytes each)",
 			n, CodeMaxPathOwnersBytes)
 	}
 }
@@ -1680,7 +1677,7 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 		p.add(at(path, which), ErrShape,
 			"%q is not a %s pattern: a %s name git would take (git check-ref-format), in "+
 				"which * matches within one component and a component of ** matches any "+
-				"number of them — a glob at most %d components below refs/",
+				"number of them, a glob at most %d components below refs/",
 			value, which, which, gitref.MaxPatternComponents-1)
 		ok = false
 	}
@@ -1691,7 +1688,7 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 	}
 	if !rule.DirectPush.Valid() {
 		p.add(at(path, "direct_push"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.DirectPush, names(CodeDirectPushes), CodeDirectPersons)
+			rule.DirectPush, words.Or(CodeDirectPushes), CodeDirectPersons)
 		ok = false
 	}
 	rule.validateGate(p, path)
@@ -1716,18 +1713,18 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 		// AT THE FIRST FIELD THE RULE SETS, naming every one: a tag never
 		// moves, so the gate as a whole has nothing to hold — one mistake.
 		p.add(at(path, set[0]), ErrConflict,
-			"a tag never moves, so no merge reaches one: %s gate merges, which only a branch rule has — "+
-				"move them to a rule over the branches they are for", strings.Join(set, ", "))
+			"a tag never moves, so no merge reaches one: %s gate merges, which only a branch rule has: "+
+				"move them to a rule over the branches they are for", words.And(set))
 		return
 	}
 	before := len(*p)
 	if !rule.MergeBy.Valid() {
 		p.add(at(path, "merge_by"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.MergeBy, names(CodeMergeBys), CodeMergeByWriters)
+			rule.MergeBy, words.Or(CodeMergeBys), CodeMergeByWriters)
 	}
 	if !rule.Approvals.Valid() {
 		p.add(at(path, "approvals"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.Approvals, names(CodeApprovalCounts), CodeApprovalsNone)
+			rule.Approvals, words.Or(CodeApprovalCounts), CodeApprovalsNone)
 	}
 	validateGateClasses(p, at(path, "approvals_unless"), "approvals_unless", rule.ApprovalsUnless)
 	humans := at(path, "human_paths")
@@ -1774,7 +1771,7 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 	landing := at(path, "landing")
 	if !rule.Landing.Policy.Valid() {
 		p.add(at(landing, "policy"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.Landing.Policy, names(CodeLandingPolicies), CodeLandingPreLand)
+			rule.Landing.Policy, words.Or(CodeLandingPolicies), CodeLandingPreLand)
 	}
 	if d := rule.Landing.Depth; d < 0 || d > CodeMaxQueueDepth {
 		p.add(at(landing, "depth"), ErrOutOfRange, "%d is outside 1..%d candidates, or unset for the default %d",
@@ -1786,15 +1783,15 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 	}
 	if !rule.DeleteSource.Valid() {
 		p.add(at(path, "delete_source"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.DeleteSource, names(CodeDeleteSources), CodeDeleteSeats)
+			rule.DeleteSource, words.Or(CodeDeleteSources), CodeDeleteSeats)
 	}
 	if len(*p) > before {
 		return
 	}
 	if n := rule.Gate().EncodedBytes(); n > CodeMaxGateBytes {
 		p.add(path, ErrOutOfRange, "the rule's merge gate is %d bytes as the code log records it, past the %d "+
-			"one gate may weigh: require fewer checks or name fewer human paths — a glob's &, < and > are "+
-			"six bytes each", n, CodeMaxGateBytes)
+			"one gate may weigh: require fewer checks or name fewer human paths (a glob's &, < and > are "+
+			"six bytes each)", n, CodeMaxGateBytes)
 	}
 }
 
@@ -1809,9 +1806,9 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 		case c == CodeChangeClassNoCodeChange:
 			p.add(idx(path, k), ErrConflict, "no_code_change is a revision's class, never a path's: an "+
 				"approval already carries across a revision that changed nothing, so it has nothing to "+
-				"exempt (want %s)", names(CodePathClasses))
+				"exempt (want %s)", words.Or(CodePathClasses))
 		case !slices.Contains(CodePathClasses, c):
-			p.add(idx(path, k), ErrUnknownValue, "%q (want %s)", c, names(CodePathClasses))
+			p.add(idx(path, k), ErrUnknownValue, "%q (want %s)", c, words.Or(CodePathClasses))
 		case dup:
 			p.add(idx(path, k), ErrConflict, "%q is listed twice (first at %s[%d])", c, name, was)
 		default:
@@ -1884,11 +1881,11 @@ func (c *Company) codeWarnings() []Warning {
 }
 
 // directBoxWarnings is one warning for every place a company hosting code puts
-// a seat's box in the `direct` cell: at the seat's `sandbox.run_in`, at the
-// `run_in` of the providers.llm entry an agent-mode executor's box is placed
-// by (once an entry), or once at `providers.sandbox.default_run_in` for every
-// box that inherits it — each box as [Company.SeatBoxes] places it, the walk
-// the engine's launches are held to.
+// a seat's box in the `direct` cell: at the `run_in` of the providers.llm
+// entry an executor's box is launched on (once an entry), or once at
+// `providers.sandbox.default_run_in` for every box that inherits it, each box
+// as [Company.SeatBoxes] places it, the walk the engine's launches are held
+// to.
 //
 // WHAT IT SAYS IS WHAT THE CELL IS: a `direct` box runs as the engine's own
 // user, so it reads every repository a git node's cache holds and, on ANY
@@ -1912,7 +1909,7 @@ func (c *Company) directBoxWarnings() []Warning {
 		return nil
 	}
 	const reads = "a `direct` box runs as the engine's own user: it can read every repository cached on a " +
-		"git node and, on any node, the Tier A keyring that signs run tokens — so it can mint the token of " +
+		"git node and, on any node, the Tier A keyring that signs run tokens, so it can mint the token of " +
 		"ANY live coding run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
@@ -1923,22 +1920,19 @@ func (c *Company) directBoxWarnings() []Warning {
 		if box.Cell != PlacementDirect {
 			continue
 		}
-		switch {
-		case box.Executor != "" && c.Providers.LLM[box.Executor].RunIn == "",
-			box.Executor == "" && (box.Seat.Sandbox == nil || box.Seat.Sandbox.RunIn == ""):
+		// AN ENTRY'S OWN run_in, or the default it inherits: on every
+		// executor the launching entry places the box, and a seat names no
+		// cell of its own.
+		if box.Executor == "" || c.Providers.LLM[box.Executor].RunIn == "" {
 			inherited = true
-		case box.Executor != "":
-			if entries[box.Executor] {
-				continue
-			}
-			entries[box.Executor] = true
-			out = append(out, advisory(at(entryPath(box.Executor), "run_in"),
-				reads+"the agent-mode runs of the seats this entry places"+remedy))
-		default:
-			w := advisory(at(box.At, "sandbox.run_in"), reads+"this seat's coding runs"+remedy)
-			w.Seat = box.Seat.IdentityKey()
-			out = append(out, w)
+			continue
 		}
+		if entries[box.Executor] {
+			continue
+		}
+		entries[box.Executor] = true
+		out = append(out, advisory(at(entryPath(box.Executor), "run_in"),
+			reads+"the coding runs of the seats this entry launches on"+remedy))
 	}
 	if inherited {
 		out = append(out, advisory(field("providers.sandbox.default_run_in"),
@@ -2026,58 +2020,37 @@ func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 	return w, true
 }
 
-// roleCodeWarnings is every agent seat whose `code.access` no code host
-// reads: the company hosts no code of its own (`code.native` unset), and the
-// seat has no GitHub App the engine drives — the company enables no GitHub
-// integration (`integrations.github.enabled`), or it does and the seat has no
-// app of its own (the seat's `integrations.github`). Those are the only two
-// things a tier caps. Valid — a company may write its seats' tiers before it
-// turns on its code host — and worth knowing, because the line reads as a
-// grant. Located at the field, the seat's code.access, and naming which of the
-// two is missing, since each is remedied differently.
+// roleCodeWarnings is every agent seat whose `code.access` nothing reads: the
+// company hosts no code of its own (`code.native` unset), and the native code
+// host is the only thing a tier caps. Valid, since a company may write its
+// seats' tiers before it turns on its code host, and worth knowing, because
+// the line reads as a grant. Located at the field, the seat's code.access.
 //
-// THE SEAT'S APP COUNTS ONLY UNDER THE COMPANY'S ENABLED INTEGRATION: the
-// engine reconciles a seat's app, and mints the tokens its tier scopes, only
-// while `integrations.github` is enabled (it unregisters GitHub on an apply
-// that disables it), so an app recorded on a seat of a company with the
-// integration off or absent is a tier nothing reads.
+// A SEAT'S GITHUB APP DOES NOT READ IT: an App's access is its own
+// permissions in GitHub's terms (`integrations.github.permissions`), so a
+// seat with an App still holds nothing by this line, and the warning says so
+// rather than pointing at GitHub as a second place the tier could count.
 //
 // EVERY TIER, NOT ONLY full_access: read_only and review read as grants as
 // much, and grant as little. NOT A HUMAN SEAT: a tier there is an admission
-// refusal of its own ([Company.validateHumanSeatCode]), the line to read — as
+// refusal of its own ([Company.validateHumanSeatCode]), the line to read, as
 // is a tier validation refuses.
 func (c *Company) roleCodeWarnings() []Warning {
 	if c.Code.Native {
 		return nil
 	}
-	integration := c.Integrations.GitHub != nil && c.Integrations.GitHub.Enabled
 	var out []Warning
 	for role, path := range c.EachRole() {
 		if role.Kind == org.KindHuman || role.Code.IsZero() ||
 			!slices.Contains(CodeAccessTiers, role.Code.Access) {
 			continue
 		}
-		ownApp := role.Integrations.GitHub != nil
-		var why string
-		switch {
-		case integration && ownApp:
-			continue
-		case integration:
-			why = "and this seat has no GitHub App of its own (integrations.github), the only two " +
-				"places a tier caps what a seat may do (set code.native, give the seat an app, " +
-				"or remove code)"
-		case ownApp:
-			why = "and has no GitHub integration enabled (integrations.github.enabled), so nothing " +
-				"drives this seat's own GitHub App: the only two places a tier caps what a seat may " +
-				"do (set code.native, enable integrations.github, or remove code)"
-		default:
-			why = "and has no GitHub integration enabled (integrations.github.enabled), the only two " +
-				"places a tier caps what a seat may do (set code.native, or enable integrations.github " +
-				"and give the seat an app, or remove code)"
-		}
 		w := advisory(at(path, "code.access"), fmt.Sprintf(
-			"code.access %s grants nothing: this company hosts no code (code.native is unset) %s",
-			role.Code.Access, why))
+			"code.access %s grants nothing: this company hosts no code (code.native is unset), "+
+				"and the engine's own code host is the only place a tier caps what a seat may do. "+
+				"A GitHub App's access is its integrations.github.permissions. Set code.native, "+
+				"or remove code",
+			role.Code.Access))
 		w.Seat = role.Seat().Handle()
 		out = append(out, w)
 	}

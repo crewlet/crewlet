@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordkv "github.com/crewlet/crewlet/internal/coord/kv"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
@@ -66,7 +67,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	}
 	cfg := coordkv.FleetConfig{
 		BucketPrefix: "behind", Replicas: len(c.Servers), Clustered: true,
-		RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
+		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
 		BudgetRetention: coord.BudgetRetention,
@@ -146,7 +147,10 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		case !found:
 			return nil
 		}
-		removed, err := near.DeleteSandboxRun(ctx, turn, rec.Version)
+		_, removed, err := near.MutateSandboxRun(ctx, turn,
+			func(current coord.Record) (coord.SandboxRunChange, error) {
+				return coord.SandboxRunChange{Delete: current.Version == rec.Version}, nil
+			})
 		if err == nil && !removed {
 			err = errors.New("the delete lost its race")
 		}
@@ -231,7 +235,10 @@ func refused(t *testing.T, srv *js.Server, member, stream, what string,
 // in whose copy a read asks.
 func clientBucket(ctx context.Context, t *testing.T, q *js.Queue, bucket string) jetstream.KeyValue {
 	t.Helper()
-	kv, err := q.JetStream().KeyValue(ctx, bucket)
+	// LOOKED UP AS THE PRODUCT LOOKS ONE UP ([jsprovision.LookupBucket]):
+	// only the stream's leader answers, so a request that lands while its
+	// group elects is asked again rather than failed.
+	kv, err := jsprovision.LookupBucket(ctx, q.JetStream(), bucket)
 	if err != nil {
 		t.Fatalf("bind %s: %v", bucket, err)
 	}

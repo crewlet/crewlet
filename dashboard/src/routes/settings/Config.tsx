@@ -36,6 +36,7 @@ import {
   Tag,
   PageNote,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -52,7 +53,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
@@ -154,11 +155,16 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
 /**
  * What this revision is to the fleet, in three words rather than two.
  *
- * "NOT ACTIVE" IS TWO DIFFERENT FACTS on this record: a revision that was
- * active and has since been replaced carries an `activated_at`, and one that
- * was stored and never applied does not. Collapsing them into "superseded"
- * tells a reader a document ran when nothing ever ran it — and the history is
+ * "NOT ACTIVE" IS TWO DIFFERENT FACTS on this record: a revision the fleet
+ * activated and has since replaced carries an `activated_at`, and one that was
+ * stored and never activated — a write that lost its race, an offline change
+ * the fleet had moved on from — does not. Collapsing them into "superseded"
+ * tells a reader the fleet took a document it never took — and the history is
  * exactly where somebody goes looking for the revision that never landed.
+ *
+ * ACTIVE IS THE FLEET'S, not a node's: `is_active` names the revision the
+ * fleet's activation pointer names. Whether each node runs it is the Across
+ * the fleet list beside it.
  */
 function RevisionState({ revision }: { revision: RevisionMeta }) {
   if (revision.is_active) return <Tag variant="success">active</Tag>;
@@ -210,14 +216,24 @@ export function configHunks(changes: readonly ConfigChange[]): DiffHunk[] {
 const CHANGES_HEAD_ID = "config-changes";
 
 /**
- * Which nodes are on this revision, which are on another, and which have not
- * said.
+ * Which nodes run this revision, which refused it, which run another, and
+ * which have not said.
  *
- * THREE ANSWERS, NOT TWO, and the third is the one this panel exists for: a
- * node that published no apply record is not a node that failed to apply, and
+ * FOUR ANSWERS, NOT TWO. The third is the one this panel exists for: a node
+ * that published no apply record is not a node that failed to apply, and
  * rendering it among the stragglers would send an operator after a machine
  * that is fine. It is the same three-valued rule `coord` is built on — held,
  * definitively not, unknown — read at the one place an operator acts on it.
+ *
+ * And a node is counted by the revision it RUNS (`config_serving_revision_id`),
+ * never by the one it last attempted: a node that refused this revision
+ * reports it beside `error` and goes on serving the one before, and counting
+ * it here called a node converged that runs another company. It is listed as
+ * refused, naming what it runs — and so is a node whose last attempt of this
+ * revision failed although it runs it ([nodeOnRevision]): the refused
+ * re-activation of a credential rotation, which goes on running the revision
+ * with the credentials it had. The count is of the nodes that run it and
+ * refused nothing about it.
  *
  * `flush` is the peek: the rail is the panel already.
  */
@@ -236,12 +252,13 @@ function AppliedAcross({
   loading?: boolean;
   flush?: boolean;
 }) {
-  const here = nodes.filter((n) => (n.config_revision_id ?? "") === revisionId);
-  const elsewhere = nodes.filter((n) => {
-    const on = n.config_revision_id ?? "";
-    return on !== "" && on !== revisionId;
-  });
-  const silent = nodes.filter((n) => (n.config_revision_id ?? "") === "");
+  const lines = nodes.map((node) => ({ node, state: nodeOnRevision(node, revisionId) }));
+  const here = lines.filter((l) => l.state === "here");
+  // THE ORDER A READER ACTS IN: what runs it, what refused it, what runs
+  // another, and what has said nothing.
+  const ordered = (["here", "refused", "elsewhere", "silent"] as const).flatMap((state) =>
+    lines.filter((l) => l.state === state),
+  );
 
   // A READ IN FLIGHT IS NOT A READ THAT FAILED, and for the second or two
   // before the lease table lands they render identically: without this the
@@ -257,17 +274,11 @@ function AppliedAcross({
     ) : (
       <div className="col gap-2">
         <p className="t-body">
-          {here.length} of {plural(nodes.length, "node")} report this revision.
+          {here.length} of {plural(nodes.length, "node")} run this revision.
         </p>
         <div className="col" style={{ gap: 2 }}>
-          {here.map((node) => (
-            <NodeLine key={node.id} node={node} state="here" />
-          ))}
-          {elsewhere.map((node) => (
-            <NodeLine key={node.id} node={node} state="elsewhere" />
-          ))}
-          {silent.map((node) => (
-            <NodeLine key={node.id} node={node} state="silent" />
+          {ordered.map(({ node, state }) => (
+            <NodeLine key={node.id} node={node} state={state} />
           ))}
         </div>
       </div>
@@ -291,25 +302,56 @@ function AppliedAcross({
   );
 }
 
+/** Where one node stands on one revision. */
+type NodeOnRevision = "here" | "refused" | "elsewhere" | "silent";
+
+/**
+ * Where one node stands on one revision: running it, having refused it (its
+ * last attempt was this revision and failed), running another, or silent.
+ *
+ * THE REFUSAL IS READ BEFORE THE REVISION IT RUNS. Re-activating the revision
+ * a node already runs is how a credential is rotated, and a node that refuses
+ * that activation names the one revision in both fields: attempted and still
+ * served, beside `error` (`FleetNode.config_serving_revision_id`). Read by
+ * what it runs first, it was tagged "runs it" in the success tone and its
+ * `config_error` went unsaid, on the panel an operator opens to see whether
+ * the rotation took — while the Nodes screen (`configStanding`) called the
+ * same node refused.
+ *
+ * Exported for the test, which holds the four apart without a screen.
+ */
+export function nodeOnRevision(node: FleetNode, revisionId: string): NodeOnRevision {
+  const failed = node.config_status === "error" || node.config_status === "degraded";
+  if (failed && (node.config_revision_id ?? "") === revisionId) return "refused";
+  const runs = node.config_serving_revision_id ?? "";
+  if (runs === revisionId) return "here";
+  if (runs !== "" || (node.config_revision_id ?? "") !== "") return "elsewhere";
+  return "silent";
+}
+
 /** One node's answer about one revision. */
-function NodeLine({ node, state }: { node: FleetNode; state: "here" | "elsewhere" | "silent" }) {
-  const on = node.config_revision_id ?? "";
+function NodeLine({ node, state }: { node: FleetNode; state: NodeOnRevision }) {
+  const runs = node.config_serving_revision_id ?? "";
   return (
     <div className="row gap-2">
       <InlineCode>{node.id}</InlineCode>
       {state === "here" ? (
-        <Tag variant="success">applied</Tag>
+        <Tag variant="success">runs it</Tag>
+      ) : state === "refused" ? (
+        <Tag variant="danger" title={runs || undefined}>
+          {node.config_status === "degraded" ? "applied in part" : "refused"}
+          {runs ? `, runs ${runs.slice(0, 10)}` : ", runs none"}
+        </Tag>
       ) : state === "elsewhere" ? (
-        <Tag variant="warning" title={on}>
-          on {on.slice(0, 10)}
+        <Tag variant="warning" title={runs || undefined}>
+          {runs ? `on ${runs.slice(0, 10)}` : "runs none"}
         </Tag>
       ) : (
         <Tag appearance="outline">not saying</Tag>
       )}
-      {/* THE APPLY THAT FAILED. A node can report this revision and have
-          refused it — `config_status` is the other half of the record, and a
-          list that showed only the id would call that node converged. */}
-      {node.config_status === "error" && (
+      {/* WHY IT REFUSED, which the tag alone cannot say. Only for this
+          revision: an error about another one is that revision's story. */}
+      {state === "refused" && (
         <span className="t-caption" title={node.config_error}>
           {node.config_error || "it could not apply that revision"}
         </span>
@@ -584,7 +626,7 @@ export function ConfigScreen({
    * revisions. The lens itself is not changed: a reader who is reading the
    * history asked for the history.
    *
-   * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy
+   * THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one copy
    * of which clicks mean elsewhere and reads a mouse event; the `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
@@ -608,7 +650,7 @@ export function ConfigScreen({
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek, setRevision, setAgainst, lens],
   );
@@ -978,6 +1020,7 @@ export function ConfigScreen({
                 columns={[
                   {
                     key: "at",
+                    align: "right",
                     header: "When",
                     shrink: true,
                     // THE ONE COLUMN THAT GIVES WAY, and it is the revision

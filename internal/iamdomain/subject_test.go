@@ -139,7 +139,7 @@ func TestTheArbitratedKindsAreDerivedFromTheEnum(t *testing.T) {
 			"subject across the whole domain, so an expectation there would "+
 			"serialise every linearizable read behind every other one, and a "+
 			"trimmed record removes anchors, so arbitrated it would write one of "+
-			"its own (ADR-0050)",
+			"its own (ADR-0073)",
 			len(spec.ArbitratedKinds), len(iamdomain.ObjectKinds))
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Role is the AUTHORED shape of one seat — a `roles:` entry.
@@ -33,7 +35,8 @@ type Role struct {
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
 	// addressable-only seat that is never spawned; its contact identities
-	// are optional, and [Company.Warnings] names one that has none).
+	// are optional, and [Company.Warnings] names one that has none on the
+	// vendor chat surface the company talks on).
 	Kind org.RoleKind `yaml:"kind,omitempty" json:"kind,omitempty" js:"enum=agent|human" desc:"agent (default) or human."`
 
 	// Contact is a HUMAN seat's external identities — how agents mention
@@ -113,15 +116,16 @@ type Role struct {
 	// phase without restating the block.
 	//
 	// There is no executor entry, and that is not an omission: `llm` IS the
-	// executor's chain. The turn's work happens in one conversation, so a
-	// second field naming the model that conversation runs on would be two
-	// spellings of one setting — and the phases that remain here are the
-	// SATELLITES an operator points somewhere cheaper.
+	// executor's chain. The turn's work happens in one run, so a second
+	// field naming the model that run is on would be two spellings of one
+	// setting — and the phases that remain here are the SATELLITES an
+	// operator points somewhere cheaper. They are also where a CLI with no
+	// in-box runner serves a seat: only claude-code and opencode can be its
+	// executor ([CodingAgents]), and any CLI can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
 	LLMJudge     ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero" desc:"Cheap model for the round-cap extension judge."`
-	LLMSandbox   ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero" desc:"Model the sandboxed coding agent runs on."`
 
 	// LearningEnabled overrides the system-wide learning setting for this
 	// seat alone. Unset inherits it; false skips reflection for this
@@ -136,18 +140,19 @@ type Role struct {
 	// once per seat.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Per-seat MCP credentials: env vars (stdio) or headers (http)."`
 
-	// Sandbox is the per-seat code-runtime gate. Absent means the seat is
-	// never offered the sandbox tool at all.
-	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Per-seat code sandbox gate. Absent = never offered."`
+	// Sandbox is what this seat's executor box reads beyond the engine-wide
+	// catalogue. See [RoleSandbox].
+	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."`
 
 	// Placement constrains which nodes may run this seat; absent is
 	// anywhere, which is what a single-process deployment always means.
 	Placement *RolePlacement `yaml:"placement,omitempty" json:"placement,omitempty" desc:"Which nodes may run this seat. Absent = any node that runs seats."`
 
-	// Code is this seat's access to the company's code: how much of a
-	// repository it may do, on the native code host and on GitHub alike.
-	// See [RoleCode].
-	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code, on the native code host and on GitHub."`
+	// Code is this seat's access to the company's code on the engine's own
+	// code host: how much of a repository it may do there. A GitHub App's
+	// access is its own permissions ([RoleGitHub.Permissions]). See
+	// [RoleCode].
+	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code on the engine's own code host (code.native)."`
 
 	// HealthTools gives this AGENT seat the deployment's health: the
 	// fleet_health and code_status tools, an administrator's reads, which its
@@ -157,7 +162,10 @@ type Role struct {
 	// administrator's view would read it through that seat's trail, so the
 	// field is listed apart for admin wherever a write is judged against the
 	// subtree rule (internal/config's org diff).
-	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty" desc:"Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health, and wake it each time an alarm fires or clears on a node. Setting or clearing it takes admin."`
+	//
+	// Its schema description names the two tools, so it is derived from
+	// their constants ([Role.fieldDescriptions]) rather than written in a tag.
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty"`
 
 	// Integrations is this seat's own identity on external surfaces: its
 	// chat apps and its GitHub App. See [RoleIntegrations].
@@ -172,6 +180,17 @@ type Role struct {
 
 	// Schedules are this seat's own recurring work.
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work fired into this seat's inbox."`
+}
+
+// fieldDescriptions is the schema's description of each of Role's fields whose
+// text names a tool, which a `desc` tag cannot read from its constant.
+func (Role) fieldDescriptions() map[string]string {
+	return map[string]string{
+		"health_tools": "Agent seats: offer this seat " + toolname.FleetHealth + " and " +
+			toolname.CodeStatus + ", the administrator's reads of the deployment's health, " +
+			"and wake it each time an alarm fires or clears on a node. Setting or clearing " +
+			"it takes admin.",
+	}
 }
 
 // RolePlacement is the authored form of a seat's placement constraint. It
@@ -233,7 +252,7 @@ func (p *RolePlacement) validate(path Path) error {
 			hint = ". A ${VAR} is not resolved here: write the node id itself"
 		}
 		probs.add(at(path, "node"), ErrUnknownValue,
-			"%q is not a node id — one starts alphanumeric and holds only "+
+			"%q is not a node id: one starts alphanumeric and holds only "+
 				"letters, digits, '.', '_' or '-' (max 64 chars), and every "+
 				"node's own id is held to that, so this pin could never be "+
 				"satisfied%s", p.Node, hint)
@@ -255,7 +274,7 @@ func (p *RolePlacement) validate(path Path) error {
 					"node.labels, so this seat could never be placed")
 		case err != nil:
 			probs.add(where, ErrUnknownValue,
-				"%v — this seat is placed only on a node carrying the key "+
+				"%v. This seat is placed only on a node carrying the key "+
 					"under node.labels, and no node can carry one outside "+
 					"that grammar", err)
 		}
@@ -269,52 +288,48 @@ func (p *RolePlacement) validate(path Path) error {
 	return probs.err()
 }
 
-// RoleSandbox is the authored per-seat code-runtime gate.
+// RoleSandbox is the authored settings of one seat's EXECUTOR BOX: what it
+// reads beyond the engine-wide catalogue.
+//
+// NOT A GATE, and nothing here places the box. Every agent seat's executor is
+// its coding CLI's own run, in the cell the providers.llm entry it launches on
+// names (that entry's `run_in`, else providers.sandbox.default_run_in), on
+// that entry's own CLI — so neither the cell nor the runner is a seat's to
+// say. What is left is what differs from one seat's work to another's: its
+// own provisioning and environment, the tool servers its box is given, how
+// long a box blocked on a person stays paused, and how many rounds one run
+// may take.
 type RoleSandbox struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled" desc:"Offer this seat the sandbox tool."`
-
-	// RunIn is WHERE this seat's code work runs, naming one cell of
-	// providers.sandbox. Empty inherits providers.sandbox.default_run_in.
-	//
-	// This is per-seat because it is a decision about ONE SEAT'S WORK: the
-	// seat that must use the operator's own subscription login and the seat
-	// whose generated code must never touch the engine host are different
-	// seats, and the block-wide `type:` this replaced could answer only for
-	// both at once.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b|self" desc:"Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in."`
-
-	// CodingAgent overrides the provider-wide default for this seat only.
-	// Empty inherits it, resolved at LAUNCH rather than at config time, so
-	// a provider swap reaches seats that never named one.
-	CodingAgent CodingAgent `yaml:"coding_agent,omitempty" json:"coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Override the provider default for this seat."`
-
-	// PauseTTLSeconds bounds how long this seat's blocked sandbox stays
-	// paused. UNSET inherits the provider default; an explicit 0 means
-	// never pause — tear the box down as soon as the run blocks, and
-	// re-seed from the pushed branch when the answer arrives.
+	// PauseTTLSeconds bounds how long this seat's box, blocked on a
+	// person's answer, stays paused. UNSET inherits the provider default;
+	// an explicit 0 means never pause — tear the box down as soon as the
+	// run blocks, and re-seed from the pushed branch when the answer
+	// arrives.
 	//
 	// A POINTER, because those are three states and a float64 has only
 	// two: an unset field's zero value would read as "never pause", so
 	// every seat that said nothing would silently lose its checkout the
-	// moment a coding agent asked a question.
+	// moment its run asked a question.
 	//
 	// A NEGATIVE VALUE IS REFUSED. It is never "no expiry" — an unbounded
 	// pause is the leak this knob exists to prevent — and inherit is said by
 	// leaving the field out.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL. Unset = provider default; 0 = never pause."`
 
-	// MaxTurns caps how many agentic rounds this seat's coding runs may
-	// take. UNSET inherits providers.sandbox.default_max_turns; an explicit
-	// 0 means uncapped, which is how a seat opts OUT of a company-wide cap.
+	// MaxTurns caps how many agentic rounds one of this seat's executor
+	// runs may take. UNSET inherits providers.sandbox.default_max_turns; an
+	// explicit 0 means uncapped, which is how a seat opts OUT of a
+	// company-wide cap.
 	//
 	// A POINTER, for the same reason pause_ttl_seconds is one: those are
 	// three states and an int has two. Without it, the one seat whose work
 	// legitimately runs long — a migration, a large refactor — could not
 	// escape a cap set for everybody else, because its "no cap" and its
 	// "say nothing" would be the same zero.
-	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped."`
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
 
-	// MCP scopes which of the seat's MCP servers the coding agent gets.
+	// MCP scopes which of the seat's MCP servers its box gets, beside the
+	// seat's own tool bridge, which every executor box is given.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
 	// rather than a simplification: the coding CLIs offer no per-tool
@@ -322,36 +337,40 @@ type RoleSandbox struct {
 	// it is given.
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
-	// Env is injected into this seat's sandbox run. External service
+	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
 	// variable of its own, and only LLM credentials derive automatically —
 	// but for the engine's own code host: a run given repositories on it is
 	// handed its run's git credential and git configuration by the engine
-	// (ADR-0063), whose variables ([ReservedSandboxEnv]) no value here may
+	// (ADR-0086), whose variables ([ReservedSandboxEnv]) no value here may
 	// set.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's executor run; declare external tokens here."`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,
-	// such a key then being left out of the run environment rather than
-	// refusing the coding run.
+	// such a key then being left out of the run environment quietly.
 	//
-	// The same declaration a tool server makes ([MCPServer.OptionalKeys]),
-	// and for the same reason: every other reference in a coding run's
-	// environment must resolve before a `run_sandbox` box is started, since
-	// a run handed an empty code-host token clones nothing and pushes
-	// nothing after spending its box, and nothing in a value can say that a
-	// setting — a test DATABASE_URL, a proxy — may be absent. A setup step's
-	// env and files declare theirs on the step.
-	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it."`
+	// AN EXECUTOR RUN STARTS EITHER WAY. It is the seat's turn itself rather
+	// than a tool call the turn chose, so refusing it for a code-host token
+	// a pass may mint in a minute would fail every message the seat could
+	// answer meanwhile. Any other key that resolves to nothing is left out
+	// too, and the run's start is logged naming it
+	// (sandbox_env_unresolved), because a run handed no code-host token
+	// clones nothing and pushes nothing, and that line is how an operator
+	// finds out why. What this list says is which absences are expected —
+	// a test DATABASE_URL, a proxy — so the line names only the ones that
+	// are not: the declaration a tool server makes
+	// ([MCPServer.OptionalKeys]). A setup step's env and files declare
+	// theirs on the step.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out quietly rather than logged as a gap in the run's environment."`
 
 	// Setup is this seat's own provisioning, applied after the
 	// engine-wide steps.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Per-seat provisioning steps, applied after the engine-wide ones."`
 }
 
-// RoleSandboxMCP is the server-level scope for a seat's coding agent.
+// RoleSandboxMCP is the server-level scope for a seat's executor box.
 type RoleSandboxMCP struct {
-	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names the coding agent may use."`
+	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names this seat's executor box is given, beside its tool bridge."`
 }
 
 // IsZero lets an unset scope drop out of a round trip.
@@ -359,17 +378,6 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path Path) error {
 	var p problems
-	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
-		// Only the SPELLING is checked here. Whether the cell is actually
-		// configured is a question about providers.sandbox, and a seat is
-		// validated without it — see (*Company).validateSandboxPlacement.
-		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			s.RunIn, names(Placements))
-	}
-	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
-		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
-			s.CodingAgent, names(CodingAgents))
-	}
 	if s.PauseTTLSeconds != nil && *s.PauseTTLSeconds < 0 {
 		p.add(at(path, "pause_ttl_seconds"), ErrOutOfRange,
 			"%g (a paused box cannot be kept a negative time, and an unbounded "+
@@ -382,9 +390,6 @@ func (s *RoleSandbox) validate(path Path) error {
 			"%d (a round cap cannot be negative; omit the field to inherit "+
 				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
 	}
-	// A gate that is off with provisioning under it is refused by the
-	// company ([Company.validateSandboxGates]), not here: whether any of it
-	// is read turns on how the seat's executor runs, which a gate cannot see.
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
 	}
@@ -403,14 +408,19 @@ func (s *RoleSandbox) validate(path Path) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: the repositories it works in, and the identity the engine records for it. How much it may do is the seat's code.access."`
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
-	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
+	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog    *RoleDatadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil
+	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
+		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -425,15 +435,17 @@ func (r RoleIntegrations) IsZero() bool {
 // THE CREDENTIALS ARE NOT TYPED IN. An app is created from a manifest the
 // engine builds, and GitHub returns its private key exactly once, to the
 // engine, at conversion time. What an operator does is click through the
-// creation and the install. Everything here except the repositories is
-// therefore written by the engine, not by a person.
-//
-// HOW MUCH THE APP MAY DO IS NOT HERE. The app is created with, and every
-// token it mints carries, the permissions of the seat's [RoleCode] access:
-// one setting for every code host this engine drives, so a seat's tier is
-// never a GitHub field that a company on the native host has nowhere to
-// write.
+// creation and the install. Everything here except `enabled`, the permissions
+// and the repositories is therefore written by the engine, not by a person.
 type RoleGitHub struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own GitHub App. Off suspends the installation and keeps the app."`
+
+	// Permissions are the App's repository permissions in GitHub's own
+	// terms, each read or write; a permission left out is No access. The
+	// app is registered at these (least privilege, D5), so a raise past
+	// them waits for an owner to accept it at GitHub.
+	Permissions map[string]GitHubAccess `yaml:"permissions,omitempty" json:"permissions,omitempty" desc:"GitHub App permissions (contents, issues, pull_requests, checks, actions, deployments, workflows), each read or write; absent is No access."`
+
 	// Repos are the repositories this seat works in, as owner/name. Empty
 	// means every repository the installation covers, which is what the
 	// operator chose when they installed the app.
@@ -471,10 +483,12 @@ type RoleGitHub struct {
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once."`
 }
 
-// IsZero lets an unset block drop out of a round trip.
+// IsZero lets an unset block drop out of a round trip. A block that says only
+// `enabled` or only its permissions is not unset: dropping it would turn the
+// seat's GitHub access off, or forget what it asked for.
 func (g *RoleGitHub) IsZero() bool {
-	return g == nil || (len(g.Repos) == 0 && g.AppID == 0 &&
-		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
+	return g == nil || (g.Enabled == nil && len(g.Permissions) == 0 && len(g.Repos) == 0 &&
+		g.AppID == 0 && g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
 		g.WebhookSecret == "")
 }
 
@@ -487,10 +501,11 @@ func (g *RoleGitHub) Held() bool {
 
 // validate checks a seat's GitHub App.
 //
-// THE REPOSITORIES ARE THE ONLY THING A PERSON WRITES here, so they are the
-// only thing that can be wrong in a way worth refusing. Everything else is
-// written by the engine after GitHub has answered, and refusing a half-built
-// record would refuse the document between the two clicks that build it.
+// THE REPOSITORIES ARE WHAT A PERSON WRITES here beside the permissions (held
+// to GitHub's own terms where the seat's access is checked), so they are what
+// can be wrong in a way worth refusing. Everything else is written by the
+// engine after GitHub has answered, and refusing a half-built record would
+// refuse the document between the two clicks that build it.
 func (g *RoleGitHub) validate(path Path) error {
 	var p problems
 	for i, repo := range g.Repos {
@@ -504,24 +519,23 @@ func (g *RoleGitHub) validate(path Path) error {
 	return p.err()
 }
 
-// RoleCode is a seat's code access: ONE VOCABULARY for every code host this
-// engine drives. A seat's GitHub App is created with, and mints every token
-// at, the permission set of its tier (internal/github.Tier), and the native
-// code host caps what the chart grants a seat by the same tier.
+// RoleCode is a seat's code access on the engine's own code host
+// (`code.native`): the tier the native host caps what the chart grants the
+// seat by (internal/code's Tier).
 //
-// It was `integrations.github.tier`, which made the one setting a person
-// writes about a seat's code a GitHub field — so a company on the native host
-// had nowhere to say it, and a seat moved between hosts changed what it may
-// do.
+// A SEAT'S GITHUB APP IS NOT CAPPED HERE. Its access is the App's own
+// permissions in GitHub's terms ([RoleGitHub.Permissions]), which the seat
+// path registers the App at; a tier is the vocabulary of a host whose
+// permissions the engine itself defines, and on GitHub the vendor defines
+// them. So this setting grants nothing on a company with no `code.native`.
 //
-// An AGENT seat's setting. A person acts on every host as their own identity
-// (contact.github_login on GitHub, a bound token on the native host), so a
-// tier on a human seat would cap nothing, and [Company.ValidateAdmission]
-// refuses one.
+// An AGENT seat's setting. A person acts on the native host as their own
+// identity, with a token bound to them, so a tier on a human seat would cap
+// nothing, and [Company.ValidateAdmission] refuses one.
 //
 // ONE SPELLING PER TIER, compared exactly: no hyphen for the underscore, and
 // no case or space folded. No tag shipped this field, so nothing was ever
-// written in another spelling and nothing needs reading in one — a second
+// written in another spelling and nothing needs reading in one: a second
 // spelling would be a compatibility path for a version that never existed,
 // and the published schema, which lists the field's enum, would have to carry
 // it too, since the schema must refuse nothing the engine runs.
@@ -531,10 +545,10 @@ type RoleCode struct {
 	// hands out and the right answer for a seat nobody has thought about
 	// yet.
 	//
-	// Its js enum is [CodeAccessTiers] — every value the validator accepts
-	// and nothing else, which TestSchemaEnumsMatchTheValidators holds — so
+	// Its js enum is [CodeAccessTiers], every value the validator accepts
+	// and nothing else, which TestSchemaEnumsMatchTheValidators holds, so
 	// the schema refuses nothing the engine runs.
-	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access. Empty means read_only."`
+	Access string `yaml:"access,omitempty" json:"access,omitempty" js:"enum=read_only|review|full_access" desc:"read_only, review or full_access on the engine's own code host. Empty means read_only."`
 }
 
 // IsZero lets an unset block drop out of a round trip: a block that says
@@ -546,7 +560,7 @@ func (c *RoleCode) IsZero() bool { return c == nil || c.Access == "" }
 // READ ONLY when the document is silent (nil-safe), which is the least this
 // engine hands out: a seat nobody has thought about should ask for more
 // rather than already hold it. A value the validator refuses never reaches a
-// running engine, and reads read only here too — the narrow direction.
+// running engine, and reads read only here too, the narrow direction.
 func (c *RoleCode) AccessOrDefault() string {
 	if c != nil && slices.Contains(CodeAccessTiers, c.Access) {
 		return c.Access
@@ -554,7 +568,7 @@ func (c *RoleCode) AccessOrDefault() string {
 	return TierReadOnly
 }
 
-// validate refuses an access no code host has.
+// validate refuses an access the native code host has no tier for.
 func (c *RoleCode) validate(path Path) error {
 	var p problems
 	if c.Access != "" && !slices.Contains(CodeAccessTiers, c.Access) {
@@ -562,18 +576,18 @@ func (c *RoleCode) validate(path Path) error {
 			"%q is not an access tier; give one of %s, spelled exactly so. "+
 				"An unknown tier would run the seat read-only, which is safe "+
 				"and is not what the document says",
-			c.Access, strings.Join(CodeAccessTiers, ", "))
+			c.Access, words.Or(CodeAccessTiers))
 	}
 	return p.err()
 }
 
 // The access tiers a seat's role.code.access can be set to.
 //
-// RESTATED HERE rather than imported from internal/github, because config is
-// the leaf every integration package depends on and reaching the other way
-// for three words would invert that. The same reasoning [Datadog] follows for
-// its tag key. Each code host's package owns the real vocabulary and the
-// permissions behind it, and a test asserts the lists agree.
+// OWNED HERE, by the field a person writes them in. The native code host
+// (internal/code) spells its Tier as these constants and maps each to what
+// the chart may grant, and a test holds the two lists to each other: config
+// is the leaf every package depends on, so the vocabulary lives where it is
+// validated and the host that enforces it imports it, never the other way.
 const (
 	TierReadOnly   = "read_only"
 	TierReview     = "review"
@@ -600,36 +614,24 @@ var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
 // team channel and which names one room per unit whatever chat backend the
 // company runs on.
 type RoleSlack struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Slack app. Off revokes the bot token and keeps the app."`
+
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 }
 
 // validate checks a seat's Slack app.
 //
-// THE TWO CREDENTIALS ARE NOT INTERCHANGEABLE and each half fails silently
-// on its own. Without a bot token the seat receives messages it can never
-// answer; without a signing secret its route answers 503 to every delivery
-// while the app's own settings page reports a healthy request URL. So
-// declaring the block at all means declaring both.
+// THE CREDENTIALS ARE NOT REQUIRED (D4): the engine seals a seat's bot token
+// and signing secret under names it derives from the handle, so a block that
+// names neither is the ordinary one. Where a block still names a bot token,
+// it is one whole `${VAR}` or a literal: the transport resolves the token only
+// when it is one whole reference, and anything else would reach Slack as
+// written, braces and all. Which positions a managed seat may name at all is
+// the document's access rules, not this check.
 func (s *RoleSlack) validate(path Path) error {
 	var p problems
-	// The transport reads the token with [envref.Resolve]; the signing
-	// secret is expanded wherever its references sit, so only the token
-	// is held to one whole reference.
 	pointerOrLiteral(&p, at(path, "bot_token"), s.BotToken)
-	if strings.TrimSpace(s.BotToken) == "" {
-		p.add(at(path, "bot_token"), ErrMissing,
-			"required: without it this seat receives messages it cannot "+
-				"answer. `crewlet slack provision` mints one into the ${VAR} "+
-				"this field points at")
-	}
-	if strings.TrimSpace(s.SigningSecret) == "" {
-		p.add(at(path, "signing_secret"), ErrMissing,
-			"required: this seat's /webhooks/slack/<handle> route has nothing "+
-				"to verify a delivery with otherwise and answers 503 to every "+
-				"one, while the app's own settings page reports a healthy "+
-				"request URL")
-	}
 	return p.err()
 }
 
@@ -640,6 +642,16 @@ func (s *RoleSlack) validate(path Path) error {
 // and the MCP tool server alike. There is no signing secret because there
 // is no inbound webhook to verify.
 type RoleMattermost struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has a Mattermost bot. Off revokes its tokens and deactivates it."`
+
+	// Roles are the bot account's Mattermost roles, by Mattermost's own
+	// names: one of [MattermostRoleSets].
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Mattermost roles: system_user, plus system_post_all_public or system_post_all, or system_admin."`
+
+	// Channels are the channels the bot is a member of, each within
+	// provisioning.channels where that list is set.
+	Channels []string `yaml:"channels,omitempty" json:"channels,omitempty" desc:"Channels this agent's bot is a member of."`
+
 	// BotToken is the bot account's personal access token. A whole-value
 	// ${VAR} is what makes the seat provisionable; a literal marks a
 	// manually managed bot, which the provisioner reports and leaves alone.
@@ -656,13 +668,6 @@ type RoleMattermost struct {
 	// whole reference beside the pattern, and [RoleMattermost.validate]
 	// refuses exactly what the schema does.
 	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$;pointer" desc:"Bot username, or one whole ${VAR} naming it; defaults to the seat handle."`
-
-	// Channel is a PROVISIONING input, not a posting default: the reconcile
-	// adds this bot to it, on top of the company-wide
-	// `provisioning.channels`. Nothing aims a message with it — the engine's
-	// transport posts none, and an agent's messages are the Mattermost MCP
-	// server's calls on this same token, each naming its own channel.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
 // validate checks a seat's Mattermost bot.
@@ -687,7 +692,7 @@ func (m *RoleMattermost) validate(path Path) error {
 		hint := ""
 		if envref.Has(m.Username) {
 			// Only a whole reference with space around it reaches here.
-			hint = fmt.Sprintf(" — and so does the ${VAR} that names one: write %q",
+			hint = fmt.Sprintf(", and so does the ${VAR} that names one: write %q",
 				strings.TrimSpace(m.Username))
 		}
 		p.add(username, ErrUnknownValue,
@@ -789,7 +794,6 @@ func (r *Role) Seat() *org.Role {
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
 		LLMAuxiliary:         pick(r.LLMAuxiliary, r.LLM.Auxiliary),
 		LLMJudge:             pick(r.LLMJudge, r.LLM.Judge),
-		LLMSandbox:           pick(r.LLMSandbox, r.LLM.Sandbox),
 		LearningEnabled:      r.LearningEnabled,
 		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),
@@ -807,7 +811,6 @@ func (r *Role) Seat() *org.Role {
 		seat.Mattermost = org.MattermostIdentity{
 			BotToken: m.BotToken,
 			Username: m.Username,
-			Channel:  m.Channel,
 		}
 	}
 	// AND THE CODE HOST'S, which this conversion used to DROP. Everything
@@ -816,7 +819,15 @@ func (r *Role) Seat() *org.Role {
 	// the first — a fact about a seat that the running seat does not carry
 	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
+		var perms map[string]string
+		if len(g.Permissions) > 0 {
+			perms = make(map[string]string, len(g.Permissions))
+			for key, level := range g.Permissions {
+				perms[key] = string(level)
+			}
+		}
 		seat.GitHub = &org.GitHubApp{
+			Enabled: SeatAccessOn(g.Enabled), Permissions: perms,
 			Repos: append([]string(nil), g.Repos...),
 			AppID: g.AppID, AppSlug: g.AppSlug,
 			InstallationID: g.InstallationID,
@@ -829,7 +840,7 @@ func (r *Role) Seat() *org.Role {
 	if r.Code != nil {
 		// What was WRITTEN — one of the three tiers, which is all the
 		// validator admits, or empty where the block says nothing. The
-		// default is the reader's: every code host reads silence as
+		// default is the reader's: the native code host reads silence as
 		// read_only through its own reading of the tier, so writing one
 		// here would be a second statement of that default.
 		seat.CodeAccess = r.Code.Access
@@ -845,9 +856,6 @@ func (r *Role) Seat() *org.Role {
 			env = nil
 		}
 		seat.Sandbox = &org.RoleSandbox{
-			Enabled:         s.Enabled,
-			RunIn:           string(s.RunIn),
-			CodingAgent:     string(s.CodingAgent),
 			PauseTTLSeconds: s.PauseTTLSeconds,
 			MaxTurns:        s.MaxTurns,
 			Setup:           seatSetupSteps(s.Setup),
@@ -917,7 +925,13 @@ type Unit struct {
 	// app this build refuses, and put "Team Slack channel" into the prompt
 	// of every agent in a company that talks on Mattermost. A unit's
 	// channel is a fact about the unit, not about who hosts it.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
+	//
+	// IT IS AN ADDRESS, which is what the grammar is for — see
+	// [unitChannel]. THE PATTERN IS ON THE FIELD as well as in the
+	// validator, for the reason [Unit.ID] gives: the generator emits it
+	// into the published schema, and a schema accepting channels the engine
+	// refuses is exactly the drift the schema-diff test cannot see.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" js:"pattern=^[a-z0-9][a-z0-9_-]{0,63}$" desc:"Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
 	// read scope — org-wide read scope is the knowledge block.
@@ -936,8 +950,8 @@ type Unit struct {
 	// VENDOR-NEUTRAL, and required of any unit that owns either. They were
 	// `integrations.jira.project` and `integrations.confluence.space`,
 	// which made the org chart name a product: a company switching
-	// backends had to rewrite its units, and a company running a native
-	// tracker against a Confluence wiki could not say so at all. The tree
+	// backends had to rewrite its units, and a company running Worklet
+	// against a Confluence wiki could not say so at all. The tree
 	// made this rename once already, when `slack_channel` became `channel`.
 	//
 	// NOT a credential, and NOT a read scope. Read scope is the org-wide
@@ -991,6 +1005,21 @@ func (u *Unit) validate(path Path) error {
 				"starting with a letter, up to 64 characters. It is chosen once "+
 				"and read by nobody, so it can be short and dull", id)
 	}
+	// THE RAW VALUE, deliberately unlike the id above: that one is trimmed
+	// here and trimmed again by [Unit.Unit], so a padded id normalises
+	// end to end, while a channel is copied VERBATIM into the organization
+	// and from there into a prompt and a room name. Trimming it here would
+	// accept `" ops"` and leave a room named with a leading space — and it
+	// would also make the published schema, which carries this same pattern
+	// and cannot trim anything, stricter than the engine. That is the one
+	// direction the schema must never take.
+	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+		p.add(at(path, "channel"), ErrShape,
+			"%q isn't a channel name. Use lowercase letters, digits, `-` and "+
+				"`_`, starting with a letter or a digit, up to 64 characters, "+
+				"with no spaces around it. Write the name, like `engineering`, "+
+				"not `#engineering` or an id like `C_ENG`", u.Channel)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -1011,6 +1040,46 @@ func (u *Unit) validate(path Path) error {
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
 var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// unitChannel is what a unit's channel may look like.
+//
+// # A channel is an ADDRESS now, and it had no rule at all
+//
+// The field shipped with no validation of any kind and two consumers — a line
+// in the prompt, and the list a structured ask's `inform` channel is checked
+// against — so anything an author typed was passed through to a model as
+// prose: `#eng`, `C_BACKEND`, `Engineering (private)`. With
+// `chat.backend: chatlet` the engine MINTS the room this names, routes a
+// unit's wakes to it, and hands the name to a model as something to type back
+// into a tool call, which makes every one of those three a different failure:
+// a name nobody can address, a rendering of an id Chatlet has no
+// concept of, and a name no vendor would accept either.
+//
+// The set is the INTERSECTION of the three surfaces rather than Chatlet's own:
+// Mattermost's channel URL names are lowercase alphanumerics with
+// `-` and `_` up to 64 characters, Slack's are lowercase letters, digits, `-`
+// and `_` up to 80, and the engine's own name admits exactly that set too,
+// reaching a broker subject only as a digest. So one grammar serves all
+// three, a company can switch backends without rewriting its org chart — a
+// vendor company's `dev_ops` validates — and the characters an author is most
+// likely to add — the `#` that is a rendering rather than a name, an upper
+// case, a space — are refused where they are written rather than printed into
+// a prompt.
+//
+// 64 characters because that is the shortest of the three limits, and the one
+// that truncates rather than refusing is the one that would give two units the
+// same room.
+//
+// # And why it is not [entityID]
+//
+// The two look alike and differ in the first character on purpose. An id is
+// a KEY this engine mints and nobody reads, so it may as well start with a
+// letter everywhere it lands; a channel is an ADDRESS on somebody's chat
+// surface, where `2fa-rollout` is an ordinary room name a vendor company
+// already has. Folding the two into one pattern would either refuse that
+// company's real channel or let an id start with a digit, and the second is
+// a key [MintUnitID] would then have to stop prefixing.
+var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // MintUnitID is the id a unit gets when its document declares none: its name,
 // reduced to the key grammar [entityID] accepts.

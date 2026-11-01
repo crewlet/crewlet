@@ -265,7 +265,7 @@ func TestAPurgedRepositorysCheckWritesNothing(t *testing.T) {
 	}
 }
 
-// A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0052's contract for
+// A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0075's contract for
 // a Required table): an ending carrying a log names the attempt's
 // code_check_logs row and its object, spelled as the walk spells the row; an
 // ending carrying none names NOTHING — never a removal, since the join may keep

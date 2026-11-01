@@ -43,6 +43,7 @@ import {
   TableDateCell,
   TableTextCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   PlusGlyph,
@@ -57,14 +58,14 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
 import type { ConfigReference, LogRefusal, QueryRefusal, SecretRow } from "~/protocol/index.ts";
@@ -98,7 +99,7 @@ function refusal(err: unknown): string {
   if (err.unauthorized) {
     // THE GRANT THE REFUSAL NAMED: "needs an operator token" sent a
     // signed-in person to find a credential they already held.
-    return needsWords("This", err.grants);
+    return authorityWords("This", err);
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -238,6 +239,8 @@ const PROVENANCE: Record<string, string> = {
   provision: "minted by an integration's provisioning pass",
   cli: "set with crewlet secrets set while its node's engine was stopped",
   "llm-login": "a coding CLI's login, stored by crewlet llm while its node's engine was stopped",
+  models:
+    "a model's credential, stored from Settings › Models once it signed the model in on a test call",
 };
 
 /**
@@ -252,6 +255,7 @@ const SOURCE_WORDS: Record<string, string> = {
   provision: "Provisioning pass",
   cli: "CLI",
   "llm-login": "CLI login",
+  models: "Models",
 };
 
 /** A source in words, or the engine's own word for one this build does not know. */
@@ -451,7 +455,7 @@ export function Secrets({ name }: { name?: string }) {
   /**
    * A row's click.
    *
-   * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy
+   * THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one copy
    * of which clicks mean elsewhere and reads a mouse event; the `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
@@ -462,7 +466,7 @@ export function Secrets({ name }: { name?: string }) {
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek],
   );
@@ -651,6 +655,7 @@ export function Secrets({ name }: { name?: string }) {
               },
               {
                 key: "at",
+                align: "right",
                 header: "Updated",
                 shrink: true,
                 drop: 4,

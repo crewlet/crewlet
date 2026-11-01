@@ -1,0 +1,1125 @@
+package worklet_test
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/worklet"
+)
+
+// readHarness is an applied estate with the reader over it.
+type readHarness struct {
+	*applyHarness
+	reader *worklet.Reader
+}
+
+func newReadHarness(t *testing.T) *readHarness {
+	t.Helper()
+	h := newApplyHarness(t)
+	// THROUGH THE FRAMEWORK, exactly as production does. A harness that
+	// read the rows directly would be testing a path nothing takes — and
+	// it is how `read_level` came to be a word in the answer rather than a
+	// property of it.
+	log, err := statelogtest.LocalReader(worklet.Domain{}, h.db,
+		statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
+	if err != nil {
+		t.Fatalf("local read authority: %v", err)
+	}
+	reader, err := worklet.NewReader(h.db.Reader(), log)
+	if err != nil {
+		t.Fatalf("tracker reader: %v", err)
+	}
+	return &readHarness{applyHarness: h, reader: reader}
+}
+
+// seed applies one task with the fields a case varies.
+func (h *readHarness) seed(id string, mutate func(*worklet.Task)) {
+	h.t.Helper()
+	task := newTask(id)
+	task.Key = "ENG-" + id
+	if mutate != nil {
+		mutate(&task)
+	}
+	if _, err := h.apply(taskRecord(id, worklet.OpCreate, task, nil),
+		time.Unix(1_700_000_100, 0).UTC()); err != nil {
+		h.t.Fatalf("seed %s: %v", id, err)
+	}
+}
+
+func (h *readHarness) ask(kv map[string]any) worklet.Answer {
+	h.t.Helper()
+	q, err := worklet.ParseQuery(worklet.MapParams(kv), wednesday, berlin)
+	if err != nil {
+		h.t.Fatalf("ParseQuery(%v): %v", kv, err)
+	}
+	// A HARNESS IS A SURFACE TOO, and an absent level resolves to the
+	// surface's own default rather than to a fourth state.
+	if q.Level == "" {
+		q.Level = statelog.ReadStale
+	}
+	answer, err := h.reader.Tasks(h.t.Context(), q, wednesday)
+	if err != nil {
+		h.t.Fatalf("Tasks(%v): %v", kv, err)
+	}
+	return answer
+}
+
+func ids(a worklet.Answer) []string {
+	out := make([]string, 0, len(a.Rows))
+	for _, row := range a.Rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
+// A DEFAULT ANSWER EXCLUDES FINISHED, ARCHIVED AND REMOVED WORK.
+//
+// Three defaults, and each one is what a person means by "the board": a task
+// that is done is out of the way, a task in an archived project is out of the
+// company, and a removed task is out of existence — the last by ONE predicate
+// for its whole life, at any age, which is what makes a restore answer exactly
+// what it answered before.
+func TestTheDefaultAnswerIsOpenLiveWork(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("open", nil)
+	h.seed("done", func(task *worklet.Task) {
+		task.Status, task.StatusGroup = worklet.StatusDone, worklet.GroupDone
+	})
+	h.seed("archived", func(task *worklet.Task) { task.Archived = true })
+
+	got := ids(h.ask(map[string]any{"container": "project:ENG"}))
+	if len(got) != 1 || got[0] != "open" {
+		t.Fatalf("the default answer is %v, want the one open live task", got)
+	}
+	if got := ids(h.ask(map[string]any{
+		"container": "project:ENG", "show_closed": "true",
+	})); len(got) != 2 {
+		t.Errorf("show_closed=true answers %v, want the open and the done one", got)
+	}
+	if got := ids(h.ask(map[string]any{
+		"container": "project:ENG", "archived": "only",
+	})); len(got) != 1 || got[0] != "archived" {
+		t.Errorf("archived=only answers %v", got)
+	}
+}
+
+// ARCHIVING A PROJECT TAKES ITS TASKS OUT OF THE DEFAULT ANSWER, THROUGH A
+// JOIN.
+//
+// The alternative — copying the project's flag onto every one of its tasks —
+// is the one unbounded cross-object write this design removed: archiving a
+// project with ten thousand tasks would be ten thousand rows written by one
+// commit, on every node, and a scope term nobody could bound.
+func TestArchivingAProjectHidesItsTasksWithoutRewritingThem(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	project := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			V: worklet.RecordVersion, OpID: "eng-live",
+			Subject: worklet.ProjectSubject("ENG"), Op: worklet.OpCreate,
+			Writer: "node-a", Scope: worklet.ScopeSet{Subject: true},
+		},
+		Kind: worklet.ChangeProjectCreated,
+		Mutation: mustJSON(worklet.Project{
+			V: worklet.DocumentVersion, Key: "ENG", Name: "Engineering",
+		}),
+	}
+	if _, err := h.apply(project, time.Unix(1_700_000_050, 0).UTC()); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	h.seed("live", nil)
+	if got := ids(h.ask(map[string]any{"container": "project:ENG"})); len(got) != 1 {
+		t.Fatalf("the task is not in the answer before the project is archived: %v", got)
+	}
+
+	archived := project
+	archived.OpID = "eng-archived"
+	archived.Op = worklet.OpPatch
+	archived.Mutation = mustJSON(worklet.Project{
+		V: worklet.DocumentVersion, Key: "ENG", Name: "Engineering",
+		Archived: true,
+	})
+	if _, err := h.apply(archived, time.Unix(1_700_000_060, 0).UTC()); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if got := ids(h.ask(map[string]any{"container": "project:ENG"})); len(got) != 0 {
+		t.Fatalf("archiving the project left %v in the default answer; the task "+
+			"row was never rewritten, so only the join can hide it", got)
+	}
+	if got := ids(h.ask(map[string]any{
+		"container": "project:ENG", "archived": "only",
+	})); len(got) != 1 {
+		t.Fatalf("archived=only answers %v, want the task in the archived "+
+			"project", got)
+	}
+}
+
+// A CANCELLED TASK IS IN THE RECENT WINDOW EXACTLY AS A DONE ONE IS.
+//
+// Because the finish stamp is by GROUP rather than by slug, `recent:` applies
+// to the whole finished set — which is what makes a board's Cancelled column
+// non-empty without a second field, and what stops "abandoned" work
+// disappearing from every view the moment it is abandoned.
+func TestARecentWindowHoldsCancelledWorkToo(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	finished := wednesday.Add(-2 * 24 * time.Hour)
+	for id, status := range map[string]worklet.Status{
+		"done": worklet.StatusDone, "cancelled": worklet.StatusCancelled,
+	} {
+		h.seed(id, func(task *worklet.Task) {
+			task.Status, task.StatusGroup = status, status.Group()
+			at := finished
+			task.DoneAt = &at
+		})
+	}
+	got := ids(h.ask(map[string]any{
+		"container": "project:ENG", "show_closed": "recent:168h",
+	}))
+	if len(got) != 2 {
+		t.Fatalf("the fortnight window answers %v, want both the done and the "+
+			"cancelled task", got)
+	}
+}
+
+// A DISJUNCTION IS A FILTER, ANDed WITH THE REST OF THE QUERY.
+//
+// It is the whole reason `any` exists: "assigned to me, or unassigned in my
+// project" is one question, and expressing it as two calls means the caller
+// merges, sorts and pages two answers by hand.
+func TestADisjunctionNarrowsRatherThanReplaces(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("mine", func(task *worklet.Task) { task.Assignee = "ana" })
+	h.seed("nobodys", nil)
+	h.seed("theirs", func(task *worklet.Task) { task.Assignee = "bo" })
+	h.seed("mine-done", func(task *worklet.Task) {
+		task.Assignee = "ana"
+		task.Status, task.StatusGroup = worklet.StatusDone, worklet.GroupDone
+	})
+
+	got := ids(h.ask(map[string]any{
+		"container": "project:ENG",
+		"any":       `[{"assignee":"ana"},{"assignee":"none"}]`,
+	}))
+	if len(got) != 2 {
+		t.Fatalf("the disjunction answers %v, want the assigned and the "+
+			"unassigned open task — and NOT the finished one, because the "+
+			"top-level default is ANDed with the branches", got)
+	}
+}
+
+// A FILTER VALUE NEVER REACHES A STATEMENT AS TEXT.
+//
+// The only things this package composes into SQL are its own column names,
+// from closed sets declared in the grammar. A filter that carried its value
+// into the statement would make a saved view a way to run a query nobody
+// wrote.
+func TestAHostileFilterValueIsBoundRatherThanComposed(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("safe", nil)
+	answer := h.ask(map[string]any{
+		"container": "project:ENG",
+		"assignee":  `' OR 1=1 --`,
+	})
+	if len(answer.Rows) != 0 {
+		t.Fatalf("a filter value that reads as SQL matched %d row(s); it is a "+
+			"handle nobody has, so the answer is empty", len(answer.Rows))
+	}
+	// And the table is still there, which a composed value would not
+	// guarantee.
+	if got := h.count("tracker_tasks"); got != 1 {
+		t.Fatalf("the estate holds %d tasks after a hostile filter", got)
+	}
+}
+
+// AN ANSWER CARRIES THE POSITION IT WAS READ AT.
+//
+// Two numbers, because a node applying nothing while its position advances
+// looks identical to one that is caught up — and a caller comparing a wake's
+// position against an answer's needs the one that says what this node HOLDS.
+func TestAnAnswerCarriesBothPositions(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("a", nil)
+	answer := h.ask(map[string]any{"container": "project:ENG"})
+	if !answer.Complete {
+		t.Fatalf("an answer from a node holding no deferred record is incomplete: "+
+			"%+v", answer.Incomplete)
+	}
+	if answer.Incomplete != nil {
+		t.Errorf("a complete answer carries an incompleteness report")
+	}
+}
+
+// A PAGE MINTS THE CURSOR THAT RESUMES IT, AND NEVER REPEATS A ROW.
+//
+// Keyset rather than offset: an offset re-reads and re-sorts every row it
+// skips, so page fifty costs fifty times page one — and a row inserted between
+// two polls shifts every page after it.
+func TestPagingResumesWithoutRepeatingOrSkipping(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		h.seed(id, nil)
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	for page := range 5 {
+		params := map[string]any{"container": "project:ENG", "limit": "2"}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		answer := h.ask(params)
+		for _, row := range answer.Rows {
+			if seen[row.ID] {
+				t.Fatalf("page %d repeated %s", page, row.ID)
+			}
+			seen[row.ID] = true
+		}
+		cursor = answer.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("paging saw %d of 5 tasks: %v", len(seen), seen)
+	}
+}
+
+// THE TOTAL HINT STOPS AT ITS CEILING RATHER THAN COUNTING ON.
+//
+// An exact total over an unbounded set is the one query in this grammar that
+// turns a sixty-second poll into a scan, and nobody reading a board needs the
+// difference between eleven thousand and twelve.
+func TestTheTotalHintIsBounded(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	for _, id := range []string{"a", "b", "c"} {
+		h.seed(id, nil)
+	}
+	answer := h.ask(map[string]any{"container": "project:ENG"})
+	if answer.TotalHint != 3 {
+		t.Fatalf("the total hint is %d for three tasks", answer.TotalHint)
+	}
+	if answer.TotalHint > worklet.TotalHintCeiling+1 {
+		t.Fatalf("the total hint counted past its ceiling")
+	}
+}
+
+// A READ'S SCOPE IS THE CLOSURE THE COVERAGE PROBE COMPARES AGAINST.
+//
+// A query with no container is the DOMAIN — not because it touches everything,
+// but because a read that cannot say what it is about is one every deferred
+// record concerns, and the honest answer to "is this complete" is then no.
+func TestAScopelessReadIsAboutTheWholeDomain(t *testing.T) {
+	t.Parallel()
+	narrow := worklet.ReadScope(worklet.Query{
+		Scope: worklet.Scope{Project: "ENG"},
+	})
+	wide := worklet.ReadScope(worklet.Query{})
+	if len(narrow.Paths) != 1 || narrow.Paths[0] == wide.Paths[0] {
+		t.Fatalf("a project read's scope is %v and a scopeless one's is %v; the "+
+			"two must differ or every read is about everything",
+			narrow.Paths, wide.Paths)
+	}
+	if !wide.Intersects(narrow) {
+		t.Fatal("the domain's scope does not cover a project's, so a deferred " +
+			"record about the whole domain would not be reported to a project " +
+			"read")
+	}
+}
+
+// THE EVERYTHING LEVEL IS ABOUT EVERY PROJECT.
+//
+// It reads the tasks of every project, so a record deferred in any one of them
+// is about it. Its closure used to be the workspace CONTAINER — where objects
+// with no project live — which covers no task at all, so a board holding an
+// undecodable record in one project reported itself complete.
+func TestTheEverythingLevelIsAboutEveryProject(t *testing.T) {
+	t.Parallel()
+	everything := worklet.ReadScope(worklet.Query{
+		Scope: worklet.Scope{Workspace: true},
+	})
+	for _, project := range []string{"ENG", "OPS", worklet.WorkspaceContainer} {
+		task := statelog.ScopeSet{Paths: []string{worklet.ScopeTerm{
+			Kind: worklet.TermObject, Container: project, ID: "a-task",
+		}.Path()}}
+		if !everything.Intersects(task) {
+			t.Errorf("the Everything level's scope %v does not cover a task in "+
+				"%s", everything.Paths, project)
+		}
+	}
+	// AND NOTHING BESIDE THE CONTAINERS: a record about one person is not
+	// about every board, or one undecodable profile edit would flag them all.
+	person := statelog.ScopeSet{Paths: []string{worklet.ScopeTerm{
+		Kind: worklet.TermFamily, ID: string(worklet.KindPerson),
+	}.Path()}}
+	if everything.Intersects(person) {
+		t.Errorf("the Everything level's scope %v covers the people family",
+			everything.Paths)
+	}
+}
+
+// A REMOVED TASK IS OUT OF EVERY ANSWER BUT THE TWO THAT ARE ABOUT REMOVALS.
+//
+// ONE predicate for a removed task's whole life, at any age — which is what
+// makes a removal an entirely local decision with no walk behind it, and a
+// restore at any age answer exactly what it answered before.
+func TestARemovedTaskIsOutOfEveryOrdinaryAnswer(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("live", nil)
+	h.seed("gone", func(task *worklet.Task) {
+		task.Removed = &worklet.Tombstone{
+			By: "ops", Kind: worklet.AuthorOperator, At: wednesday,
+		}
+	})
+	got := ids(h.ask(map[string]any{"container": "project:ENG"}))
+	if len(got) != 1 || got[0] != "live" {
+		t.Fatalf("the answer is %v; a removed task is out of it whatever else "+
+			"the query asks for", got)
+	}
+	// AND EVEN WHEN EVERY OTHER DEFAULT IS LIFTED, because the removal
+	// predicate is not one of them.
+	got = ids(h.ask(map[string]any{
+		"container": "project:ENG", "show_closed": "true", "archived": "true",
+	}))
+	if len(got) != 1 || got[0] != "live" {
+		t.Fatalf("lifting the other defaults answered %v; a removal is not a "+
+			"default a caller can turn off", got)
+	}
+}
+
+// THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS, AT EITHER SCOPE.
+//
+// `all:` is every membership at once — a task carrying two of three is not a
+// match, which is the one of the three that reads correctly while being wrong.
+// And each is asked of a project and of the whole company, because the two are
+// read from the tag rows differently ([worklet.Query] compiles a project's
+// filter to that project's tag rows): a task in another project carrying the
+// same tags is in the company's answer and never in the project's.
+func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("both", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
+	h.seed("one", func(task *worklet.Task) { task.Tags = []string{"api"} })
+	h.seed("none", nil)
+	h.seed("elsewhere", func(task *worklet.Task) {
+		task.Project, task.Key = "OPS", "OPS-1"
+		task.Tags = []string{"api", "v2"}
+	})
+
+	for name, tc := range map[string]struct {
+		filter                string
+		inProject, everywhere []string
+	}{
+		"any matches either": {"any:api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"all matches only both": {"all:api,v2", []string{"both"},
+			[]string{"both", "elsewhere"}},
+		"none matches neither": {"none:api,v2", []string{"none"},
+			[]string{"none"}},
+		"a bare list defaults to any": {"api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"one tag": {"v2", []string{"both"}, []string{"both", "elsewhere"}},
+		// THE SPELLING A PERSON OR A MODEL TYPES — a label, not the slug
+		// the rows hold — finds the same work.
+		"a label finds its slug": {"all:API,V2", []string{"both"},
+			[]string{"both", "elsewhere"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for container, want := range map[string][]string{
+				"project:ENG": tc.inProject, "workspace": tc.everywhere,
+			} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": tc.filter,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s in %s answered %v, want %v", tc.filter,
+						container, got, want)
+				}
+			}
+		})
+	}
+}
+
+// A LONG TAG LIST IS ANSWERED, NOT REFUSED.
+//
+// `all:` was one `t.id IN (…)` per slug ANDed together, an expression a level
+// deeper for every slug, and this engine refuses one past a hundred levels — so
+// a list of ninety-odd tags failed the read rather than answering it. A list
+// that long is longer than any task can carry ([worklet.MaxTagsPerTask]), so
+// `all:` of it answers nothing, and `any:` and `none:` of the same list answer
+// as they do for two tags, at either scope and in either subtask mode.
+func TestALongTagListIsAnsweredRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("tagged", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
+	h.seed("bare", nil)
+	tags := []string{"api", "v2"}
+	for i := len(tags); i < 3*worklet.MaxTagsPerTask; i++ {
+		tags = append(tags, fmt.Sprintf("tag-%03d", i))
+	}
+	list := strings.Join(tags, ",")
+	for mode, want := range map[string][]string{
+		"all:": nil, "any:": {"tagged"}, "none:": {"bare"},
+	} {
+		for _, container := range []string{"project:ENG", "workspace"} {
+			for _, subtasks := range []string{"collapsed", "separate"} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": mode + list, "subtasks": subtasks,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s of %d tags in %s (%s) answered %v, want %v",
+						mode, len(tags), container, subtasks, got, want)
+				}
+			}
+		}
+	}
+}
+
+// A PAGE BOUNDARY IS THE WHOLE ORDER, NOT THE ID.
+//
+// # The failure this exists to catch
+//
+// The cursor used to carry only the last row's id and the predicate was
+// `id > ?` — while the order is `<sort column>, id`. On a board ordered by
+// rank, every task with a later rank and a smaller id SORTS AFTER the boundary
+// and FAILS the predicate, so it is never returned; every task with an earlier
+// rank and a larger id passes it on every page, so it is returned again and
+// again. Both at once, silently: a caller paging its own board would see some
+// of its tasks twice and never see others, and nothing in the answer said so.
+//
+// The fixture is the shape that catches it — ranks and ids in OPPOSITE orders
+// — because any fixture where they agree passes with either implementation.
+func TestPagingAnOrderReturnsEveryRowExactlyOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// Ranks ascend while ids descend, so "after this rank" and "after
+	// this id" name disjoint sets.
+	const total = 9
+	for i := range total {
+		task := newTask(fmt.Sprintf("t-%d", total-i))
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	// BOTH DIRECTIONS. "After" in a descending order is a SMALLER value,
+	// and a keyset that compared the same way both ways would return the
+	// page BEFORE the boundary — every descending page repeating the
+	// first — which an ascending fixture cannot show.
+	for _, sort := range []string{"rank", "-rank", "-updated"} {
+		seen := map[string]int{}
+		cursor := ""
+		for page := 0; page < total+2; page++ {
+			params := map[string]any{
+				"container": "project:ENG", "sort": sort, "limit": "2",
+			}
+			if cursor != "" {
+				params["cursor"] = cursor
+			}
+			answer := r.ask(params)
+			for _, row := range answer.Rows {
+				seen[row.ID]++
+			}
+			if answer.NextCursor == "" {
+				break
+			}
+			cursor = answer.NextCursor
+		}
+
+		if len(seen) != total {
+			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
+				"boundary that compares a column the order does not sort by, "+
+				"or compares it the wrong way, drops rows on one side of it",
+				sort, len(seen), total)
+		}
+		for id, times := range seen {
+			if times != 1 {
+				t.Errorf("paging by %s returned task %s %d times; a keyset "+
+					"boundary returns each row exactly once", sort, id, times)
+			}
+		}
+	}
+}
+
+// A CURSOR BELONGS TO THE ORDER THAT MINTED IT.
+//
+// Resuming a rank-ordered page inside an update-ordered query would compute a
+// boundary against a column the query does not sort by — which drops rows
+// without saying so, and is the same defect as the one above wearing a
+// caller's mistake instead of ours.
+func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 3 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	first := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "rank,updated", "limit": "1",
+	})
+	if first.NextCursor == "" {
+		t.Fatal("the first page minted no cursor, so this case asserts nothing")
+	}
+	q, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
+		"container": "project:ENG", "sort": "rank", "cursor": first.NextCursor,
+	}), wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	// THE LEVEL IS THE SURFACE'S, and naming it here is what makes this
+	// case about the CURSOR: an unset level is refused by Tasks before the
+	// cursor is ever decoded, so a case that left it unset passed against
+	// any cursor rule at all, including none.
+	q.Level = statelog.ReadStale
+	if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
+		t.Fatal("a cursor minted by a two-column order was applied to a " +
+			"one-column one, which computes a boundary against a column the " +
+			"query does not sort by")
+	}
+}
+
+// A CURSOR WHOSE ROW HAS NO ID NAMES NO ROW, and is refused rather than
+// resumed.
+//
+// Every order ends in the task's id, which is never NULL, so the cursor's last
+// key is what makes it a place at all. Without one there is no arm past it —
+// "after nothing" is the empty set of arms — and resumed, a page would answer
+// nothing with no cursor and no error, which reads as the listing's end.
+func TestACursorThatNamesNoRowIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	cursor := base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"k":["a0",null],"o":"t.rank, t.id"}`))
+	if err := r.askErr(map[string]any{"container": "project:ENG",
+		"cursor": cursor}); err == nil || !strings.Contains(err.Error(), "names no row") {
+		t.Fatalf("a cursor with no id was answered (err %v), want a refusal "+
+			"saying it names no row", err)
+	}
+}
+
+// AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO.
+//
+// The arity check above passes for any two orders of equal width, and the
+// cursor's values are then bound against columns of a DIFFERENT TYPE — which
+// SQLite resolves by affinity rather than refusing. An `updated` cursor fed to
+// `sort=rank` returns rank's own first page again; a `rank` cursor fed to
+// `sort=updated` compares TEXT against INTEGER, which orders after every row,
+// so every page is the first. Both are silent.
+func TestACursorFromAnotherOrderOfEqualLengthIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 4 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	byUpdated := r.ask(map[string]any{
+		"container": "project:ENG", "sort": "updated", "limit": "2",
+	})
+	if byUpdated.NextCursor == "" {
+		t.Fatal("the first page minted no cursor, so this case asserts nothing")
+	}
+	for _, sort := range []string{"rank", "-updated"} {
+		q, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
+			"container": "project:ENG", "sort": sort,
+			"cursor": byUpdated.NextCursor, "limit": "2",
+		}), wednesday, berlin)
+		if err != nil {
+			t.Fatalf("ParseQuery: %v", err)
+		}
+		q.Level = statelog.ReadStale
+		if _, err := r.reader.Tasks(t.Context(), q, wednesday); err == nil {
+			t.Errorf("an `updated` cursor was accepted by sort=%s — same key "+
+				"count, different order, so the boundary is computed against "+
+				"a column that does not mean what the values in it mean", sort)
+		}
+	}
+}
+
+// PAGING A NULLABLE SORT RETURNS EVERY ROW EXACTLY ONCE, in both directions.
+//
+// `due` is nullable and a `sort=f.<slug>` term is a LEFT JOIN whose column is
+// NULL for every task that set no value — that join is LEFT precisely so those
+// tasks still appear. A keyset written with bare `>`, `<` and `=` is NULL for
+// every one of them: ascending, the page that ended on a valueless row matched
+// nothing and the list simply stopped; descending, `col < ?` excluded the NULL
+// rows at every page, so they were unreachable.
+func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedFields(t, r)
+
+	// HALF THE ROWS CARRY NO VALUE, and they are interleaved with the ones
+	// that do — a fixture where the valueless rows are all at one end
+	// passes against an implementation that simply drops them.
+	const total = 9
+	for i := range total {
+		task := newTask(fmt.Sprintf("t-%d", i))
+		task.Key = fmt.Sprintf("ENG-%d", i)
+		if i%2 == 0 {
+			due := wednesday.Add(time.Duration(i) * 24 * time.Hour)
+			task.DueAt = &due
+			task.Fields = map[string]json.RawMessage{
+				"f-effort": json.RawMessage(fmt.Sprintf("%d", i)),
+			}
+		}
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	for _, sort := range []string{"due", "-due", "f.effort", "-f.effort"} {
+		params := map[string]any{"container": "project:ENG", "sort": sort}
+		paged := pageThrough(t, r, params, 2)
+		seen := map[string]int{}
+		for _, id := range paged {
+			seen[id]++
+		}
+		if len(seen) != total {
+			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
+				"boundary that is NULL for a row with no value ends the list "+
+				"where it should have carried on", sort, len(seen), total)
+		}
+		for id, times := range seen {
+			if times != 1 {
+				t.Errorf("paging by %s returned %s %d times", sort, id, times)
+			}
+		}
+		// AND IN THE ORDER ONE READ DRAWS: a resume that read the NULL tail
+		// before the values beyond the cursor returns every row once and
+		// puts the undated ones in the middle of the list.
+		if whole := ids(r.ask(withKey(params, "limit", "100"))); !slices.Equal(paged, whole) {
+			t.Errorf("paging by %s answers\n%v\nwhere one read answers\n%v",
+				sort, paged, whole)
+		}
+	}
+}
+
+// PAGING AN ORDER RETURNS EVERY ROW ONCE, IN THE ORDER ONE READ DRAWS.
+//
+// A later page resumes after the last row of the one before it, as the arms
+// of the order read in turn ([keyset]): the rows tied with that row on every
+// column and later by id, then those tied on all but the last, and so on out
+// to the rows past it on the first column. A tie arm that dropped its id bound
+// repeats the rows the page before already returned, one that was left out
+// skips the rest of the tie, and arms read out of turn put a page's rows out
+// of order — each only for a caller who pages, and only where a boundary falls
+// INSIDE a tie, which a fixture of distinct values never reaches.
+//
+// So the fixture is ties ([tiedCompany]), read in every order of
+// [tiedOrders] two and three rows at a time, so a boundary falls inside a tie
+// and at its end, and the pages concatenated must be one read's answer
+// exactly.
+func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := tiedCompany(t)
+	for name, params := range tiedOrders {
+		t.Run(name, func(t *testing.T) {
+			whole := ids(r.ask(withKey(params, "limit", "100")))
+			if len(whole) < 4 {
+				t.Fatalf("one read answers %v, too few rows for a page "+
+					"boundary to fall inside anything", whole)
+			}
+			for _, size := range []int{2, 3} {
+				if paged := pageThrough(t, r, params, size); !slices.Equal(paged, whole) {
+					t.Errorf("paging %d at a time answers\n%v\nwhere one read "+
+						"answers\n%v", size, paged, whole)
+				}
+			}
+		})
+	}
+}
+
+// tiedOrders is every order [tiedCompany] is read in by the cases that walk
+// an order through its ties: a board's own, the update order in a project and
+// the company's, spend in both, mixed-direction orders of several columns, an
+// order no index serves, and the trash in every subtask mode and by removal.
+var tiedOrders = map[string]map[string]any{
+	"the board":               {"container": "project:ENG"},
+	"recently updated":        {"container": "project:ENG", "sort": "-updated"},
+	"by spend":                {"container": "project:ENG", "sort": "-spend_tokens"},
+	"by priority then update": {"container": "project:ENG", "sort": "priority,-updated"},
+	"by due then title":       {"container": "project:ENG", "sort": "-due,title"},
+	"by title":                {"container": "project:ENG", "sort": "title"},
+	"the workspace":           {},
+	"by spend everywhere":     {"sort": "-spend_tokens"},
+	"the trash":               {"container": "project:ENG", "removed": "true"},
+	"the trash, flat":         {"container": "project:ENG", "removed": "true", "subtasks": "separate"},
+	"the trash everywhere":    {"removed": "true", "subtasks": "separate"},
+	"the trash by removal":    {"removed": "true", "sort": "removed", "subtasks": "separate"},
+}
+
+// tiedCompany is a project whose tasks tie on almost every column an order
+// can sort by: one instant every write is stamped with, spend that is zero for
+// all but two tasks, a handful of priorities, due dates with repeats and none
+// at all, and titles with repeats — and in the trash, a subtree removed at one
+// instant beside a task removed alone.
+func tiedCompany(t *testing.T) *roundTrip {
+	t.Helper()
+	r := newRoundTrip(t)
+	priorities := []worklet.Priority{worklet.PriorityHigh, worklet.PriorityNormal,
+		worklet.PriorityNormal, worklet.PriorityLow}
+	for i := range 9 {
+		task := newTask(fmt.Sprintf("t-%d", i))
+		task.Key = ""
+		task.Priority = priorities[i%len(priorities)]
+		task.Title = []string{"alpha", "beta", "alpha"}[i%3]
+		if i%3 != 0 {
+			due := wednesday.Add(time.Duration(i%2) * 24 * time.Hour)
+			task.DueAt = &due
+		}
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	for i, id := range []string{"t-3", "t-6"} {
+		if _, err := r.writer.RecordTurn(t.Context(), fmt.Sprintf("turn/run-%d/dispatch", i),
+			worklet.TurnRecord{
+				Task: id, Seat: "dev", TurnID: fmt.Sprintf("run-%d", i),
+				Trigger: "work_item", Outcome: "done", Phases: []string{"execute"},
+				Spend: worklet.TurnSpend{Turns: 1, Input: 900, Output: 100},
+			}); err != nil {
+			t.Fatalf("RecordTurn: %v", err)
+		}
+		r.drain()
+	}
+	// THE TRASH: a subtree removed together, at one instant, and a task
+	// removed alone.
+	seedTree(t, r, "t-root", "t-kid", worklet.StatusTodo, worklet.StatusTodo)
+	kid := newTask("t-kid2")
+	kid.Key = ""
+	root := "t-root"
+	kid.Parent, kid.Depth = &root, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid2", kid, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	lone := newTask("t-lone")
+	lone.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-lone", lone, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-out", "t-root", "ENG",
+		true, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-lone-out", "t-lone", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	return r
+}
+
+// pageThrough reads a query to its end a page of size rows at a time and
+// answers every row in the order the pages returned them.
+func pageThrough(t *testing.T, r *roundTrip, params map[string]any, size int) []string {
+	t.Helper()
+	var out []string
+	cursor := ""
+	for range 100 {
+		page := withKey(params, "limit", strconv.Itoa(size))
+		if cursor != "" {
+			page = withKey(page, "cursor", cursor)
+		}
+		answer := r.ask(page)
+		out = append(out, ids(answer)...)
+		if answer.NextCursor == "" {
+			return out
+		}
+		cursor = answer.NextCursor
+	}
+	t.Fatalf("a hundred pages of %d and still a cursor: %v", size, out)
+	return nil
+}
+
+// A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT.
+//
+// Four of the decisions the compiler makes are not predicates anybody wrote —
+// they are the shape of the answer, applied by default: a removed task is out,
+// a finished one is out, an archived project's tasks are out, and a subtask
+// mode rewrites the predicate to be about roots. Compiled again inside a
+// branch, each emitted its DEFAULT and was ANDed inside the OR, so a top-level
+// `show_closed=true` was defeated by every branch's own open-only clause and
+// the disjunction answered a strictly smaller set than the flat form.
+func TestADisjunctionDoesNotReapplyTheAnswersOwnShape(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("open", func(task *worklet.Task) { task.Assignee = "bo" })
+	h.seed("done", func(task *worklet.Task) {
+		task.Assignee = "bo"
+		task.Status, task.StatusGroup = worklet.StatusDone, worklet.GroupDone
+	})
+
+	flat := ids(h.ask(map[string]any{
+		"container": "project:ENG", "assignee": "bo",
+		"show_closed": "true", "subtasks": "separate",
+	}))
+	viaAny := ids(h.ask(map[string]any{
+		"container": "project:ENG", "any": `[{"assignee":"bo"}]`,
+		"show_closed": "true", "subtasks": "separate",
+	}))
+	if len(flat) != 2 {
+		t.Fatalf("the flat form answers %v, want both tasks", flat)
+	}
+	if len(viaAny) != len(flat) {
+		t.Fatalf("the same predicate answers %v flat and %v as a disjunction "+
+			"— a branch is a predicate, and one that re-applies the answer's "+
+			"own defaults narrows what the caller asked for", flat, viaAny)
+	}
+}
+
+// AND THE KEYS THAT DECIDE THAT SHAPE ARE REFUSED INSIDE A BRANCH.
+//
+// They are the same decision at every branch or they are incoherent, so the
+// place to say them is the query. Refusing the key is only half of it — the
+// other half is that the absent key must not resolve to its default inside the
+// branch either, which is what the case above asserts.
+func TestABranchMayNotCarryTheAnswersOwnShape(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{
+		"removed", "archived", "show_closed", "subtasks",
+		"read_level", "max_lag_seconds", "max_lag_seq", "min_position",
+	} {
+		branch := `[{"assignee":"bo","` + key + `":"true"}]`
+		if _, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
+			"any": branch,
+		}), wednesday, berlin); err == nil {
+			t.Errorf("a branch carrying %q was accepted — it is about the "+
+				"answer rather than about the rows", key)
+		}
+	}
+	// AND AN EMPTY BRANCH IS REFUSED AT THE COMPILE, because it selects
+	// every task and makes every other branch decoration.
+	h := newReadHarness(t)
+	h.seed("one", nil)
+	q, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
+		"container": "project:ENG", "any": `[{}]`,
+	}), wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	_, err = h.reader.Tasks(t.Context(), q, wednesday)
+	if err == nil {
+		t.Fatal("an empty branch was accepted, and it selects every task")
+	}
+	// AND IT IS REFUSED BY NAME, not by SQLite choking on `()`. A syntax
+	// error names a statement the caller never wrote and cannot fix; this
+	// one names the branch.
+	if !strings.Contains(err.Error(), "any branch 0") {
+		t.Errorf("an empty branch was refused as %q, which does not say which "+
+			"branch is empty or why", err)
+	}
+}
+
+// THE ROW'S OVERDUE FLAG IS THE FILTER'S OWN PREDICATE.
+//
+// `due=overdue` compiles to "before midnight today, in the COMPANY's zone,
+// and still open". The row's flag was compared against `time.Now()` instead —
+// two different thresholds on two different clocks — so a task due at 09:00
+// today was rendered overdue from 09:01 by every list while `?due=overdue`
+// excluded it all day, and a screen showing both contradicted itself on one
+// row. The field exists precisely so a renderer never re-derives the
+// predicate differently.
+func TestTheOverdueFlagIsTheOverdueFilter(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+
+	// DUE EARLIER TODAY — past this process's clock, but not past
+	// midnight, which is exactly where the two predicates part company.
+	earlier := wednesday.Add(-3 * time.Hour)
+	h.seed("today", func(task *worklet.Task) { task.DueAt = &earlier })
+	// AND ONE GENUINELY OVERDUE, so the case is not passing against a
+	// reader that simply never sets the flag.
+	yesterday := wednesday.Add(-30 * time.Hour)
+	h.seed("yesterday", func(task *worklet.Task) { task.DueAt = &yesterday })
+
+	all := h.ask(map[string]any{"container": "project:ENG"})
+	flagged := map[string]bool{}
+	for _, row := range all.Rows {
+		flagged[row.ID] = row.Overdue
+	}
+	filtered := map[string]bool{}
+	for _, row := range h.ask(map[string]any{
+		"container": "project:ENG", "due": "overdue",
+	}).Rows {
+		filtered[row.ID] = true
+	}
+	for id, isFlagged := range flagged {
+		if isFlagged != filtered[id] {
+			t.Errorf("task %s carries overdue=%v on its row and %v in "+
+				"?due=overdue — the row's flag and the filter are one "+
+				"predicate or a renderer showing both contradicts itself",
+				id, isFlagged, filtered[id])
+		}
+	}
+	if !flagged["yesterday"] {
+		t.Error("a task due yesterday is not flagged overdue, so this case " +
+			"would pass against a reader that never sets the flag at all")
+	}
+}
+
+// A ROW CARRIES ITS TYPE, on a flat answer and in a board's column alike.
+//
+// The type was on the document and on no row, so a board could group BY a
+// value its cards could not SHOW: every card drew as the same kind of thing,
+// a column headed "bug" held rows that said nothing about being one, and the
+// only way to draw the icon was a document read per card.
+func TestARowCarriesItsType(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("bug", func(task *worklet.Task) { task.Type = "bug" })
+	h.seed("chore", func(task *worklet.Task) { task.Type = "chore" })
+
+	flat := h.ask(map[string]any{"container": "project:ENG"})
+	got := map[string]string{}
+	for _, row := range flat.Rows {
+		got[row.ID] = row.Type
+	}
+	if got["bug"] != "bug" || got["chore"] != "chore" {
+		t.Fatalf("the flat rows carry types %v, want each task's own", got)
+	}
+
+	board := h.ask(map[string]any{"container": "project:ENG", "group_by": "type"})
+	column := groupOf(t, board, "bug")
+	if len(column.Rows) != 1 || column.Rows[0].Type != "bug" {
+		t.Errorf("the bug column carries %+v, want one row typed bug", column.Rows)
+	}
+}
+
+// A FILTER ON A PERSON FINDS THE WORK THE PERSON IS ON, AND NOTHING ELSE —
+// read from the person's own rows rather than by probing every task, at both
+// scopes and in both subtask modes, and answering what the probe answered: a
+// flat listing every task the person is on, a collapsed one the roots they
+// are on with their subtrees.
+func TestAPersonFilterFindsTheWorkThePersonIsOn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"a", "b", "c"} {
+		filedTask(t, r, id)
+	}
+	parent := "c"
+	sub := newTask("s")
+	sub.Key, sub.Parent = "ENG-s", &parent
+	if _, err := r.writer.CreateTask(t.Context(), "op-s", sub, nil); err != nil {
+		t.Fatalf("CreateTask s: %v", err)
+	}
+	r.drain()
+	for _, write := range []struct {
+		id    string
+		patch worklet.TaskPatch
+		kind  worklet.ChangeKind
+	}{
+		{"a", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"s", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"b", worklet.TaskPatch{Watchers: &[]string{"ana", "bob"}}, worklet.ChangeWatchers},
+		{"c", worklet.TaskPatch{Watchers: &[]string{"bob"}}, worklet.ChangeWatchers},
+	} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+write.id+string(write.kind),
+			write.id, "ENG", worklet.NoIfMatch, write.patch, write.kind, nil); err != nil {
+			t.Fatalf("UpdateTask %s: %v", write.id, err)
+		}
+		r.drain()
+	}
+	for _, scope := range []map[string]any{{}, {"container": "project:ENG"}} {
+		for _, c := range []struct {
+			params map[string]any
+			want   []string
+		}{
+			{map[string]any{"collaborator": "ana", "subtasks": "separate"}, []string{"a", "s"}},
+			{map[string]any{"collaborator": "ana"}, []string{"a"}},
+			{map[string]any{"watcher": "ana"}, []string{"b"}},
+			{map[string]any{"watcher": "ana,bob", "subtasks": "separate"}, []string{"b", "c"}},
+			{map[string]any{"watcher": "carol"}, []string{}},
+		} {
+			params := map[string]any{}
+			for key, value := range scope {
+				params[key] = value
+			}
+			for key, value := range c.params {
+				params[key] = value
+			}
+			got := ids(r.ask(params))
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("%v found %v, want %v", params, got, c.want)
+			}
+		}
+	}
+}
+
+// A LINKED PAGE'S FILTER IS THE TASKS THAT LINK THAT PAGE, read off the page's
+// own edges.
+//
+// The filter is answered from the reverse edge — the tasks whose relations
+// name the page as their other end — so it must be exactly those tasks, at a
+// project and at the workspace, flat and with subtasks rolled up, and a task
+// linking another page, or another task, is not one.
+func TestALinkedPageFilterIsTheTasksLinkingThePage(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-a", "t-b", "t-c", "t-d"} {
+		task := newTask(id)
+		task.Key = ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	r.relate("t-a", "s-1", worklet.RelationPage)
+	r.relate("t-c", "s-1", worklet.RelationPage)
+	r.relate("t-b", "s-2", worklet.RelationPage)
+	// AN EDGE OF ANOTHER KIND, which links a task rather than a page.
+	r.relate("t-d", "t-a", worklet.RelationLinked)
+
+	for name, params := range map[string]map[string]any{
+		"in a project":         {"container": "project:ENG", "linked_page": "s-1"},
+		"at the workspace":     {"linked_page": "s-1"},
+		"flat":                 {"linked_page": "s-1", "subtasks": "separate"},
+		"of a page none links": {"linked_page": "s-9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := []string{"t-a", "t-c"}
+			if params["linked_page"] == "s-9" {
+				want = []string{}
+			}
+			got := ids(r.ask(withKey(params, "sort", "title")))
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("linked_page=%v answers %v, want %v", params["linked_page"],
+					got, want)
+			}
+		})
+	}
+}

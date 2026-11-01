@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // VERIFY: an operator's question — does this node's cache of a repository
@@ -1088,8 +1089,8 @@ func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l 
 		case err != nil:
 			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(f.rel), err)
 		case v == hashDamaged && want.whole:
-			problems = append(problems, fmt.Sprintf("%s does not list the installed chain %v",
-				filepath.ToSlash(f.rel), strings.Fields(string(want.content))))
+			problems = append(problems, fmt.Sprintf("%s does not list the installed chain %s",
+				filepath.ToSlash(f.rel), words.And(strings.Fields(string(want.content)))))
 		case v == hashDamaged:
 			problems = append(problems, filepath.ToSlash(f.rel)+" fails its checksum")
 		}

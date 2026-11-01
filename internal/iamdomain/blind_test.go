@@ -114,7 +114,7 @@ func TestABlindCarriesNothingOfTheAddress(t *testing.T) {
 			"as structure", blind)
 	}
 	// AND IT CARRIES NOTHING OF THE ADDRESS. The whole point: this value
-	// is in every directory record on the log, in every node's rows and in
+	// is in every directory record on the log, in every data node's rows and in
 	// every trail row an invitation writes, in the clear.
 	for _, fragment := range []string{"sarah", "chen", "example", "@"} {
 		if strings.Contains(blind, fragment) {

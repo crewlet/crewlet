@@ -35,10 +35,15 @@
  * conflict it is.
  */
 
-import { classifyConfigRefusal, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import {
+  classifyConfigRefusal,
+  type ConfigRefusal,
+  type ConfigUnsettled,
+} from "~/protocol/configAnswer.ts";
 import { answerOf } from "~/protocol/configWrite.ts";
 import type { CharterMoved } from "~/contract/config.ts";
 import { rest } from "~/protocol/rest.ts";
+import type { ActivatedRevision } from "~/lib/nodeStanding.ts";
 import {
   charterOf,
   partOf,
@@ -68,8 +73,11 @@ export type CharterRead =
 
 /** What one write of the charter came to. */
 export type CharterWrite =
-  /** Stored; `epoch` is the one its revision activates at. */
-  | { readonly kind: "saved"; readonly epoch: number | null }
+  /**
+   * Stored; `activated` is the revision it stored and the epoch that activates
+   * at, as the answer names them, and null where it names neither.
+   */
+  | { readonly kind: "saved"; readonly activated: ActivatedRevision | null }
   /** The charter already said this: nothing was stored. */
   | { readonly kind: "unchanged" }
   /** The charter moved since it was read; this is what it says now. */
@@ -80,10 +88,15 @@ export type CharterWrite =
 /** What one save came to. */
 export type SaveOutcome =
   /**
-   * Stored. `epoch` is the one the revision activates at, or null where the
+   * Stored. `activated` is the revision it stored and the epoch that activates
+   * at — what the page follows this node's apply of it by — or null where the
    * save was settled by reading it back after its answer was lost.
    */
-  | { readonly kind: "saved"; readonly epoch: number | null; readonly summary: string }
+  | {
+      readonly kind: "saved";
+      readonly activated: ActivatedRevision | null;
+      readonly summary: string;
+    }
   /** The company already holds the draft: nothing was written. */
   | { readonly kind: "unchanged" }
   /** Somebody changed the part since the person started; `theirs` is what it says now. */
@@ -92,8 +105,11 @@ export type SaveOutcome =
   | { readonly kind: "none" }
   /** The engine refused the read or the write. */
   | { readonly kind: "refused"; readonly refusal: ConfigRefusal }
-  /** A write that got no answer, settled by a read that still shows the base: nothing landed. */
-  | { readonly kind: "lost" }
+  /**
+   * A write whose outcome was unsettled (`refusal`, the last such answer),
+   * settled by a read that still shows the base: nothing landed.
+   */
+  | { readonly kind: "lost"; readonly refusal: ConfigUnsettled }
   /** The charter kept moving under every attempt. */
   | { readonly kind: "busy" };
 
@@ -134,9 +150,14 @@ export async function writeCharter(
   );
   const body = record(answer.body);
   if (answer.status === 200) {
-    return body.changed === false
-      ? { kind: "unchanged" }
-      : { kind: "saved", epoch: typeof body.epoch === "number" ? body.epoch : null };
+    if (body.changed === false) return { kind: "unchanged" };
+    return {
+      kind: "saved",
+      activated:
+        typeof body.revision_id === "string" && typeof body.epoch === "number"
+          ? { revisionId: body.revision_id, epoch: body.epoch }
+          : null,
+    };
   }
   // THE CHARTER MOVED, and the refusal carries it as it is now with its tag,
   // which is all the next decision needs.
@@ -178,23 +199,23 @@ export async function savePart(
   const read = await transport.read(signal);
   if (read.kind !== "charter") return read;
   let now: TaggedCharter = read;
-  let unanswered = false;
+  let unsettled: ConfigUnsettled | null = null;
   for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
     const stored = partOf(now.charter, part);
     if (samePart(stored, draft)) {
-      return unanswered
-        ? { kind: "saved", epoch: null, summary: summaryOf(part, base, draft) }
+      return unsettled
+        ? { kind: "saved", activated: null, summary: summaryOf(part, base, draft) }
         : { kind: "unchanged" };
     }
     if (!samePart(stored, base)) return { kind: "conflict", theirs: stored };
-    if (unanswered) return { kind: "lost" };
+    if (unsettled) return { kind: "lost", refusal: unsettled };
 
     const summary = summaryOf(part, stored, draft);
     const next = withPart(now.charter, part, draft);
     const outcome = await transport.write(next, now.etag, summary, signal);
     switch (outcome.kind) {
       case "saved":
-        return { kind: "saved", epoch: outcome.epoch, summary };
+        return { kind: "saved", activated: outcome.activated, summary };
       case "unchanged":
         return { kind: "unchanged" };
       case "moved":
@@ -207,12 +228,12 @@ export async function savePart(
         return outcome;
       case "refused": {
         if (outcome.refusal.kind === "conflict") return { kind: "busy" };
-        if (outcome.refusal.kind !== "unreachable") return outcome;
+        if (outcome.refusal.kind !== "unsettled") return outcome;
         // SETTLED BY A READ rather than reported as a guess.
         const settle = await transport.read(signal);
         if (settle.kind !== "charter") return settle;
         now = settle;
-        unanswered = true;
+        unsettled = outcome.refusal;
         attempt--;
         continue;
       }

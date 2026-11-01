@@ -20,6 +20,7 @@ import (
 const hierarchyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

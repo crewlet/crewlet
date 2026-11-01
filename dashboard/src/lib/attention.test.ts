@@ -24,6 +24,7 @@ import {
 } from "./attention.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { fmtDateTime } from "./format.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -100,6 +101,7 @@ describe("what it surfaces", () => {
       placement: "direct",
       task_description: "",
       question: "Which branch should I target?",
+      question_context: "",
       audience: "",
       audience_handles: [],
       audience_fallback: false,
@@ -282,8 +284,13 @@ describe("what it surfaces", () => {
       }),
     );
     expect(item?.title).toContain("monthly");
-    expect(item?.detail).toContain("2026-02-01T00:00:00Z");
+    // AS A PERSON READS A MOMENT, never the wire's timestamp.
+    expect(item?.detail).toContain(fmtDateTime("2026-02-01T00:00:00Z"));
+    expect(item?.detail).not.toContain("T00:00:00Z");
     expect(item?.at).toBe("2026-01-01T11:59:00Z");
+    // THE CEILING ITSELF, where it is raised, and no link to what was spent.
+    expect(item?.remedy).toEqual({ setting: "company_token_budget" });
+    expect(item?.path).toBeUndefined();
   });
 
   test("a seat refusing its own ceiling is raised against the seat", () => {
@@ -302,8 +309,9 @@ describe("what it surfaces", () => {
     );
     expect(items[0]?.id).toBe("seat-budget-a");
     expect(items[0]?.detail).toBe(
-      "10 of 100 tokens spent. Raise the limit, or wait until 2026-01-02T00:00:00Z.",
+      `10 of 100 tokens spent. Raise the limit, or wait until ${fmtDateTime("2026-01-02T00:00:00Z")}.`,
     );
+    expect(items[0]?.remedy).toEqual({ setting: "seat_token_budget", seat: "dev-a" });
     // The gate's stamp is the row's age rather than a clause of its sentence.
     expect(items[0]?.at).toBe("2026-01-01T11:59:00Z");
   });
@@ -345,7 +353,7 @@ describe("what it surfaces", () => {
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
-              message: "provider unreachable",
+              detail: "provider unreachable",
               phase: "execute",
               turn_id: "t1",
               at: "2026-01-01T11:59:00Z",
@@ -458,7 +466,7 @@ describe("where a condition is shown", () => {
     expect(WHERE_OF[stalled!.subject]).toBe("live");
     // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
     // condition nor the round.
-    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-c"]);
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["seat-state-c"]);
   });
 });
 
@@ -475,7 +483,7 @@ describe("ordering", () => {
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
-              message: "provider unreachable",
+              detail: "provider unreachable",
               phase: "execute",
               turn_id: "t1",
               at: "2026-01-01T11:59:00Z",
@@ -489,7 +497,9 @@ describe("ordering", () => {
     expect(severities).toEqual(
       [...severities].sort((a, b) => (a === b ? 0 : a === "critical" ? -1 : 1)),
     );
-    expect(items.some((i) => i.detail.includes("provider unreachable"))).toBe(true);
+    // THE ENGINE'S RAW MESSAGE rides along for the disclosure, never as the detail.
+    expect(items.some((i) => i.technical === "provider unreachable")).toBe(true);
+    expect(items.some((i) => i.detail.includes("provider unreachable"))).toBe(false);
   });
 
   test("every id is unique, so a list can key on it", () => {
@@ -544,7 +554,7 @@ describe("a stopped seat's row", () => {
         nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
       }),
     );
-    expect(items.find((i) => i.id === "stopped-devrel")?.detail).toBe(
+    expect(items.find((i) => i.id === "seat-state-devrel")?.detail).toBe(
       "The seat cannot take work: paused by Jane Founder.",
     );
   });
@@ -574,9 +584,79 @@ describe("a stopped seat's row", () => {
         ],
       }),
     );
-    expect(items.filter((i) => i.id.startsWith("stopped-")).map((i) => i.id)).toEqual([
-      "stopped-one",
-      "stopped-two",
+    expect(items.filter((i) => i.id.startsWith("seat-state-")).map((i) => i.id)).toEqual([
+      "seat-state-one",
+      "seat-state-two",
     ]);
+  });
+});
+
+// A MODEL AT ITS USAGE LIMIT IS ONE ROW FOR ITS ENTRY, NOT ONE PER SEAT, and a
+// seat's own row keeps its id whichever condition it is in. While the engine
+// retried a spent subscription every second, each seat flipped between a
+// "stopped" row and a "last turn failed" row under two ids, which a list keyed
+// on the id drew as one row leaving and another arriving.
+describe("a model at its usage limit", () => {
+  const limit = {
+    parked: true,
+    resets_at: "2026-01-01T12:30:00Z",
+    since: "2026-01-01T11:59:00Z",
+    cli: "claude-code",
+    subscription: true,
+  };
+  const failed = {
+    kind: "rate_limit",
+    detail: "llm chain exhausted after 1 providers (default)",
+    phase: "execute",
+    turn_id: "t1",
+    at: "2026-01-01T11:59:30Z",
+    event_id: "e1",
+  };
+
+  test("is one condition for the entry, and no row of each seat's", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "pm",
+            agent_id: "pm",
+            role: "PM",
+            activity: "stopped",
+            stopped_reason: "provider",
+            provider_limit: limit,
+            last_error: failed,
+          },
+          {
+            id: "qa",
+            agent_id: "qa",
+            role: "QA",
+            activity: "idle",
+            provider_limit: limit,
+            last_error: failed,
+          },
+        ],
+      }),
+    );
+    const decide = conditionsToDecide(items);
+    expect(decide.map((i) => i.id)).toEqual(["provider-limit-claude-code-plan"]);
+    expect(decide[0]?.title).toBe("Claude Code subscription limit reached");
+    expect(decide[0]?.remedy).toEqual({ setting: "model_providers" });
+  });
+
+  test("a seat's own row keeps its id between stopped and failed", () => {
+    const stopped = attentionQueue(
+      input({
+        agents: [
+          { id: "a", agent_id: "a", role: "A", activity: "stopped", stopped_reason: "unplaced" },
+        ],
+      }),
+    );
+    const failedTurn = attentionQueue(
+      input({
+        agents: [{ id: "a", agent_id: "a", role: "A", activity: "idle", last_error: failed }],
+      }),
+    );
+    expect(stopped.map((i) => i.id)).toEqual(["seat-state-a"]);
+    expect(failedTurn.map((i) => i.id)).toEqual(["seat-state-a"]);
   });
 });

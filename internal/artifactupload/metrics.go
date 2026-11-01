@@ -23,8 +23,9 @@ var Refusals = []string{
 	"invalid", "media_type", "content", "credential", "capability_unknown", "contract_unknown",
 	"edit_refused", "policy_refused", "upload_missing", "upload_mismatch", "upload_not_found",
 	"upload_expired", "upload_consumed", "uploads_outstanding", "turn_quota", "quota_exceeded",
-	"store_full", "version_moved", "carried_object_gone", "label_taken", "trashed", "not_found",
-	"conflict", "folder_not_found", "brand_contrast", "brand_incomplete", "other",
+	"store_full", "version_moved", "carried_object_gone", "label_taken", "labels_full", "source_taken",
+	"exists", "trashed", "not_found", "conflict",
+	"folder_not_found", "brand_contrast", "brand_incomplete", "other",
 }
 
 // reasonOf is a refusal's reason, from [Refusals].
@@ -81,6 +82,12 @@ func reasonOf(err error) string {
 		return "upload_consumed"
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
 		return "label_taken"
+	case errors.Is(err, artifactsdomain.ErrLabelsFull):
+		return "labels_full"
+	case errors.Is(err, artifactsdomain.ErrSourceTaken):
+		return "source_taken"
+	case errors.Is(err, artifactsdomain.ErrExists):
+		return "exists"
 	case errors.Is(err, artifactsdomain.ErrBrandContrast):
 		return "brand_contrast"
 	case errors.Is(err, artifactsdomain.ErrBrandIncomplete):
@@ -97,7 +104,7 @@ func reasonOf(err error) string {
 	case errors.Is(err, artifactsdomain.ErrConflict):
 		return "conflict"
 	case errors.Is(err, ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid),
-		errors.Is(err, artifactsdomain.ErrUploadStale), errors.Is(err, artifactsdomain.ErrSourceTaken),
+		errors.Is(err, artifactsdomain.ErrUploadStale),
 		errors.Is(err, artifactsdomain.ErrAgentCompanyShare), errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		return "invalid"
 	}

@@ -277,7 +277,7 @@ func UnreadyReasons() []UnreadyReason {
 func (r UnreadyReason) Valid() bool { return slices.Contains(UnreadyReasons(), r) }
 
 // PassesFill reports whether a walk that met r at the node it let fill a copy
-// ([GitQuery.Home], ADR-0059) lets the NEXT node of its order fill one
+// ([GitQuery.Home], ADR-0082) lets the NEXT node of its order fill one
 // instead. True where no copy that serves the read is coming on that node and
 // another node's fill may serve it: behind_config, which judges no seat until
 // the node's apply succeeds — however long a stuck node takes — and
@@ -295,7 +295,7 @@ func (r UnreadyReason) Valid() bool { return slices.Contains(UnreadyReasons(), r
 // read on each busy node, each evicting a warm one to make the room, and add
 // no capacity anywhere. So one repository's seat reads are served by the git
 // nodes holding a copy of it: its home, and any node a person's fetch, a push
-// or an earlier fill has warmed — a ceiling ADR-0059 states.
+// or an earlier fill has warmed — a ceiling ADR-0082 states.
 //
 // AN UNKNOWN REASON PASSES NOTHING — a newer build's, read by this one — so
 // the walk keeps its filler where it was, as every walk did before the

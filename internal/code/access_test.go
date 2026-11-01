@@ -274,7 +274,7 @@ func TestGrantsFollowTheChart(t *testing.T) {
 
 	// A PERSON'S STANDING READS NO CHART, AND NO VISIBILITY: a bound
 	// credential maintains, one bound to nobody reads — with a roster and
-	// without one, on a company repository and on a unit one (ADR-0058:
+	// without one, on a company repository and on a unit one (ADR-0081:
 	// visibility narrows seats only).
 	for _, roster := range []code.Roster{r, nil} {
 		for _, repo := range []code.RepoRef{orphan, unitOnly(orphan), unitOnly(platform)} {
@@ -320,7 +320,7 @@ func TestAVisibilityThisBuildDoesNotKnowNarrows(t *testing.T) {
 	}
 }
 
-// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0055's rules need no chart, and
+// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0078's rules need no chart, and
 // a person's push must not depend on a node having read one.
 func TestAPersonsGrantAsksNoRoster(t *testing.T) {
 	t.Parallel()

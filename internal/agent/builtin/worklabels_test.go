@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // labelSurface is one surface's registry over the fake tracker, with the
@@ -35,14 +35,14 @@ func labelSurface(t *testing.T, trk *fakeTracker, operator bool) *tools.Registry
 }
 
 // declarationStopped is the error the tracker's EnsureTags answers when its
-// declaration's outcome is unknown: [tracker.ErrStepUnresolved], or
-// [tracker.ErrStepUnvouched] where this node's ledger cannot vouch for it.
+// declaration's outcome is unknown: [worklet.ErrStepUnresolved], or
+// [worklet.ErrStepUnvouched] where this node's ledger cannot vouch for it.
 func declarationStopped(unvouched bool) error {
-	sentinel := tracker.ErrStepUnresolved
+	sentinel := worklet.ErrStepUnresolved
 	if unvouched {
-		sentinel = tracker.ErrStepUnvouched
+		sentinel = worklet.ErrStepUnvouched
 	}
-	return fmt.Errorf("tracker: declare [regression] in ENG: tracker: whether "+
+	return fmt.Errorf("worklet: declare [regression] in ENG: worklet: whether "+
 		"the declaration of [regression] in ENG landed is unknown (operation "+
 		"step-op-of-the-declaration): %w", sentinel)
 }
@@ -225,22 +225,22 @@ func TestALabelDeclarationRefusedOverATagIsAnsweredUnderTheCallingTool(t *testin
 		want []string
 	}{
 		"a label the project already uses": {
-			err: fmt.Errorf("tracker: declare [regression] in ENG: %w",
-				&tracker.TagClash{Project: "ENG", Slug: "regression", Label: "regression",
-					Other: tracker.Tag{Slug: "regressions", Label: "Regression"}}),
+			err: fmt.Errorf("worklet: declare [regression] in ENG: %w",
+				&worklet.TagClash{Project: "ENG", Slug: "regression", Label: "regression",
+					Other: worklet.Tag{Slug: "regressions", Label: "Regression"}}),
 			want: []string{"was refused, and nothing was written",
 				"give `labels` regressions instead of regression",
 				`write_project on ENG with tags_add: [{"slug": "regression"`,
 				"make this call again"},
 		},
 		"a project with no room for another tag": {
-			err: fmt.Errorf("tracker: declare [regression] in ENG: %w",
-				&tracker.TagsFull{Project: "ENG", Slug: "regression"}),
+			err: fmt.Errorf("worklet: declare [regression] in ENG: %w",
+				&worklet.TagsFull{Project: "ENG", Slug: "regression"}),
 			want: []string{"was refused, and nothing was written",
 				"leave regression out of `labels`", "tags_archive"},
 		},
 		"a declaration that could not be read or written": {
-			err: errors.New("tracker: read ENG's tags: disk full"),
+			err: errors.New("worklet: read ENG's tags: disk full"),
 			want: []string{"was refused before ", "declaring its labels in ENG " +
 				"did not land", "Nothing was written"},
 		},

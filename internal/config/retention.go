@@ -115,6 +115,30 @@ const (
 	NatsObjectsMaxBytesFloor   int64 = 1 << 30
 	NatsObjectsMaxBytesCeiling int64 = 64 << 40
 
+	// ChatLogMaxBytesFloor and ChatLogMaxBytesCeiling bound the chat log's.
+	//
+	// THE FLOOR IS THE GIBIBYTE every corpus-sized log takes, because this
+	// is one: it grows with what the company says, as the mutation log
+	// grows with what it files, and below a gibibyte it is a window that
+	// refuses a message somebody typed within a month of a blocked trim at
+	// the declared census. Not the identity and usage logs' 64 MiB, which
+	// size a headcount and a census of objects a small company has few of.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a sizing: at the supported
+	// fifty thousand messages a day (about 75 MB of log a day at a
+	// kibibyte and a half a record) 256 GiB is about a decade of a
+	// COMPLETELY BLOCKED trim, which no backup gap or donor outage a
+	// retention gate tolerates comes near, and far above anything an unset
+	// value asks for.
+	//
+	// THE SAME NUMBER AS THE KNOWLEDGE BASE'S, NOT FOR ITS REASON. That one
+	// is a quarter of the mutation log's for the corpus ratio
+	// DerivedPagesLogDivisor states; this one follows from the census and a
+	// window, so the two are separate constants and either may move without
+	// the other.
+	ChatLogMaxBytesFloor   int64 = 1 << 30
+	ChatLogMaxBytesCeiling int64 = 256 << 30
+
 	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
 	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
 	//
@@ -146,6 +170,25 @@ const (
 	// or past the policy raises `backup_age` sooner), so the question is how
 	// long somebody has to act on a firing alarm, not how long until anyone
 	// notices.
+	//
+	// # And no barriers, which is a declaration rather than an omission
+	//
+	// A `linearizable` read appends a barrier record to the log of the
+	// domain it reads, so a log a seat's tools read at that level carries a
+	// barrier term: its domain's declared rate per seat (statelog.ReadModel)
+	// × seats × 365 days × the ≈ 140 bytes a signed barrier costs. The
+	// mutation log's is 125 × 100 × 365 × 140 B ≈ 639 MB a year at the
+	// reference company (docs/guides/retention.md) — more than this whole
+	// default. THIS log's is zero: no read of the identity estate takes a
+	// barrier, because every identity answer is a node's own rows with their
+	// lag beside them and a session not yet applied is waited for at the
+	// position its bearer states, so its domain declares a rate of zero in
+	// the engine's register and the term is 0 × 100 × 365 × 140 B = 0 bytes.
+	// The `census_drift` alarm holds the log to that zero and names this
+	// field on its first barrier: a reader that starts reading the estate
+	// at `linearizable` brings its own bytes into this arithmetic — 5.1 MB a
+	// year for every read a day each of the reference company's 100 seats
+	// makes.
 	//
 	// IT IS NOT 64 MiB. This log moves every morning, and at 64 MiB the
 	// pessimistic rate fills it in under three months — a window that
@@ -185,8 +228,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// one of the gibibytes every node reserves at the logs' smallest, which
-	// [StoreMaxBytesFloor] counts.
+	// one gibibyte of what every unset ceiling reserves at its smallest
+	// (see [StoreMaxBytesFloor]).
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -201,6 +244,49 @@ const (
 	DefaultUsageLogMaxBytes int64 = 1 << 30
 	UsageLogMaxBytesFloor   int64 = 64 << 20
 	UsageLogMaxBytesCeiling int64 = 64 << 30
+
+	// DefaultAssistantLogMaxBytes is the Dashboard Assistant's log ceiling,
+	// and AssistantLogMaxBytesFloor and AssistantLogMaxBytesCeiling bound it.
+	//
+	// # Half a gibibyte, and the arithmetic behind it
+	//
+	// THE LOG GROWS WITH HEADCOUNT, NOT WITH THE DISK, so unset takes a
+	// fixed default rather than a share of the volume, as the identity
+	// estate's and the usage log's do. A turn writes about eight records
+	// (the question, the answer, a few steps, a card, its opening and its
+	// close), sealed and signed at about 20 KiB together for an ordinary
+	// turn; the reference company's two hundred people asking ten questions
+	// a day write about 40 MB a day. 512 MiB is then about two weeks of a
+	// COMPLETELY BLOCKED trim, against a `trim_blocked` alarm raised after a
+	// day, so the question is how long somebody has to act on a firing
+	// alarm. The conversations themselves go after their retention whatever
+	// the log holds: the rows are purged by their own records.
+	//
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT. The engine scales an
+	// unset ceiling no lower than [MinDomainCeiling] in internal/engine, and
+	// holds a log that asked for less at what it asked, so a fixed 512 MiB
+	// was reserved in full on every fresh node: it raised the least a node
+	// boots in past the limit crewlet-operator gives the smallest data volume
+	// it admits, and a deployment sized for everything else stopped booting
+	// for a feature it may never turn on. The assistant's register entry
+	// therefore lets scaling take it down to this field's 64 MiB floor, which
+	// is all a fresh node has to find for it; the default is what it gets
+	// wherever the broker has the room. Two weeks of a blocked trim is still
+	// far past the alarm, and the identity estate's log, which also grows
+	// with headcount, takes the same 512 MiB.
+	//
+	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
+	// records: ten people write a twentieth of the reference rate, for which
+	// 64 MiB is a month. THE CEILING IS A TYPO GUARD: sixty-four times the
+	// default is far past any modelled company.
+	//
+	// AND NO SEAT'S BARRIERS: no seat reads this log, so its domain declares
+	// a read rate of zero in the engine's register (statelog.ReadModel), and
+	// its one linearizable reader is the object collector's pin, 25 a day:
+	// about 1.3 MB a year at the ≈ 140 bytes a barrier costs.
+	DefaultAssistantLogMaxBytes int64 = 512 << 20
+	AssistantLogMaxBytesFloor   int64 = 64 << 20
+	AssistantLogMaxBytesCeiling int64 = 64 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
@@ -234,9 +320,9 @@ const (
 	//
 	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
 	//     MEASURED for the reference company's tasks, comments, edits and
-	//     turns (internal/tracker's "What a day costs the log, measured",
+	//     turns (internal/worklet's "What a day costs the log, measured",
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
-	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
+	//     sized at, worklet.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
 	//   - the code log 7.5–10.1 MB a day: 3 000 pushes at 1 555 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
@@ -312,14 +398,14 @@ const (
 	// ask. A ceiling set in stream.code_log_max_bytes comes off the logs'
 	// share whole and is never scaled, while the derived ones are scaled
 	// together into what it leaves (the engine's fit), so on a first boot
-	// below about 596 GiB free half the mutation log's ask is more than half
+	// below about 621 GiB free half the mutation log's ask is more than half
 	// of what that log is created with beside it — at 100 GiB free, 12½ GiB
-	// beside a mutation log created at 7.7 GiB. Before the first boot the
+	// beside a mutation log created at 7.0 GiB. Before the first boot the
 	// half is about 53 % of what the mutation log is created with beside a
 	// derived code log — a little more than half, because the room the code
 	// log gives back lengthens the mutation log too — and no more than
-	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 5.2 GiB, beside which
-	// the mutation log is created at 10.4 GiB rather than 9.9
+	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 4.8 GiB, beside which
+	// the mutation log is created at 9.6 GiB rather than 9.1
 	// (docs/guides/replication.md, "What the code log's reservation costs",
 	// has the other volumes). Once the streams exist it is half the ceiling
 	// the mutation log's stream holds, its crewlet.statelog.log.max_bytes,
@@ -331,6 +417,12 @@ const (
 	// DerivedArtifactsLogDivisor is how much smaller an unset
 	// ArtifactsLogMaxBytes is than the mutation log's ceiling: FOUR, the
 	// knowledge base's ratio, because a publish is a page-rate event.
+	//
+	// Its log carries the mutation log's BARRIER TERM as well: a seat's
+	// artifact tools read at `linearizable`, so its domain declares the
+	// reference rate (statelog.ReadModel) and the term is 125 × 100 × 365 ×
+	// 140 B ≈ 639 MB a year at the reference company, which the 16 GiB a
+	// quarter of the mutation log's clamp gives it holds many times over.
 	DerivedArtifactsLogDivisor = 4
 
 	// DerivedArtifactDataLogDivisor is how much smaller an unset
@@ -341,8 +433,47 @@ const (
 	// the pool, and at HALF the mutation log's on a 64 GiB volume the
 	// vector changelog would be created below the corpus a model change
 	// republishes. A company whose pages write heavily sets the field: the
-	// bound it accepts is twice the artifacts log's for that reason.
+	// bound it accepts is twice the artifacts log's for that reason. Its
+	// barrier term is the artifacts log's: a seat's datastore tools read at
+	// `linearizable`, about 639 MB a year at the reference company.
 	DerivedArtifactDataLogDivisor = 4
+
+	// DerivedChatLogDivisor caps an unset ChatLogMaxBytes on a small
+	// volume: the chat log asks for its domain's excursion budget
+	// (`chatlet.ChatLogMaxBytes`, 8 GiB), but never for more than this
+	// fraction of what an unset mutation log derives from the same volume
+	// ([DerivedLogMaxBytes]) — a sixteenth of the free space, so the whole
+	// ask from 128 GiB free and 4 GiB on a 64 GiB volume.
+	//
+	// FOUR, MEASURED rather than borrowed from the knowledge base's ratio,
+	// although it is the same number. Every derived ask is scaled into one
+	// budget in proportion, so what the chat log asks for comes out of the
+	// vector changelog's room for a model change — the excursion that log
+	// is sized for, and one designed not to alarm. The reference company's
+	// fifth-year model change puts 7.9 GiB in the changelog, and
+	// `log_headroom` fires below a tenth of headroom, so the changelog has
+	// to be created at 8.8 GiB or more. A first boot under an embedded
+	// broker creates it there from about 100 GiB free with chat's ask
+	// capped at a quarter, from 102 at a third or with the whole 8 GiB
+	// asked, and from 92 with no chat log at all: of the three, the quarter
+	// costs the changelog least. None of them reaches it on a 64 GiB volume.
+	// The logs share 18 GiB there — half of what the broker's three quarters
+	// of the volume leave once the object bucket has reserved a quarter of
+	// them — and the changelog is created at 5.4 GiB with the quarter, 5.3
+	// at a third and 5.0 with the whole ask (5.9 with no chat log), under
+	// the change itself, so a volume that size sets
+	// `stream.tracker_vectors_max_bytes` (docs/guides/retention.md says to
+	// what).
+	//
+	// WHAT IT COSTS the chat log, stated: its horizon under a completely
+	// blocked trim on a small volume. Created at 1.4 GiB on that 64 GiB
+	// first boot, rather than 2.5 with the whole ask, it refuses ordinary
+	// writes after about 42 days of a fully blocked trim at the declared
+	// census rather than 78, and after about 17 at the supported 50 000
+	// messages a day rather than 32 — its read barriers counted in both.
+	// The log_headroom alarm names the log a tenth of the way before
+	// either, and from 128 GiB free the cap no longer binds.
+	DerivedChatLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
@@ -358,38 +489,37 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs' FLOORS sat inside with room beside them while there were
-	// fewer logs — and it is NOT the room a fresh node needs, which is
-	// COMPUTED from the register (engine.BrokerFloor) rather than written
-	// here, because the register moves and a figure stated here went stale
-	// each time it did: it was five while there were four domains, and the
-	// artifact logs and the code log took what the logs reserve at their
-	// smallest to 7.5 GiB — seven at a gibibyte (the tracker's, the vectors',
-	// the knowledge base's, the code log's and the two artifact logs' at the
-	// gibibyte scaling stops at, and the usage log's default) and the
-	// identity log's 512 MiB default. Every node reserves every one of them
-	// whatever it runs. So a limit between this floor and the computed one is
-	// valid here, `crewlet validate` says it is short, and the boot refuses it
-	// naming both figures; and the mailboxes, the event stream and every
-	// coordination bucket, which reserve nothing, grow against what is left.
+	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
+	// than what a node of a given configuration needs. Every node reserves
+	// every state-log domain's ceiling whatever it runs, and left unset the
+	// ten come to 8.5625 GiB at their smallest: the tracker's, the
+	// vectors', the knowledge base's, the code log's, the artifacts', the
+	// datastore's and the chat log's at the gibibyte scaling stops at, the
+	// usage log's 1 GiB default and the identity log's 512 MiB one (neither
+	// scaled below what it asks), and the assistant's 64 MiB, where its own
+	// scaling stops. The object store's nats bucket is reserved beside them.
+	// So a value this floor admits can be short of what a configuration
+	// boots in, and that is said where it can be acted on:
+	// engine.BrokerFloorFor computes the least a fresh node of the
+	// configuration reserves, `crewlet validate` and every start's advisories
+	// warn below it, and a refused reservation quotes it. Before the
+	// artifact, code, assistant and chat logs the floor was the logs' 4.5 GiB
+	// with room beside them, which is why it is six.
 	//
-	// NOT LOWER: at five gibibytes even the original four logs' unreserved
-	// streams would have half a gibibyte, so a document `crewlet validate`
-	// admits — every ceiling unset, which the cross-field check above cannot
-	// sum — would fail at boot on whichever stream the broker reached last,
-	// which is the failure that check exists to move forward to `crewlet
-	// validate`.
-	//
-	// THE COMPANY'S FILES are not in this floor either: where they live in
-	// the broker's own bucket, its reservation (store.objects.nats_max_bytes,
-	// or a share of this limit) is a term of the computed one.
+	// THE COMPANY'S FILES RESERVE A SHARE OF IT where they live in the broker:
+	// the object store's nats bucket is reserved before any log is sized, a
+	// quarter of the limit unless store.objects.nats_max_bytes sets it, so a
+	// limit holds the logs' reservations only beside the bucket's.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
-	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base, 1 TiB of code log), so anything past it is a unit
-	// mistake rather than a deployment.
+	// describe (1 TiB of mutation log, 2 TiB of vectors, 1 TiB of code log,
+	// 512 GiB of artifact datastore, 256 GiB each of knowledge base,
+	// artifacts and chat, 64 GiB each of usage and assistant, and 16 GiB of
+	// identity — about 5.4 TiB together), so anything past it is a unit
+	// mistake rather than a deployment. The object bucket's own bound is this
+	// one, and its reservation has to fit inside whatever limit is set,
+	// beside the logs'.
 	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
@@ -603,7 +733,8 @@ func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.CodeLogMaxBytes +
-		s.ArtifactsLogMaxBytes + s.ArtifactDataLogMaxBytes
+		s.ArtifactsLogMaxBytes + s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes +
+		s.ChatLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -682,7 +813,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 // wrote is one the shared-budget scaling may lower, and one an operator wrote
 // is not. It used to report whether the operator SET it — the inverse of
 // every other ceiling's second return, read by a register that asks the same
-// question of all five.
+// question of every log.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
 		return s.UsageLogMaxBytes, false
@@ -710,6 +841,20 @@ func (s Stream) CodeMaxBytes(free int64) (int64, bool) {
 	tracker, _ := s.LogMaxBytes(free)
 	return min(max(tracker*DerivedCodeLogNumerator/DerivedCodeLogDenominator,
 		CodeLogMaxBytesFloor), CodeLogMaxBytesCeiling), true
+}
+
+// AssistantMaxBytes is the Dashboard Assistant's log ceiling, and whether it
+// was derived: the operator's value, or the fixed default
+// ([DefaultAssistantLogMaxBytes]), which reports `true` because a value nobody
+// wrote is one the shared-budget scaling may lower.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, for [Stream.IamMaxBytes]'s reason: the log
+// grows with the company's headcount, which a volume has nothing to say about.
+func (s Stream) AssistantMaxBytes() (int64, bool) {
+	if s.AssistantLogMaxBytes > 0 {
+		return s.AssistantLogMaxBytes, false
+	}
+	return DefaultAssistantLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

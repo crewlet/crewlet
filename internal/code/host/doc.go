@@ -10,7 +10,7 @@
 // push's objects into the repository it runs in before any hook can refuse
 // them, and a refused push's objects would then be served, and connected
 // against, by a cache that is supposed to be a function of the rows
-// (ADR-0054). The one hook, proc-receive, relays every ref update to the
+// (ADR-0077). The one hook, proc-receive, relays every ref update to the
 // engine over a unix socket; the engine checks what only it can (a forced
 // update under a protection, a blob over the limit), uploads the push's one
 // pack bundle to the object store, and proposes the push to the repository's
@@ -74,7 +74,7 @@
 // A seat's or a person's change made through a tool — files committed, a
 // commit reverted or picked, a branch created or deleted — is BUILT on the
 // git node (Server.Write, write.go; the build, build.go) and LANDED as a push
-// (ADR-0062): judged on the copy synced to its caller's floor, and every
+// (ADR-0085): judged on the copy synced to its caller's floor, and every
 // refusal judged again once at the log's head before it is answered; built in
 // a scratch named by its push id, by git's own plumbing over exactly the
 // trees the change touches — never an index of the whole tree, which
@@ -293,7 +293,7 @@
 // object store is the code.Putter that code.StoreBundle — the one store of a
 // pack bundle, sealed on its way — is handed.
 //
-// What the admitted request may do is its GRANT (code.GrantOf, ADR-0058),
+// What the admitted request may do is its GRANT (code.GrantOf, ADR-0081),
 // built from ONE principal — the admission's principal(), the credential and
 // the seat the guard resolved it to, the same value the push's session and
 // proposal carry — and asked with no roster, since a person's grant reads no
@@ -310,7 +310,7 @@
 //
 // # A coding box is admitted by its run
 //
-// A seat's coding box is git's other client (ADR-0063), under /box/git/ on the
+// A seat's coding box is git's other client (ADR-0086), under /box/git/ on the
 // public listener beside its other two edges, with its RUN'S credential: git's
 // Basic user name BoxUser and a per-run token (BoxTokens, key domain
 // BoxKeyDomain) as the password, handed to the box, with the rest of its git

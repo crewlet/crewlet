@@ -69,9 +69,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var log = logging.Get("api.stream")
@@ -158,7 +158,7 @@ const (
 	// transfer or a purge. Routed to the artifact's room, and a HINT: the
 	// artifact, what moved, the head version and the record's position,
 	// never content, so a screen re-reads through the questions that decide
-	// what it may see. Pushed by every node from its own applier
+	// what it may see. Pushed by every data node from its own applier
 	// ([Service.ArtifactsMoved]).
 	KindArtifactChanged Kind = "artifact_changed"
 
@@ -210,6 +210,17 @@ var routes = map[Kind]Route{
 	KindArtifactData:     RouteRoom,
 	KindArtifactPresence: RouteRoom,
 
+	// The company's own chat, each frame to the viewers its room admits —
+	// decided by the chat hub per recipient, never fanned out by route.
+	KindChatPosted:            RouteViewer,
+	KindChatEdited:            RouteViewer,
+	KindChatDeleted:           RouteViewer,
+	KindChatReacted:           RouteViewer,
+	KindChatRoomChanged:       RouteViewer,
+	KindChatMembershipChanged: RouteViewer,
+	KindChatCursorMoved:       RouteViewer,
+	KindChatPresence:          RouteViewer,
+
 	// The answers, to the one client that asked.
 	KindResult: RouteDirect,
 	KindError:  RouteDirect,
@@ -222,7 +233,10 @@ var routes = map[Kind]Route{
 // asks no permission at all: the overview — the roster, what each seat is
 // doing, the org chart, spend, schedules, the tools, health — is everybody's
 // (ADR-0033). What a need says is whether the kind is everybody's, admin's,
-// or one app's.
+// or one app's — and an app's need IS the app's own name ([NeedFor]), so the
+// set of needs is derived from [iam.Apps] rather than kept beside it: an app
+// declared there is a need here, and an audience meets it, with no edit to
+// this package.
 type Need string
 
 const (
@@ -251,12 +265,39 @@ const (
 	// reaches only the sockets in the artifact's room, and a socket is in
 	// it only because its join was decided like reading the artifact
 	// (`get_artifact`) and stays decided ([rooms]); any resolved reader may
-	// be in a room, so no grant stands in front of the kind itself.
+	// be in a room, so no grant stands in front of the kind itself. It is
+	// NO APP'S NEED, the `artifacts` app's included ([NeedFor]): that app
+	// gates authoring an artifact and never reading one.
 	NeedArtifact Need = "artifact"
+	// NeedChatlet is Chatlet's: every chat frame — a committed record, a
+	// person's own read state, a room's presence — is the chat questions'
+	// rows, which their holders alone ask. It is the reader's half of
+	// what admits a chat frame; WHICH room is the chat hub's per-recipient
+	// decision on top of it.
+	NeedChatlet = Need(iam.GrantChatlet)
 )
 
-// Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedInbox, NeedArtifact}
+// Needs is the closed set: the four that are no app's, then one per app in
+// [iam.Apps]' order.
+var Needs = append([]Need{NeedEverybody, NeedAdmin, NeedInbox, NeedArtifact}, appNeeds()...)
+
+// NeedFor is the need of a kind one app's holders may read.
+func NeedFor(app iam.Grant) Need { return Need(app) }
+
+// appNeeds is one need per app.
+func appNeeds() []Need {
+	out := make([]Need, 0, len(iam.Apps))
+	for _, app := range iam.Apps {
+		out = append(out, NeedFor(app))
+	}
+	return out
+}
+
+// app is the app this need is, or false for one that is not an app's.
+func (n Need) app() (iam.Grant, bool) {
+	app := iam.Grant(n)
+	return app, app.IsApp()
+}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -292,6 +333,15 @@ var needs = map[Kind]Need{
 	KindArtifactChanged:  NeedArtifact,
 	KindArtifactData:     NeedArtifact,
 	KindArtifactPresence: NeedArtifact,
+
+	KindChatPosted:            NeedChatlet,
+	KindChatEdited:            NeedChatlet,
+	KindChatDeleted:           NeedChatlet,
+	KindChatReacted:           NeedChatlet,
+	KindChatRoomChanged:       NeedChatlet,
+	KindChatMembershipChanged: NeedChatlet,
+	KindChatCursorMoved:       NeedChatlet,
+	KindChatPresence:          NeedChatlet,
 }
 
 // NeedOf is who may read kind, and false for a kind that says nothing about
@@ -310,6 +360,9 @@ func NeedOf(kind Kind) (Need, bool) {
 func (n Need) Grants() []iam.Grant {
 	if n == NeedAdmin {
 		return []iam.Grant{iam.GrantAdmin}
+	}
+	if app, ok := n.app(); ok {
+		return []iam.Grant{app}
 	}
 	return nil
 }
@@ -359,8 +412,11 @@ type Audience struct {
 	resolved bool
 	admin    bool
 
-	// apps are the apps this reader uses, in [iam.Apps] order: every one of
-	// them for an administrator.
+	// apps are the apps this reader uses, in [iam.Apps]' order — every one
+	// for an administrator. A SET DERIVED FROM THE APPS rather than a field
+	// per app, so the next app is one line in internal/iam and not five
+	// edits here, any one of which forgotten is an audience that silently
+	// never receives that app's frames or never compares unequal.
 	apps   []iam.Grant
 	record string
 
@@ -403,21 +459,27 @@ func (a Audience) Receives(kind Kind) bool {
 	if !a.resolved {
 		return false
 	}
-	switch needs[kind] {
-	case NeedEverybody:
+	need, declared := needs[kind]
+	switch {
+	case !declared:
+		return false
+	case need == NeedEverybody:
 		return true
-	case NeedAdmin:
+	case need == NeedAdmin:
 		return a.admin
-	case NeedInbox:
+	case need == NeedInbox:
 		// THE ROOM DECIDES, by the watch's own decision: a socket
 		// reaches a frame of this need only through a watch of the seat
 		// that was allowed.
 		return true
-	case NeedArtifact:
+	case need == NeedArtifact:
 		// THE ROOM DECIDES, by the reader's role on the artifact: a
 		// socket reaches a frame of this need only through a join that
 		// was allowed.
 		return true
+	}
+	if app, ok := need.app(); ok {
+		return a.Has(app)
 	}
 	return false
 }
@@ -431,6 +493,10 @@ func (a Audience) Admin() bool { return a.resolved && a.admin }
 // build does not know) is no app anybody uses: [Audience.Admin] is the
 // question about admin.
 func (a Audience) Has(app iam.Grant) bool {
+	// THE ADMINISTRATOR'S APPS ARE ALREADY IN THE SET — [NewAudience] asks
+	// [iam.Principal.Can], which expands admin to every app — so an
+	// administrator is not a case here, and a name that is no app is no
+	// audience's, theirs included.
 	return a.resolved && app.IsApp() && slices.Contains(a.apps, app)
 }
 
@@ -463,8 +529,8 @@ func (a Audience) Record() string { return a.record }
 
 // Reach is what this audience may see of the seat with agentID's live state.
 func (a Audience) Reach(agentID string) livestate.Reach {
-	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantTracker),
-		Record: a.record}
+	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantWorklet),
+		Config: a.resolved && a.admin, Record: a.record}
 }
 
 // Equal reports whether two audiences receive exactly the same.
@@ -590,6 +656,21 @@ func (rows AgentRows) For(audience Audience) (string, any) {
 	return audience.variant(false), out
 }
 
+// SpendRollup is the live spend breakdown as the `tokens` push carries it: a
+// [Shaped] payload, whole for an admin and without its per-entry breakdown for
+// everybody else ([tokens.Rollup.WithoutEntries]), which is how the `tokens`
+// question answers too. The variant is named after which of the two it is,
+// `admin` or `overview`, as the org's is.
+type SpendRollup tokens.Rollup
+
+// For is the rollup as audience may read it.
+func (r SpendRollup) For(audience Audience) (string, any) {
+	if audience.Admin() {
+		return "admin", tokens.Rollup(r)
+	}
+	return "overview", tokens.Rollup(r).WithoutEntries()
+}
+
 // SandboxRows are the in-flight coding runs as a [Shaped] payload: each masked
 // to the reach its reader has over the seat that launched it.
 type SandboxRows []livestate.SandboxEntry
@@ -663,9 +744,11 @@ type Envelope struct {
 
 	// Detail is the refusal's own sentence, written FOR the caller: a
 	// `bad_params` refusal's (see [BadParamsError]) — which names the
-	// parameter to change and the values it accepts — or an `unavailable`
-	// one's state-log refusal words ([Unavailable.Detail]). ONE KEY for
-	// both, as the REST envelope carries both under `detail`; set through
+	// parameter to change and the values it accepts — a revision this node
+	// cannot open ([RevisionError]), which names the key or the document that
+	// brings it back, or an `unavailable` one's state-log refusal words
+	// ([Unavailable.Detail]). ONE KEY for every one, as the REST envelope
+	// carries each under `detail`; set through
 	// [Envelope.unavailable] on the second, so the two halves of an
 	// `unavailable` frame cannot be built apart. Omitted on every other
 	// frame — a query failure's own text can carry a database path, and
@@ -694,24 +777,19 @@ func (e *Envelope) unavailable(u Unavailable) {
 	e.Detail = httpjson.Sentence(u.Detail)
 }
 
-// Refused is the reason and the grants an `unauthorized` frame carries.
+// Refused is the reason and the grants an `unauthorized` frame carries, and
+// the role an artifact's refusal for a role names.
 //
 // GRANTS IS NEVER OMITTED from a refusal that has one, because an EMPTY list is
-// an answer — no capability would admit this caller, and what is missing is a
-// relation the chart does not hold — where an absent key would read as a
-// frame that did not say.
+// an answer — no capability would admit this caller, and what the deciding
+// rule asks is something else, which the reason names — where an absent key
+// would read as a frame that did not say. ROLE IS, on every refusal but the
+// one for a role below the verb's: it is the role to ask an artifact's owner
+// for, which no other refusal has.
 type Refused struct {
 	Reason string   `json:"reason"`
 	Grants []string `json:"grants"`
-}
-
-// NewRefused is the refusal a decision made, as the frame carries it.
-func NewRefused(reason authz.Reason, grants []iam.Grant) *Refused {
-	names := make([]string, 0, len(grants))
-	for _, g := range grants {
-		names = append(names, string(g))
-	}
-	return &Refused{Reason: string(reason), Grants: names}
+	Role   string   `json:"role,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.
@@ -855,6 +933,25 @@ func (c *Client) Posture() FramePosture {
 	return c.posture
 }
 
+// admits is the posture this client takes a push of kind under, and false
+// where its audience's need or its posture refuses the kind — the two filters
+// every push passes before it is shaped and encoded ([fanOut]), stated once so
+// a producer choosing its recipients one by one can ask them FIRST: a client a
+// frame will never reach is not worth a read to decide whether it may see it.
+func (c *Client) admits(kind Kind) (FramePosture, bool) {
+	// WHO MAY READ IT before what the posture delivers: a client the kind
+	// is not declared for is not in its audience whatever the route says.
+	// See [needs].
+	if !c.Receives(kind) {
+		return "", false
+	}
+	posture := c.Posture()
+	if posture.index() < 0 || !posture.Delivers(kind) {
+		return "", false
+	}
+	return posture, true
+}
+
 // SetPosture moves this client to p, reporting whether it took.
 //
 // AN INVALID POSTURE IS REFUSED AND THE CURRENT ONE KEPT. The zero value is
@@ -950,19 +1047,22 @@ func (c *Client) Reply(env Envelope) {
 // broadcast with it. The two ends genuinely race: the transport closes when its
 // socket dies while the ingest path is fanning out. Holding it is cheap because
 // nothing here blocks: every operation is a select with a default.
-func (c *Client) send(frame *Frame) {
+//
+// It reports whether the frame was queued: false for no frame and for a client
+// already closed.
+func (c *Client) send(frame *Frame) bool {
 	if frame == nil {
-		return
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return
+		return false
 	}
 	for {
 		select {
 		case c.out <- frame:
-			return
+			return true
 		default:
 		}
 		// Full. Take one off the front and try again. The take can only
@@ -1447,30 +1547,40 @@ func (h *Hub) Clients() int {
 // [RouteBroadcast] is every client; [RouteRoom] is the clients in the frame's
 // room and nobody else. [RouteDirect] is REFUSED here: a result carries the
 // correlation id of one client's question, and fanning it out would answer
-// every other tab's question with it. A kind with no route at all is refused
-// for the same reason: there is no safe default, and "everyone" is the unsafe
-// one.
+// every other tab's question with it. [RouteViewer] is refused too: its
+// recipients are chosen one by one by the chat hub, and a chat frame fanned
+// out by route is a private room on every tab. A kind with no route at all is
+// refused for the same reason: there is no safe default, and "everyone" is the
+// unsafe one.
 //
 // Never blocks on any client: each client's own queue absorbs the difference,
 // and one that has fallen behind loses its oldest frame rather than holding up
 // the publish path.
-func (h *Hub) Broadcast(env Envelope) {
+//
+// It answers how many clients it handed the frame to ([fanOut]).
+func (h *Hub) Broadcast(env Envelope) int {
 	route := RouteOf(env.Kind)
 	switch {
 	case !route.Valid():
 		log.Error("stream_unrouted_kind", "kind", env.Kind,
 			"hint", "add the kind to internal/api/stream's route table; a push "+
 				"with no route is dropped rather than sent to every client")
-		return
+		return 0
 	case route == RouteDirect:
 		log.Error("stream_direct_kind_broadcast", "kind", env.Kind,
 			"hint", "an answer belongs to the client that asked; use Client.Reply")
-		return
+		return 0
+	case route == RouteViewer:
+		log.Error("stream_viewer_kind_broadcast", "kind", env.Kind,
+			"hint", "a chat frame reaches the viewers its room admits, decided "+
+				"one by one by the chat hub; broadcast, it is a private room "+
+				"delivered to every open tab")
+		return 0
 	case route == RouteRoom && env.room == "":
 		log.Error("stream_room_frame_without_a_room", "kind", env.Kind,
 			"hint", "build it with PushSeat or PushArtifact; a room-routed frame "+
 				"with no room has no audience and is never fanned out to everyone")
-		return
+		return 0
 	}
 
 	h.mu.RLock()
@@ -1482,26 +1592,39 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 	h.mu.RUnlock()
 
-	// ONE ENCODE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one
-	// variant, and a [Shaped] or [RoomShaped] one as many as the readers it
-	// tells apart.
+	return fanOut(targets, env)
+}
+
+// fanOut hands env to every target its need, its posture and its room admit,
+// encoding it ONCE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one
+// variant, and a [Shaped] or [RoomShaped] one as many as the readers it tells
+// apart.
+//
+// THE ONE PATH A PUSH LEAVES BY, whoever chose the targets — [Hub.Broadcast]
+// from its route, and a producer that decides its recipients one by one from
+// its own — so who may read a kind, what a posture delivers, how a payload is
+// shaped and how often it is encoded are each decided in one place. A producer
+// with a send loop of its own would be a second answer to all four.
+//
+// It answers how many clients it handed the frame to: what a producer timing a
+// push to the sockets watching a change counts as the change pushed
+// (internal/objectives' change visibility), so a change nobody is watching is
+// no event.
+func fanOut(targets []*Client, env Envelope) int {
+	sent := 0
 	type encoding struct {
 		slot    int
 		variant string
 	}
 	cache := map[encoding]*Frame{}
 	for _, c := range targets {
-		// WHO MAY READ IT before how it is encoded: a client the kind is
-		// not declared for is not in its audience whatever the route
-		// says. See [needs].
-		if !c.Receives(env.Kind) {
+		// WHO MAY READ IT AND WHAT ITS POSTURE DELIVERS, before how it is
+		// encoded. See [Client.admits].
+		posture, admitted := c.admits(env.Kind)
+		if !admitted {
 			continue
 		}
-		posture := c.Posture()
 		slot := posture.index()
-		if slot < 0 || !posture.Delivers(env.Kind) {
-			continue
-		}
 		reader, member := c.reader(env.room, env.Kind)
 		if !member {
 			continue
@@ -1527,8 +1650,11 @@ func (h *Hub) Broadcast(env Envelope) {
 			}
 			cache[key] = frame
 		}
-		c.send(frame)
+		if c.send(frame) {
+			sent++
+		}
 	}
+	return sent
 }
 
 // reader is who c is as a push to room is shaped, and false where c must not

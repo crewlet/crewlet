@@ -88,7 +88,9 @@ func brokerAnswerServer(t *testing.T, status int, edit func(map[string]any)) (*h
 		edit(answer)
 	}
 	var asked atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// THE ENGINE'S OWN ANSWERS, marked as every answer it writes is: an
+	// unmarked one is a proxy's, which the client tells apart.
+	srv := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked.Add(1)
 		if r.URL.Path != "/fleet/broker" {
 			http.NotFound(w, r)
@@ -101,7 +103,7 @@ func brokerAnswerServer(t *testing.T, status int, edit func(map[string]any)) (*h
 		} else {
 			_, _ = w.Write([]byte(`{"error":"unauthenticated","code":"unauthenticated"}`))
 		}
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	return srv, &asked
 }
@@ -113,7 +115,7 @@ func brokerAnswerServer(t *testing.T, status int, edit func(map[string]any)) (*h
 // derives from the ACTIVE key, created 0600; the seed never reaches the
 // terminal; the invocation names the listener this host's node answered with.
 // An existing file is refused and left as it was. A node that is not this
-// host's — a -url naming a balancer or a peer — is refused before anything is
+// host's — an -api naming a balancer or a peer — is refused before anything is
 // written, since a loopback listener is its own host's; a node with no client
 // listener says why; a node that serves no API is asked nothing and points at
 // its broker_keys line; and a 401 names the variable the token comes from.
@@ -225,7 +227,7 @@ func TestTheBrokerCredentialIsTheActiveKeysOperatorKey(t *testing.T) {
 
 	// ASKED NOTHING, which is what lets it answer at all: the API address a
 	// node serving none would be asked at is refused (api.port is 0), and
-	// any -url names another node, which the check above refuses.
+	// any -api names another node, which the check above refuses.
 	t.Run("a node serving no API is asked nothing", func(t *testing.T) {
 		t.Parallel()
 		cfg, material := credentialTierA(t, "")

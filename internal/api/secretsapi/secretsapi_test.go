@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -82,8 +83,14 @@ func mountedAs(t *testing.T, opts secretsapi.Options, caller iam.Principal) http
 }
 
 // newService builds the surface, failing the test on a wiring mistake.
+//
+// A CASE THAT NAMES NO COMPANY writes into one that reads none of its
+// secrets, so it is about the store alone and re-activates nothing.
 func newService(t *testing.T, opts secretsapi.Options) *secretsapi.Service {
 	t.Helper()
+	if opts.Config == nil {
+		opts.Config = &company{}
+	}
 	svc, err := secretsapi.New(opts)
 	if err != nil {
 		t.Fatalf("secretsapi.New: %v", err)
@@ -253,6 +260,8 @@ func TestWithoutAKeyringTheSurfaceIsRefused(t *testing.T) {
 			ActiveKeyID: "k1"}, "Options.Cipher"},
 		{"no active key", secretsapi.Options{Fleet: coordmem.NewFleet(),
 			Cipher: cipherFor(t, "k1")}, "Options.ActiveKeyID"},
+		{"no config surface", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1"}, "Options.Config"},
 	} {
 		svc, err := secretsapi.New(c.opts)
 		if err == nil {
@@ -316,7 +325,7 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, _ := call(t, h, http.MethodPut, "/secrets/BIG",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("PUT = %d, want 413", code)
 	}
@@ -423,6 +432,37 @@ func (f *fakeIdentity) SealedKeys(context.Context) (iamdomain.SealedCount, error
 func (f *fakeIdentity) Reseal(context.Context) (iamdomain.ResealReport, error) {
 	f.resealed++
 	return f.report, f.err
+}
+
+// THE LISTING COUNTS THE ASSISTANT'S SEALED VALUES BY KEY, which a rotation
+// waits out rather than moves: an operator retires the old key on "nothing is
+// under it", and a listing that left the conversations out read nothing under
+// it while live conversations still were. A node given no assistant estate
+// says so with a null. Mutation: drop the count from the listing and the
+// first case fails.
+func TestAListingCountsTheAssistantsSealedValues(t *testing.T) {
+	t.Parallel()
+	opts := secretsapi.Options{Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+		ActiveKeyID: "k1", Now: func() time.Time { return clock },
+		Assistant: fakeAssistant{assistantdomain.SealedCount{
+			Values: secrets.KeyCounts{"k0": 4, "k1": 2}}}}
+	code, body := call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK ||
+		!strings.Contains(body, `"assistant_values":{"values":{"k0":4,"k1":2}}`) {
+		t.Errorf("the listing = %d %s, want the assistant's values counted by key", code, body)
+	}
+	opts.Assistant = nil
+	code, body = call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || !strings.Contains(body, `"assistant_values":null`) {
+		t.Errorf("a node with no assistant estate listed %d %s, want it said", code, body)
+	}
+}
+
+// fakeAssistant is an assistant estate holding count.
+type fakeAssistant struct{ count assistantdomain.SealedCount }
+
+func (f fakeAssistant) SealedKeys(context.Context) (assistantdomain.SealedCount, error) {
+	return f.count, nil
 }
 
 // A REKEY IS THE WHOLE ROTATION, THE IDENTITY ESTATE INCLUDED.
@@ -586,7 +626,7 @@ func TestAWriteThatNamesItsProvenanceIsRefused(t *testing.T) {
 		{"source=operator", "v", []string{`"source"`}},
 		{"source=api", "v", []string{`"source"`}},
 		{"by=ops&source=cli", "v", []string{`"by"`, `"source"`}},
-		{"source=operator", strings.Repeat("x", secretsapi.MaxValueBytes+1),
+		{"source=operator", strings.Repeat("x", secrets.MaxValueBytes+1),
 			[]string{`"source"`}},
 	} {
 		code, raw := call(t, h, http.MethodPut, "/secrets/A?"+tc.query, tc.body)
@@ -689,7 +729,7 @@ func TestAWriteRefusesANameNoReferenceCanEverName(t *testing.T) {
 func TestABadNameIsRefusedBeforeTheValueIsRead(t *testing.T) {
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, body := call(t, h, http.MethodPut, "/secrets/bad-name",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusBadRequest || !strings.Contains(body, "invalid_name") {
 		t.Fatalf("PUT with a bad name and an oversized body = %d %s, want 400 invalid_name",
 			code, body)
@@ -735,6 +775,11 @@ func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
 		// route's once the flag is read: admin as the listing is, so a
 		// caller holding every app is refused it naming admin too.
 		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", ""},
+		// AND SEVERAL AT ONCE, which is the same verb mounted on its
+		// own route: a caller holding every app is refused it naming
+		// admin, before the body is read.
+		{"revealing several values", http.MethodPost, "/secrets/reveal",
+			`{"names":["A"]}`},
 		{"a write", http.MethodPut, "/secrets/B", "two"},
 		{"a delete", http.MethodDelete, "/secrets/A", ""},
 		{"a rekey", http.MethodPost, "/secrets/rekey", ""},
@@ -820,6 +865,15 @@ func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
 			// with nothing under it.
 			if presentBody != absentBody {
 				t.Errorf("the two refusals differ:\n%s\n%s", presentBody, absentBody)
+			}
+			// AND THE SAME FOR SEVERAL AT ONCE, decided on the route
+			// before the body is read.
+			many, manyBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["A"]}`)
+			none, noneBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["NOWHERE"]}`)
+			if many != http.StatusForbidden || none != http.StatusForbidden ||
+				manyBody != noneBody {
+				t.Errorf("revealing several values answered %d and %d, want the "+
+					"one 403 for both:\n%s\n%s", many, none, manyBody, noneBody)
 			}
 		})
 	}

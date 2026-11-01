@@ -220,6 +220,32 @@ func Probe(dbPath string) error {
 	return nil
 }
 
+// Hold takes this process's claim on the node database at dbPath and KEEPS
+// it, answering the release that gives it back — [ErrLocked] naming the holder
+// where another process has it, as an open is refused.
+//
+// For a caller that has to exclude another PROCESS across a stretch in which
+// it holds no handle of its own. `crewlet run` is the one: it decides what the
+// engine boots on by opening this file, reading it and closing it again, and
+// opens it for the engine only once the broker is up — a gap of seconds, in
+// which an offline `crewlet config import` would replace the very row the boot
+// has already decided on. The claim is REFCOUNTED per process ([claimStore]),
+// so the engine's own open shares this one and the boot's release leaves the
+// engine holding the file with nothing in between.
+//
+// The release is idempotent, so a caller gives the claim back where it knows
+// it is done and defers it for every path that does not.
+//
+// Not for a SCRATCH store, which the engine deletes as it opens it: a discard
+// takes the path alone ([discard]) and is refused while a claim here stands.
+func Hold(dbPath string) (func(), error) {
+	lock, err := lockStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return sync.OnceFunc(lock.release), nil
+}
+
 // release drops this handle's share of the claim, freeing the lock when it
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.

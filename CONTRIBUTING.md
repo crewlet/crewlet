@@ -86,8 +86,9 @@ it; on Linux `make test` runs the same packages.
 
 **A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
-dashboard or running `internal/e2e`'s client replay does. Nothing in the tree
-pins a node version; CI installs the latest — see *Which node* under
+dashboard, running `internal/e2e`'s client replay or the probe of OpenCode's
+notes plugin does. Nothing in the tree pins a node version; CI installs the
+latest — see *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
 
@@ -107,7 +108,7 @@ make build        # or: go build ./...
 
 `make help` lists every target, and that is the whole setup — nothing to
 install beyond the prerequisites above. The engine embeds its own event
-stream (a NATS JetStream server) and its store is a local file it creates, so
+stream (a NATS JetStream server) and its store is two local files it creates, so
 `crewlet run` in an empty directory is a working company — there is no broker
 to operate and nothing to point a DSN at.
 
@@ -170,15 +171,31 @@ fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
 
+**Two of those gates judge formatting, at two standards.** `gofmt -l` over
+`go run ./internal/sourcetree/gofiles` is one of them; `golangci-lint run` is
+the other, because `.golangci.yml` enables the `gofmt` *formatter* too and its
+`simplify` pass is on — so a redundant composite-literal type passes the first
+and fails the second. `make fmt` repairs both (it runs `gofmt -s -w` over that
+same list); `golangci-lint fmt` repairs those plus the `goimports` grouping the
+lint job also enforces — hand it the captured list too, since on its own it
+steps over a dot-directory by name but walks into a nested checkout anywhere
+else. Reach for one of those two rather than plain `gofmt -w`, which cannot
+fix what the linter reports.
+
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), never a bare
 `npx vitest`. Vitest's forks pool writes every transformed module into a
 fresh directory under the system temp directory and never removes it — 16 to
-48 MB a run, which over a day of gate runs filled the volume the engine's
-embedded broker sizes its storage from. Both scripts run Vitest through
-`dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
-creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
-started without it.
+48 MB a run, which over a day of gate runs left 11.9 GB on the machine that
+runs the engine's suites. The Go suites keep their stores and broker streams
+under that same temp directory (`t.TempDir()`), and a write that finds the
+disk full fails a case for a reason nothing in the change explains. It used
+to fail every node boot first, while the test brokers still sized their
+storage from the volume's free space; they declare a fixed size now
+(`internal/queue/jetstream/brokertest`), which ended that failure and not the
+leak. Both scripts run Vitest through `dashboard/scripts/owned-tmpdir.mjs`,
+which points `TMPDIR` at a directory it creates and removes;
+`src/test/ownedTmpdir.test.ts` fails a run that was started without it.
 
 A dashboard case also fails on what it writes to `console.error` or
 `console.warn` (`dashboard/src/test/console.ts`, judged after every case by
@@ -384,6 +401,17 @@ What follows are the prerequisites that legitimately vary by machine.
   directory above the script holding a `go.mod` — rather than the directory it
   is run from.
 
+  `node` also runs the **OpenCode notes plugin** the engine embeds
+  (`internal/sandbox/codingagent/opencode_steer.js`): the plugin is
+  JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
+  drives it — as the engine writes it into a real box — under plain `node`,
+  through `opencode_steer_probe.mjs` beside it, against a stand-in of the
+  bridge's notes route and against a real bridge's. That package is in the
+  parallel half, so `make test`
+  requires node too and CI's `test (race)` job installs it, and its skip has
+  no allowlist entry either. It needs no npm either: the plugin imports
+  nothing.
+
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, the
   purity of `src/contract/`, and the MEASURED contrast of every colour token
@@ -544,11 +572,13 @@ What follows are the prerequisites that legitimately vary by machine.
   bundle](#a-dashboard-bump-brings-its-own-bundle).
 
   **Which node.** CI installs `latest` — the newest Node release, resolved by
-  setup-node when the job runs — in the `dashboard` job, the `gates` job and
+  setup-node when the job runs — in the `dashboard` job, the `test (race)` and
+  `gates` jobs and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. `gates` need not match either:
-  what it runs under plain node is the committed bundle, not a fresh build.
+  because it rebuilds the bundle that job diffs. `test (race)` and `gates` need
+  not match either: what they run under plain node is a committed file — the
+  plugin, the built bundle — not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -632,12 +662,17 @@ What follows are the prerequisites that legitimately vary by machine.
   make test-cross
   ```
 
-Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
+Tests never call real LLM APIs — use the fakes in `internal/providers`. A
+phase that offers tools plays its model as a scripted CLI run over the real
+tool session (`internal/providers/llm/llmtest`), never by calling the
+dispatcher around it: the socket, the tool list, the withheld answers and the
+release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
-`dashboard/src`, and `internal/e2e`'s client replay is
-`internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it. There is
-no top-level `tests/` tree.
+`dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
+beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
+is `internal/sandbox/codingagent/opencode_steer_probe.mjs`, beside the
+`opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
@@ -648,6 +683,56 @@ still fails at the first fixture and no case pays the whole migration sequence
 for nothing it asserts. Only a test whose subject is migration — the schema
 cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `store.OpenNode`.
+
+A test broker that reserves a fixed amount declares its size rather than take
+it from the runner's disk: a node fixture gives its stream a directory through
+`brokertest.StoreIn`, which sets `stream.store_max_bytes` to
+`brokertest.StoreMaxBytes` with it, a broker opened directly with a store
+directory sets `StoreMaxBytes: brokertest.StoreMaxBytes`, and an external one
+comes from `externaltest.Start`, whose account states the same limit. Left
+unset, an embedded broker's limit is three quarters of the free space on a
+volume every package beside it shares, and a fresh node reserves several
+gibibytes of it at boot, so a case passes on a roomy runner and fails on a
+fuller one whatever the change. Only a case whose subject is the derived
+limit, or a refusal below the floor, states a size of its own; one that
+reserves nothing, or only what the broker reports it has left, needs none.
+
+A case that starts an engine never runs below `internal/engine`'s
+`startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`
+holds every bootstrap to anyway. The lease TTL is also the seat watchdog's
+threshold, and once a host goes that long without a beat the watchdog ends the
+process with status 75: in a test, the whole binary and every case running in
+it, which no assertion reports. Two cases at three seconds sat one loaded
+runner from it, and the one meant to catch a start context cancelling the
+renewer could never fail, because the watchdog ended the binary first. So a
+case reads the renew or the deadline it is about off the host or its store
+(`seat.Host.MayStart`, a lease's deadline) rather than waiting for a lease to
+lapse, and a case whose subject is a fraction of a shorter TTL builds an
+`Engine` literal that starts no seat host.
+
+What a query plan says is read in `storetest`, once. The pinned driver may
+rewrite a correlated scalar subquery that selects one aggregate into a join
+against its whole child table, grouped by the correlation columns, and whether
+it does is chosen by its cost guess over a database nobody has ANALYZEd rather
+than by any line of the statement. So `storetest.Decorrelated` is the one check
+for it: the `scalar_subquery_<n>` operand the rewrite produces, never the
+`ephemeral_subquery_` index a FROM-clause subquery is joined through, held to
+the driver in both directions, so a driver bump that renames or stops the
+rewrite fails there before it blinds a gate. The tracker's and the knowledge
+base's index gates, search's vector and lexical gates and the chat prune's room
+read each refuse what `Decorrelated` flags.
+
+`Decorrelated` sits beside the one vocabulary every plan gate reads a plan
+through, over either estate's handle (`Handle`: the node's own file as much as
+the replicated estate): `PlanTree`, `Plan` and `Details`; `IndexesIn`, `Seeks`,
+`Walks`, `Sorts` and `ScansHeap`; `IndexesOn`; and `StatementLiterals`, the
+walk of the module's source a gate's completeness check makes, which fails when
+it read nothing outside the gate's own package. Two copies of how a plan is
+spelled are two gates a driver bump blinds one at a time, and a gate's private
+reading had already planned a copy of the statement it held, so a walk of every
+Go file of the module, tests included, refuses an `EXPLAIN QUERY PLAN` spelled
+in a literal anywhere but `storetest/plan.go`. Package `store`'s own files
+alone are exempt, since they cannot import the package that imports them.
 
 ### The end-to-end gates
 
@@ -809,6 +894,19 @@ deletes nothing itself.
   field, the file or the variable they have to change — not just what failed.
 - **Comments explain WHY**, and especially why an obvious alternative is
   wrong. The diff shows what the code does.
+- **A field holding words somebody else wrote is declared on the field**, as a
+  credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
+  (words at length: a body, a comment, a message, an excerpt) or
+  `untrusted:"name"` (a title, a name, a label), the tag `provenance.FieldTag`
+  names. The agent runtime's read tools refuse to answer a declared field they
+  did not fence or name the writers of,
+  `provenance.TestEveryDeclaredFieldHoldsText` holds every tag in the tree to
+  those two kinds and to a type that holds text, and `agent/builtin`'s sweep
+  (`TestEveryToolThatHandsOverSomebodysWordsIsFenced`) derives from the
+  declarations which tools hand such words to a model. So a new read type that
+  carries somebody's words declares them, or a tool answering it is never held
+  to the fence — see
+  [`adr/0040`](adr/0040-content-a-model-reads-carries-its-provenance.md).
 - **Every piece of state answers "who has to agree on it?"** — *this node
   alone* is the node's own database file; *every node, identically, derived
   from an ordered log* is the replicated estate, written only by a state log's
@@ -837,11 +935,12 @@ deletes nothing itself.
 Go's compiler proves the types line up. It cannot prove a backend is wired,
 and this codebase has two shapes where it is not:
 
-- **A config value with no implementation.** `role.sandbox.run_in: e2b`
-  parses, validates, appears in the generated schema — and the engine refuses
-  it at construction, because the company configured no `e2b:` backend. That
-  refusal is the right behaviour; what would be wrong is accepting it and
-  failing later, inside a turn that has already spent its rounds.
+- **A config value with no implementation.**
+  `providers.sandbox.default_run_in: e2b` parses and appears in the generated
+  schema — and validation refuses it while the company configures no `e2b:`
+  backend, because every executor run placed there would fail at its launch.
+  That refusal is the right behaviour; what would be wrong is accepting it and
+  failing later, inside every turn of every seat that runs there.
 - **A knob nothing reads.** `provisioning.group_webhook` was validated,
   documented and consulted by no code at all, so an operator setting it got
   the default and no error. A config field ships with the code that reads it,
@@ -1296,7 +1395,7 @@ the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
 every git node runs, so it is read as release surface. A floor pin only ever
 moves to a newer patch of its own series; raising a floor itself is a change to
 `gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
-[ADR-0057](adr/0057-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
+[ADR-0080](adr/0080-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
 pin changes the recipe too: git's own Makefile makes Rust mandatory from 3.0,
 which the report says when it names one.
 
@@ -1410,9 +1509,9 @@ an older build:
   a state-log record this build cannot read is deferred and kept, never
   dropped — except a gate record above the version it reads, or one whose
   envelope it cannot decode at all, which stops the applier rather than
-  apply it wrong — which is why every node names the version it reads on
-  its position heartbeat, a writer of a gate above the base version waits on
-  that census before publishing one, and an envelope never refuses what a
+  apply it wrong — which is why every data node names the version it reads
+  on its position heartbeat, a writer of a gate above the base version waits
+  on that census before publishing one, and an envelope never refuses what a
   newer build may add to it; and a bump of the seat-host lease protocol makes
   the newer node refuse to claim beside a live lower lease. That contract
   runs FORWARD, to the builds after this one, and never obliges this tree to
@@ -1442,8 +1541,8 @@ Links are checked, not trusted. `internal/docsgate` fails the suite on a
 relative link to a file that does not exist, on an `#anchor` that names no
 heading of its target (by GitHub's slug: rename a heading and every anchor to
 it goes red), and on a page under `docs/` that `docs/index.md` does not list.
-The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
-string the engine composes — are held by `dashboard/src/app/links.test.ts`
+The dashboard's own addresses (`#/worklet/ENG-42` in a guide, a tool skill or a
+string the engine composes) are held by `dashboard/src/app/links.test.ts`
 against the dashboard's route resolver, along with every pointer at a
 `dashboard-design.md` heading. And `internal/docslinks` reads every text file
 in the tree for an absolute `https://docs.crewlet.ai` link, failing on one the
@@ -1756,6 +1855,31 @@ what readers see in the generated release notes. See below.
 Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
+
+### Land a feature as a series of pull requests
+
+A feature lands as a sequence of pull requests, not as one large one. Plan the
+pieces before writing code. A piece doesn't have to deliver working
+functionality by itself, but `main` has to be able to take it as it is: clean,
+finished code with its own tests and docs, every gate green, no existing
+behaviour broken, and nothing half-wired for a user to trip over. Code that
+nothing calls until a later piece wires it in, or that sits behind config
+nothing sets yet, is fine. A stub or a `TODO` is not.
+
+- **Track the series in one issue.** It describes the feature and lists the
+  pieces as a checklist. Each pull request says `Part of #N`, and the last one
+  says `Closes #N`. Add each pull request's link to the checklist as it opens.
+- **Land one piece, then start the next on `main`.** Each pull request is
+  green in CI and titled as a release note on its own.
+- **If a piece is waiting on review, stack the next one on it.** Branch from
+  the previous piece's branch and open the pull request against that branch,
+  saying in the description which pull request it builds on. When the lower
+  one merges, rebase onto `main` and retarget. Stacking against another
+  branch needs that branch in this repository. From a fork, open the next
+  pull request against `main` and say which one it builds on; its diff
+  includes the lower piece until that one merges.
+- **The series is the change.** It is done when the last piece merges and
+  the issue closes.
 
 ## Reporting bugs and requesting features
 

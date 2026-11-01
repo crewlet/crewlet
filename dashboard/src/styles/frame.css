@@ -13,8 +13,9 @@
    52px bar, the drawer below `breakpoint.shell` — all of that is
    `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
    What is here is what the kit has no opinion about: the two rows the page
-   header draws, the peek as a column of the sheet, the Settings column, and
-   the sidebar's own few rows (the engine panel's insides, the user block).
+   header draws, the Settings column, and the sidebar's own few rows (the
+   engine panel's insides, the user block). The peek is the kit's too
+   (`PeekRail`, in the shell's peek slot).
 
    WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
    current section are raised or underlined, and the one accent in the chrome
@@ -39,13 +40,14 @@
 /* ---- The page column's own furniture -------------------------------------
    The PAGE'S scroll container is the kit's `main` on every screen that
    scrolls as a page; the toolbar a screen puts its own controls in and the
-   command palette are ours. A FULL-HEIGHT screen (`useFillScreen`: a task,
-   the Inbox, a knowledge page) holds `main` still and lets its own columns
-   scroll instead — each exactly `main`'s height, so they are the page's
-   scrollers there and `100cqb` is their view too. A box INSIDE the page may
-   still scroll its own content (a running phase's transcript, a seat's thread
-   list, the Settings column, a board lane, a long record), and each of those
-   is held to the rules under "The document does not scroll" in
+   command palette are ours. A FULL-HEIGHT screen (`useFillScreen`, whose doc
+   in `app/fill.tsx` names the screens that ask and when each withdraws) holds
+   `main` still: a canvas fills it, and a two-column screen lets its own
+   columns scroll instead — each exactly `main`'s height, so they are the
+   page's scrollers there and `100cqb` is their view too. A box INSIDE the
+   page may still scroll its own content (a running phase's transcript, a
+   seat's thread list, the Settings column, a board lane, a long record), and
+   each of those is held to the rules under "The document does not scroll" in
    docs/reference/dashboard-design.md: bounded to the scroller's view, and
    handing the wheel back, at either end, to whichever of those scrolls it. */
 
@@ -104,7 +106,7 @@
    further (`.tail-scroll.tailing` in screens.css). Outside both — a dialog,
    portaled to the document — a block states its own ceiling. */
 .app .crewlet-app-shell__main,
-.app .peek-body {
+.app .crewlet-peek-rail__body {
   --record-ceiling: min(
     var(--record-max),
     max(
@@ -353,54 +355,6 @@
   color: var(--color-text-primary);
 }
 
-/* ---- The peek, as a column of the sheet ----------------------------------
-   THE PEEK IS A COLUMN OF THE SHEET, not a child of whichever screen opened
-   it. It used to be a flex child inside the tracker's own three-column
-   layout, which is exactly why no other screen could have one. It is the
-   kit's `footer` slot now — the one place inside the sheet and outside `main`
-   — and while one is open at a width that can hold it, the sheet becomes a
-   grid: the page header across the top, the screen and the peek side by side
-   under it. The header spans both, because the section a reader is on is
-   still the section they are on with a row peeked.
-
-   ONLY WHILE ONE IS OPEN, because an empty column would take its width from
-   every screen that never opens one — and ONLY WHERE THE FRAME HAS ROOM, which
-   the shell decides and writes as `data-peek="column"` (the other value,
-   `drawer`, is the block further down). Not a media query: the width that
-   leaves the list its floor is 236px wider beside Settings' section column
-   than beside any other screen, and it moves with the density, and a media
-   query can see neither. `app/layout.ts` has the arithmetic.
-
-   THE TRACK IS THE READER'S WIDTH, CAPPED. `--peek-w` is the dragged width,
-   published on the ROOT by `DetailRail`, so the column and the panel read one
-   value and cannot disagree about how wide it is. It may be anything to 640
-   and it outlives the window it was dragged in, so the track takes it only as
-   far as the sheet can give with the list still at its floor: `100%` is the
-   sheet, and `--peek-reserve` — the shell's, from `listReserve` — is the
-   gutter, the padding, a section column and the list. At the threshold the
-   cap is exactly the resting 420, so the column never opens narrower than
-   the width it was decided at. */
-.app[data-peek="column"] .crewlet-app-shell__sheet {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) min(var(--peek-w, 420px), 100% - var(--peek-reserve));
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.app[data-peek="column"] .page-head {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-
-.app[data-peek="column"] .crewlet-app-shell__main {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.app[data-peek="column"] .peek-rail {
-  grid-column: 2;
-  grid-row: 2;
-}
-
 /* ---- The sidebar's own rows ----------------------------------------------
    The navigation is the kit's `SidebarNav` and the engine's row is the kit's
    `AppShell.RailRow`; what is here is what the kit leaves to the application:
@@ -467,6 +421,12 @@
   padding: var(--spacing-3);
 }
 
+/* IN A DIALOG, the folded sidebar's way to them (the reader's menu), the
+   dialog's body brings the inset, so the rows stand on that one. */
+.preferences--bare {
+  padding: 0;
+}
+
 /* A LABEL COLUMN AND A CONTROL COLUMN, and the three controls are ONE WIDTH:
    the two switchers share one box, three cells each, which the kit's `fill`
    divides evenly, so a row of glyphs and a row of letters are the same
@@ -499,8 +459,8 @@
 /* ---- The page header -----------------------------------------------------
    Two rows and the state bar: the kit's top bar (the breadcrumb and what this
    page can do), the workspace's section tabs, and whatever the engine's
-   condition says. ONE element for all of them, so the peek column's grid can
-   place the header as one block across both columns.
+   condition says. ONE element for all of them, standing over the screen and
+   the peek column alike, since the kit's peek stands beside `main` under it.
 
    AND IT IS THE BAR'S MEASURING STICK. Every rule that decides whether the
    bar's contents still fit was written against the WINDOW, and the window is
@@ -551,7 +511,7 @@
    the controls. */
 
 /* A SCOPE'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx, and
-   All projects' drawn by the header): `Work › ENG Core · Tasks | About |
+   All projects' drawn by the header): `Worklet › ENG Core · Tasks | About |
    History | Files`. On every page without lenses the slot is empty and is no
    flex item at all, so it costs the bar no gap.
 
@@ -810,89 +770,6 @@
    `@crewlethq/ui`'s ObjectHeader and FactLine draw it, and their stylesheet
    holds the rules: the eyebrow, the two-line title, the fact line's 7.5rem
    track floor and its two bands. */
-
-/* ---- The detail rail ---------------------------------------------------- */
-
-.peek-veil {
-  display: none;
-}
-
-.peek-rail {
-  position: relative;
-  /* THE TRACK SETS THE WIDTH. A width here as well would win over the grid
-     and leave the column it sits in either short or overflowing whenever the
-     two were nudged apart. */
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--color-surface-subtle);
-  border-left: 1px solid var(--color-border-hover);
-}
-
-.peek-grip {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 2;
-}
-
-.peek-grip:hover {
-  background: var(--color-brand-accent-soft);
-}
-
-.peek-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  height: var(--page-bar-h);
-  padding: 0 var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-hover);
-  flex: 0 0 auto;
-}
-
-/* THE PEEK'S OWN SCROLLER, and a SIZE container for the reason `main` is one:
-   a record inside a peek is bounded by what the peek shows (`100cqb`, the
-   record ceiling above), and with no size container between it and the root
-   `cqb` falls back to the small viewport, which counts the peek's bar as view.
-   Containment costs it nothing: its height is the flex column's, never its
-   content's. */
-.peek-body {
-  container: peek / size;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 var(--spacing-4) var(--spacing-6);
-}
-
-/* THE DRAWER: the other value of the same attribute, so there is no width at
-   which the peek is both a column and a drawer, or neither — which is what two
-   media queries on one number had to be kept tiling to promise. Below the
-   frame's threshold the peek slides over the screen behind a veil, and a fixed
-   box takes no track, so the sheet stays one column under it. */
-.app[data-peek="drawer"] .peek-veil {
-  display: block;
-  position: fixed;
-  inset: 0;
-  background: color-mix(in srgb, var(--color-surface-subtle) 60%, transparent);
-  z-index: calc(var(--z-index-overlay) - 1);
-}
-
-.app[data-peek="drawer"] .peek-rail {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: var(--z-index-overlay);
-  width: min(var(--peek-w, 420px), 92vw);
-  box-shadow: var(--shadow-md);
-}
-
-.app[data-peek="drawer"] .peek-grip {
-  display: none;
-}
 
 /* ---- Facets --------------------------------------------------------------
    One dimension of a list, as a row of narrowing chips. WHAT THE COUNTS ARE

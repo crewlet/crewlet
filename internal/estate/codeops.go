@@ -13,10 +13,10 @@ import (
 // REST routes and a seat's tools make of the rows, and the listings a git node
 // finds the repositories a compaction, a publication or an expunge may be due
 // in by — each naming the CODE domain, so the code copy's own verdict — never
-// the tracker's — decides whether a node answers it (ADR-0049), and its floor
+// the tracker's — decides whether a node answers it (ADR-0072), and its floor
 // is on the code log — and a read of a repository's CONTENT by object id and
 // an engine write built beside it, which name no domain's copy and are asked
-// of the repository's home GIT node ([GitCopy], ADR-0059). A push, a
+// of the repository's home GIT node ([GitCopy], ADR-0082). A push, a
 // compaction, an expunge record and a change's write are keyed on their
 // repository's data nodes: see the package doc's "A push is asked of its
 // repository's committer". An operation that JUDGES A GRANT from the serving
@@ -172,7 +172,7 @@ var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 
 // opCodeMerge is a change's MERGE — one record that merges the change and
 // moves its target onto the commit its merge built, decided by its merge gate
-// from one snapshot (ADR-0066) — asked of the repository's COMMITTER exactly
+// from one snapshot (ADR-0089) — asked of the repository's COMMITTER exactly
 // as a write of its queue is: an IDEMPOTENT write keyed by its operation id,
 // which its builder minted once and the domain's operation ledger collapses
 // (the merge's push id is derived from it, so no retry lands a branch twice),
@@ -432,7 +432,7 @@ var opCodeLifecycle = define("code.lifecycle", opIdempotentWrite, codeDomain, fa
 
 // opCodeGitRead is one server-side read of a repository by object id — a tree,
 // a file's lines, a diff, a comparison — asked of the repository's HOME git
-// node first, then its runner-up (ADR-0059), on the git lane, each attempt
+// node first, then its runner-up (ADR-0082), on the git lane, each attempt
 // stamped with whether the node asked is the walk's effective home
 // (code.GitQuery.Home), the one node a walk lets fill a copy. A git node that
 // cannot answer for a reason about itself (code.ErrGitUnready) ran nothing
@@ -456,7 +456,7 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 // opCodeMergePreview is one MERGE PREVIEW — what merging one commit of a
 // repository into another would do, a comparison's preview
 // (code.MergePreviewQuery) — asked as a read by object id is: of the
-// repository's HOME git node first, then its runner-up (ADR-0059), on the git
+// repository's HOME git node first, then its runner-up (ADR-0082), on the git
 // reads' lane, each attempt stamped with whether the node asked is the walk's
 // effective home (code.MergePreviewQuery.Home), the one node a walk lets fill
 // a copy. The git node answers it by THE merge a repository's home records a
@@ -488,8 +488,8 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // opCodeGitWrite is one ENGINE WRITE — a commit of files, a revert, a
 // cherry-pick, a branch created or deleted, which a seat or a person asks of
 // a repository through a tool and the engine builds beside a copy of it
-// (ADR-0062) — asked of the repository's HOME git node first, then its
-// runner-up (ADR-0059): the home's copy is the one the repository's reads keep
+// (ADR-0085) — asked of the repository's HOME git node first, then its
+// runner-up (ADR-0082): the home's copy is the one the repository's reads keep
 // warm, so a write is built where its objects already are. Each attempt is
 // stamped with whether the node asked is the walk's effective home
 // (code.EngineWrite.Home), the one node a walk lets fill a copy, as a read's

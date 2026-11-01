@@ -89,7 +89,7 @@ const (
 	// RoleData keeps the company's durable state on this node's own disk: a
 	// copy of the replicated estate and the node's own database. A node
 	// WITHOUT it keeps nothing that has to outlive it: its store is scratch,
-	// and it reads and writes the company's tracker and knowledge base
+	// and it reads and writes the company's tracker, knowledge base and chat
 	// through a data node. It is what a small, disposable agent node runs.
 	//
 	// IT SAYS NOTHING ABOUT THE BROKER. Whether this node's broker is a
@@ -127,9 +127,11 @@ const (
 	// RoleWorkers runs the company-wide singleton duties behind
 	// worker:{duty} leases — the scheduler tick, the maintenance sweep, the
 	// sandbox waiter, the integration reconcile, the learning passes, the
-	// state logs' trim, the embedding duty and the identity sweep. Exactly
-	// one node does each at a time; a fleet with none of these does none of
-	// them.
+	// state logs' trim, the embedding duty, the identity sweep, the object
+	// store's collector, the trash reaper, Chatlet's message horizon and the
+	// code-retention duty.
+	// Exactly one node does each at a time; a fleet with none of these does
+	// none of them.
 	RoleWorkers NodeRole = "workers"
 )
 

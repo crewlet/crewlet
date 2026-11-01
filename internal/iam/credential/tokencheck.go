@@ -248,7 +248,7 @@ func ending(row TokenRow, now time.Time) TokenCheck {
 // away from a person takes it away from every token they made. Through
 // [iam.Expand] on both sides, because a token minted [admin] carries every app
 // its owner keeps when admin is taken away from them, and a token minted
-// [tracker] by an administrator who never ticked the app separately still
+// [worklet] by an administrator who never ticked the app separately still
 // carries it. A name this build does not know grants nothing, here as
 // everywhere. The node's admin posture is the caller's to apply on top, as it
 // is for every credential.

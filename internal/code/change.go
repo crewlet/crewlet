@@ -13,7 +13,7 @@ import (
 )
 
 // A CHANGE'S CLOSED SETS — the values code_changes holds (replicated migration
-// 0058, the table created again by 0066), each a named string with typed
+// 0081, the table created again by 0089), each a named string with typed
 // constants, Valid, and a function answering the set in order: the one list a
 // validator, a schema and the dashboard's contract read.
 
@@ -62,7 +62,7 @@ const (
 	// MergedViaDirect is a change a MERGE RECORD merged ([Merge]): its
 	// target moved onto the commit its merge built, by a record whose
 	// decide held the change to its target's merge gate — or recorded a
-	// person's override of it — from one snapshot (ADR-0066).
+	// person's override of it — from one snapshot (ADR-0089).
 	//
 	// BASE FORMAT, under the condition merge.go's head states: no build
 	// that carries the code domain has run without it, and a change row is

@@ -92,12 +92,12 @@ func (c *Company) validateOptionalKeys() error {
 	return p.err()
 }
 
-// validateRunOptionalKeys holds a coding run's `optional_keys` lists — a seat's
-// sandbox block's, over its env, and every setup step's, over its env and its
-// files — to the rule a tool server's list is held to ([Company.validateOptionalKeys]):
-// an entry that leaves nothing out is refused, because the key it was meant
-// for stays required, and a coding run is refused wherever its value resolves
-// to nothing.
+// validateRunOptionalKeys holds an executor box's `optional_keys` lists — a
+// seat's sandbox block's, over its env, and every setup step's, over its env
+// and its files — to the rule a tool server's list is held to
+// ([Company.validateOptionalKeys]): an entry that leaves nothing out is
+// refused, because the key it was meant for stays expected, and a run is
+// logged as starting without it wherever its value resolves to nothing.
 //
 // AN ADMISSION RULE like that one: nothing about running depends on it, since
 // an entry naming nothing is merely never consulted.
@@ -113,7 +113,7 @@ func (c *Company) validateRunOptionalKeys() error {
 			held.settings(step.Env)
 			held.contents(step.Files)
 			held.check(&p, at(idx(path, i), "optional_keys"), step.OptionalKeys,
-				"this step's env, nor a path of its files", "no coding run is started")
+				"this step's env, nor a path of its files", runStartsWithout)
 		}
 	}
 	if c.Providers.Sandbox != nil {
@@ -128,12 +128,19 @@ func (c *Company) validateRunOptionalKeys() error {
 			held := heldKeys{}
 			held.settings(gate.Env)
 			held.check(&p, at(path, "sandbox.optional_keys"), gate.OptionalKeys,
-				"this sandbox block's env", "no coding run is started")
+				"this sandbox block's env", runStartsWithout)
 		}
 		steps(at(path, "sandbox.setup"), gate.Setup)
 	}
 	return p.err()
 }
+
+// runStartsWithout is what happens to an executor run whose environment holds
+// a reference that resolves to nothing and is not optional, for the sentence
+// [heldKeys.check] writes: the run is the seat's turn itself, so it starts,
+// and the gap is logged for the operator to find (the engine's runEnvironment).
+const runStartsWithout = "the seat's executor run starts without it and logs " +
+	"the gap as sandbox_env_unresolved"
 
 // heldKeys is what an `optional_keys` list is checked against: for each key
 // its values are written under, whether one of them carries a reference, and
@@ -342,7 +349,7 @@ func spelledUnlike(p *problems, server *MCPServer, path Path, block, unit map[st
 // seventh copy of it is precisely the drift that table exists to end.
 //
 // THE BRIDGE NAME NEEDS NO CASE OF ITS OWN. A server may not be called
-// [BridgeServerName] — that is refused where servers are declared — so an
+// [ToolServerName] — that is refused where servers are declared — so an
 // `mcp_env` block keyed on it names no server and is reported by this rule
 // like any other. Writing a second, better-worded case for it would be a
 // second place to keep the reserved name.
@@ -382,7 +389,7 @@ func (c *Company) validateMCPEnvServers() error {
 			}
 			p.add(entry(at(path, "mcp_env"), key), ErrUnknownValue,
 				"%q is not a declared tool server: mcp_servers has %s. "+
-					"Nothing reads this block — the engine looks the "+
+					"Nothing reads this block: the engine looks the "+
 					"credentials up per SERVER, so a key naming none is never "+
 					"consulted and the server it was meant for starts with "+
 					"none", key, servers)
@@ -476,7 +483,7 @@ func (c *Company) validateSeatEmails() error {
 				"%d seats declare the email %q (%s; compared lower-cased with "+
 					"any plus tag dropped). The party registry keys on that "+
 					"form and the first seat wins, so all but one of these "+
-					"silently stops being findable by address — mail meant for "+
+					"silently stops being findable by address, and mail meant for "+
 					"one person resolves to another. Give each seat its own "+
 					"address",
 				len(holders), email, strings.Join(names, ", "))
@@ -522,7 +529,7 @@ func (c *Company) validateReferenceShapes() error {
 		if lead != "" && !org.ValidHandle(lead) {
 			p.add(at(path, "lead"), ErrShape,
 				"%q is not a seat handle: %s. A unit's lead names the seat's "+
-					"HANDLE, not its display name — %q resolves to nobody, so "+
+					"HANDLE, not its display name. %q resolves to nobody, so "+
 					"this unit has no lead, every escalation from it reaches "+
 					"the parent's, and its lead-targeted schedules never fire",
 				lead, handleRule, lead)
@@ -534,7 +541,7 @@ func (c *Company) validateReferenceShapes() error {
 			p.add(at(path, "unit"), ErrShape,
 				"%q is not a unit key: %s. A seat declared at the org root "+
 					"joins its unit by KEY (the unit's `id:`), not by the "+
-					"team's display name — %q matches no key, so this seat "+
+					"team's display name. %q matches no key, so this seat "+
 					"stays at the root, outside the unit's credentials and "+
 					"invisible to its lead", ref, unitKeyRule, ref)
 		}
@@ -545,7 +552,7 @@ func (c *Company) validateReferenceShapes() error {
 			}
 			p.add(idx(at(path, "manages"), i), ErrShape,
 				"%q is neither a seat handle nor a unit key. A `manages:` "+
-					"entry takes a seat's handle (%s) or a unit's key (%s) — a "+
+					"entry takes a seat's handle (%s) or a unit's key (%s). A "+
 					"display name matches neither, so this entry expands to "+
 					"nobody and the seat's roster is short without saying so",
 				target, handleRule, unitKeyRule)

@@ -42,13 +42,14 @@ import {
   TableDateCell,
   TableEntityCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
 import { MessageSquareGlyph, UsersGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
@@ -400,7 +401,7 @@ export function Conversations() {
   const openChannel = useCallback(
     (c: A2AChannel, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "channel", id: c.id });
-      // The grid hands this both events. `rowPeekHandler` is the frame's one
+      // The grid hands this both events. `peekClickHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a MOUSE event — every
       // modifier and the middle button belong to the browser, so the row stays
       // a real link to the channel's page. The `enter` chord carries no button
@@ -409,7 +410,7 @@ export function Conversations() {
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek],
   );
@@ -515,6 +516,7 @@ export function Conversations() {
                 },
                 {
                   key: "opened",
+                  align: "right",
                   header: "Opened",
                   shrink: true,
                   drop: 1,
@@ -523,6 +525,7 @@ export function Conversations() {
                 },
                 {
                   key: "last",
+                  align: "right",
                   header: "Last message",
                   shrink: true,
                   sortValue: (c) => tsKey(c.last_at),

@@ -78,16 +78,16 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 	}
 }
 
-// post sends one call the way the scripted CLI does, carrying the given system
-// prompt and a transcript that offers no tools, which is the shape both
-// branches under test take.
+// post sends one request the way the scripted CLI does, carrying the given
+// system prompt and no tools — a text function's request, which is the shape
+// both branches under test take.
 // IT TAKES THE SERVER, not its URL: sixty goroutines post concurrently here
 // and the pool must be this server's own, never the process-global one every
 // httptest cleanup in the binary sweeps — see
 // [github.com/crewlet/crewlet/internal/httpx/httpxtest].
 func post(t *testing.T, srv *httptest.Server, system string) {
 	t.Helper()
-	body, err := json.Marshal(cliCall{System: system, Prompt: "## user\n\nHow did the week go?\n"})
+	body, err := json.Marshal(modelRequest{System: system, Prompt: "## user\n\nHow did the week go?\n"})
 	if err != nil {
 		t.Errorf("encode the call: %v", err)
 		return

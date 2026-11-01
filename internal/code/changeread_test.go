@@ -75,7 +75,7 @@ func TestAChangeIsFoundByItsNumber(t *testing.T) {
 	requireChanged(t, other, err)
 	first := opening(web, featureRef, mainRef, dev)
 	first.Open.Body = "Retries the upload once a minute, five times."
-	first.Open.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+	first.Open.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 	opened, err := c.ProposeChange(ctx, first)
 	requireChanged(t, opened, err)
 	second, err := c.ProposeChange(ctx, opening(web, releaseRef, mainRef, ada))
@@ -384,7 +384,7 @@ func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 		pushedBy(t, c, repo, ada, update(topicRef, code.ZeroOID, oidOf("T")))
 	}
 	task := func(id string) *types.WorkItem {
-		return &types.WorkItem{Backend: types.WorkNative, ID: id, Key: strings.ToUpper(id), Project: "ENG"}
+		return &types.WorkItem{Backend: types.WorkWorklet, ID: id, Key: strings.ToUpper(id), Project: "ENG"}
 	}
 	type opened struct {
 		ref, repo, owner, work string

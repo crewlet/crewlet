@@ -52,26 +52,64 @@ var CredentialKeys = []string{
 // A HUMAN seat holds none and must never be looked up as though it did: it
 // is addressable through its own contact block — `github_login` — which the
 // party registry registers from the org.
+//
+// THE SEAT'S OWN APP TOKEN IS NOT ONE. A value naming
+// `${GITHUB_APP_TOKEN_<HANDLE>}` ([SeatVar] with [FieldAppToken]) is the
+// seat's app acting, and the app's account is its slug, which the engine
+// wrote down when it created the app: there is nothing to look up, and the
+// lookup this feeds (GET /user) is refused for every installation token
+// anyway. So such a key is passed over here, in [credentialSlot] and in
+// [CredentialReads] alike, and a seat whose only credential is its app's
+// token holds no personal credential at all. Before its app exists it
+// therefore waits for the app rather than being looked up with a token
+// nothing has issued yet.
 func CredentialOf(seat *org.Role, value func(string) string) string {
 	if seat == nil || seat.IsHuman() || value == nil {
 		return ""
 	}
 	block := seat.MCPEnv[SeatEnv]
 	for _, key := range CredentialKeys {
-		raw := strings.TrimSpace(value(block[key]))
-		if raw == "" {
+		if namesAppToken(seat, block[key]) {
 			continue
 		}
-		// "Authorization: Bearer <token>" carries the credential behind a
-		// scheme. Stripping it is what lets one config shape work through
-		// both an HTTP MCP server and this lookup. GitHub's older `token`
-		// scheme is stripped too: it is the same credential wearing the
-		// word the API used to want.
-		raw = strings.TrimPrefix(raw, "Bearer ")
-		raw = strings.TrimPrefix(raw, "token ")
-		return strings.TrimSpace(raw)
+		if token := bareCredential(value(block[key])); token != "" {
+			return token
+		}
 	}
 	return ""
+}
+
+// namesAppToken reports whether raw, a seat's value under one of
+// [CredentialKeys], names that seat's own issued app token.
+func namesAppToken(seat *org.Role, raw string) bool {
+	return slices.Contains(envref.Names(raw), SeatVar(seat.Handle(), FieldAppToken))
+}
+
+// bareCredential is the credential in a resolved value, without the scheme
+// an Authorization header carries it behind.
+//
+// "Authorization: Bearer <token>" carries the credential behind a scheme.
+// Stripping it is what lets one config shape work through both an HTTP MCP
+// server and this lookup. GitHub's older `token` scheme is stripped too: it
+// is the same credential wearing the word the API used to want.
+//
+// A SCHEME WITH NOTHING AFTER IT IS NO CREDENTIAL. `Bearer ${TOKEN}` with
+// TOKEN unset resolves to "Bearer ", and reading the word itself as the token
+// sent GitHub a request it could only refuse, logged as a bad credential
+// rather than as the variable nobody set.
+func bareCredential(resolved string) string {
+	fields := strings.Fields(resolved)
+	switch {
+	case len(fields) == 0:
+		return ""
+	case strings.EqualFold(fields[0], "Bearer") || strings.EqualFold(fields[0], "token"):
+		if len(fields) == 2 {
+			return fields[1]
+		}
+		return ""
+	default:
+		return strings.TrimSpace(resolved)
+	}
 }
 
 // CredentialReads is every variable the reconcile's identity scan reads
@@ -89,6 +127,9 @@ func CredentialReads(o *org.Organization) []string {
 	for _, seat := range agentSeats(o) {
 		block := seat.MCPEnv[SeatEnv]
 		for _, key := range CredentialKeys {
+			if namesAppToken(seat, block[key]) {
+				continue
+			}
 			names = append(names, envref.Names(block[key])...)
 		}
 	}
@@ -133,7 +174,7 @@ func credentialSlot(seat *org.Role) (string, bool) {
 	}
 	block := seat.MCPEnv[SeatEnv]
 	for _, key := range CredentialKeys {
-		if strings.TrimSpace(block[key]) != "" {
+		if strings.TrimSpace(block[key]) != "" && !namesAppToken(seat, block[key]) {
 			return key, true
 		}
 	}

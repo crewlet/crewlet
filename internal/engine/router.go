@@ -19,13 +19,13 @@ import (
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
 //
-// Every seat tool on every node reaches the tracker and the knowledge base
-// through one [estate.Router]: a data node holds the whole estate and answers
-// its own seats' calls from its own copy — with its floors enforced exactly as
-// a remote data node enforces them — while a node without `data` holds nothing
-// and asks for everything. A tool cannot tell which, and must not: a tool that
-// behaved differently on the two kinds of node would be two tools, and only
-// one of them tested.
+// Every seat tool on every node reaches the tracker, the knowledge base and
+// chat through one [estate.Router]: a data node holds the whole estate and
+// answers its own seats' calls from its own copy — with its floors enforced
+// exactly as a remote data node enforces them — while a node without `data`
+// holds nothing and asks for everything. A tool cannot tell which, and must
+// not: a tool that behaved differently on the two kinds of node would be two
+// tools, and only one of them tested.
 //
 // # Who holds the estate, as this node routes it
 //
@@ -33,7 +33,7 @@ import (
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
 // fleet per call. Who serves a repository's GIT work is read off the same
-// view — every live node with the git role ([wholeGit], ADR-0059) — and so is
+// view — every live node with the git role ([wholeGit], ADR-0082) — and so is
 // what each of them advertises it can give its background work, read together
 // with them off one listing ([wholeGit.Listing]), which places a repository's
 // maintenance; this node's own git half is asked per request ([engineGit]).
@@ -48,7 +48,7 @@ import (
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
 // domain's copy that is WRONG is out of service for that domain's operations
-// alone ([localEstate.For], ADR-0049), and the node keeps its seats.
+// alone ([localEstate.For], ADR-0072), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -154,7 +154,7 @@ func (w wholeEstate) Holders() ([]string, error) {
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
 // gitPlacement is who serves git as this node routes a repository's git work
-// (ADR-0059): every live node whose presence profile names the git role, from
+// (ADR-0082): every live node whose presence profile names the git role, from
 // the same watched view as the estate's placement — and, read together with
 // them off one listing of that view, what each of them advertises it can give
 // its background work, which places a repository's maintenance
@@ -308,7 +308,7 @@ type heldVerdict struct {
 // copy is out of service.
 //
 // A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
-// alone (ADR-0049). An applier halted at a record it cannot decode or held one
+// alone (ADR-0072). An applier halted at a record it cannot decode or held one
 // past the deferral grace, an eviction, rows below the log's first record, a
 // checkpoint on another stream, a stalled prefix: a domain's copy in any of
 // those states goes OUT OF SERVICE — this node's router sends its own seats'
@@ -359,7 +359,7 @@ func (l *localEstate) serves(ctx context.Context, domain string) bool {
 }
 
 // copyOutOfService is the first of domains, in the order given, whose copy on
-// this node is out of service ([localEstate.serves], ADR-0049) — or false
+// this node is out of service ([localEstate.serves], ADR-0072) — or false
 // where every one serves, or where this node holds no estate to judge. A
 // fleet duty that decides from those domains' rows asks it before it claims
 // ([dutyDecline]).
@@ -446,7 +446,7 @@ func (l *localEstate) peek(ctx context.Context, c *core) (v copyVerdict, known b
 // as far as it can tell WITHOUT WAITING: it runs its core, and the last
 // verdict read of the copy — where one has been — found every domain a seat
 // depends on in service ([estate.SeatCopy]). A wrong copy of any other domain
-// costs that domain's calls a peer and never the seats (ADR-0049).
+// costs that domain's calls a peer and never the seats (ADR-0072).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
@@ -464,7 +464,7 @@ func (l *localEstate) servesUnasked(ctx context.Context) bool {
 
 // outOfService is which of domains this node's copy holds OUT OF SERVICE as far
 // as it can tell without waiting — a verdict read found that domain's copy
-// wrong (ADR-0049), or found the estate file shut, which takes every domain's
+// wrong (ADR-0072), or found the estate file shut, which takes every domain's
 // copy with it — in the order domains names them, and nil for none.
 //
 // FOR A WATCH OVER ONE SUBSYSTEM'S APPLIERS — the inbox relay's sources, the
@@ -607,13 +607,19 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if n.indexer != nil {
 		b.Backlinks = n.indexer
 	}
+	if n.chatReader != nil {
+		b.Chat = n.chatReader
+	}
+	if n.chatIndex != nil {
+		b.ChatSearch = n.chatIndex
+	}
 	w := e.writeSide()
-	if writer := w.tracker; writer != nil {
+	if w.tracker != nil {
 		b.Writer = func(a estate.Actor) estate.TrackerWriter {
 			// A NIL INTERFACE, never a typed nil: the server reads nil
 			// as "the tracker refused to act as this party".
-			if w := writer.As(a.Handle, a.Kind, a.Provenance); w != nil {
-				return w
+			if tw := w.tracker.As(a.Handle, a.Kind, a.Provenance); tw != nil {
+				return tw
 			}
 			return nil
 		}
@@ -621,13 +627,16 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if w.pages != nil {
 		b.PageWriter = w.pages
 	}
+	if w.chat != nil {
+		b.ChatWriter = w.chat
+	}
 	// THE CODE HALF, where the runtime was built for it: the reader always,
 	// the committer, the change writer, the checks writer, the marks writer
-	// and the lifecycle store only where this node publishes — each nil in a maintenance mode,
-	// and code.Served then refuses a proposal, a conversation's or a check's
-	// write and a lifecycle request as a node that ran nothing, so the router
-	// asks the next data node with the same push id or operation rather than
-	// this node appending it.
+	// and the lifecycle store only where this node publishes — each nil in a
+	// maintenance mode, and code.Served then refuses a proposal, a
+	// conversation's or a check's write and a lifecycle request as a node that
+	// ran nothing, so the router asks the next data node with the same push id
+	// or operation rather than this node appending it.
 	if n.built.runsCode() {
 		b.Code = code.Served{Committer: w.committer, ChangeWriter: w.changes, ChecksWriter: w.checks,
 			Reader: n.codeReader, Store: w.code, Marks: w.marks}

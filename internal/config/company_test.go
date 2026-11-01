@@ -49,11 +49,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.llm.sub.agent", ErrUnknownValue,
 		},
 		{
-			"unknown mode",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: batch\n",
-			"providers.llm.sub.mode", ErrUnknownValue,
-		},
-		{
 			"unknown auth mode",
 			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      auth: {mode: oauth}\n",
 			"providers.llm.sub.auth.mode", ErrUnknownValue,
@@ -69,13 +64,8 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.llm.sub.max_concurrent", ErrOutOfRange,
 		},
 		{
-			"a placement on a text-mode entry",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      run_in: direct\n",
-			"providers.llm.sub.run_in", ErrConflict,
-		},
-		{
-			"self as an agent-mode entry's cell",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: agent\n      run_in: self\n",
+			"a placement that is no cell",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      run_in: host\n",
 			"providers.llm.sub.run_in", ErrUnknownValue,
 		},
 
@@ -88,11 +78,10 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			// A CATALOGUE IS A CHOICE, and every default is wrong in a
 			// way nobody sees: `local` runs the coding agent on this
-			// host, an absent block turns code work off while the
-			// config says it is on, and the default this replaced named
-			// a backend the engine had no code to build.
+			// host, and the default this replaced named a backend the
+			// engine had no code to build.
 			"a sandbox block that names no backend",
-			"name: Acme\nproviders:\n  sandbox:\n    default_coding_agent: opencode\n",
+			"name: Acme\nproviders:\n  sandbox:\n    default_max_turns: 40\n",
 			"providers.sandbox", ErrMissing,
 		},
 		{
@@ -106,13 +95,12 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.sandbox.default_max_turns", ErrOutOfRange,
 		},
 		{
-			// A seat that runs code in a company with no catalogue is
-			// offered nothing and told nowhere: the gate reads as
-			// working configuration and its code work quietly never
-			// happens.
-			"a seat that runs code with no catalogue at all",
-			"name: Acme\nroles:\n  - name: SWE\n    sandbox: {enabled: true}\n",
-			"roles[0].sandbox.enabled", ErrMissing,
+			// An agent seat with a model to run on and no catalogue
+			// takes its work and fails every turn at launch: its
+			// executor is its CLI's own run, in a box.
+			"an agent seat with no catalogue at all",
+			"name: Acme\nproviders:\n  llm:\n    sub: {model: sonnet}\nroles:\n  - name: SWE\n",
+			"providers.sandbox", ErrMissing,
 		},
 		{
 			"a setup step that does nothing",
@@ -133,8 +121,13 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			"a ceiling below its own base",
-			"name: Acme\nturn_engine:\n  max_tool_rounds: 20\n  execute_max_tool_rounds_ceiling: 10\n",
-			"turn_engine.execute_max_tool_rounds_ceiling", ErrOutOfRange,
+			"name: Acme\nturn_engine:\n  onboarding_max_tool_rounds: 20\n  onboarding_max_tool_rounds_ceiling: 10\n",
+			"turn_engine.onboarding_max_tool_rounds_ceiling", ErrOutOfRange,
+		},
+		{
+			"a negative launch floor",
+			"name: Acme\nturn_engine:\n  executor_min_budget_tokens: -1\n",
+			"turn_engine.executor_min_budget_tokens", ErrOutOfRange,
 		},
 		{
 			"a conversation ledger that keeps nothing",
@@ -224,11 +217,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  mattermost:\n    enabled: true\n    url: https://chat.example.com\n",
 			"integrations.mattermost.team", ErrMissing,
 		},
-		{
-			"an unknown gitlab access level",
-			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n    signing_secret: s\n    provisioning:\n      access_level: owner\n",
-			"integrations.gitlab.provisioning.access_level", ErrUnknownValue,
-		},
 
 		// seats
 		{
@@ -307,20 +295,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, site_url: acme.example.com, token: t}\n",
 			"integrations.jira.site_url", ErrUnknownValue,
 		},
-		// A per-seat Slack app needs BOTH credentials, and each half fails
-		// silently on its own: without a token the seat receives messages
-		// it cannot answer, without a secret its route answers 503 while
-		// the app's settings page reports a healthy request URL.
-		{
-			"a slack app with no signing secret",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n",
-			"roles[0].integrations.slack.signing_secret", ErrMissing,
-		},
-		{
-			"a slack app with no bot token",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        signing_secret: \"${S}\"\n",
-			"roles[0].integrations.slack.bot_token", ErrMissing,
-		},
 		{
 			"a Mattermost username the server would refuse",
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      mattermost:\n        bot_token: \"${T}\"\n        username: Agent CEO\n",
@@ -348,11 +322,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"a Slack bot token with a reference inside it",
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"xoxb-${T}\"\n        signing_secret: \"${S}\"\n",
 			"roles[0].integrations.slack.bot_token", ErrShape,
-		},
-		{
-			"a sandbox block that is never enabled",
-			"name: Acme\nroles:\n  - name: CEO\n    sandbox:\n      env: {GITHUB_TOKEN: \"${T}\"}\n",
-			"roles[0].sandbox.enabled", ErrConflict,
 		},
 		{
 			"a unit with no name",
@@ -384,14 +353,14 @@ func TestCompanyValidatorRejections(t *testing.T) {
 func TestTheBackendAxesAreExclusiveAndDerived(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a bare company gets a native tracker and a native wiki", func(t *testing.T) {
+	t.Run("a bare company gets Worklet and Doclet", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, "name: Acme\n")
-		if got := cfg.TrackerBackendFor(); got != TrackerNative {
-			t.Errorf("tracker = %q, want native", got)
+		if got := cfg.TrackerBackendFor(); got != TrackerWorklet {
+			t.Errorf("tracker = %q, want worklet", got)
 		}
-		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
-			t.Errorf("knowledge = %q, want native", got)
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeDoclet {
+			t.Errorf("knowledge = %q, want doclet", got)
 		}
 	})
 
@@ -413,11 +382,11 @@ integrations:
 		}
 	})
 
-	t.Run("native beside its vendor is refused", func(t *testing.T) {
+	t.Run("Worklet or Doclet beside its vendor is refused", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
 name: Acme
-knowledge: {backend: native}
+knowledge: {backend: doclet}
 integrations:
   confluence: {url: "https://wiki.example.com", token: "${T}", webhook_secret: "${S}"}
 `, "knowledge.backend")
@@ -426,7 +395,7 @@ integrations:
 		}
 		err = rejects(t, `
 name: Acme
-tracker: {backend: native}
+tracker: {backend: worklet}
 integrations:
   jira: {url: "https://jira.example.com", token: "${T}", webhook_secret: "${S}"}
 `, "tracker.backend")
@@ -458,16 +427,16 @@ integrations:
 		}
 	})
 
-	// A NARROWING ON THE NATIVE BACKEND IS ORDINARY, and this is the case
+	// A NARROWING ON DOCLET IS ORDINARY, and this is the case
 	// the rule it replaces got wrong: a scope used to require
 	// integrations.confluence, because presence was the only signal there
 	// was. With a backend named explicitly, a curated floor over the
 	// company's own pages needs no vendor at all.
-	t.Run("a scope narrows the native backend", func(t *testing.T) {
+	t.Run("a scope narrows Doclet", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, "name: Acme\nknowledge:\n  scope: [HANDBOOK, ENG]\n")
-		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
-			t.Errorf("backend = %q, want native", got)
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeDoclet {
+			t.Errorf("backend = %q, want doclet", got)
 		}
 		if got := cfg.SkillsContainerKey(); got != DefaultSkillsContainer {
 			t.Errorf("skills container = %q, want the default", got)
@@ -567,41 +536,146 @@ roles:
 }
 
 // A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
-// both classes of rule. A person who works through the dashboard is bound to
-// the seat in the identity directory and has no chat account to write down.
-// Refusing the document refused them. That nobody can be MESSAGED at the seat is a warning, at the seat's
-// `contact` — and the control is the same seat with an identity, which warns
-// about nothing.
+// both classes of rule and on every chat surface. A person who works through
+// the dashboard is bound to the seat in the identity directory and has no
+// chat account to write down. Refusing the document refused them. That
+// nobody can be MESSAGED at the seat on a vendor chat surface is a warning, at
+// the seat's `contact` — see
+// TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface.
 func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
-	if err := cfg.ValidateAdmission(); err != nil {
-		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	for name, doc := range map[string]string{
+		"on the engine's own chat": "name: Acme\nroles:\n  - name: Founder\n    kind: human\n",
+		"on a vendor's": "name: Acme\n" + mattermostBlock +
+			"roles:\n  - name: Founder\n    kind: human\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := mustCompany(t, doc)
+			if err := cfg.ValidateAdmission(); err != nil {
+				t.Fatalf("ValidateAdmission() = %v, want nil", err)
+			}
+			o, err := cfg.Organization()
+			if err != nil {
+				t.Fatalf("Organization() = %v, want the company to build", err)
+			}
+			if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
+				t.Fatalf("the founder seat is missing or not human: %+v", founder)
+			}
+		})
 	}
-	var unreachable []Warning
-	for _, w := range cfg.AdvisoryWarnings() {
-		if w.Seat == "founder" {
-			unreachable = append(unreachable, w)
+}
+
+// A HUMAN SEAT NOBODY CAN MENTION IS SAID SO ONLY WHERE THAT IS TRUE: on a
+// vendor chat surface this company talks on, and only when the seat names no
+// account there.
+//
+// The advisory used to fire for every human seat with an empty `contact`,
+// whatever the company ran, and said nothing addressed to it on a chat
+// surface reached anybody. On the engine's own chat that is false — the
+// person reads the rooms on the dashboard as their seat — and with no chat at
+// all there is no surface to be unreachable on. And the contact block as a
+// whole was the wrong question on a vendor surface: a GitHub login silenced
+// it on a Slack company where no mention reaches the person.
+//
+// Each vendor's rows are built from [chatVendors], so a third surface is
+// covered by being added there, and the row that writes the vendor's own
+// contact key holds that key to the field it is decoded into.
+//
+// Mutations: fire on every backend and the chatlet and `none` rows warn;
+// judge the contact block as a whole and the code-host and other-vendor rows
+// go quiet; read only the first declared surface and the two-workspace row
+// warns.
+func TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface(t *testing.T) {
+	t.Parallel()
+	const person = "roles:\n  - name: Founder\n    kind: human\n"
+	const both = "integrations:\n" +
+		"  mattermost: {enabled: true, url: https://chat.example.com, team: acme}\n" +
+		"  slack: {typing_status: addressed}\n"
+	declaring := map[string]string{
+		"mattermost": mattermostBlock,
+		"slack":      "integrations:\n  slack: {typing_status: addressed}\n",
+	}
+	type row struct {
+		doc  string
+		says []string // nil: the seat is not advised about
+	}
+	rows := map[string]row{
+		"the engine's own chat": {doc: "name: Acme\n" + person},
+		"no chat at all, beside a vendor block": {
+			doc: "name: Acme\nchat: {backend: none}\n" + mattermostBlock + person,
+		},
+		"both workspaces, an account in one": {
+			doc: "name: Acme\n" + both + person + "    contact: {slack_user_id: U0FOUNDER}\n",
+		},
+		"both workspaces, an account in neither": {
+			doc:  "name: Acme\n" + both + person,
+			says: []string{"Mattermost or Slack", "`mattermost_user_id` or `slack_user_id`"},
+		},
+	}
+	for _, vendor := range chatVendors {
+		block, ok := declaring[vendor.name]
+		if !ok {
+			t.Fatalf("no document in this test declares the chat vendor %q", vendor.name)
+		}
+		rows[vendor.name+": no contact at all"] = row{
+			doc:  "name: Acme\n" + block + person,
+			says: []string{vendor.title, "`" + vendor.contactKey + "`"},
+		}
+		rows[vendor.name+": an account there"] = row{
+			doc: "name: Acme\n" + block + person +
+				"    contact: {" + vendor.contactKey + ": founder}\n",
+		}
+		rows[vendor.name+": an account there, by reference"] = row{
+			doc: "name: Acme\n" + block + person +
+				"    contact: {" + vendor.contactKey + ": \"${FOUNDER_ID}\"}\n",
+		}
+		rows[vendor.name+": only a code host's login"] = row{
+			doc:  "name: Acme\n" + block + person + "    contact: {github_login: founder}\n",
+			says: []string{vendor.title},
+		}
+		for _, other := range chatVendors {
+			if other.name != vendor.name {
+				rows[vendor.name+": only an account on "+other.name] = row{
+					doc: "name: Acme\n" + block + person +
+						"    contact: {" + other.contactKey + ": founder}\n",
+					says: []string{vendor.title},
+				}
+			}
 		}
 	}
-	if len(unreachable) != 1 || unreachable[0].Path != "roles[0].contact" ||
-		unreachable[0].Kind != WarningAdvisory {
-		t.Errorf("the founder's warnings = %+v, want one advisory at "+
-			"roles[0].contact saying nobody can be messaged there", unreachable)
-	}
-	reachable := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n"+
-		"    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
-	for _, w := range reachable.AdvisoryWarnings() {
-		if w.Seat == "founder" {
-			t.Errorf("a seat with a contact identity is warned about: %+v", w)
-		}
-	}
-	o, err := cfg.Organization()
-	if err != nil {
-		t.Fatalf("Organization() = %v, want the company to build", err)
-	}
-	if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
-		t.Fatalf("the founder seat is missing or not human: %+v", founder)
+	for name, tc := range rows {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got []Warning
+			for _, w := range mustCompany(t, tc.doc).AdvisoryWarnings() {
+				if w.Seat == "founder" {
+					got = append(got, w)
+				}
+			}
+			if tc.says == nil {
+				if len(got) != 0 {
+					t.Errorf("a seat somebody can reach, or no vendor surface to "+
+						"be unreachable on, was advised about: %+v", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Path != "roles[0].contact" ||
+				got[0].Kind != WarningAdvisory {
+				t.Fatalf("the founder's warnings = %+v, want one advisory at "+
+					"roles[0].contact saying nobody can be messaged there", got)
+			}
+			// THE HANDLE IS QUOTED, never the opening word a reader in
+			// sentence case would raise into a seat nobody declared.
+			if !strings.HasPrefix(got[0].Message, `the human seat "founder" `) {
+				t.Errorf("the advisory does not open on the quoted handle: %q", got[0].Message)
+			}
+			for _, says := range tc.says {
+				if !strings.Contains(got[0].Message, says) {
+					t.Errorf("the advisory does not say %q: %q", says, got[0].Message)
+				}
+			}
+		})
 	}
 }
 
@@ -928,5 +1002,29 @@ func TestTheKitVersionVariableIsReserved(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "newest artifact kit this build embeds") {
 		t.Errorf("the refusal must say where the value comes from; got:\n%v", err)
+	}
+}
+
+// A SEAT'S SLACK BLOCK NAMES NO CREDENTIAL (D4): the engine seals the bot
+// token and the signing secret under names it derives, so a block that is
+// only on or off is valid, and one that still names a token is held to one
+// whole ${VAR} or a literal.
+func TestASlackBlockNeedsNoCredentials(t *testing.T) {
+	t.Parallel()
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n")); err != nil {
+		t.Errorf("a Slack block with no credentials was refused: %v", err)
+	}
+	rejects(t, "name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n        bot_token: \"xoxb-${REST}\"\n",
+		"roles[0].integrations.slack.bot_token")
+}
+
+// THE APP-CONFIGURATION TOKEN IS A WHOLE ${VAR}: its refresh token works once,
+// and each rotation is sealed back under the name it points at.
+func TestTheSlackConfigurationTokenIsAReference(t *testing.T) {
+	t.Parallel()
+	rejects(t, "name: Acme\nintegrations:\n  slack: {app_config_token: xoxe-1-literal}\n",
+		"integrations.slack.app_config_token")
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {app_config_token: \"${SLACK_APP_CONFIG_TOKEN}\"}\n")); err != nil {
+		t.Errorf("a reference was refused: %v", err)
 	}
 }

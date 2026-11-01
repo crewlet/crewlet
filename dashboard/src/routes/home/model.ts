@@ -26,9 +26,10 @@ import type {
   FeedScheduleRun,
   WorkFlowPoint,
 } from "~/protocol/index.ts";
-import { plural, toWall } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { companyZone } from "~/lib/range.ts";
+import { shownStateOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -95,18 +96,23 @@ export function deltaWords(
 export interface Crew {
   working: number;
   needs: number;
+  /** Every seat the engine calls stopped, the paused ones among them. */
   stopped: number;
+  /** The stopped seats a person paused (`shownStateOf` reads "paused"). */
+  paused: number;
   idle: number;
   total: number;
 }
 
 export function crewOf(agents: readonly AgentRow[]): Crew {
-  const crew: Crew = { working: 0, needs: 0, stopped: 0, idle: 0, total: agents.length };
+  const crew: Crew = { working: 0, needs: 0, stopped: 0, paused: 0, idle: 0, total: agents.length };
   for (const a of agents) {
     if (a.activity === "working") crew.working++;
     else if (a.activity === "needs") crew.needs++;
-    else if (a.activity === "stopped") crew.stopped++;
-    else if (a.activity === "idle") crew.idle++;
+    else if (a.activity === "stopped") {
+      crew.stopped++;
+      if (shownStateOf(a) === "paused") crew.paused++;
+    } else if (a.activity === "idle") crew.idle++;
   }
   return crew;
 }
@@ -122,13 +128,16 @@ export function joinParts(parts: readonly string[]): string {
   return parts.join(" · ");
 }
 
-/** "1 waiting · 1 stopped · 1 idle" — the parts that are not working, each
- *  named only when it has a seat in it. */
+/** "1 waiting · 1 paused · 1 stopped · 1 idle": the parts that are not
+ *  working, each named only when it has a seat in it. A paused seat is said to
+ *  be paused, as its own badge says, and never counted as stopped. */
 export function crewParts(crew: Crew): string[] {
   if (crew.total === 0) return ["No agent seats in the chart"];
+  const faults = crew.stopped - crew.paused;
   const parts = [
     crew.needs && `${crew.needs.toLocaleString()} waiting`,
-    crew.stopped && `${crew.stopped.toLocaleString()} stopped`,
+    crew.paused && `${crew.paused.toLocaleString()} paused`,
+    faults && `${faults.toLocaleString()} stopped`,
     crew.idle && `${crew.idle.toLocaleString()} idle`,
   ].filter(Boolean) as string[];
   if (parts.length === 0) return crew.working === crew.total ? ["Every seat is working"] : [];
@@ -190,18 +199,30 @@ export interface Waiting {
   count: number;
   floor: boolean;
   oldestAt: string | null;
+  /**
+   * The answer could not account for everything (the board kit's `gapsOf`),
+   * so the count may be wrong in either direction and "nothing" is no claim
+   * to make over it.
+   */
+  partial: boolean;
 }
 
 export function waitingOf(
   answer: DecisionsAnswer | null,
   seatConditions: readonly { at?: string }[],
+  partial: boolean,
 ): Waiting | null {
   if (!answer || typeof answer.total !== "number") return null;
   let oldest = answer.oldest_at ?? null;
   for (const c of seatConditions) {
     if (c.at && (!oldest || Date.parse(c.at) < Date.parse(oldest))) oldest = c.at;
   }
-  return { count: answer.total + seatConditions.length, floor: answer.capped, oldestAt: oldest };
+  return {
+    count: answer.total + seatConditions.length,
+    floor: answer.capped,
+    oldestAt: oldest,
+    partial,
+  };
 }
 
 /** "2h 10m", "38m", "3d" — how long something has waited. */
@@ -284,8 +305,12 @@ export function statusSentence(input: {
   const clauses: Segment[][] = [];
   const w = input.waiting;
   if (w) {
-    if (w.count === 0) clauses.push([{ text: "nothing needs your decision" }]);
-    else {
+    // NOTHING IS A CLAIM, made only over an answer that accounted for
+    // everything; over one that could not, the clause is left out and the
+    // decisions tile says why.
+    if (w.count === 0) {
+      if (!w.partial) clauses.push([{ text: "nothing needs your decision" }]);
+    } else {
       const one = w.count === 1 && !w.floor;
       clauses.push([
         {
@@ -341,7 +366,7 @@ function capitalise(s: string): string {
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
   { value: "all", label: "Everything", kinds: "" },
-  // CREWLET WORKS' KINDS, offered only where the company runs it: the engine
+  // WORKLET'S KINDS, offered only where the company runs it: the engine
   // keeps a kind only where its half is its own, and refuses one named that
   // it does not keep.
   { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },
@@ -471,19 +496,4 @@ export function scheduleVerb(run: FeedScheduleRun): string {
 export function surfaceName(surface: string): string {
   const known: Record<string, string> = { slack: "Slack", mattermost: "Mattermost" };
   return known[surface] ?? surface.charAt(0).toUpperCase() + surface.slice(1);
-}
-
-/**
- * "Good morning, Jane", in the READER's clock, which is whose morning it is,
- * and with the first word of their name. A reader nobody named is greeted
- * without one rather than as "there" or as a token id.
- *
- * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
- * timestamp on the page is drawn in.
- */
-export function greeting(now: number, name: string): string {
-  const hour = Number(toWall(now).slice(11, 13));
-  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-  const first = name.trim().split(/\s+/)[0] ?? "";
-  return first ? `Good ${part}, ${first}` : `Good ${part}`;
 }

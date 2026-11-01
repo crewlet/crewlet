@@ -83,6 +83,7 @@ func TestCompactionResolvesItsSeatByHandle(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: m
@@ -137,6 +138,7 @@ func TestEpisodeCondensingResolvesItsSeatByHandle(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: m

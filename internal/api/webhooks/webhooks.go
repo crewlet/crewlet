@@ -112,6 +112,11 @@ type Options struct {
 	// callback has to be served wherever the setup surface is.
 	AppFlow AppCompleter
 
+	// SlackInstalls finishes an install a seat's install link began. Nil
+	// answers such an arrival 503: the link was minted by an engine that
+	// can finish it, and this one cannot say otherwise.
+	SlackInstalls SlackInstaller
+
 	// Recheck asks the reconcile loop to look at GitHub immediately, for
 	// the moment a person finishes installing an agent's app there.
 	//
@@ -153,6 +158,8 @@ type Receiver struct {
 	forge      *forgeVerifier
 	appFlow    AppCompleter
 
+	slackInstalls SlackInstaller
+
 	// recheck asks the reconcile loop to look at GitHub now, and
 	// recheckedAt is when this route last did. See [recheckEvery]: the
 	// route is unauthenticated, so the ask is rate limited here rather
@@ -186,13 +193,15 @@ func New(opts Options) (*Receiver, error) {
 			strings.Join(missing, ", "))
 	}
 	r := &Receiver{
-		secrets:    opts.Secrets,
-		publisher:  opts.Publisher,
-		appFlow:    opts.AppFlow,
-		recheck:    opts.Recheck,
-		claims:     opts.Claims,
-		configured: opts.Configured,
-		now:        opts.Now,
+		secrets:   opts.Secrets,
+		publisher: opts.Publisher,
+		appFlow:   opts.AppFlow,
+		recheck:   opts.Recheck,
+
+		slackInstalls: opts.SlackInstalls,
+		claims:        opts.Claims,
+		configured:    opts.Configured,
+		now:           opts.Now,
 	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }
@@ -222,7 +231,7 @@ func (r *Receiver) Routes(mux httpjson.Router) {
 	mux.HandleFunc("POST /webhooks/confluence/{event}", r.confluenceCloud)
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
 	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
-	mux.HandleFunc("GET /webhooks/slack-oauth", slackOAuthLanding)
+	mux.HandleFunc("GET /webhooks/slack-oauth", r.slackOAuthLanding)
 	mux.HandleFunc("GET /webhooks/github-app", r.githubAppLanding)
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE READ WIRE: the queries a reader answers and the answers it gives. They
@@ -465,7 +466,7 @@ func (row PushRow) brief() PushRow {
 // derived from the commits, whose committer header any client may write.
 //
 // THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0063), and a row naming no way this build knows is refused by
+// replicated 0086), and a row naming no way this build knows is refused by
 // every reader of it (scanPush): an apply that forgot the column would
 // otherwise read as one way or the other.
 type PushVia string
@@ -609,7 +610,7 @@ type IntroducedQuery struct {
 // push beside it costs the read more pages and never one page more than
 // that. An index on the run would hold an entry for every box push on every
 // data node for the history's 181 days to serve that one read a run
-// (replicated 0070 says what it would cost); BenchmarkRunPushes measures what
+// (replicated 0093 says what it would cost); BenchmarkRunPushes measures what
 // the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
@@ -1036,7 +1037,7 @@ type ReadQuery struct {
 	// and serves only what BOTH may read: a listing leaves out what either
 	// may not, and a read the asker's own grant covers and the ceiling's
 	// does not is [ErrAboveCeiling]. Judged where the read is answered, as
-	// the asker's grant is (ADR-0058), and never where the turn runs: a
+	// the asker's grant is (ADR-0081), and never where the turn runs: a
 	// ceiling judged against the repository a turn resolved once would keep
 	// admitting a seat a later activation shut out of it for the rest of
 	// the turn, while the asker's own grant was judged afresh at every read.
@@ -1044,7 +1045,7 @@ type ReadQuery struct {
 	// ONLY A SEAT, AND ONLY BESIDE A SEAT: a person's or a token's read is
 	// its own, which no ceiling bounds, and a seat is the one requester
 	// whose grant reads the chart — a person maintains every repository
-	// (ADR-0055) and a stranger reads none, both settled where the turn runs
+	// (ADR-0078) and a stranger reads none, both settled where the turn runs
 	// before any read is asked. Refused on `introduced`, on `run_pushes` and
 	// on the duty listings `compaction_due`, `publication_due` and
 	// `expunge_due`, which no principal makes.
@@ -2574,7 +2575,7 @@ type GitQuery struct {
 	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
 	// and held to the repository's read grant by the git node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
-	// repository, a person or a token by ADR-0055's rules, which read no
+	// repository, a person or a token by ADR-0078's rules, which read no
 	// chart. Never trusted for anything but the grant. REFUSED on a read the
 	// engine makes on its own account ([GitQuery.EnginesOwn]), which names
 	// none.
@@ -2620,7 +2621,7 @@ type GitQuery struct {
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
 	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
-	// copy it does not hold (ADR-0059): its EFFECTIVE HOME — the first git
+	// copy it does not hold (ADR-0082): its EFFECTIVE HOME — the first git
 	// node of the repository's order once the walk's demotions are applied —
 	// and, only where that node answered that no copy serving the read is
 	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
@@ -3011,7 +3012,7 @@ func WirePath(p string) (text, b64 string) {
 // is the git node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, GitReadKinds())
+		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
 	}
 	if id, err := uuid.Parse(q.RepoID); err != nil || id.String() != q.RepoID {
 		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
@@ -3296,7 +3297,7 @@ func (q ReanchorQuery) validate() error {
 			return fmt.Errorf("%w: %s.id: %q names two anchors, whose answers would read as one", ErrInvalid,
 				field, a.ID)
 		case !a.Side.Valid():
-			return fmt.Errorf("%w: %s.side: %q is not one of %v", ErrInvalid, field, a.Side, Sides())
+			return fmt.Errorf("%w: %s.side: %q is not one of %s", ErrInvalid, field, a.Side, words.Or(Sides()))
 		case a.Side == SideOld && q.Base == "":
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)

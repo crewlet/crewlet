@@ -104,10 +104,12 @@ config — rungs 2 and 3 especially:
   of silent miss.
 - **A human seat with no `contact` identity is legal and worth a look.** It
   passes the schema and `crewlet validate` alike — a person who works only
-  through the dashboard has no chat account to declare — but `crewlet
-  validate` prints an advisory, because nothing addressed to that seat on a
-  chat surface reaches anybody. Give it one for the surface the company runs
-  unless that is the intent.
+  through the dashboard has no chat account to declare. On the engine's own
+  chat that is the whole story: agents mention the person by their seat's
+  handle and they read it on the dashboard. On Mattermost or Slack `crewlet
+  validate` prints an advisory, because nothing addressed to that seat on the
+  vendor's surface reaches anybody. Give it one for the surface the company
+  runs unless that is the intent.
 - **Every `knowledge.*` scope list names a backend the config actually
   configures.** A scope for a backend with no integration block narrows
   nothing, and `crewlet validate` refuses it.
@@ -153,23 +155,28 @@ live-editable, so the first version does not need to be the last.
    from the moment they join until they are removed — they are invited or
    created *onto* it — so each human teammate needs one too, and a
    company with no human seat can admit nobody.
-4. **What surfaces does the work live on?** Chat and the code host are
-   the ones to ask about; the tracker and the knowledge base **ship with
-   the engine and are on by default**, so a founder needs a positive
-   reason to bring Jira and Confluence rather than a reason not to. The
-   reason is usually about their people — a team already living in Jira
-   should not be asked to watch a second board — and never about the
-   agents, who cannot tell the difference. Say so, then point them at
+4. **What surfaces does the work live on?** The code host is the one to
+   ask about; the tracker, the knowledge base and chat **ship with the
+   engine and are on by default**, so a founder needs a positive reason
+   to bring Jira, Confluence, Slack or Mattermost rather than a reason
+   not to. The reason is usually about their people — a team already
+   living in Jira should not be asked to watch a second board, nor one
+   already living in Slack to answer agents in a second chat — and never
+   about the agents, who cannot tell the difference. Chat carries the one
+   trade that is not about habit, so name it: the engine's own chat sends
+   nothing to a person who is away — no email, no push — and a vendor's
+   does. Say so, then point them at
    [Choosing your stack](https://docs.crewlet.ai/engine/latest/getting-started/choosing-your-stack/)
    rather than re-deriving the trade-offs. **Do not wire integrations in
    the first pass** — see the sequencing rule below.
 
-   Give each unit a `project` and a `space` in the first pass regardless:
-   on the default backends that is the whole setup, and it is what gives
-   a team somewhere to file work and write things down — the native
-   knowledge base creates a page only in a declared space (a unit's or a
+   Give each unit a `project` and a `space` in the first pass regardless,
+   and a `channel` to each unit that should have a room of its own: on
+   the default backends that is the whole setup, and it is what gives a
+   team somewhere to file work, write things down and talk: Doclet
+   creates a page only in a declared space (a unit's or a
    seat's `space`, `knowledge.root_space`, or the tool-skills container),
-   exactly as the tracker files work only in a declared project.
+   exactly as Worklet files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Every model is reached through the vendor's own **coding
    CLI**, which the engine drives as a process, so ask *whose* models and
@@ -183,20 +190,47 @@ live-editable, so the first version does not need to be the last.
      `auth: {mode: api-key}`, which reads `ANTHROPIC_API_KEY` from the secret
      store or the environment. Name another variable with
      `auth.api_key: "${VAR}"` only if theirs is called something else.
-   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
-     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
-     with; leave `auth` out for a ChatGPT login.
    - **Open models** (OpenRouter, a hosted provider, a local server) —
      `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
      the provider's key in `env` under that provider's own variable, e.g.
      `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`.
+   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
+     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
+     with; leave `auth` out for a ChatGPT login. **Not on its own:** every
+     agent seat's executor is its coding CLI's own run, which only
+     `claude-code` and `opencode` can be, so a company on Codex alone is
+     refused. Codex (and every other CLI) serves a seat's reviewer, workers
+     and side passes through `llm_review`, `llm_subagent`, `llm_auxiliary` or
+     `llm_judge`, beside a Claude Code or OpenCode entry the seat's `llm`
+     names.
+
+   **Write `providers.sandbox` with the model**, because every agent seat's
+   executor runs in a box from it and a company with an agent seat and a
+   model is refused without one. For a local instance, the founder's own
+   machine included, recommend `container`: a `local.image` carrying the CLI
+   (an image of their own, or a stock one plus a setup step that installs it)
+   and `default_run_in: container`. `sandbox: {local: {}, default_run_in:
+   direct}` is the shortest start and runs it as the engine's user — a fully
+   permissioned CLI on that host, with whatever that account can read — so
+   keep it for a dedicated host the founder is willing to hand to an
+   autonomous agent, the entry that needs the host itself, or a first run on
+   their own machine while its seats take work from them alone, and say that
+   the runs move into `container` before a seat takes work from anyone else;
+   `e2b` keeps the run off the host altogether. See
+   [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
    Whichever it is, the CLI must be installed on the machine running
    `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
-   tell the founder to run it. If they want a plan with a key behind it, that
-   is two entries on the same CLI and a list: `llm: [plan, key]`. A cheap,
-   fast entry for `llm_auxiliary` is worth suggesting once the company grows:
-   every auxiliary call pays a CLI launch under a fixed deadline. See
+   tell the founder to run it, and where: with the engine stopped it reaches
+   the fleet's secret store itself, through the node's own broker; while the
+   engine runs it reads the company's values through it, so it is run beside
+   it with `CREWLET_API_TOKEN` set to one of the node's Tier A tokens (or with
+   `-api URL` naming a running node). A member of a cluster whose engine is
+   stopped cannot reach the store alone, so the doctor is refused there,
+   naming `-api`. If they want a plan with a key behind it, that is two
+   entries on the same CLI and a list: `llm: [plan, key]`. A cheap, fast entry
+   for `llm_auxiliary` is worth suggesting once the company grows: every
+   auxiliary call pays a CLI launch under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
 
    Ask whether they want a cost ceiling, and on which window:
@@ -211,19 +245,23 @@ concrete chart and let them correct it. Concrete beats complete.
 
 ## Sequence: get a turn on screen first
 
-A company with no integrations only reacts to schedules. That is the
-right first milestone, because it proves the engine, the model, and the
-config all work before any external credential is in play.
+A company with no integrations is the right first milestone, because it
+proves the engine, the model, and the config all work before any external
+credential is in play, and one schedule gets its first turn on screen with
+nobody having to give it work.
 
-It is not a hollow one: the tracker and the knowledge base are on by
-default, so that first turn can already file work and write pages, and
-the founder can watch it happen on the Tracker and Pages screens. The
-integrations that come later are about where their PEOPLE are, not about
-what the company can do.
+It is not a hollow one: Worklet, Doclet and Chatlet are on by
+default, so that first turn can already file work, write pages and post in
+its team's room, and the founder can watch it happen in the dashboard's
+Worklet, Doclet and Chatlet workspaces (and answer in Chatlet as their own seat
+once they have signed in on it, below). The integrations that come later are
+about where their PEOPLE are, not about what the company can do.
 
-**First pass** — no `integrations`, no `mcp_servers`, one LLM provider,
-the org chart with a `project` and `space` per unit, and one schedule on
-the top seat so a turn actually fires:
+**First pass** — no `integrations`, no `mcp_servers`, one LLM provider
+(Claude Code or OpenCode) and the `providers.sandbox` step 5 writes with
+it, the org chart with a `project` and `space` per unit and a `channel`
+per team that should have a room, and one schedule on the top seat so a
+turn actually fires:
 
 ```yaml
 roles:
@@ -244,8 +282,8 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with GitLab + Mattermost + sandbox on the
-  engine's own tracker and knowledge base, its model open models through
+  a complete seven-seat company with GitLab + Mattermost + sandbox on
+  Worklet and Doclet, its model open models through
   OpenCode on an OpenRouter key.
 - [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml) —
   the SAME seven seats with everything but chat removed: Mattermost alone, on
@@ -318,27 +356,58 @@ there that is no secret is written as itself: `GITLAB_HOST: gitlab.com`,
 masks everything in such a position that is not exactly one reference,
 and writing the masked value back keeps the stored one.
 
-**Seats you will provision need a *whole-value* `${VAR}`.**
-`crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent
-tokens *into the config's own references*, and that capture contract
-requires the value to be exactly one reference —
-`"${MATTERMOST_TOKEN_CEO}"`, never `"tok-${SUFFIX}"` or a literal. One
-distinct variable per seat. Atlassian and GitHub mint nothing: create
-those accounts and tokens by hand, and their commands report which
-account each credential turned out to be.
+**An agent's own account at a managed integration is the engine's.** Turn a
+seat on with `roles[].integrations.<kind>.enabled: true` and its access in
+the vendor's own terms (a Datadog role id, GitLab's `access_level`,
+Mattermost's `roles` and `channels`, and so on), or on the integration's
+Agents tab. The engine creates the account and seals its token under a name
+it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
+`MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not
+write a `${VAR}` for that token anywhere in the document: a seat's variable
+that a company block or another seat also names is refused.
 
 **The knowledge base and the tracker are each single-homed, and each is
-named.** `knowledge.backend` is `native` (the default), `confluence` or
-`none`; `tracker.backend` is `native`, `jira` or `none`. Two knowledge
+named.** `knowledge.backend` is `doclet` (the default), `confluence` or
+`none`; `tracker.backend` is `worklet` (the default), `jira` or `none`. Two knowledge
 bases would make an agent's answer to "what do we already know about
-this" depend on which was asked, so naming `native` beside an
-`integrations.confluence` block is refused — and the same for the
+this" depend on which was asked, so naming `doclet` beside an
+`integrations.confluence` block is refused, and the same for the
 tracker. Leaving a backend unset **derives** it from whether the vendor
 block is there, so an existing config keeps what it had. The two axes are
-independent: a native tracker against a Confluence wiki is ordinary. Put
+independent: Worklet against a Confluence wiki is ordinary. Put
 the org-wide read scope in `knowledge.scope`, and note a scope on a
 backend switched off is refused, because it reads as a working narrowing
 and narrows nothing.
+
+**Chat is a third axis on the same terms, and it is `chat.backend`.**
+`chatlet` (the engine is the chat system), `vendor` (Slack or Mattermost),
+or `none`. Unset derives `vendor` when the company declares a vendor chat
+surface and `chatlet` otherwise — and for chat that includes **any seat's
+own `integrations.slack` app**, because Slack's credentials are per seat
+and a company using it heavily may never write the org-level block.
+Naming `chatlet` beside one is refused: a person would reply in one place
+while the agents read the other, and no rule could say which thread was
+real. The value is `vendor` rather than a product name because a company
+may legitimately run Mattermost *and* Slack. On `chatlet`, the founder's
+own policy lives in `chat.chatlet` — and `message_retention_days` is
+three-valued: leave it out for a year, write `0` to keep messages **for
+ever**, or 30..3650 for a horizon. (`inbox.retention_days`
+reads `0` the other way, as "take the default"; do not carry one across
+to the other.)
+
+**A unit's `channel` is an address, and it has a grammar.** Lowercase
+letters, digits, `-` and `_`, up to 64 characters — `backend`, never
+`#backend`, `C_BACKEND` or `Backend Team`. It is inherited by children
+that name none, which is the way to give a whole branch one room. On
+Chatlet the engine OPENS the room this names for the unit that
+declares it, and a room belongs to that one unit, so two units declaring
+the same channel are **refused** there — `crewlet validate` and every
+config write refuse the document; give each its own channel, or leave a
+child's empty so it inherits. On a vendor surface the same pair is only
+warned about (everything scoped to one lands in the other's room). A
+Chatlet company where no unit declares a channel at all is warned
+about too — no team has a room of its own until somebody opens one by
+hand and adds its seats.
 
 **`project` / `space` on a unit or root role is identity, not read scope,
 and not a credential.** It means "this team's home": where inbound
@@ -347,7 +416,7 @@ and writes pages. It does **not** widen what agents can read (only
 `knowledge.scope` does) and it is **not** an MCP credential (those live
 in `role.mcp_env`). This is the single most-confused part of the config —
 get it right and say which one you mean. The keys are **vendor-neutral**
-by design: the same `project: ENG` names a native project and a Jira one,
+by design: the same `project: ENG` names a Worklet project and a Jira one,
 so switching backends never rewrites the org chart. Shape them as an
 upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`),
 which is what every backend accepts, and never use the reserved `TS` or
@@ -370,7 +439,9 @@ top agent, so escalation terminates at a person and agents recognise
 their activity in chat / the tracker / the code host. It is not optional:
 it is also the seat the founder **joins on**, since every person who signs
 in holds exactly one human seat and is put onto it rather than given one
-later:
+later — and on the engine's own chat it is who they are in every room,
+since a credential acting as nobody's seat reads nothing there, not even
+a public room:
 
 ```yaml
 roles:
@@ -383,16 +454,22 @@ roles:
 
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They reject the runtime-only fields, and `contact` is
-optional: a person with none works through the dashboard only, agents
-cannot @-mention them, and `crewlet validate` warns about the seat at its
-`contact`. Scope their `manages` to the top roles — a
-founder managing every seat floods them. Give every other person who will
+optional: a person with none works through the dashboard only. On the
+engine's own chat that loses nothing, because agents mention them by
+their seat's handle; on Mattermost or Slack agents cannot @-mention them
+there, and `crewlet validate` warns about the seat at its `contact`.
+Scope their `manages` to the top roles — a founder managing every seat
+floods them. Give every other person who will
 sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
-**Agents do not get code-authoring tools by default.** Reading and
-reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
-which needs `providers.sandbox` configured. See
+**Every agent seat writes code in its own run.** Its executor is its coding
+CLI's own run (`claude-code` or `opencode`) with a shell and git, in a box
+from `providers.sandbox`, which the company must configure once it has an
+agent seat and a model; reading and reviewing code on a code host is MCP.
+`role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its
+code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
+`max_turns`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
 **The engine ships no tool-skill prose.** If they want agents to know
@@ -460,17 +537,28 @@ are five copies of one agent with five times the bill.
 When you finish, the founder should have:
 
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
-2. `crewlet.yaml` — Tier A: the store's file path (one local file this
-   process owns — there is no DSN), the stream slot, `coordination.type`,
-   and the API host/port with at least one auth token. Leave the stream
-   `type: embedded` with a `store_dir` and `coordination.type: local`:
-   that is one node with no broker to operate and no service to point
-   anything at, and it is what every company starts as. Validate it too
-   (`crewlet validate crewlet.yaml`).
-3. `.env` — every `${VAR}` the two files reference, with real values.
-   List them explicitly; a missing one keeps a tool server, or a
-   `run_sandbox` coding run, that reads it from starting, and anywhere
-   else can resolve to an empty string that fails later, deep in a turn.
+2. `crewlet.yaml` — Tier A: the store's file path (two local files this
+   process owns, the node's own and the replicated estate beside it — there
+   is no DSN), the stream slot, `coordination.type`, the API host/port, and
+   the three things a node serving the API refuses to start without:
+   `api.external_url` (where a browser reaches it — `http://localhost:8000`
+   on one machine, the public address behind a proxy), `api.auth.admin`
+   and at least one auth token. Every node also needs the `secrets:`
+   keyring — `active_key_id` and a key whose `material:` is a `${VAR}` —
+   because every record it writes is signed under it; `crewlet secrets
+   keygen -key-id <id>` mints a key and prints the snippet and the export
+   line. Leave the stream `type: embedded` with a `store_dir` and
+   `coordination.type: local`: that is one node with no broker to operate
+   and no service to point anything at, and it is what every company
+   starts as. Step 1 of the
+   [quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/)
+   writes a complete one. Validate it too (`crewlet validate crewlet.yaml`).
+3. `.env` — every `${VAR}` the two files reference, with real values,
+   the keyring's key among them. List them explicitly; a missing one
+   keeps a tool server that reads it from starting, is left out of an
+   executor run (which starts anyway and logs `sandbox_env_unresolved`),
+   and anywhere else can resolve to an empty string that fails later,
+   deep in a turn.
 4. The run command, and what they should expect to see:
 
 ```bash
@@ -482,15 +570,15 @@ crewlet run crewlet.yaml -company company.yaml
 5. How they join it. Nobody holds a password until they are put on a
    seat, and the API token is what puts the first person on theirs — so
    its `grants` must list `admin` (`grants: [admin]`), which runs the
-   company and includes both apps, and the node's `api.auth.admin` must be
+   company and includes every app, and the node's `api.auth.admin` must be
    `serve`. Sign in at the dashboard with the API token, open **Company › Org
    chart**, open the founder's seat (drawn **Vacant**) and press
    **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by an administrator — with both apps (Tracker, Knowledge) ticked by
-   default, and Admin only for the people who run the company. See [How the first person
+   way, by an administrator, with every app (Worklet, Doclet, Artifacts,
+   Chatlet) ticked by default, and Admin only for the people who run the company. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Routing a code host.
@@ -380,6 +381,13 @@ func inbound(h hook, reason string) notify.Inbound {
 		meta[ProjectIDField] = strconv.Itoa(id)
 	}
 	subject, body := subjectAndBody(h)
+	if body != "" {
+		source, author := bodyProvenance(h)
+		meta[notify.BodySourceField] = string(source)
+		if author != "" {
+			meta[notify.BodyAuthorField] = author
+		}
+	}
 	if key, value := itemRef(h); key != "" {
 		meta[key] = value
 	}
@@ -408,6 +416,32 @@ func subjectAndBody(h hook) (string, string) {
 	default:
 		return h.Attrs.Title, h.Attrs.Description
 	}
+}
+
+// bodyProvenance is what [subjectAndBody]'s body is and, where the payload says
+// one person wrote every word of it, who.
+//
+// A NOTE IS A REMARK ON THE ITEM and an issue's or merge request's own text is
+// its DESCRIPTION — the tracker's own two surfaces, since the engine charges
+// both kinds of item to one work item. ITS AUTHOR ONLY WHERE THE TEXT IS FRESH:
+// a note just created is its writer's (a release too old to say `action` sends
+// a note hook only on a create), and an item's description is its opener's on
+// the hook that opened it; an update is whoever made it, and a description on
+// any later hook is the opener's first version and every edit since. A body
+// nobody is named for is fenced as nobody's.
+func bodyProvenance(h hook) (provenance.Source, string) {
+	switch h.Kind {
+	case "note":
+		if action := strings.ToLower(h.Attrs.Action); action == "" || action == "create" {
+			return provenance.SourceWorkComment, h.actor()
+		}
+		return provenance.SourceWorkComment, ""
+	case "issue", "merge_request":
+		if strings.ToLower(h.Attrs.Action) == "open" {
+			return provenance.SourceWorkDescription, h.actor()
+		}
+	}
+	return provenance.SourceWorkDescription, ""
 }
 
 // itemRef is the issue or merge request this event names, as a metadata key

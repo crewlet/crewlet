@@ -27,7 +27,7 @@ import (
 // a third-party HTTP round trip inside the transaction that saves somebody's
 // page. It would also charge the company once per NODE, for a value every node
 // needs and nobody can compute differently. So it is a fleet singleton that
-// publishes a record, and the record is what every node applies.
+// publishes a record, and the record is what every data node applies.
 //
 // # What it costs, from the constants below
 //
@@ -538,7 +538,8 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	case d.Standing == nil:
 		return nil, fmt.Errorf("search: the embed duty cannot read the vector " +
 			"log's standing — it publishes nothing about the index without " +
-			"knowing this node has applied the log and every node reads the records")
+			"knowing this node has applied the log, and every data node " +
+			"applies what it publishes")
 	case d.Budget == nil:
 		return nil, fmt.Errorf("search: the embed duty has no tick budget — " +
 			"EmbedDeps.Budget is the bound its caller holds the tick to, which " +
@@ -1504,7 +1505,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 	return out, nil
 }
 
-// TaskCorpus embeds the native tracker's tasks.
+// TaskCorpus embeds Worklet's tasks.
 //
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
@@ -1555,7 +1556,7 @@ const (
 //
 // EXPORTED FOR THE TRACKER'S INDEX GATE, which plans every statement that reads
 // `tracker_tasks` against the indexes the tracker declares
-// (internal/tracker's TestEveryIndexServesARegisteredQuery). A copy written
+// (internal/worklet's TestEveryIndexServesARegisteredQuery). A copy written
 // for the gate certifies a statement nothing runs, which is how an index on a
 // column nothing ever wrote was kept for this duty's "selection" while the
 // selection the duty does run was certified by nothing.

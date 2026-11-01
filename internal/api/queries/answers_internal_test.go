@@ -16,7 +16,7 @@ import (
 // way round once a cache sat in front of the read.
 //
 // And each reach withholds exactly its half: the payload only without the
-// body, the work-item tags only without the tracker, every other column kept.
+// body, the work-item tags only without Worklet, every other column kept.
 //
 // Mutation: delete the tags from row.Tags itself rather than from a clone, or
 // clear the payload on the input slice, and the input check goes red.
@@ -35,9 +35,9 @@ func TestMaskHistoryNeverWritesThrough(t *testing.T) {
 		reach         livestate.Reach
 		payload, tags bool
 	}{
-		{"a status reader without the tracker", livestate.Reach{}, false, false},
+		{"a status reader without Worklet", livestate.Reach{}, false, false},
 		{"a status reader with the tracker", livestate.Reach{Tracker: true}, false, true},
-		{"a lead without the tracker", livestate.Reach{Body: true}, true, false},
+		{"a lead without Worklet", livestate.Reach{Body: true}, true, false},
 		{"an admin", livestate.Reach{Body: true, Tracker: true}, true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {

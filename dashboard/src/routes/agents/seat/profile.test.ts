@@ -12,11 +12,11 @@ import {
   HUMAN_TABS,
   feedRows,
   fortnight,
+  lastTurnEnded,
   liveRow,
   mayReadRecord,
   mayReadTrail,
   seatRun,
-  pillWord,
   placementWords,
   sandboxWords,
   seatSchedules,
@@ -139,20 +139,8 @@ describe("the week's change", () => {
   });
 });
 
-describe("the state pill", () => {
-  test("names why a stopped seat stopped, in the engine's own reason", () => {
-    const stopped = (reason: string) =>
-      ({ role: "SWE", activity: "stopped", stopped_reason: reason }) as unknown as AgentRow;
-    expect(pillWord(stopped("paused"))).toBe("Paused");
-    expect(pillWord(stopped("budget"))).toBe("Stopped · budget");
-    expect(pillWord(stopped("unplaced"))).toBe("Not placed");
-    // A reason this build does not know is not guessed at.
-    expect(pillWord(stopped("gremlins"))).toBe("Stopped");
-  });
-});
-
 describe("the current turn's calls", () => {
-  const row = (executions: number, running: boolean): AgentRow =>
+  const row = (executions: number, running: boolean | number): AgentRow =>
     ({
       role: "SWE",
       live_call: {
@@ -167,15 +155,21 @@ describe("the current turn's calls", () => {
           success: true,
           started_at: "2026-09-21T09:48:02Z",
           duration_ms: 300,
+          call_id: `done-${i}`,
         })),
-        running_call: running
-          ? { round: 9, name: "sandbox.run", arguments: "{}", started_at: "2026-09-21T09:51:31Z" }
-          : null,
+        running_calls: Array.from({ length: Number(running) }, (_, i) => ({
+          id: `run-${i}`,
+          round: 9,
+          name: i === 0 ? "sandbox.run" : `read.${i}`,
+          arguments: "{}",
+          started_at: "2026-09-21T09:51:31Z",
+        })),
       },
     }) as unknown as AgentRow;
 
-  // THE RUNNING CALL IS THE ROW THE CARD EXISTS FOR, so it is never the one cut.
-  test("keeps the running call and the newest calls before it, within the limit", () => {
+  // THE RUNNING CALLS ARE THE ROWS THE CARD EXISTS FOR, so an answered call is
+  // cut before any of them.
+  test("keeps the running calls and the newest calls before them, within the limit", () => {
     const rows = feedRows(row(8, true), 5);
     expect(rows).toHaveLength(5);
     expect(rows.map((r) => r.name)).toEqual([
@@ -187,6 +181,31 @@ describe("the current turn's calls", () => {
     ]);
     expect(rows.at(-1)?.running).toBe(true);
     expect(feedRows(row(8, false), 5).map((r) => r.name)[0]).toBe("tool.3");
+    // Three side by side: every one of them, and two answered calls.
+    const three = feedRows(row(8, 3), 5);
+    expect(three.map((r) => [r.name, r.running])).toEqual([
+      ["tool.6", false],
+      ["tool.7", false],
+      ["sandbox.run", true],
+      ["read.1", true],
+      ["read.2", true],
+    ]);
+    // More side by side than the card holds: the newest of them, and nothing
+    // answered.
+    expect(feedRows(row(8, 7), 5).map((r) => r.name)).toEqual([
+      "read.2",
+      "read.3",
+      "read.4",
+      "read.5",
+      "read.6",
+    ]);
+  });
+
+  // A CALL IS ONE ROW FOR ITS WHOLE LIFE: keyed by its own id running and
+  // answered alike, so the row a reader is watching is not replaced by another
+  // when its result lands.
+  test("keys a call by its own id, running and answered alike", () => {
+    expect(feedRows(row(1, 1)).map((r) => r.key)).toEqual(["call-done-0", "call-run-0"]);
   });
 
   test("reads each call's time and duration off the engine's own record", () => {
@@ -223,13 +242,26 @@ describe("the current turn's calls", () => {
 describe("the setup card's words", () => {
   const role = (over: Partial<ConfigRole>): ConfigRole => ({ name: "SWE", ...over });
 
-  test("a sandbox is not offered until it is enabled, and a default is said as one", () => {
-    expect(sandboxWords(role({}))).toBe("Not offered");
-    expect(sandboxWords(role({ sandbox: { enabled: false, run_in: "e2b" } }))).toBe("Not offered");
+  // EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so the row never says one is
+  // missing: a seat with no block runs on the catalogue's defaults, and one
+  // with a block is said by what it adds.
+  test("a seat's box is the catalogue's defaults, or what its own block adds", () => {
+    expect(sandboxWords(role({}))).toBe("The catalogue's defaults");
+    expect(sandboxWords(role({ sandbox: {} }))).toBe("The catalogue's defaults");
     expect(
-      sandboxWords(role({ sandbox: { enabled: true, run_in: "e2b", coding_agent: "opencode" } })),
-    ).toBe("e2b · opencode");
-    expect(sandboxWords(role({ sandbox: { enabled: true } }))).toBe("The provider's default cell");
+      sandboxWords(
+        role({
+          sandbox: {
+            setup: [{ name: "deps" }, { name: "lint" }],
+            env: { GH_TOKEN: "${GH}", REGION: "eu" },
+            mcp: { servers: ["github"] },
+            max_turns: 40,
+          },
+        }),
+      ),
+    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns");
+    // Zero is an explicit "uncapped", said as itself rather than as a cap of 0.
+    expect(sandboxWords(role({ sandbox: { max_turns: 0 } }))).toBe("No turn cap");
   });
 
   test("placement is a pinned node, a set of labels, or any node", () => {
@@ -335,13 +367,13 @@ describe("whose record this page asks for", () => {
       seats: [seat("ana", ["ceo"], []), seat("ceo", [], ["ana"]), seat("bo", [], [])],
     },
   } as never);
-  const reader = (handle: string, admin = false, tracker = true) => ({
+  const reader = (handle: string, admin = false, worklet = true) => ({
     handle,
     admin,
-    tracker: tracker || admin,
+    worklet: worklet || admin,
   });
 
-  // THE ENGINE'S RULE, all three arms, each with Tracker: the owner, whoever
+  // THE ENGINE'S RULE, all three arms, each with Worklet: the owner, whoever
   // leads them, and an admin, who holds every app.
   test("is the owner's, a lead's and an admin's", () => {
     expect(mayReadRecord(reader("ceo"), led, "ceo")).toBe(true);
@@ -354,10 +386,10 @@ describe("whose record this page asks for", () => {
     expect(mayReadRecord(reader(""), led, "ceo")).toBe(false);
   });
 
-  // A PERSON'S RECORD IS THE TRACKER'S: without the app nobody's is asked —
-  // their own and their report's included — since the engine refuses every
-  // record question to a reader without Tracker.
-  test("is asked by nobody without Tracker, the owner and the lead included", () => {
+  // A PERSON'S RECORD IS WORKLET'S: without the app nobody's is asked, their
+  // own and their report's included, since the engine refuses every record
+  // question to a reader without Worklet.
+  test("is asked by nobody without Worklet, the owner and the lead included", () => {
     expect(mayReadRecord(reader("ceo", false, false), led, "ceo")).toBe(false);
     expect(mayReadRecord(reader("ana", false, false), led, "ceo")).toBe(false);
   });
@@ -402,4 +434,12 @@ describe("mayReadTrail", () => {
     expect(mayReadTrail({ handle: "bo", admin: false }, led, "agent")).toBe(false);
     expect(mayReadTrail({ handle: "", admin: false }, led, "agent")).toBe(false);
   });
+});
+
+// A TURN A PERSON STOPPED IS SAID TO HAVE BEEN STOPPED — never "failed", which it
+// did not, and never a bare "ended", which hides that anybody stopped it.
+test("a seat's last turn says how it ended, a person's stop included", () => {
+  expect(lastTurnEnded("completed")).toBe("ended");
+  expect(lastTurnEnded("failed")).toBe("failed");
+  expect(lastTurnEnded("stopped")).toBe("was stopped");
 });

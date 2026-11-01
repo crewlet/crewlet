@@ -342,7 +342,7 @@ test("the browser asks before closing a tab with unsaved writing, and not otherw
 // `mayChangeConfig`) and the parts open and the route is read.
 test("a reader who may not write it, sent to the edit address, reads the page and asks nothing", async () => {
   location.hash = "#/company/principles?edit=mission,vision,policies";
-  mount(["tracker"]);
+  mount(["worklet"]);
   await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   expect(within(card("Mission")).getByText(ACME.mission)).toBeDefined();
   expect(screen.queryByRole("textbox")).toBeNull();

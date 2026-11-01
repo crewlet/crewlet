@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // REQUEST-TIME REPAIR. A git process the host ran in a cache that git itself
@@ -225,7 +226,7 @@ const (
 	// only a shape that sweep did not end is rebuilt.
 	RebuildShape RebuildReason = "shape"
 	// RebuildStream is a cache whose log was RECREATED under it — its stream
-	// identity is not the one the cache read from (ADR-0053: a stream the
+	// identity is not the one the cache read from (ADR-0076: a stream the
 	// engine provisions again is stamped anew; a snapshot restore is not a
 	// recreation). Counted by the round that reads it whole.
 	RebuildStream RebuildReason = "stream"
@@ -423,7 +424,7 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 	reason, drops := f.Reason, f.Drops
 	if !slices.Contains(rebuildReasons, reason) {
 		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process over the cache "+
-			"failed with, one of %v, and %q is not", ErrInvalid, rebuildReasons, reason)
+			"failed with, one of %s, and %q is not", ErrInvalid, words.Or(rebuildReasons), reason)
 	}
 	switch {
 	case reason == RebuildDerived && (drops == 0 || drops&^c.image.parts(c.image.all()) != 0):

@@ -66,12 +66,12 @@ import (
 
 // codeUsage is every `crewlet code` synopsis.
 const codeUsage = `usage: crewlet code <command>
-  status [<config.yaml>] [-url URL] [-repo NAME] [-pushes N] [-json]
+  status [<config.yaml>] [-api URL] [-repo NAME] [-pushes N] [-json]
       the repositories and their history, as the node reads them
-  verify [<config.yaml>] [-url URL] [-repo NAME]... [-repair] [-json]
+  verify [<config.yaml>] [-api URL] [-repo NAME]... [-repair] [-json]
       check THIS node's cache against the repositories' rows; every git
       node keeps its own cache, so verify each
-  export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
+  export <name> <file.bundle> [<config.yaml>] [-api URL] [-git PATH]
       write a repository's every ref and object to one git bundle
   import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
       push another host's repository into a declared one, in steps under
@@ -123,7 +123,7 @@ func runCode(environ config.Source, args []string, stdout, stderr io.Writer) err
 const maxCredentialInput = 64 << 10
 
 // codeCredentialUser is the user name the helper answers. FIXED: the API
-// reads only the password of a Basic credential (ADR-0055), so a name would
+// reads only the password of a Basic credential (ADR-0078), so a name would
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 
@@ -421,7 +421,7 @@ func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) 
 	client, err := nodeClientFor(environ, args, "code status", stderr, func(fs *flag.FlagSet) {
 		repo = fs.String("repo", "", "one repository in detail, with its recent pushes")
 		pushes = fs.Int("pushes", 10, "with -repo, how many of its newest pushes to print")
-		asJSON = fs.Bool("json", false, "print the node's answers as they came, one JSON document a page")
+		asJSON = fs.Bool("json", false, "print the node's answers, one JSON document a page")
 	})
 	if err != nil {
 		return err
@@ -442,8 +442,8 @@ func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) 
 // At the reads' default level, stale — a listing an operator reads — and the
 // position it was read at on stderr, so two runs can be compared.
 //
-// NOTHING IS HELD BUT WHAT IS PRINTED: with -json each page goes out as it
-// came, and in the table each repository is its row of text, which the
+// NOTHING IS HELD BUT WHAT IS PRINTED: with -json each page is printed as it
+// is read ([printAnswer]), and in the table each repository is its row of text, which the
 // tabwriter keeps until it can size the columns — never the node's whole view
 // of every repository, rules and description included, which at
 // config.CodeMaxRepos runs to a couple of hundred megabytes for a table of a
@@ -452,11 +452,12 @@ func codeListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Wr
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tSTATUS\tOWNER\tBRANCH\tHEAD\tREFS\tPACKS\tSIZE\tLAST PUSH")
 	listed := 0
+	var printed error
 	from, to, err := codePages(ctx, client, "/code/repos", url.Values{}, 0, code.MaxReposPerPage,
 		func(raw json.RawMessage, page codeReadView) bool {
 			if asJSON {
-				fmt.Fprintf(stdout, "%s\n", raw)
-				return true
+				printed = printAnswer(stdout, raw)
+				return printed == nil
 			}
 			for _, r := range page.Repos {
 				listed++
@@ -470,7 +471,7 @@ func codeListRepos(ctx context.Context, client *nodeClient, stdout, stderr io.Wr
 		return codeReadRefused(client, err)
 	}
 	if asJSON {
-		return nil
+		return printed
 	}
 	if listed == 0 {
 		// The header the tabwriter holds is never flushed.
@@ -514,15 +515,20 @@ func codeShowRepo(ctx context.Context, client *nodeClient, name string, n int, s
 		return fmt.Errorf("the node's answer for %s carries no repository", name)
 	}
 	if asJSON {
-		fmt.Fprintf(stdout, "%s\n", answer)
+		if err := printAnswer(stdout, answer); err != nil {
+			return err
+		}
 	}
-	var history []codePushLine
+	var (
+		history []codePushLine
+		printed error
+	)
 	if n > 0 {
 		_, _, err := codePages(ctx, client, path+"/pushes", floorAt(detail.Position), n, code.MaxPushesPerPage,
 			func(raw json.RawMessage, page codeReadView) bool {
 				if asJSON {
-					fmt.Fprintf(stdout, "%s\n", raw)
-					return true
+					printed = printAnswer(stdout, raw)
+					return printed == nil
 				}
 				for _, p := range page.Pushes {
 					if len(history) < n {
@@ -536,7 +542,7 @@ func codeShowRepo(ctx context.Context, client *nodeClient, name string, n int, s
 		}
 	}
 	if asJSON {
-		return nil
+		return printed
 	}
 	return renderCodeRepo(stdout, *detail.Repo, history)
 }
@@ -614,7 +620,7 @@ func codePages(ctx context.Context, client *nodeClient, path string, query url.V
 func codeReadRefused(client *nodeClient, err error) error {
 	var refusal *nodeRefusal
 	if errors.As(err, &refusal) && refusal.Code == "no_route" {
-		return missingSurface(client.base, "code host", refusal.Code, "-url")
+		return missingSurface(client.base, "code host", refusal.Code)
 	}
 	return err
 }
@@ -687,16 +693,16 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 	case r.Status == "deleted" && code.ManagedBy(r.ManagedBy) == code.ManagedTools:
 		// A TOOL MADE IT, and a configuration never adopts one: declaring
 		// its name would be refused, so the way back is the tools'.
-		fmt.Fprintf(&b, "%s — deleted on %s; a restore through the code tools brings it back until "+
+		fmt.Fprintf(&b, "%s: deleted on %s; a restore through the code tools brings it back until "+
 			"code.deleted_retention_days have passed\n", r.Name, codeTime(r.DeletedAt))
 	case r.Status == "deleted":
-		fmt.Fprintf(&b, "%s — deleted on %s; declaring it again in code.repos restores it until "+
+		fmt.Fprintf(&b, "%s: deleted on %s; declaring it again in code.repos restores it until "+
 			"code.deleted_retention_days have passed\n", r.Name, codeTime(r.DeletedAt))
 	case r.Status == "purging":
-		fmt.Fprintf(&b, "%s — being purged since its deletion on %s: its refs and packs are being "+
-			"removed, and its name is free once they are\n", r.Name, codeTime(r.DeletedAt))
+		fmt.Fprintf(&b, "%s: being purged since its deletion on %s (its refs and packs are being "+
+			"removed, and its name is free once they are)\n", r.Name, codeTime(r.DeletedAt))
 	default:
-		fmt.Fprintf(&b, "%s — %s, owned by %s:%s, default branch %s\n", r.Name, r.Status, r.Owner.Kind,
+		fmt.Fprintf(&b, "%s: %s, owned by %s:%s, default branch %s\n", r.Name, r.Status, r.Owner.Kind,
 			r.Owner.Ref, r.DefaultBranch)
 	}
 	if r.Redirect != "" {
@@ -757,12 +763,12 @@ func managedLine(r codeRepoView) string {
 	}
 	switch code.RepoKind(r.Kind) {
 	case code.RepoProject:
-		return "the code tools — a project"
+		return "the code tools (a project)"
 	case code.RepoScratch:
-		return "the code tools — " + r.Owner.Ref + "'s scratch repository, last active " +
-			codeTime(r.LastActivityAt) + ", deleted once idle for code.scratch.idle_days unless a live turn holds it"
+		return "the code tools (" + r.Owner.Ref + "'s scratch repository, last active " +
+			codeTime(r.LastActivityAt) + ", deleted once idle for code.scratch.idle_days unless a live turn holds it)"
 	}
-	return "the code tools — " + r.Kind
+	return "the code tools (" + r.Kind + ")"
 }
 
 // visibilityLine is a repository's visibility as `status` prints it: which
@@ -771,9 +777,9 @@ func managedLine(r codeRepoView) string {
 func visibilityLine(v string) string {
 	switch code.Visibility(v) {
 	case code.VisibilityCompany:
-		return v + " — every seat reads it"
+		return v + " (every seat reads it)"
 	case code.VisibilityUnit:
-		return v + " — only the seats the chart relates to its owner read it"
+		return v + " (only the seats the chart relates to its owner read it)"
 	}
 	return v
 }
@@ -783,10 +789,10 @@ func visibilityLine(v string) string {
 func searchLine(m string) string {
 	switch code.SearchMode(m) {
 	case code.SearchIndexed:
-		return m + " — read from an index of its default branch, by a search across the company's " +
-			"repositories as well as one naming it"
+		return m + " (read from an index of its default branch, by a search across the company's " +
+			"repositories as well as one naming it)"
 	case code.SearchGrep:
-		return m + " — read with git grep, only by a search naming it"
+		return m + " (read with git grep, only by a search naming it)"
 	}
 	return m
 }
@@ -912,8 +918,8 @@ func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) 
 			named = append(named, v)
 			return nil
 		})
-		repair = fs.Bool("repair", false, "repair what the check finds — in place where only the copy's "+
-			"directory is out of place, by a rebuild otherwise — then check the copy again")
+		repair = fs.Bool("repair", false, "repair what the check finds (in place where only the copy's "+
+			"directory is out of place, by a rebuild otherwise), then check the copy again")
 		asJSON = fs.Bool("json", false, "print each verification as the node answered it")
 	})
 	if err != nil {
@@ -939,7 +945,7 @@ func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) 
 		clean, err := verifyOne(ctx, client, name, floor, *repair, *asJSON, productionVerifyWaits(), stdout,
 			stderr)
 		if err != nil {
-			// The node serves no verify: the -url is wrong for every
+			// The node serves no verify: the -api is wrong for every
 			// repository alike.
 			return err
 		}
@@ -991,7 +997,7 @@ func codeVerifyTargets(ctx context.Context, client *nodeClient, named []string) 
 // verifyOne verifies one repository on the node at floor and prints what it
 // found, answering whether the node's copy is clean — or not held, which has
 // nothing to be unclean — and an error only where the node serves no verify
-// at all, which is the -url's and every repository's alike.
+// at all, which is the -api's and every repository's alike.
 //
 // THE CHECK IS THE NODE'S OPERATION: the POST begins it and waits a moment
 // for it (host.VerifyHold), answering it ended — a small copy's — or running,
@@ -1035,12 +1041,12 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 			if asJSON {
 				said = stderr
 			}
-			fmt.Fprintf(said, "%s: not held on this node — nothing here to check (verify the git nodes "+
-				"that serve it)\n", name)
+			fmt.Fprintf(said, "%s: not held on this node, so nothing here to check: verify the git nodes "+
+				"that serve it\n", name)
 			return true, nil
 		case errors.As(err, &refusal) && refusal.Code == "no_route":
 			return false, fmt.Errorf("%s serves no verify: only a node whose roles include both ingress and "+
-				"git keeps a cache to check — point -url at one", client.base)
+				"git keeps a cache to check. Point -api at one", client.base)
 		case errors.As(err, &refusal) && refusal.Status == http.StatusServiceUnavailable &&
 			refusal.RetryAfter > 0 && time.Now().Add(refusal.RetryAfter).Before(refusedUntil):
 			fmt.Fprintf(stderr, "%s: %v\n  asking again in %s\n", name, err, refusal.RetryAfter)
@@ -1064,7 +1070,10 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 		return false, nil
 	}
 	if asJSON {
-		fmt.Fprintf(stdout, "%s\n", raw)
+		if err := printAnswer(stdout, raw); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", name, err)
+			return false, nil
+		}
 	}
 	return renderVerification(stdout, stderr, name, v, repair, asJSON), nil
 }
@@ -1124,7 +1133,7 @@ func awaitVerification(ctx context.Context, client *nodeClient, name string, v *
 			wait = min(wait, max(time.Until(endsBy), 0))
 		}
 		if !sleepFor(ctx, wait) {
-			fmt.Fprintf(stderr, "%s: %v; the check (verification %s) goes on on the node — read GET %s "+
+			fmt.Fprintf(stderr, "%s: %v; the check (verification %s) goes on on the node: read GET %s "+
 				"there for its outcome\n", name, ctx.Err(), v.ID, at)
 			return nil, false
 		}
@@ -1142,14 +1151,14 @@ func awaitVerification(ctx context.Context, client *nodeClient, name string, v *
 				continue
 			}
 			fmt.Fprintf(stderr, "%s: lost the node while it checked (verification %s): %v\n  read GET %s "+
-				"there once it answers, or run this again — a check still running is handed back\n",
+				"there once it answers, or run this again (a check still running is handed back)\n",
 				name, v.ID, err, at)
 			return nil, false
 		default:
 			var refusal *nodeRefusal
 			if errors.As(err, &refusal) && refusal.Code == "not_found" {
-				fmt.Fprintf(stderr, "%s: the node no longer keeps verification %s — it restarted, or "+
-					"another verify of %s began — run this again\n", name, v.ID, name)
+				fmt.Fprintf(stderr, "%s: the node no longer keeps verification %s (it restarted, or "+
+					"another verify of %s began): run this again\n", name, v.ID, name)
 				return nil, false
 			}
 			fmt.Fprintf(stderr, "%s: reading verification %s: %v\n", name, v.ID, err)
@@ -1244,7 +1253,7 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 	}
 	switch {
 	case rebuilt:
-		fmt.Fprintf(out, "%s: the rebuilt copy still has %d problem(s) — what a rebuild leaves is in the "+
+		fmt.Fprintf(out, "%s: the rebuilt copy still has %d problem(s). What a rebuild leaves is in the "+
 			"object store or the rows, and each says which:\n", name, len(problems))
 	case inPlace:
 		fmt.Fprintf(out, "%s: the copy repaired in place still has %d problem(s):\n", name, len(problems))
@@ -1274,13 +1283,13 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 // bundle is the one sized for it, where a temporary directory is often a
 // small, memory-backed one.
 func codeExport(environ config.Source, args []string, stdout, stderr io.Writer) error {
-	// THE TWO SUBJECTS LEAD, before any flag (`work purge`'s idiom): the
+	// THE TWO SUBJECTS LEAD, before any flag (`worklet purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
 	name, rest := splitSubject(args)
 	file, rest := splitSubject(rest)
 	if name == "" || file == "" {
-		fmt.Fprintln(stderr, "usage: crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] "+
+		fmt.Fprintln(stderr, "usage: crewlet code export <name> <file.bundle> [<config.yaml>] [-api URL] "+
 			"[-git PATH]")
 		return errors.New("name the repository to export and the bundle file to write, before any flag")
 	}

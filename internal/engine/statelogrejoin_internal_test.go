@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +18,14 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE THAT FALLS BELOW THE FLOOR WHILE RUNNING ADOPTS WITHOUT A RESTART.
@@ -130,7 +134,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// the adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
-	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())
+	rows, err := worklet.NewRows(back.Store.Replicated().Reader(), worklet.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
@@ -261,9 +265,47 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 // with its backends and that broker.
 func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
+	n := openRejoinNode(t)
+	e := n.start(t)
+	// PRESENT, as a running data node is from its seat host's start: a join
+	// waits for the live data nodes' donors and no others, and this node's
+	// own is one of them.
+	presentAsDataNode(t, e, e.id)
+	return e, n.back, n.q
+}
+
+// rejoinNode is the node [bootRejoinNode] stands up, before it is started: a
+// case that has to reach its backends first — to put a register of its own in
+// front of the fleet's — or boot the same node a second time over them, starts
+// it itself.
+type rejoinNode struct {
+	boot    config.Bootstrap
+	company *config.Company
+	back    *Backends
+	q       *jetstream.Queue
+}
+
+// openRejoinNode opens a [rejoinNode]'s backends, which the test closes.
+func openRejoinNode(t testing.TB) *rejoinNode {
+	t.Helper()
+	return openRejoinNodeOver(t, nil)
+}
+
+// openRejoinNodeOver is [openRejoinNode] with wrap, when it is not nil, round
+// the driver of the store the engine is handed ([store.Options.WrapDriver]) —
+// which the node's replicated estate is opened through too, so a case can
+// fail one step of an install as the store would.
+//
+// A SECOND HANDLE ON THE NODE'S FILE, beside the one [OpenBackends] opened:
+// that one is what the queue's publish listener writes the event log through,
+// and nothing detaches the listener, so closed early it would be written into
+// on every publish. The store shares a path's claim within a process, and the
+// first handle is closed after the queue that writes through it.
+func openRejoinNodeOver(t testing.TB, wrap func(driver.Driver) driver.Driver) *rejoinNode {
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -273,22 +315,152 @@ func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
-	t.Cleanup(func() { back.Close(context.Background()) })
-	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	listened := back.Store
+	if wrap != nil {
+		opts := storeOptions(&b, cfg)
+		opts.WrapDriver = wrap
+		wrapped, openErr := store.OpenNode(t.Context(), b.Store.Path, opts)
+		if openErr != nil {
+			back.Close(context.Background())
+			t.Fatalf("open the node's store through the wrapped driver: %v", openErr)
+		}
+		back.Store = wrapped
 	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
-	// PRESENT, as a running data node is from its seat host's start: a join
-	// waits for the live data nodes' donors and no others, and this node's
-	// own is one of them.
-	presentAsDataNode(t, e, e.id)
-
+	t.Cleanup(func() {
+		back.Close(context.Background())
+		if wrap != nil {
+			_ = listened.Close()
+		}
+	})
 	q, ok := back.Queue.(*jetstream.Queue)
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	return e, back, q
+	return &rejoinNode{boot: b, company: cfg, back: back, q: q}
+}
+
+// start boots the node over its backends — again, for a case that stopped it —
+// and stops it when the test ends.
+func (n *rejoinNode) start(t testing.TB) *Engine {
+	t.Helper()
+	e, err := New(t.Context(), Options{Bootstrap: &n.boot, Company: n.company, Backends: n.back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
+// refusingHolds is a register whose every trim hold is refused, as a
+// coordination store that cannot take this node's write refuses it: a fault of
+// the joining node's own, which every offer would meet. asked counts the pins
+// it refused, so a case can tell a join that met the fault from one that never
+// asked.
+type refusingHolds struct {
+	fleetRegister
+	asked atomic.Int64
+}
+
+func (r *refusingHolds) PutHold(context.Context, coord.TrimHold) error {
+	r.asked.Add(1)
+	return errors.New("the coordination store refused this node's write")
+}
+
+// refusingPositions is a register whose positions read is refused once armed,
+// as a coordination store that cannot be reached refuses it — the first fleet
+// read a join makes, before it asks anybody for anything.
+type refusingPositions struct {
+	fleetRegister
+	armed atomic.Bool
+}
+
+// errPositionsRefused is what an armed [refusingPositions] answers, so a case
+// can tell the refusal it staged from a failure the fixture made by accident.
+var errPositionsRefused = errors.New("the coordination store refused the positions read")
+
+func (r *refusingPositions) Positions(ctx context.Context) ([]coord.NodePositions, error) {
+	if r.armed.Load() {
+		return nil, errPositionsRefused
+	}
+	return r.fleetRegister.Positions(ctx)
+}
+
+// refuseInstalled is a driver wrapper ([store.Options.WrapDriver]) that, once
+// armed on the node's replicated file, refuses a connection to whatever file
+// is put at that path in its place — as a store that cannot open what it was
+// handed refuses it — and lets every connection to the file it was armed on
+// through. So a join over it reads, closes and replaces its estate as it
+// always does, and fails at exactly one step: opening the artefact its install
+// renamed into place.
+type refuseInstalled struct {
+	mu      sync.Mutex
+	path    string
+	armedOn os.FileInfo
+
+	// refused counts the connections it turned away, so a case can tell a
+	// join that met the failure from one that never got as far as the
+	// install.
+	refused atomic.Int64
+}
+
+// errInstalledRefused is what [refuseInstalled] refuses a connection with.
+var errInstalledRefused = errors.New("the store refused the file installed at this path")
+
+// arm starts refusing any file put at path in place of the one there now.
+func (r *refuseInstalled) arm(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("read the file to arm on: %v", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.path, r.armedOn = path, info
+}
+
+// replaced reports whether a connection to name would reach a file put in
+// place of the one r was armed on.
+func (r *refuseInstalled) replaced(name string) bool {
+	r.mu.Lock()
+	path, armedOn := r.path, r.armedOn
+	r.mu.Unlock()
+	if armedOn == nil || name != path {
+		return false
+	}
+	now, err := os.Stat(name)
+	return err == nil && !os.SameFile(now, armedOn)
+}
+
+// wrap is the [store.Options.WrapDriver] function: a method, so the value a
+// case arms is the one the store connects through.
+func (r *refuseInstalled) wrap(d driver.Driver) driver.Driver {
+	return refuseInstalledDriver{inner: d, r: r}
+}
+
+type refuseInstalledDriver struct {
+	inner driver.Driver
+	r     *refuseInstalled
+}
+
+// Open hands back the inner driver's own connection, unwrapped, so every
+// connection it lets through is exactly the one the store would have made.
+func (d refuseInstalledDriver) Open(name string) (driver.Conn, error) {
+	if d.r.replaced(name) {
+		d.r.refused.Add(1)
+		return nil, errInstalledRefused
+	}
+	return d.inner.Open(name)
+}
+
+// trackerCheckpoint is the tracker's checkpoint in the node's replicated file.
+func trackerCheckpoint(t *testing.T, e *Engine) statelog.Position {
+	t.Helper()
+	at, _, found, err := statelog.CursorFor(t.Context(),
+		e.backends.Store.Replicated().Reader(), worklet.Domain{}.Stream().Name)
+	if err != nil || !found {
+		t.Fatalf("read the tracker's checkpoint: found %v, %v", found, err)
+	}
+	return at
 }
 
 // pushBelowTheFloor leaves a running node below its tracker log's floor, which
@@ -318,13 +490,13 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, log *jetstream.DomainLog, last uint64) {
 
 	t.Helper()
-	spec := tracker.Domain{}.Stream()
+	spec := worklet.Domain{}.Stream()
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
 	s := e.core.Load().log
-	running = s.Domain(tracker.Domain{}.Name())
+	running = s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -333,7 +505,25 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	// below and moves where they land.
 	quietTheCollector(t, e)
 
-	// Settle: whatever the boot wrote to the tracker's log is applied.
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: running.runner.Committed().Generation,
+		Scope: statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	// THE NODE HAS APPLIED HISTORY of its own before it falls behind: one
+	// barrier it applies, so its tracker rows hold a checkpoint, as every
+	// node that has been away does. Stated here rather than left to the
+	// collector's first pass, which writes no barrier when it has nothing
+	// to judge.
+	if _, _, err := log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
+		"", nil, running.signer.Seal(body)); err != nil {
+		t.Fatalf("append the node's own barrier: %v", err)
+	}
+
+	// Settle: whatever was written to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
 		_, end, err := log.Bounds(t.Context())
 		return err == nil && running.runner.Committed().Seq == end
@@ -356,14 +546,6 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		info, err := cons.Info(t.Context())
 		return err == nil && info.NumWaiting == 0
 	})
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
-		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
-		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
-		Scope: statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}},
-	})
-	if err != nil {
-		t.Fatalf("encode a barrier: %v", err)
-	}
 	for range 2 {
 		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
 			"", nil, running.signer.Seal(body)); err != nil {
@@ -400,7 +582,7 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 		t.Fatalf("open the copy: %v", err)
 	}
 	moveCheckpoint(t, running.log, copyDB, statelog.Position{
-		Stream: tracker.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
+		Stream: worklet.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
 	}, running.runner.StreamCreatedAt())
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
@@ -413,8 +595,8 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 // quietTheCollector lets the object collector finish its first pass and stops
 // it, so nothing but the case itself appends to the tracker's log from here.
 //
-// EACH PASS PINS THE TRACKER'S ESTATE WITH A BARRIER of its own, and the first
-// runs as the node boots, on its own goroutine, whenever its duty claim and
+// A PASS THAT HAS AN OBJECT TO JUDGE PINS THE TRACKER'S ESTATE WITH A BARRIER
+// of its own, and the first runs as the node boots, on its own goroutine, whenever its duty claim and
 // its decline check come back — under load, now and then after the node
 // admits seats and after a case's first write. A case that reads the log's
 // end, or stages records at chosen sequences, around a pin landing where it
@@ -535,7 +717,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			// nothing else would ever call it wrong — so this node's own
 			// seats would be answered that failure rather than asked of
 			// a peer.
-			if v := s.judgeCopy(t.Context()); !v.shut || v.answers(tracker.Domain{}.Name()) {
+			if v := s.judgeCopy(t.Context()); !v.shut || v.answers(worklet.Domain{}.Name()) {
 				t.Fatalf("a copy whose file is shut is judged %+v, want it shut — "+
 					"every domain's copy out of service at once", v)
 			}
@@ -666,7 +848,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			if err != nil {
 				t.Fatalf("open a JetStream handle: %v", err)
 			}
-			cons, err := js.Consumer(t.Context(), tracker.Domain{}.Stream().Name,
+			cons, err := js.Consumer(t.Context(), worklet.Domain{}.Stream().Name,
 				running.consumer.Name())
 			if err != nil {
 				t.Fatalf("look up the tracker's consumer: %v", err)
@@ -683,6 +865,282 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 					got.DeliverPolicy, got.OptStartSeq, last+1, last)
 			}
 		})
+	}
+}
+
+// A REJOIN WHOSE OWN RECORD FAILS AFTER THE INSTALL IS STILL AN ADOPTION.
+//
+// The rename is the join's point of no return: from it the donor's file is the
+// live database, open, with every applier resuming from its checkpoint. What
+// can still fail is this node's HISTORY row of the adoption, in the node
+// estate — a different file, with writers of its own while the node runs.
+// Reported as "no donor", the rejoin skipped everything an adoption owes: no
+// consumer was moved to the file's checkpoint, and no listener was told the
+// rows were replaced, so a dashboard socket a donor's rows had revoked kept
+// streaming the company — and the node, now current, never asked again, so
+// nothing ever told them.
+//
+// The row's advance is refused by a trigger on the node estate, which is the
+// store failing a write it was asked for and nothing else.
+func TestARejoinWhoseRecordFailsAfterTheInstallIsAnAdoption(t *testing.T) {
+	t.Parallel()
+	e, back, q := bootRejoinNode(t)
+	waitUntil(t, 20*time.Second, "the node to admit seats",
+		func() bool { return e.StateLogHydrated(t.Context()) })
+	s := e.core.Load().log
+	quietHeartbeat(s)
+	running, at, last := pushBelowTheFloor(t, e, q)
+	rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
+	copyAdvancedTo(t, back, running, at, last, rows)
+	standUpDonor(t, e, q, rows, statelog.Position{
+		Stream: at.Stream, Generation: at.Generation, Seq: last,
+	}, running.runner.KeyedTo())
+
+	// THE INSTALLED PHASE IS THE FIRST UPDATE OF THE ROW the verified
+	// phase inserted, so refusing every update refuses both phases after
+	// the rename and nothing before it.
+	if err := back.Store.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `CREATE TRIGGER refuse_the_adoption_row
+			BEFORE UPDATE ON statelog_adoption
+			BEGIN SELECT RAISE(ABORT, 'the node estate refused the write'); END`)
+		return err
+	}); err != nil {
+		t.Fatalf("install the trigger: %v", err)
+	}
+
+	heard := &heardMoves{}
+	e.SetOnIdentityMoved(heard.hear)
+	if err := e.rejoin(s.run, s); err != nil {
+		t.Fatalf("rejoin = %v, want an adoption — the donor's file is the live "+
+			"database and only this node's history row of it is short", err)
+	}
+	if got := heard.take(); !slices.ContainsFunc(got,
+		func(m iamdomain.Moved) bool { return m.Everyone }) {
+		t.Fatalf("the credential listener heard %+v, want everyone: the rows are "+
+			"a donor's, and a socket they revoked would go on streaming", got)
+	}
+	js, err := natsjs.New(q.Conn())
+	if err != nil {
+		t.Fatalf("open a JetStream handle: %v", err)
+	}
+	cons, err := js.Consumer(t.Context(), worklet.Domain{}.Stream().Name, running.consumer.Name())
+	if err != nil {
+		t.Fatalf("look up the tracker's consumer: %v", err)
+	}
+	info, err := cons.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read the tracker's consumer: %v", err)
+	}
+	if got := info.Config; got.DeliverPolicy != natsjs.DeliverByStartSequencePolicy ||
+		got.OptStartSeq != last+1 {
+		t.Fatalf("the consumer starts %s at %d, want at %d — an adoption moves "+
+			"every consumer to the file's checkpoint", got.DeliverPolicy, got.OptStartSeq, last+1)
+	}
+	// AND THE ROW SAYS WHAT HAPPENED TO IT: begun, never advanced.
+	var completed sql.NullInt64
+	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT completed_at FROM statelog_adoption
+			ORDER BY started_at DESC LIMIT 1`).Scan(&completed)
+	}); err != nil {
+		t.Fatalf("read the adoption row: %v", err)
+	}
+	if completed.Valid {
+		t.Fatal("the adoption row is complete although every write advancing it " +
+			"was refused")
+	}
+}
+
+// A REJOIN THAT MET A FAULT OF THIS NODE'S OWN REPLACED NOTHING, AND SAYS SO.
+//
+// The coordination store refuses the pin on the log's tail, which every offer
+// would meet: the join ends there, nothing was installed, and the live
+// database was never closed. So the rejoin must not announce the estate
+// replaced — that closes every dashboard socket on the node and resets every
+// artifact room, and it would do it again on every retry for as long as the
+// fault lasted — and must answer as a node still behind, so its retry widens.
+func TestARejoinThatMetAFaultOfItsOwnReplacesNothing(t *testing.T) {
+	t.Parallel()
+	n := openRejoinNode(t)
+	holds := &refusingHolds{fleetRegister: n.back.Fleet}
+	n.back.Fleet = holds
+	e := n.start(t)
+	presentAsDataNode(t, e, e.id)
+	waitUntil(t, 20*time.Second, "the node to admit seats",
+		func() bool { return e.StateLogHydrated(t.Context()) })
+	s := e.core.Load().log
+	quietHeartbeat(s)
+	running, at, last := pushBelowTheFloor(t, e, n.q)
+	rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
+	copyAdvancedTo(t, n.back, running, at, last, rows)
+	standUpDonor(t, e, n.q, rows, statelog.Position{
+		Stream: at.Stream, Generation: at.Generation, Seq: last,
+	}, running.runner.KeyedTo())
+
+	heard := &heardMoves{}
+	e.SetOnIdentityMoved(heard.hear)
+	err := e.rejoin(s.run, s)
+	if !errors.Is(err, errJoinUnable) {
+		t.Fatalf("rejoin = %v, want %v — a node whose own pin was refused is "+
+			"behind, as when nobody could donate, and retries", err, errJoinUnable)
+	}
+	if holds.asked.Load() == 0 {
+		t.Fatal("the join never asked for its pin, so nothing here met the fault")
+	}
+	if got := heard.take(); slices.ContainsFunc(got,
+		func(m iamdomain.Moved) bool { return m.Everyone }) {
+		t.Fatalf("the credential listener heard %+v: a join that installed nothing "+
+			"announced the rows replaced, closing every socket on the node", got)
+	}
+	if got := trackerCheckpoint(t, e); got.Seq != at.Seq {
+		t.Fatalf("the tracker's rows stand at %d after a join that installed "+
+			"nothing, want the %d they held", got.Seq, at.Seq)
+	}
+}
+
+// A REJOIN THAT FAILED BEFORE IT ASKED ANYBODY REPLACED NOTHING, AND SAYS
+// NOTHING.
+//
+// The join's first fleet read — the positions register, which names the
+// generation each log is on — is refused, as a coordination store that cannot
+// be reached refuses it. Nothing was asked, fetched or installed, and the live
+// database was never closed, so the rejoin fails with that refusal and must
+// not announce the estate replaced: that closes every dashboard socket on the
+// node and resets every artifact room, and it would do it again on every
+// retry for as long as the store stayed out of reach. The one failure that
+// does announce it is [TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced]'s.
+func TestARejoinThatFailedBeforeItAskedReplacesNothing(t *testing.T) {
+	t.Parallel()
+	n := openRejoinNode(t)
+	positions := &refusingPositions{fleetRegister: n.back.Fleet}
+	n.back.Fleet = positions
+	e := n.start(t)
+	presentAsDataNode(t, e, e.id)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	s := e.core.Load().log
+	quietHeartbeat(s)
+	_, at, _ := pushBelowTheFloor(t, e, n.q)
+
+	heard := &heardMoves{}
+	e.SetOnIdentityMoved(heard.hear)
+	positions.armed.Store(true)
+	err := e.rejoin(s.run, s)
+	positions.armed.Store(false)
+	if !errors.Is(err, errPositionsRefused) {
+		t.Fatalf("rejoin = %v, want the refused positions read — the staging "+
+			"never reached the join's first fleet read", err)
+	}
+	if errors.Is(err, statelog.ErrEstateNotRestored) {
+		t.Fatalf("rejoin = %v: a join that failed before it asked anybody "+
+			"reports the estate lost", err)
+	}
+	if got := heard.take(); slices.ContainsFunc(got,
+		func(m iamdomain.Moved) bool { return m.Everyone }) {
+		t.Fatalf("the credential listener heard %+v: a join that failed before "+
+			"it asked anybody announced the rows replaced, closing every socket "+
+			"on the node", got)
+	}
+	if !replicatedOpen(n.back.Store) {
+		t.Fatal("the replicated estate is closed after a join that never got as " +
+			"far as closing it")
+	}
+	if got := trackerCheckpoint(t, e); got.Seq != at.Seq {
+		t.Fatalf("the tracker's rows stand at %d after a join that installed "+
+			"nothing, want the %d they held", got.Seq, at.Seq)
+	}
+}
+
+// A REJOIN THAT COULD NOT OPEN WHAT IT INSTALLED SAYS THE ROWS WERE REPLACED.
+//
+// The install renamed the donor's file to the live path and the store would
+// not open it, so the node holds no replicated estate — and the file under it
+// is the donor's, whose revocations no committed batch here ever named. That
+// is [statelog.ErrEstateNotRestored], and it is the one failed join that
+// announces the rows replaced: the heartbeat's restore says it again once it
+// opens the file, which is a heartbeat away at the soonest and never while
+// the cause lasts, and until then nothing else names a socket the donor's
+// rows ended. The control is [TestARejoinThatFailedBeforeItAskedReplacesNothing].
+func TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced(t *testing.T) {
+	t.Parallel()
+	refuse := &refuseInstalled{}
+	n := openRejoinNodeOver(t, refuse.wrap)
+	e := n.start(t)
+	presentAsDataNode(t, e, e.id)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	s := e.core.Load().log
+	quietHeartbeat(s)
+	running, at, last := pushBelowTheFloor(t, e, n.q)
+	rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
+	copyAdvancedTo(t, n.back, running, at, last, rows)
+	standUpDonor(t, e, n.q, rows, statelog.Position{
+		Stream: at.Stream, Generation: at.Generation, Seq: last,
+	}, running.runner.KeyedTo())
+
+	heard := &heardMoves{}
+	e.SetOnIdentityMoved(heard.hear)
+	refuse.arm(t, n.back.Store.ReplicatedFile())
+	err := e.rejoin(s.run, s)
+	if !errors.Is(err, statelog.ErrEstateNotRestored) {
+		t.Fatalf("rejoin = %v, want %v — the artefact is installed and the "+
+			"store would not open it", err, statelog.ErrEstateNotRestored)
+	}
+	if refuse.refused.Load() == 0 {
+		t.Fatal("the store never turned the installed file away, so the join " +
+			"failed somewhere else and nothing here met the failure")
+	}
+	if replicatedOpen(n.back.Store) {
+		t.Fatal("the replicated estate is open after a join whose install the " +
+			"store would not open")
+	}
+	if got := heard.take(); !slices.ContainsFunc(got,
+		func(m iamdomain.Moved) bool { return m.Everyone }) {
+		t.Fatalf("the credential listener heard %+v, want everyone: the file "+
+			"at the live path is the donor's, and a socket its rows ended would "+
+			"go on streaming until the restore opens it", got)
+	}
+}
+
+// A BOOT WHOSE JOIN MET A FAULT OF ITS OWN COMES UP BEHIND.
+//
+// The same refused pin at boot. The node's own database is open and untouched
+// — the join never reached the install — so it is exactly a node nobody could
+// donate to: it comes up on the history it has, its coverage and seat admission
+// say what it cannot answer for, and it asks again on its widening interval.
+// Stopping the boot on it would make a coordination store that refused one
+// write a process exit, and a fault that lasts a crash loop paying the broker's
+// recovery on every attempt.
+func TestABootWhoseJoinMetAFaultOfItsOwnComesUpBehind(t *testing.T) {
+	t.Parallel()
+	n := openRejoinNode(t)
+	e := n.start(t)
+	presentAsDataNode(t, e, e.id)
+	waitUntil(t, 20*time.Second, "the node to admit seats",
+		func() bool { return e.StateLogHydrated(t.Context()) })
+	quietHeartbeat(e.core.Load().log)
+	running, at, last := pushBelowTheFloor(t, e, n.q)
+	rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
+	copyAdvancedTo(t, n.back, running, at, last, rows)
+	standUpDonor(t, e, n.q, rows, statelog.Position{
+		Stream: at.Stream, Generation: at.Generation, Seq: last,
+	}, running.runner.KeyedTo())
+	e.Stop(context.Background())
+
+	// THE SAME NODE BOOTS AGAIN, below the floor, with a donor waiting and
+	// its own pin refused.
+	holds := &refusingHolds{fleetRegister: n.back.Fleet}
+	n.back.Fleet = holds
+	again, err := New(t.Context(), Options{Bootstrap: &n.boot, Company: n.company, Backends: n.back})
+	if err != nil {
+		t.Fatalf("New = %v, want a node that comes up behind — its own database "+
+			"is open and untouched, and the fault is one it can retry past", err)
+	}
+	t.Cleanup(func() { again.Stop(context.Background()) })
+	if holds.asked.Load() == 0 {
+		t.Fatal("the boot never asked for its pin, so it never joined and " +
+			"nothing here met the fault")
+	}
+	if got := trackerCheckpoint(t, again); got.Seq != at.Seq {
+		t.Fatalf("the tracker's rows stand at %d after a join that installed "+
+			"nothing, want the %d they held", got.Seq, at.Seq)
 	}
 }
 
@@ -870,7 +1328,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	name := running.domain.Name()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {

@@ -46,23 +46,25 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-There are five exceptions, and each is held to exactly what makes it one.
+There are six exceptions, and each is held to exactly what makes it one.
 
 The first is a **third-party app's own mark** on Company › Integrations
 (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
 Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
-to exactly that: a mark is drawn only beside the third-party app's name,
-nothing reads state from it, none of its hues is reused as a token, and the
+to exactly that: a mark is drawn only beside the third-party app's name, or
+beside a link or a reference INTO that app in operator-facing words, where it
+says whose the pull request or the channel is ([What prose names is drawn as
+what it is](#what-prose-names-is-drawn-as-what-it-is)); nothing reads state
+from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
 else. A tool the company has not set up keeps its mark at full strength:
 whether it is connected is the state beside it, and a drained Datadog read as
 a placeholder image rather than as Datadog. Crewlet's own services carry their
 **product marks** (`ProductMark`) on the same terms: drawn only beside the
 service's name, the one place the brand's violet is identity rather than a
-token, and Crewlet Chat's *coming soon* is the mark's own soon state, never a
-greyed copy.
+token.
 
 The second exception is the organization's two charts, **Company › Org chart**
 and **Org chart › Edit org**, which draw it the way the console's org chart does:
@@ -116,6 +118,15 @@ them apart, and the same fact is in words in every cell's description and the
 presence list, so nothing relies on colour alone. The reader's own place is
 the focus ring, as everywhere.
 
+The sixth is a **colour value's swatch** (`ColorChip` at the text's size):
+where words write a colour (`#ffe100`), a small square of it is drawn before
+the value. It is not identity and not state but the value itself, shown. It is
+held to exactly that: drawn only beside the value it shows, which stays
+written out (the swatch is decoration, so nothing is read from colour alone);
+filled only from a value that passed the design system's `#rrggbb` gate, never
+from raw CSS; and drawn with an edge of its own, so a colour that matches the
+ground is still a swatch.
+
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
@@ -150,7 +161,7 @@ before it, and the sentence beside it says what they are doing.
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
-| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
+| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), or a parked run ("Coding run on ENG-9") — which is what it says for as long as the run works, workers it delegated to included: a seat's workers run under its executor's run, whose calls the engine does not stream |
 | `needs` (`warning`) | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
 | `stopped` (`danger`) | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
@@ -188,8 +199,8 @@ seat that fell over have both stopped, and only one of them is a failure.
 
 Every diff the dashboard draws is one component, `components/DiffView.tsx`,
 and no line of it is coloured: Settings › Configuration's Diff lens, a
-knowledge page's History and its editor's view of a colleague's save, the
-newest change on Knowledge's landing, a principle somebody saved while it was
+Doclet page's History and its editor's view of a colleague's save, the
+newest change on Doclet's landing, a principle somebody saved while it was
 being written, and an artifact's versions compared by file and by line. A
 removed line is not a failure and an added one is not done, so the state hues
 are not spent on them; and on a screen that also draws a state, a red removed
@@ -512,7 +523,7 @@ reader can go (fifteen **workspaces**, in three runs and a foot) and the
 few objects they keep coming back to: the views and artifacts they pinned and
 the pages they starred. A workspace's own **sections** are paths drawn as tabs
 in its page header (Settings draws its fifteen as a column of four groups, and
-lists nothing that lives elsewhere; Work draws its as the lenses of the scope
+lists nothing that lives elsewhere; Worklet draws its as the lenses of the scope
 its trail names),
 and its objects — a unit, a
 container, a node — are rows on the section that lists them.
@@ -528,11 +539,16 @@ list a section of Settings.
 
 - A **sidebar row** is a workspace, or a live shortcut to a pinned view, a
   starred page or a running turn. A project is not one: it is a **scope** of
-  Work, named and switched in Work's trail
-  ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)).
+  Worklet, named and switched in Worklet's trail
+  ([Worklet's scope](#worklets-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
-  renderer: `tabs` in the page header, `lenses` beside Work's scope in the
-  trail, or `column` for Settings.
+  renderer: `tabs` in the page header, `lenses` beside Worklet's scope in the
+  trail, `column` for Settings, or `panel` for Chatlet, whose screen draws them
+  at the head of its Rooms panel. Chatlet draws no tabs because the header
+  draws them on a section's own page and never on an object's, and a room is
+  the object page a chat reader spends their time on, so Activity, Threads,
+  Drafts and sent and Saved head the panel, drawn from the same table, and the
+  frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -612,7 +628,7 @@ Two kinds, and nothing is both:
 `URL_HOMES` in `lib/work.ts` is where that is declared per key rather than per
 paragraph: every URL key the work list carries names the control that owns it —
 chip, arrangement, or one of the three that are deliberately neither and carry
-their reason at the entry. `routes/work/toolbar/grammar.test.tsx` holds it against
+their reason at the entry. `routes/worklet/toolbar/grammar.test.tsx` holds it against
 the SCREEN in both directions, reading the key set out of `ItemsView.tsx`
 rather than listing it: every key the list puts on the address has a home, and
 every home is a key the list actually writes. Both halves fail silently
@@ -662,7 +678,7 @@ switching a saved board to a list must not throw the saved filters away.
 
 **And a narrowing the SCREEN is is not a filter either — it is LOCKED.** One
 list serves three screens, and two of them are that list narrowed to something
-the reader did not choose: `#/work/{KEY}` is the work in one project, `#/me`'s
+the reader did not choose: `#/worklet/{KEY}` is the work in one project, `#/me`'s
 Queue is the work one person holds and its Asked by me the work one person is
 waiting on an answer about. A locked narrowing is held to four rules, and each
 one is a way the same defect appears if it is broken:
@@ -709,7 +725,7 @@ each the answer to one thing that went missing at one item:
   denominator a board's comparison needs and Open draws no dead Done lane. What
   is the screen's is the DRAWING: an empty lane says "Nothing here" rather than
   standing as a heading over nothing. The rule and the axes it covers are in
-  [the work tracker guide](../guides/work-tracker.md#views); a list, a table
+  [the Worklet guide](../guides/worklet.md#views); a list, a table
   and a timeline draw only the bands that hold rows, which is the bullet under
   "A board draws every lane the scope admits" below.
 - **The view strip is always drawn.** Its first tab is the container's own
@@ -741,11 +757,11 @@ each the answer to one thing that went missing at one item:
 
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
-uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
+uuid, and every reserved segment is lowercase. That is what lets `#/worklet/views`
 resolve before any answer arrives. The resolver recognises a key by that shape
 rather than by elimination: the engine uppercases every container key it
-keeps, so a segment under Knowledge holding a lowercase letter is a section or
-Not Found, never a container — `#/knowledge/skills` does not open a container
+keeps, so a segment under Doclet holding a lowercase letter is a section or
+Not Found, never a container: `#/doclet/skills` does not open a container
 called `skills` before the screen that section names exists.
 
 The set itself is `RESERVED_SEGMENTS` in `app/nav.ts` and is deliberately NOT
@@ -762,26 +778,28 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, its code, what it knows, what it made and what is running. The engine stands
-beside the company's name in the head, and the foot is the reader, with
-Settings and Preferences as glyphs beside them.
+its work, its code, what its people say to each other, what it knows, what it
+made and what is running. The engine stands beside the company's name in the
+head, and the foot is the reader, with Settings and Preferences as glyphs beside
+them.
 
 | Row | Route | Figure |
 |---|---|---|
 | **Home** | `#/home` | — |
-| **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+"). It moves the moment the person's inbox does: the frame watches their own record and asks again within half a second of an `inbox_changed` frame, and the minute-long poll behind it is only the fallback |
-| **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
+| **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY. The chrome fills a figure only for what waits on you: this, My work's and Chatlet's. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+"). It moves the moment the person's inbox does: the frame watches their own record and asks again within half a second of an `inbox_changed` frame, and the minute-long poll behind it is only the fallback |
+| **My work** | `#/me` | a **badge** in the quiet grey (the Inbox's asks keep the accent, since nobody asked for this): the open work assigned to you, the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | *Company* | | |
 | **Principles** | `#/company/principles` (and `#/company`) | none: the company's mission, vision and policies are every reader's |
-| **Brand** | `#/company/brand` | none: the adopted brand is every reader's, and adopting one is an Admin's on the page itself |
+| **Brand** | `#/company/brand` | none: the published brand is every reader's, and publishing one is an Admin's on the page itself |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
-| **Work** | `#/work` | — |
+| **Worklet** | `#/worklet` | none |
 | **Code** | `#/code` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Code workspace](#the-code-workspace) |
-| **Knowledge** | `#/knowledge` | — |
+| **Chatlet** | `#/chatlet/activity` (and `#/chatlet`) | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
+| **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
 | *Foot* | | |
@@ -793,7 +811,7 @@ person's, and the shared strip has none — and across EVERY container
 (`work_saved_views`), so a view pinned from a project board is here with the
 project's key as its lead; each with the total it selects, counted in the
 view's own container; a
-pinned row RUNS the view, `#/work/tasks?view=<key>` or its project's list for a view
+pinned row RUNS the view, `#/worklet/tasks?view=<key>` or its project's list for a view
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
@@ -834,10 +852,32 @@ opened (the kit's `IconButtonLink`, current on a Settings page), Preferences
 its popover. The head carries the company's lockup and, at the end of its
 line, the **engine panel**'s compact status.
 
+**The sidebar folds to a compact rail.** Above the shell breakpoint the kit's
+fold control, or `Mod+\`, folds the sidebar to the kit's 76 px rail and back,
+and the choice is the reader's, kept per reader in this browser
+(`app/sidebar/railShape.ts`), as their Home board is. Folded, it is the kit's
+`CompactNav`: **Search** (the palette the full sidebar's field opens), then
+Home, Inbox and My work, each its glyph over its name, then ONE tile for
+Company and one for Workspace, each opening a flyout of its places beside the
+rail on a point, a press or the arrow keys; the tile carries its places'
+badges and is marked current when the page on screen is one of them. Under
+the foot's rule stand the engine's status (its dot and alarms), **Settings**
+as a tile, and the reader's face alone, which opens the same menu the user
+block's row does, with **Preferences** in it, opening as a dialog of the same
+three controls. Both shapes are drawn from one list of places, so they cannot
+list a place with a different link, lock or figure. The live shortcuts
+(Pinned, Starred, Running) are the full sidebar's, and a shortcut is never
+current in the folded rail, so the place holding the page keeps the mark. The
+company's mark and the fold control stand in the same place in both shapes,
+the mark in the head's row and the control in the row under it, so neither
+moves when the sidebar folds. Below the breakpoint the sidebar is the drawer,
+which is always the full list, and the stored choice comes back when the
+window widens.
+
 **Every "New task" is one sheet.** A work screen's
 page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
-frame's single New task sheet (`dashboard/src/routes/work/NewTask.tsx`, mounted
-by the shell out of the Work chunk), each door telling it only what it knows.
+frame's single New task sheet (`dashboard/src/routes/worklet/NewTask.tsx`, mounted
+by the shell out of the Worklet chunk), each door telling it only what it knows.
 A board
 lane's `+` files INTO its lane (`app/newTask.ts`'s `presetForLane`): it
 presets exactly the value that puts a task there — the lane's status, type,
@@ -851,10 +891,10 @@ sheet could hold that status and nobody files new work as already abandoned
 done). The Unassigned lane's `+` chooses nobody,
 which the project routes as its own unassigned work — to its default assignee
 where it names one and the chart still holds that seat, else triage — and
-the field says which before the press. Where the company runs no Crewlet
-Works, none of those doors is drawn (see the rule on services above). An applied create that came
-back with a caveat — the engine's `warnings` — says it in its toast rather
-than a plain "Filed". The sheet files project, title,
+the field says which before the press. Where the company does not run
+Worklet, none of those doors is drawn (see the rule on services above). An applied create that came
+back with a caveat (the act answer's `caveats`, in a person's words) says it in
+its toast rather than a plain "Filed". The sheet files project, title,
 description, type, status, assignee, priority, due and labels as ONE
 `create_work_item`, sending only the fields the person set (an unset one is the
 engine's default, never the sheet's guess of it); the type, status words and
@@ -878,11 +918,13 @@ empty, the field says where the task lands — the project's default assignee
 field's help line is its control's description, so a screen reader hears it
 with the field. `applied` opens the new task by the
 key the engine minted; `pending` closes with the not-yet-applied toast; a
-refusal stays in the sheet in the engine's own sentence, which names the
-argument it refused (drawn as a value, not in backticks). What the engine would
+refusal stays in the sheet in the words the engine wrote for a person (a
+title over its cap is "The title is too long"), or, for a refusal nobody has
+worded for one yet, in its kind's own sentence: never the tool's sentence to a
+model, which names arguments (ADR-0060). What the engine would
 refuse is said on the field BEFORE the press: the title and the description are
-counted in the engine's unit — UTF-8 bytes, against `tracker.MaxTitle` (256) and
-`MaxBody` (32 KiB), held by `contract/work.ts` — counting down in the last fifth
+counted in the engine's unit (UTF-8 bytes, against `worklet.MaxTitle`, 256, and
+`MaxBody`, 32 KiB, held by `contract/work.ts`), counting down in the last fifth
 and marked invalid past the cap, saying by how much. Create is then held, and
 the reason is written in the sheet's foot beside it, because the kit reads a
 held button's reason to a screen reader only; Enter while held takes focus to
@@ -905,10 +947,11 @@ Home, Company › Principles and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
-reads. An APP's sections need that app: Inbox, My work, Work and Settings ›
-Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
+reads. An APP's sections need that app: Inbox, My work, Worklet and Settings ›
+Expensive tasks need Worklet, and Doclet needs Doclet, and every
+section of Chatlet is chat's. And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
-Knowledge › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
+Doclet › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
 every reader's, with an app's state and connecting kept for Admins on the page. Every comparison goes through
 `lib/access.ts`'s `holdsAny`, which counts every app an admin carries, so an
@@ -926,7 +969,11 @@ READING, `useHeldReading` in `lib/viewer.ts` — who the reader is and what they
 hold, from one source — which the sidebar's rows, Settings' column and the
 frame's refusal of a section all take, so the column and the sidebar can never
 lock one reader differently. The command palette says the same of a guarded
-destination in the same words — "Needs Admin access" beside its hint. There is
+destination in the same words — "needs Admin access" beside its hint — read
+off its address by the rule the frame's refusal reads (`nav.ts`'s `closedBy`),
+the workspace's access first: every section of Worklet, My work or Chatlet is
+offered to a reader without that app saying what opens the workspace, where
+a lock read off the section alone offered them unlocked. There is
 NO "no access yet" state: a person somebody gave no app still reads the
 overview, so the socket is dialled for every signed-in principal and the
 frame never replaces the company with a panel saying they hold nothing — they
@@ -941,20 +988,22 @@ it held — an outage keeps the last state, and a refusal is not an
 outage.
 
 **A service the company does not run is hidden, never locked.** A company
-runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none,
-Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none, and
-hosts its git repositories in the engine (`code.native`) or does not. The
-engine decides which from the company document and publishes it to every
-signed-in reader as the org projection's `services`, which the frame already
-reads (`lib/services.ts`). Where the company does not run one, the places that read
+runs Worklet, or Jira in its place, or no tracker; Doclet, or Confluence in
+its place, or no knowledge base; Crewlet's own chat (Chatlet), or the
+Mattermost or Slack it declares, or none; and hosts its git repositories in the
+engine (`code.native`) or does not. The engine decides which from the company
+document and publishes it to every signed-in reader as `services` on the org
+projection, which the frame already reads (`lib/services.ts`). Where the
+company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
-Crewlet Works, Work and My work leave the sidebar, the palette and the `g`
+Worklet, its workspace and My work leave the sidebar, the palette and the `g`
 chords, and so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
-task); without Crewlet Knowledge, Knowledge does; and where the engine hosts
-no code, Code does. The Inbox stays, because
+task); without Doclet, its workspace does; without Chatlet, Chatlet
+does, with a seat's Direct message and Chatlet's Home widgets; and where the
+engine hosts no code, Code does. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -966,7 +1015,7 @@ place draws a notice in place (`app/ServiceNotice.tsx`): what the company runs
 instead, in the engine's word, and why the page asked for is not here (a New
 design address says a design is made by an agent working a task). It is
 readable by every signed-in reader, and offers the service's own page under
-Company › Integrations (`#/company/integrations/works` or `/knowledge`) to a
+Company › Integrations (`#/company/integrations/worklet` or `/doclet`) to a
 reader who may open it, which is every reader. It
 is drawn only once the engine has answered, so a deep link opened on a cold
 tab is never refused on a guess. Until the org projection arrives every
@@ -988,7 +1037,7 @@ is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
 signed in that nobody was. It names ACCESS by the word People gives
-it (Admin, Tracker, Knowledge) rather than a credential,
+it (Admin, Worklet, Doclet, Chatlet) rather than a credential,
 because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
@@ -1004,7 +1053,7 @@ section was held at "Checking your access to Nodes" until the socket's viewer
 answered, while the session it had already read said the reader does not hold
 admin. One address an app's lock does not close is a WORK ITEM SOMEBODY WAS
 ASKED ABOUT (`App.tsx`): the engine answers the person an open ask names
-without the tracker, so the item's own read decides it. A read that FAILED is no answer and does not hold the
+without Worklet access, so the item's own read decides it. A read that FAILED is no answer and does not hold the
 section — treating it as "holds nothing" would lock a reader out until the
 next poll — so the screen mounts, and the guarded screens draw no figure from
 a read that never succeeded. Edit org is
@@ -1013,6 +1062,22 @@ kept in the tab's storage: replacing the builder the moment the reader's
 access was withdrawn would take the draft off screen while the person who wrote it is
 still there to copy it out, and the builder says for itself which of its
 saves the reader's access reaches.
+
+**Chatlet is guarded whole, and keeps one refusal of its own.** Every chat page
+is read AS A SEAT — the engine answers for the seat the session's principal
+holds, with no handle parameter anywhere in the chat family and no arm, an
+administrator's included, that reads somebody else's rooms — so the
+workspace's row and all three of its sections name the Chatlet app, and a reader
+without it meets the frame's refusal on every chat page, a room included. What
+the frame cannot say is chat's own. A principal that holds Chatlet and acts as NO
+seat — a deployment's own token, a service account — reads nothing there, not
+even a public room, so the screen says that ("Chatlet is read as the seat you
+hold"), naming the binding that would give the credential one (`crewlet iam
+bind`). A company whose chat is not Chatlet (`chat.backend: vendor` or
+`none`) is no refusal at all: Chatlet is a service like Worklet and Doclet, so
+its row is hidden there and an address under it says where the
+company talks instead, naming the vendor to a reader holding Chatlet, rather than
+showing rooms it cannot have or offering a room it cannot hold.
 
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
@@ -1128,7 +1193,7 @@ row is a menu button (the kit's `AccountRow` `menu`), named by the reader and
 the kit draws no trailing chevron: its width goes to the name beside the
 larger badge, and the row's hover fill says it can be pressed. **The
 menu says only what the row does not**: its header is the reader's access, the
-one line People uses for it ("Admin", "Tracker · Knowledge",
+one line People uses for it ("Admin", "Worklet · Doclet",
 "Overview only"), and under it come **Account** (the one workspace with no
 sidebar row of its own, `place: "menu"` in `app/nav.ts`, where the password,
 the second factor and the sessions are), then **Sign out** and **Sign out
@@ -1179,7 +1244,8 @@ and the tab.
 run; `g c` for Company's Principles, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
 `g o` for Code (its initial is Company's, and `d` and `e` are Schedules' and
-Brand's, so `o` is the one letter of its name no other chord holds), `g k`,
+Brand's, so `o` is the one letter of its name no other chord holds), `g t` for
+Chatlet, `g k`,
 `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u` for
 your Account. A chord to a hidden place is not answered, as its row is not
 drawn. A chord rather than a modifier, because every single-modifier
@@ -1187,24 +1253,24 @@ combination worth having is already the browser's. Two `g` sequences are not
 workspaces: `g r` watches the running turn when exactly one seat is working,
 and opens Live › Now running — every running turn — when several are, or
 none; and `g p` switches project
-([below](#works-scope-is-named-and-switched-in-the-trail)). Every key the
+([below](#worklets-scope-is-named-and-switched-in-the-trail)). Every key the
 dashboard answers is in [one table](#the-keys), and `?` shows it.
 
-### Work's scope is named and switched in the trail
+### Worklet's scope is named and switched in the trail
 
-Work's pages end their trail in the scope they show: **All projects**, or one
-project, written as its key chip and its name (`Work › FAIR Product and
+Worklet's pages end their trail in the scope they show: **All projects**, or one
+project, written as its key chip and its name (`Worklet › FAIR Product and
 Engineering`). That last crumb is the page's `h1` and the kit's `Switcher`
 button at once (`app/header/ProjectSwitcher.tsx`): pressing it, or `g p` from
 anywhere, opens one panel that changes the scope. Beside it sit the scope's
-**lenses**, drawn as the kit's chip `Tabs`: All projects' are Work's own
+**lenses**, drawn as the kit's chip `Tabs`: All projects' are Worklet's own
 sections (Projects, Tasks and History, each a path), and a project's are keys
 on its address (Tasks, About, History and Files). Both draw alike, the lens
 that is on outlined by its own accent hairline, so the bar reads one way in
-either scope, and Work keeps no row of section tabs. Work is plain words on its
+either scope, and Worklet keeps no row of section tabs. Worklet is plain words on its
 landing, where a link would lead to the page it is on, and the frame's star is
 not drawn on these pages. On a phone the lenses take a row of their own under
-the bar's line, and Work shrinks to its glyph.
+the bar's line, and Worklet shrinks to its glyph.
 
 **The panel.** A search band, a list that scrolls and a footer that does not.
 **All projects** comes first, with the open work across every active project;
@@ -1217,7 +1283,7 @@ which is held with its reason for a reader who cannot set a project on the org
 chart: a project is a key another system finds a unit or seat by, so setting
 one takes Admin, a unit's lead included.
 Archived projects are never offered: they are listed under Projects, and the
-panel says so where a reader looks. It opens under its button on Work's scope
+panel says so where a reader looks. It opens under its button on Worklet's scope
 pages, centred over the page for `g p` anywhere else (nothing behind it moves
 until a row is chosen), and as a sheet from the bottom edge under 640 px.
 
@@ -1244,7 +1310,7 @@ view and the filters belong to the scope they were set in, because a project's
 statuses, labels and fields are its own. The browser tab reads the lens, then
 the scope: "Tasks · All projects", "About · Product and Engineering".
 
-**New project** (`routes/work/NewProject.tsx`) asks for an owner (a team, or an
+**New project** (`routes/worklet/NewProject.tsx`) asks for an owner (a team, or an
 agent seat above every team, that owns no project yet, each offered by its key
 or handle; never a person's seat, which the engine refuses a project) and a key (`KEY_SHAPE`, and
 no project or node already has it), then continues in Edit org with that
@@ -1264,17 +1330,17 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Tracker access)* | `row=` (which item the pane is on) |
-| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(the whole of My work needs Tracker access)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Worklet access)* | `row=` (which item the pane is on) |
+| `#/me` | **My work › Queue**: what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(the whole of My work needs Worklet access)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
-| `#/work` | **Work › Projects**: Work's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Work needs Tracker access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
-| `#/work/tasks` | **Work › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
-| `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/history` | **History**: All projects' History lens: the tracker's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
-| `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
-| `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
+| `#/worklet` | **Worklet › Projects**: Worklet's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Worklet needs Worklet access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
+| `#/worklet/tasks` | **Worklet › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
+| `#/worklet/views` · `#/worklet/views/{id}` | **Saved views**: the inventory, and one view run | |
+| `#/worklet/history` | **History**: All projects' History lens: Worklet's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
+| `#/worklet/search` | **Search**: the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
+| `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
+| `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
 | `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=active\|archived\|deleted\|purging` (none is active and archived) |
 | `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
@@ -1283,44 +1349,53 @@ a screen, and every workspace and section the code declares is below.
 | `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
-| `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
-| `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Adopt as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unadopted draft ("Continue setting up") and the Brand page's **Run setup again** | |
+| `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the published (adopted) version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, publishing a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
+| `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Publish as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unpublished draft (**Finish draft**, or **Edit draft** once it is ready) and the Brand page's **Run setup again** | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
-| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
+| `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Worklet's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
-| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
+| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
+| `#/chatlet` | **Chatlet**: the company's own rooms and conversations, under a top bar (Menu, the Rooms and Messages switchers, and the open room's actions), with the Rooms panel slid in from Menu or pinned beside the conversation *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room. The bare address is no page of its own: it opens Activity, Chatlet's landing, and is replaced at once (never a step of Back) by `#/chatlet/activity`, keeping a `pane=` | `dm=` (a seat's handle, from its page or peek: replaced at once by `#/chatlet/new?to={handle}`) · `pane=` (on every Chatlet address: see the room) |
+| `#/chatlet/activity` | **Chatlet › Activity**, where Chatlet opens (its sidebar row, its `g t` chord and its palette entry): every message that named you, every reply in a thread you follow and every reaction to what you said, across every room. The whole away story: the engine sends no email, no push and no SMS. A reader in no rooms is told how a room comes to exist | |
+| `#/chatlet/threads` | **Chatlet › Threads**: every thread you follow, newest reply first | |
+| `#/chatlet/drafts` | **Chatlet › Drafts and sent**: what you have not sent yet, in every room and thread, and what you sent | |
+| `#/chatlet/saved` | **Chatlet › Saved**: the messages you saved for later | |
+| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your own rooms | `q=` · `in=` (narrowed to one room) |
+| `#/chatlet/browse` | **Chatlet › Browse rooms**: every room you can read, to join or open | |
+| `#/chatlet/new` | **Chatlet › New message**: a conversation with the people or agents you name, the one you already share with them if there is one | `to=` (handles, comma-separated) |
+| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `message=` (the message a link landed on, flashed, then left) · `pane=thread:{room}:{root}` · `pane=details:{room}:about\|members\|shared\|notifications` · `pane=profile:{handle}` · `pane=catchup:{room}` · `pane=summarize:{room}` (ONE pane at a time, beside the conversation or over it; any place may carry one) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/knowledge` | **Knowledge**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen *(the whole of Knowledge needs Knowledge access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
-| `#/knowledge/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
-| `#/knowledge/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
-| `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
-| `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
-| `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
+| `#/doclet` | **Doclet**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Doclet screen *(the whole of Doclet needs Doclet access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/doclet/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
+| `#/doclet/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
+| `#/doclet/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
+| `#/doclet/skills` | **Agent skills**: the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `sort=title\|-updated` (tool skills: the engine's order) · `seat=` (learned) |
+| `#/doclet/diaries` · `#/doclet/diaries/{handle}` | **Agent diaries**: every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/yours` · `#/artifacts/shared` | **Artifacts**: All (everything the reader can open, the latest activity first, their pins above as a Pinned group), Yours (what they own, with their trash behind the Trash toggle) and Shared with you, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. An earlier gallery's `#/artifacts/mine` is rewritten in place to Yours, and `#/artifacts/company` and `#/artifacts/agents` to All. All and Yours open on **Start a new artifact**, a quiet tray of the kinds (`ArtifactMakeRow`): each kind's glyph on its own tint, its name and what it is for, on the dotted field the org chart's canvas uses, one line on a wide page (the words under each name dropped on a narrower one) and three across in two rows on a phone, each opening New on that kind; it is drawn for a reader who may start one, and steps aside for a search, a type and the trash. The artifacts are a **grid of cards** by default: each card's preview is a snapshot of the artifact's own content, drawn small by the renderer its page uses (a doc's opening, a deck's cover slide, a sheet's first rows, a board's widgets from its top with their figures, filling the card within six dataset reads, a design's cover board filling the card edge to edge (a phone's board, which that would cut to its top, shown whole) and a page, each framed, a page that reads its datastore answered its reads by a read-only preview host that refuses every write, names no viewer and joins no room, and a page that keeps each viewer's own state handed a newcomer's, empty and kept by that host alone, so it draws as a first visit does), rendered once when the card comes within a screen of the scroller's view, no more than six rendering at once, and then kept as a still copy with nothing live behind it, so scrolling past a card again reads and draws nothing; a card mounted again on the same visit (a filter, the shape, a page of results) shows its copy at once, a new version is drawn afresh, and a page loaded afresh takes new snapshots; a page or a design's board keeps its frame instead, since a frame cannot be copied, at most twelve kept, and its datastore reads are each answered once; the kind's drawing stands in before a card has drawn, and every read is a preview that records no open; under it the title, who can open it (a lock, people or the company) and when it was edited, and a More menu (pin, copy link, rename, Move to… a folder, move to the trash; restore in the trash). The list is the second shape, and which one a browser shows is remembered there: each row the kind's glyph on its tint beside the title, with the kind's word and the description under it (`ArtifactNameCell`, so there is no Type column), who can open it as a glyph and a word (`ArtifactAccessLabel`: Private, Shared or Company; not in the trash), the owner's badge and name, the folder it is kept in as the reader sees it (its path, or Top level; not in the trash), when it was edited and the reader's role, a row's ground moving under the pointer and its mark's hairline taking the kind's hue. The page bar holds the search and New; the toolbar holds the type, the order, the trash (Yours), **Select** and the shape. Select (or `x`) puts a box on every card and row, a card's body then picks rather than opens, and a `SelectionBar` under the toolbar says how many are picked with **Move to…** (`m`), held with its reason only for a reader without the Artifacts access and otherwise sending every pick for the engine to decide one by one (a folder's manager may take what they can only read to the top level), the move's toast naming each that did not move and why, and Clear; the picks belong to one question and clear when it changes, and the trash offers none. The reader's own artifacts are owned by "You", and Yours draws no owner or role column; the trash's rows say when each was trashed and when it is deleted for good. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. | `kind=html\|doc\|slides\|design\|dashboard\|sheet` · `q=` · `sort=updated\|created\|title\|opened` (all three kept across the sections) · `status=trashed` (Yours: the reader's own trash) |
 | `#/artifacts/folders` · `#/artifacts/folders/{id}` | **Folders**, a fourth tab beside the three flat questions: where things are kept rather than who made them. A folder is a place and never a permission (it grants nothing on what it holds, and moving an artifact changes nobody's access), so every reader browses the folders they can see. The section is the top level: its folders as tiles (`FolderTile`, the folder glyph on a neutral tint, its name, who sees it on a top-level tile, Everyone or Only you, and what directly inside it this reader can open, "12 artifacts · 2 folders" or "Nothing you can open yet", never "Empty"; four across, three on a narrower page, a full-width 44px row on a phone), then **Not in a folder**, everything the reader can open filed in no folder they can see. A folder's page, addressed by the id the engine minted so a rename or a move breaks no link, carries the trail Artifacts › Folders › every folder above it, a header (the open folder's glyph, its name, who sees it, and a More menu: Copy link for anyone, and Rename, Move to… and Remove for its owner, the owner's lead or an administrator), its subfolders A to Z, then its artifacts in the chosen order, each the engine's `artifacts` listing for the folder (`folder=<id>&delimiter=/`, S3's one level); a phrase searches the place's whole subtree instead, offering the folders beneath it whose names match and naming each artifact's folder. The toolbar adds whose they are (Anyone's, Yours, Shared with you) to the gallery's; New in a folder offers **Folder** above the kinds, and a kind's page opens filed there. **New folder** (`n`) asks for a name and, at the top level only (a person's), who can see it: Everyone at the company (who may file into it) or Only you; a subfolder is seen by whoever sees its top-level folder. **Move to…** is one dialog for an artifact, a selection and a folder: every place the reader may file into as its path in words, Top level first, the current one marked, in a list always on screen under its field at one height (so nothing moves under the pointer when the field loses focus), found by typing any part of the path, ending in Create “name” in the folder being browsed (or the one a typed path names; at the top level it first asks who sees it), and on a phone takes the whole window as a full-height sheet at every step; it says "Moving never changes who can open it", each artifact of a selection is decided alone, and a toast names what did not move and why and offers Undo. Moving a folder where more people see it asks first. **Remove** moves everything in the folder up to the folder above, deletes nothing and is said so. An empty folder says so with New and New folder to a reader who can file into it, and "Nothing here is shared with you" to one who cannot; a folder the reader cannot see is "Folder not found", as one that does not exist. `u` goes up a folder | `kind=` · `q=` · `sort=` (kept from the gallery) · `scope=mine\|shared` (whose, on these pages only) |
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them. The bar's first control is **Save in**, the folder the new artifact is filed in (the folder page New was pressed on), which opens Move to… to choose another and writes nothing until the artifact is made; the way back leads to that folder, and a task asking an agent names it by its id alone (a task is read by people a private folder is not shown to, so it never carries the path) | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `folder=` (the folder it is filed in, by id) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Tracker), every `providers.llm` entry — the coding CLI it drives, its model, its mode and how it signs in, by the variable each credential names — read off the company document (`config`), and the seats whose chain names it; one model's facts, its sign-in and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, the column's landing and the Settings row's address, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). `{id}` is the model's key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
-| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
+| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
 | `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
-| `#/settings/spend/tasks` | **Settings › Token spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access; not offered where the company runs no Crewlet Works)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
+| `#/settings/spend/tasks` | **Settings › Token spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Worklet access; not offered where the company does not run Worklet)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/settings/people` | **People**, the identity directory but its service accounts: every person with their stage, login, access and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's report on them (`/iam/check`), and every human seat with whatever holds it, a person, a service account or an open invitation (`/iam/seats`) *(needs Admin access)*. An admin changes, suspends, resets, signs out and removes people, and cancels invitations. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart. An invitation's link and a reset link are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold is said in the peek) |
 | `#/settings/service-accounts` | **Service accounts**, the machine principals: each with its stage, login, access and the seat it acts as, and the directory's report on them; an admin creates one (on a human seat or none) and mints its token, shown once *(needs Admin access)*. A row opens in the peek, as on People | `peek=person:{id}` |
 | `#/settings/tokens` | **API tokens**, this node's Tier A token labels, each joined to the directory row its login names and the seat that row binds (`/iam/node-tokens`), and, where the company document is managed, the tokens that alone may write it *(needs Admin access)*. Never a value. A person's own tokens are on their Account | |
 | `#/settings/sign-in` | **Sign-in policy**, how people sign in, as the engine serves it: the shortest password, whether two-step verification is required, how long a session lives (from sign-in and unused) and how long a step-up lasts, read-only and naming the node that answered *(needs Admin access)* | |
-| `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime\|identity\|artifacts` |
+| `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=worklet\|doclet\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes**, leases (each seat's holder and **since** when), duties, config rollout, and the fleet broker's members as the nodes advertise them and as its metadata group counts them *(needs Admin access)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
@@ -1335,7 +1410,8 @@ a screen, and every workspace and section the code declares is below.
 redirect whose old path is now a live route sends every reader of that route
 somewhere else, permanently, with the address bar agreeing with them — which is
 strictly worse than the dead link it exists to avoid, because a dead link is
-visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
+visible. It happened once, to an address that had meant a coding run before a
+workspace took it over. No `v*` tag
 has ever shipped a route from this tree, so there is nobody holding an old link:
 an address from before the one-sidebar rebuild (one under the retired
 `activity`, `cost` or `admin` heads), or from before Company and Settings were
@@ -1345,8 +1421,8 @@ where the product knows why there is nothing there, and offers the way home.
 
 **An object's segment is decided by its shape, never by a lookup**, so every
 address resolves before any answer arrives. A project or container key is
-uppercase, a task is `KEY-n` or its uuid, and a page is its uuid — so a word in
-one of those positions (`people` after `work`, `runbook` after `knowledge/pages`)
+uppercase, a task is `KEY-n` or its uuid, and a page is its uuid, so a word in
+one of those positions (`people` after `worklet`, `runbook` after `doclet/pages`)
 is Not Found rather than an object the engine never minted, which would draw its
 refusal under a trail naming a page that does not exist.
 
@@ -1393,7 +1469,7 @@ unless flagged or empty, and then the id — and every link, peek, `[`/`]` step,
 `itemPath` for the route and an adapter per row shape (`subjectItem`,
 `noticeItem`, `checklistTask`, `linkedItem`, `detailItem`) so no screen pairs
 an id with the wrong flag. A project's route is `projectPath` for the same reason: no route
-into the tracker is spelled at the call site. `routes/work/collision.test.tsx`
+into Worklet is spelled at the call site. `routes/worklet/collision.test.tsx`
 clicks each of a pair in every shape the work list draws and reads where it
 went, because every shape built its link, its peek, its stepper and its "this
 is the open one" check out of the key, and each opened the claimant from both
@@ -1409,7 +1485,7 @@ the composer's, the hand-off's) and pass the key beside it only as the word a
 sentence uses; its turns, like its history and its comments, are asked for by
 the id. The grid's inline edits and the note naming who won a lost race, a
 link chosen in the composer (by the hit's id, linked by its address) and the
-trash's **Restore** follow the same rule. `routes/work/WorkItem.test.tsx`
+trash's **Restore** follow the same rule. `routes/worklet/WorkItem.test.tsx`
 opens a duplicate's page and reads what every write named, and
 `collision.test.tsx` restores each of a pair from the trash.
 
@@ -1417,7 +1493,7 @@ opens a duplicate's page and reads what every write named, and
 (`work_item{backend, id, key, project}`) is what the turn was charged to, not a
 tracker row, so it carries no `key_collision` — and a turn on the task that did
 NOT claim its key, asked for by the key, was titled, numbered and opened as its
-neighbour. So a native task is asked for and opened by its id (`turnItem` in
+neighbour. So a Worklet task is asked for and opened by its id (`turnItem` in
 `lib/work.ts`), an answer about it is matched to the question by either name
 (`answersAddress`), and once an answer has carried the flag the task is opened
 through `itemAddress`; a vendor's item, whose id is the vendor's, keeps its
@@ -1505,7 +1581,7 @@ nothing to sort, which is a table in the sense the element means rather than a
 list of objects. (The retention screen's per-domain terms were the other one;
 they are a description list now.)
 
-**Including the tracker's own list and table, which are one grid with two
+**Including Worklet's own list and table, which are one grid with two
 column sets.** They were two components over one answer, and the cost was
 exactly what two renderers of one row always costs: the list had none of the
 rules this section states — one track list for the whole grid, the cap on a
@@ -1656,8 +1732,8 @@ things follow from that, and each is a rule a new column has to keep:
 - **A value wraps rather than being cut.** `.truncate` is right for a cell that
   IS one line of a fixed column and wrong once the column is gone: at 390px it
   cut the one field the reader opened the list for and left the rest of the
-  card empty underneath it. What bounds the value instead is the engine — a
-  title is at most `tracker.MaxTitle`.
+  card empty underneath it. What bounds the value instead is the engine: a
+  title is at most `worklet.MaxTitle`.
 - **A head longer than the label column wraps inside it.** The label is a
   fixed 7rem — 112px — so every value in a card starts at the same place with
   no track to line them up with, and 7rem is what the heads measure: the widest
@@ -1677,7 +1753,7 @@ things follow from that, and each is a rule a new column has to keep:
 
 **A footnote may not set its column's width.** A `.fact` is a column flex box,
 so it is as wide as its widest child — and a note is prose where the value
-above it is a word. Measured on a knowledge page's header: `v1` under a 146px
+above it is a word. Measured on a Doclet page's header: `v1` under a 146px
 "set by Agent CEO · 2m ago" and `2m ago` under a 153px "any change, not only a
 save", beside three note-less facts at 66 to 75px, so the gaps between the five
 labels ran 85, 162, 90, 169 and the row read as five columns placed at random.
@@ -1689,7 +1765,7 @@ on a second line, and an orphan reads as a fault. This is deliberately not
 `--size-measure`: that is a reading measure for prose somebody sits down with, and a
 caption under a fact is read in one glance beside the thing it qualifies.
 
-**A trail of one segment is not a trail.** The knowledge page draws its
+**A trail of one segment is not a trail.** The Doclet page draws its
 ancestor chain above the header, outermost first, because a title alone says
 nothing about which team's tree a page is in. On a page filed directly in its
 container — which is most of them — that chain is the container and nothing
@@ -1768,12 +1844,12 @@ four clauses that travel together because each one was got wrong separately:
   mint and mark every row in its column.
 
 The cells this governs are the frame's `SeatCell`, the shared `SeatChip`, the
-tracker's compact `Assignee`, the Projects directory's Lead and Last change,
+Worklet's compact `Assignee`, the Projects directory's Lead and Last change,
 the trash's `removed_by`, the log's actor, a schedule's scope and every fire it
 woke, a saved view's owner, a page's watchers and commenters and a delivery's
 recipient — and the rule is written here rather than at any one of them because
 the whole point is that the same person looks the same on every screen they
-appear on. `components/work.test.tsx` and `routes/work/shapes/Grid.test.tsx`
+appear on. `components/work.test.tsx` and `routes/worklet/shapes/Grid.test.tsx`
 hold the outline over the pieces and over the grid's two column sets.
 
 ### A row of numbers shares its lines
@@ -1933,9 +2009,9 @@ bars.
 `window` where the engine counted them through the listing's own predicate and
 `loaded` where the browser bucketed the pages it is holding, and the noun is the
 caller's too — so the one sentence a screen reader hears says "9,412 events in
-this window" on the event log and "41 changes on the pages loaded" on the
-tracker's. Optional, it was wrong on the second caller the day that caller
-arrived: a tracker chart announced a page count as a window count, in a noun
+this window" on the event log and "41 changes on the pages loaded" on
+Worklet's. Optional, it was wrong on the second caller the day that caller
+arrived: a Worklet chart announced a page count as a window count, in a noun
 nothing on that screen is.
 
 **A log reaches its older rows by fetching them.** A page boundary is not a
@@ -1946,29 +2022,29 @@ the window or a server-side facet changes — pages fetched under the previous
 question are rows the engine would never have answered for this one, and the
 cursor walks that question's history. Discarded, never hidden under the old
 question: hidden, they came back when the reader returned to it, under a first
-page read since. From the press of Load older the first page is held still —
-no poll, no reconnect and no return of the tab reads it — because the cursor
-was minted from its last row: re-reading it under newer rows pushes that row
-out and the changes between two pages belong to neither, which is a silent
-hole in the middle of a log. The reader's own write still reads it again, so
-the screen they acted on shows the act, and the pages held are then read again
-from it, in order, and swapped in together; a read again that fails lets the
-hold go and the first page is live again. Once it is true a screen with a foot
-to say it in says so — "Paused while you page back." The pager is one,
-`lib/usePaged.ts`, under every paged list: a list paged by a cursor in another
-order holds the same way, since its first page read again pushes rows out
-alike — Code's Repositories, Work's task lists, Knowledge's listings, the
-Inbox's Snoozed and Earlier, and the artifact gallery and its folders — and
-where its foot counts what is loaded, that count says the list is "paused
-while more are loaded". **An older page that fails is said beside the control
-that asks it, never in its place** (`PageFailed`: "Could not read the next
-page", with the code): the pager keeps what it holds and the cursor the page
-was asked from, so the same press reads it again. In its place, a footer left
-the reader nothing to press — under a list held still, nothing to do but
-reload — and a refusal's banner promises a retry the screen makes on its own,
-which a page the reader asked for once never gets. Live › Activity reads the
-first page of its window through the same control, so a first page refused
-before any answered is said as the refusal it was, with the control beside it.
+page read since. The first page stays live while the reader pages on — polled,
+read again on reconnect and after the reader's own write — and that is why the
+pages after it have to be joined to it: the cursor of the second page was minted
+from the first page's last row, so a first page read again under newer rows
+pushes that row out, and the changes between the two pages would belong to
+neither, a silent hole in the middle of a log. So whenever the first page moves
+under pages loaded, the range between it and the next held page is read and
+spliced in before the list moves, and until it has been the list stays as it
+was drawn; the read is bounded by the pages held, and a gap longer than that,
+or one the read failed on, drops the later pages instead, so the reader pages on
+again from a list with no hole in it. The pager is one, `lib/usePaged.ts`,
+under every paged list — a list paged by a cursor in another order loses rows
+off its first page alike: Code's Repositories, Worklet's task lists, Doclet's
+listings, the Inbox's Snoozed and Earlier, and the artifact gallery and its
+folders. **An older page that fails is said beside the control that asks it,
+never in its place** (`PageFailed`: "Could not read the next page", with the
+code): the pager keeps what it holds and the cursor the page was asked from, so
+the same press reads it again. In its place, a footer left the reader nothing
+to press but reload — and a refusal's banner promises a retry the screen makes
+on its own, which a page the reader asked for once never gets. Live › Activity
+reads the first page of its window through the same control, so a first page
+refused before any answered is said as the refusal it was, with the control
+beside it.
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
@@ -2086,8 +2162,9 @@ rounded, with ONE scroller inside it. Below the kit's `breakpoint.shell`
 (1024 px) the sheet is the whole window and the sidebar is a modal drawer that
 takes Escape, traps Tab, hands focus back to its toggle and closes on a
 navigation — opened from the bar's toggle or with `Mod+\` (`⌘\` on a Mac,
-`Ctrl+\` elsewhere), a chord that does nothing above the breakpoint, where the
-sidebar is always on screen; the skip link precedes everything and lands on
+`Ctrl+\` elsewhere), the chord that above the breakpoint, where the sidebar is
+always on screen, folds it to its compact rail and back
+([The sidebar](#the-sidebar)); the skip link precedes everything and lands on
 the scroller. None of that is written in this repository, because a second
 copy of it is how the two drift. What `dashboard/src/app/` owns:
 
@@ -2095,22 +2172,22 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 |---|---|
 | `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
 | `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token" under it with the token's name in the row's title and under the access in the menu, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. Pressing the name of anybody resolved opens the reader's own menu (the kit's `AccountRow` `menu`, named ", your menu", marked current on `#/account`, where it stands in for the row the Account does not have): their access as its header, then the reader's own [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`; never the seat, which holds none of what a person looks for there), where the password, the second factor and recovery codes, the sessions and the personal access tokens are, and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1212px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1212px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a Doclet page, whose More carries it, and Doclet's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
-| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
+| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the widths the dashboard derives itself: where the peek becomes a column, where Ask Crewlet does, where Settings' column folds, and where Chat's columns fold |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
-| `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
-| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `peekAddress` | the peek's address: `peek=` in the URL, opened by a push and moved by a replace, and the page a row links to (`peekHref`); which clicks peek is the kit's (`peekClickHandler`, `peekRowActivation`) |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's `peek` slot and drawn by the kit's `PeekRail` (resizable from the keyboard as well as the pointer, a column of the sheet where the frame leaves the list beside it its floor, 1160 px on most screens and 1396 beside Settings' column, and a drawer under that): the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
-| `TimeRangePicker` | the one control for `window=` |
+| `lib/rangePicker` | the one control for `window=`: a screen's range mapped onto the kit's `TimeRangePicker` (Today as the company's day, a custom window on the reader's zone or as whole company days) |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation (the kit's `PageNote`), wrapped so its last line never holds a word alone |
 
-**Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
+**Two widths are the kit's, and the rest are arithmetic.** Below 1024 px (`breakpoint.shell`) the
 sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
 pane: a `DataGrid`'s rows become labelled cards — or, on a grid that asks for
 `phoneRows="compact"`, two unlabelled lines: what the row IS (its
@@ -2144,18 +2221,19 @@ That is **1160 px** on a screen and **1396 px** beside Settings' column at the
 normal density (1152 and 1388 compact, 1167 and 1403 comfortable). Below that the peek
 is a drawer over the screen. The first cut of this counted only the sidebar,
 the inset, the hairlines, the peek and the list, and put the threshold at
-1112: the Work list beside a peek there was 396 px, and at 1280 a peek on
+1112: the Worklet list beside a peek there was 396 px, and at 1280 a peek on
 Settings › Nodes left the nodes grid 328 px with its columns cut off.
 
 It is **the shell, not a media query**, that applies it, because two of those
 terms are not the window's: the section column belongs to the screen, and the
 inset and padding scale with the reader's density — a media query can see
 neither. `app/layout.ts` (`peekColumnMin`) does the arithmetic, the shell asks
-`matchMedia` for the one width right for the frame on screen, and it writes one
-attribute, `data-peek="column"` or `"drawer"`, so there is no width with both
-or neither. And the column's track is the reader's dragged width CAPPED at what
-the sheet can give with the list at its floor (`--peek-reserve`, from
-`listReserve`), because a width dragged to 640 on a wide window outlives it.
+`matchMedia` for the one width right for the frame on screen, and it hands the
+kit's `AppShell` one `peekShape`, which the kit publishes as `data-peek="column"`
+or `"drawer"`, so there is no width with both or neither. And the column is the
+reader's dragged width CAPPED at what the sheet can give with the list at its
+floor (the rail's `reserve`, from `listReserve`), because a width dragged to 640
+on a wide window outlives it.
 
 **Beside a canvas the peek rests at 330.** A list beside a peek keeps its floor
 and reflows; a chart is SHRUNK into whatever width the peek leaves it, so every
@@ -2165,6 +2243,25 @@ asks for the window's height with `useFillScreen`), and the rail rests there
 until the reader drags it: a width they dragged is their preference on every
 screen, anywhere from 330 to 640. The threshold above is computed at the
 resting 420 for every screen.
+
+**Chatlet's columns give way by the screen's width.** Chatlet draws its rail, a
+room's transcript and an open thread side by side. They fold by the width of
+the SCREEN (`@container page`), never the window's, because the sidebar, a
+peek and Ask Crewlet's column each take a share of the window that a media
+query cannot see. The transcript keeps a 320 px floor (`TRANSCRIPT_FLOOR` in
+`app/layout.ts`, the width WCAG's Reflow criterion asks every page to read
+at). So the rail narrows from 260 px towards 200 px first, and below a 539 px
+screen it stacks above the room. A thread stands beside the transcript from a
+978 px screen (the rail at 260, the floor, the thread's 360 and two gaps) and
+under it below that, never in its place. The gaps are counted at the widest
+density, so the floor holds at every density.
+
+Beside Ask Crewlet's column at its resting width, a 1280 px window leaves
+the screen 556 px at the normal density: the rail narrows to 220 px and an
+open thread goes under the room. At 1168 px, where the column first fits, the
+screen is 444 px and the rail stacks too. A column dragged wider leaves the
+screen narrower still, and the columns fold sooner, because they ask the
+screen and not the window.
 
 **A screen publishes what the chrome needs and renders none of it.** The labels
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
@@ -2177,7 +2274,7 @@ badge.
 **And only a SCREEN publishes — a body rendered inside one never does.** The
 frame holds one coverage slot with one setter, so a reusable body that published
 from inside another screen fought that screen's own answer: on
-`#/work/{KEY}?lens=history` the project's read and the log's read both wrote it,
+`#/worklet/{KEY}?lens=history` the project's read and the log's read both wrote it,
 whichever polled last won, and switching lenses unmounted the log and cleared the
 slot to nothing over a page still showing the project it had read. A body states
 its own rows' coverage INLINE instead, beside the rows, which is what a peek rail
@@ -2214,7 +2311,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Work's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` folds the sidebar to its compact rail and back, and opens the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -2222,10 +2319,13 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
+| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox or a comment on a task. `Enter` alone is a new line, since such a letter is often several lines |
+| Writing a chat message | `Enter` sends it and `Shift+Enter` adds a line (bound by the design system's `Composer`), `Up` in an empty box edits your last message, `Mod+B` and `Mod+I` bold and italicise the selection |
+| On a focused chat message | `E` edits your message, `T` opens its thread, `S` saves it for later, `Delete` deletes it, `Up` and `Down` move to the message above and below |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
-| In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
+| In Ask Crewlet | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
+| In a dialog, a menu, the drawer or Ask Crewlet | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
 the platform's own notation with the kit's `Kbd`.
@@ -2257,9 +2357,9 @@ the frame alone, so the suite mounts it and refuses an "Anywhere" row it did
 not bind — a key the legend offered and nothing answered.
 
 **`/` searches what you are looking at.** A screen with a search box of its
-own — the seat filter, the event log, the tools catalogue, the audit log's
-actor, work search and a list's key-or-title box, the knowledge base and its
-page finder — registers it with `useSearchTarget`, and `/` focuses it with its
+own (the seat filter, the event log, the tools catalogue, the audit log's
+actor, work search and a list's key-or-title box, Doclet and its
+page finder, Search chat) registers it with `useSearchTarget`, and `/` focuses it with its
 text selected to type over; on a screen with none, `/` opens the palette. It
 opened the palette everywhere, so on those screens the key a reader pressed to
 search the screen took them away from it.
@@ -2355,7 +2455,7 @@ show its ancestry beside the controls takes a line of its own.
   never changes with the width. A tab the reader cannot open draws the same
   lock the sidebar and the Settings column draw (the kit's `LockedLabel`), naming
   the access it needs. **A group the reader holds none of draws its key once.**
-  A Tracker-only reader met a key on 13 of the sidebar's 15 rows, which read as
+  A Worklet-only reader met a key on 13 of the sidebar's 15 rows, which read as
   noise rather than as a reason. Where every row of a named group shares one
   reason (`groupLock`), the key and the reason sit on the group's label and its
   rows go quiet, each still naming the access as its title and to a screen
@@ -2366,7 +2466,11 @@ show its ancestry beside the controls takes a line of its own.
   loading, the density preference). **An object's own tabs fold the same
   way** (a seat's Overview … Settings, a turn's sections): a scrolling row
   hides its scrollbar, and on a phone a seat's Settings began five pixels past
-  the strip's end with nothing to say it was there. **Both are the kit's
+  the strip's end with nothing to say it was there. **A detail's tab bar
+  stands one step (8px) above its panel**, one token for every tabbed detail
+  (an integration's page, a seat's profile, a turn, the org builder's node
+  editor, a room's details): the panel is the head's own, not a section a
+  section's gap below it. **Both are the kit's
   underline row with `overflow="menu"`**, so the fold, its arithmetic, "More"
   and the reading note are the kit's: the section strip is `Tabs` in router
   mode (a `nav` of links, the current one `aria-current="page"`, a folded link
@@ -2380,7 +2484,7 @@ show its ancestry beside the controls takes a line of its own.
   between two tabs moved the header's controls. Whether a page IS a row is
   `nav.ts`'s `isSidebarRow`, asked by the inline star and by the phone's More
   alike, and never the path's length: the reader's Account is one segment long
-  and has no row, so it is kept like any other page. Knowledge's landing and
+  and has no row, so it is kept like any other page. Doclet's landing and
   its pages are the exception: a page is starred from its own More menu, so
   neither draws the frame's star (`useOwnStar`).
 
@@ -2536,8 +2640,8 @@ refusal panel, the Account, Home's greeting and People read too,
 where each used to ask for itself — and **dials for
 every session it reads**. The socket admits every principal the engine
 resolves whose stage may act, and what a reader may SEE on it is decided per
-push by their access — the overview for everybody, a seat's transcript for its
-lead and an admin, the tracker's pushes for whoever holds Tracker (ADR-0033) —
+push by their access (the overview for everybody, a seat's transcript for its
+lead and an admin, Worklet's pushes for whoever holds Worklet; ADR-0033),
 so a person somebody gave no app still reads the org chart, the agents'
 status and their own account, and nothing is held back for them. A `401` is
 nobody, and the sign-in follows with nothing dialled; a read that failed on
@@ -2638,7 +2742,11 @@ every sign-in path to a quiet console.
 **An invitation is read, never spent, by opening it.** The link carries the
 whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
-the view, the body on the redemption — never in a request URL. The view names
+the view, the body on the redemption — never in a request URL. Both link
+headers are declared in `contract/identity.ts` (`INVITE_SECRET_HEADER`,
+`RESET_SECRET_HEADER`) and held to the views' own spellings by an engine test,
+because a header renamed on one side alone presents no secret and every link
+opens as the `410` an id nobody issued answers. The view names
 who it is for, who sent it — when a person did: one a Tier A token or a service
 account issued, the company's first person's above all, names no sender, since
 `token:founder` is nothing its reader would recognise — and the seat it binds.
@@ -2737,13 +2845,62 @@ builder's kept draft. That draft is stamped with the reader it was kept for, and
 one kept for anybody else is discarded unoffered.
 
 **And so does a session somebody else left in the browser.** Signing in as
-somebody else in one tab ends the session every other tab of the browser was
-opened with (each socket closes `4401`) and moves the cookie they share, so the
-next `GET /auth/session` — the socket's before it dials again, the frame's on
-its next read — answers for them. A tab read by anybody else is handed over
-exactly as a sign-in by them would hand it — emptied, its new reader recorded,
-reloaded where it was — and the socket dials nothing for them first
-(`lib/session.ts`'s `takeSession`, which `main.tsx` hands the socket).
+somebody else in one tab moves the cookie every other tab of the browser
+shares, and tries to end the session those tabs were opened with — best effort,
+since a sign-in is never refused over the close of somebody's other session.
+Where the close lands, each socket closes `4401`, and the socket's
+`GET /auth/session` before it dials again answers for the new person; the
+frame's own read answers for them too when the tab next becomes visible. Where
+it does not, nothing on the socket says so, and a window left open beside the
+one that signed in would go on drawing the last person's screen with every
+request it sent going out as the new one. So every request a tab makes for its
+reader names them (`X-Crewlet-Reader`, `protocol/signin.ts`): a REST read or
+change, an act and its Retry, a download, the degraded-mode snapshot, the
+socket's refusal probe, and the session keepalive (`protocol/keepalive.ts`),
+which reads the session every five minutes while the socket is open unless the
+engine answered something else in the last five. The socket's handshake is the
+one request a browser cannot put a header on, so it names the reader in its URL
+instead (`/ws/stream?reader=`, `READER_PARAM`), which the engine reads on an
+upgrade alone. The engine refuses one whose cookie is anybody else's `409
+reader_changed` before it runs, so a press in that window makes no change as
+the new person, a Retry of the last person's change sends their operation as
+nobody's, and a socket that dropped for another reason and dialled again under
+the new cookie draws nothing of the new person's company: its refused handshake
+reaches the page as a bare 1006, and the refusal probe reads the `409`. The two
+requests that name nobody are the session read itself, which is how a tab
+learns who to be handed to, and the token exchange, which signs somebody in. On
+any of these signals a tab read by anybody else is handed over exactly as a
+sign-in by them would hand it — emptied, its new reader recorded, reloaded
+where it was — and the socket dials nothing for them first (`lib/session.ts`'s
+`takeSession`, which `main.tsx` hands the socket, and `sessionMoved`, which it
+installs for the refusal). The reader's id is no secret, but it is in the
+socket's URL, so a proxy's access log of `/ws/stream` records it. A window
+whose socket stays open and that sends nothing of its own is handed over by
+the keepalive in under ten minutes, two keepalive intervals rather than one: a
+tick passes over a tab the engine answered less than five minutes before, and
+that answer may have come just before the sign-in.
+
+**A tab learns who it is read by before it is served anything.** The check
+above covers what a tab asks once it has recorded its reader, and a tab opened
+with a session already in the browser records nobody until a read of the
+session answers. The frame's own `GET /auth/session` records it before the
+socket is dialled, and the socket holds every dial it makes for a tab that has
+still recorded nobody — the frame's when that read FAILED, a reconnect, a
+signed-out tab coming back into view — behind a session read of its own
+(`protocol/socket.ts`'s `learnReader`): it records whoever answers and dials
+naming them, a `401` is the sign-in, and any other failure dials nothing and
+asks again on the backoff, since a dial naming nobody is served as whoever
+holds the cookie. A dial made blind was the tab's first sight of the company,
+and a sign-in in another tab before its next session read was then ADOPTED as
+its reader by a tab drawing what it had been served for the last one. What
+stays outside the check is exact. A browser that refuses the tab's storage
+records nobody however often it reads the session (`lib/reader.ts` keeps the
+reader nowhere else), so its requests name nobody and a cookie moved under it
+is served rather than refused — the setting that blocks a site's storage
+usually blocks its cookie as well, and with it the session. And a screen's own
+REST read sent before any session read has answered names nobody; none is sent
+today, because every screen's REST read waits for the frame's session answer or
+for the viewer, which the socket answers only after a session read has.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
@@ -2833,13 +2990,15 @@ company did.** That is Home until its reader arranges it (see
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
-  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head names the
-  asker (the seat they asked as, never a credential) with their badge, and
-  what every one of their asks shares (the item, the role the reader is asked
-  in, how long ago); what differs between two asks is said on the ask, and so
-  is the channel an ask promised to post its answer to ("answer posted to
-  #releases"). Under each question one line reads "Recommended: Hold release"
-  with **Accept**, which sends that option, and **Change**, which opens every
+  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head, a quiet
+  band, names the asker (the seat they asked as, never a credential) with
+  their small face and badge, and what every one of their asks shares (the
+  item, the role the reader is asked in, how long ago); what differs between
+  two asks is said on the ask, and so is the channel an ask promised to post
+  its answer to ("answer posted to #releases"). Each question is ONE ROW: the
+  question (two lines at most on Home), and under it its key and "Recommended:
+  Hold release", with **Accept**, which sends that option, and a quiet
+  **Change** at the row's end, centred on the words. **Change** opens every
   option as a choice with its detail line and the recommended one tagged
   (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
   `Composer`, up to 2,000 characters, Command+Enter to send) sends a reply
@@ -2851,7 +3010,9 @@ company did.** That is Home until its reader arranges it (see
   ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
   anyway" or "Answered “the reply”", until the card is drawn afresh; there is
   no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
-  by its turn (`answer_run`), with how long its box is still held. A seat the
+  by its turn (`answer_run`), with how long its box is still held: its row shows
+  the question's one sentence, never the context under it, and its **Answer**
+  dialog draws the run's ask as the Inbox does, its options as buttons. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
@@ -2860,13 +3021,16 @@ company did.** That is Home until its reader arranges it (see
   answered in words in place: **Reply** opens the field under the question
   and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
-  browser cannot act. **Open inbox** and **Review** both land on
-  `#/inbox`, whose list opens with every one of them under Needs you.
+  browser cannot act. A parked run and a stopped seat sit under the same head
+  as an ask, the seat's name said there and not again in the row's title. The
+  card's foot, **Show 4 more in Inbox** (**Open inbox** where it lists them
+  all), and **Review** both land on `#/inbox`, whose list opens with every one
+  of them under Needs you.
 - **Live now**: how many seats the engine says are working, and for the
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
   charged to, never a work key), how long, where it is in context → execute →
-  review ("Execute · round 7 of 25"), and the last call it made, each a way
+  review ("Execute · coding run"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
@@ -2890,8 +3054,8 @@ company did.** That is Home until its reader arranges it (see
   own column with the aside under it, so a row that wraps and one that does not
   keep the same alignment.
 
-**Home leaves out what cannot arrive.** Where the company runs no Crewlet
-Works (see [the sidebar](#the-sidebar)), the *Tasks in progress* and
+**Home leaves out what cannot arrive.** Where the company does not run
+Worklet (see [the sidebar](#the-sidebar)), the *Tasks in progress* and
 *Completed* figures, **Tasks completed** and **Projects** are not drawn, nor
 offered in the tray, and New task leaves the page bar: a tile reading zero
 would claim a tracker that answered nothing. The decisions, the conditions,
@@ -2940,6 +3104,28 @@ widgets, Cancel and Done. New task steps aside until Done.
   questions its page asks and only reads; every write stays on the page. A
   contribution that names no such page is left out and reported, and a suite
   (`board/registry.test.ts`) fails the build on it.
+- **A widget never says "nothing" over an answer that could not account for
+  everything.** An answer says when it is short: a record this build cannot
+  read met the read (`complete: false`), or a node did not answer a fleet read
+  (`coverage`). `WidgetQuery` in `routes/home/board/kit.tsx` is the one place
+  that is decided, over the gaps `gapsOf` reads from every answer a widget
+  draws and the widget's own lines (a muted room, a list cut at its bound): a
+  widget's claim ("You're caught up", "No turn failed in the last 24 hours")
+  is drawn only over an answer with no gap; with a gap and no rows the card
+  says there is nothing to list and why it may be wrong, and with rows it says
+  the gap under them. A figure says "May be incomplete" on its second line, and
+  a count that stopped at its ceiling is written as the floor it is ("50+").
+  A count another surface already says is read from that surface's reading,
+  never from the widget's own page: the Inbox card's is the sidebar badge's
+  (`useInboxCounts`), so the two never name different numbers. And a widget
+  that follows one thing reads it by its key, as its own page does, never by
+  finding it in a page of a listing: the Project widget and a pinned project
+  ask `work_project`, so a project past the listing's first page is still the
+  one the reader chose, and a picker whose list the engine cut says so.
+  Every widget module, and every card Home's own widgets draw, goes through
+  `WidgetQuery` rather than `QueryState` or `EmptyState`, which
+  `board/kit.test.tsx` holds, and `board/widgets.render.test.tsx` answers every
+  widget's questions short and holds each to saying so.
 - **Per reader, per browser**, as stars are (`STORAGE_KEYS.homeBoard`), and
   read back as untrusted input: every field is checked, every string capped,
   and every link held to a `#/` address or an `https://` one. A widget whose
@@ -3026,18 +3212,52 @@ opens the field in their place and sends the answer in words
 from the start. Where the ask promised a channel (`decision.inform`) the line
 under the answer says "Your answer is also posted to #channel": the engine
 holds the asker to it (`ExternalNotification.owes`), and an ask that promised
-nothing draws no such line. A parked coding run's pane heads with its
-question's first sentence, quotes the question whole and verbatim, says how
-long its box is still held, and answers by its turn (`answer_run`). A stopped
+nothing draws no such line. A parked coding run's pane is drawn as a
+question is (ADR-0068): its one-sentence question heads it with its inline
+references placed, its context follows as Markdown, its recommendation sits with
+the reasoning and the evidence it cites, and its options are buttons, the
+recommended one first and filled, with "Something else" to answer in words. An
+open question is answered in its field. It says how long the box is still held
+and answers by its turn (`answer_run`). A question from an older build, one
+free-text block, draws its first sentence as the heading and the rest as
+Markdown; nothing is ever quoted verbatim. A stopped
 seat's names the window that is spent and offers the two ways out: raise the
 ceiling, or hand the item on. A condition's says what it costs to leave and
 where the answer is.
 
-**What was done is shown, then the next item opens.** An answered question
-or run stays in its place in Needs you, struck through and read as
-"Answered", and its pane shows the answer where the controls were; a read or
-snoozed update shows its new state. 700 ms later (`ADVANCE_MS`) the next item
-after it in the list opens, unless the reader has moved on first.
+**What is answered moves to Answered, and the next item opens.** An answered
+question or run leaves Needs you at once for the head of the **Answered**
+group, marked **Answered** in its head (a soft success tag where the time was)
+with the answer under the question ("You chose **Hold release**", or what was
+written, with a speech mark), in full ink and never struck through: a strike
+reads as "cancelled" and cuts through the words a reader comes back to check.
+The next item after it opens in the pane in the same moment, the group stays
+closed and counts it, and one polite announcement says both ("Answered. Next:
+…"). A second press on a row already answered moves the reader on no further.
+An answer the engine has accepted and not yet settled stays where it stood,
+shown as sent, until it settles. Needs you's count is what is still open. A
+read or snoozed update shows its new state, and 700 ms later (`ADVANCE_MS`)
+the next item after it opens, unless the reader has moved on first.
+
+**What was answered before waits in a closed group.** The asks put to the
+reader and closed in the last week, and the coding runs' questions the reader
+answered themselves (`answered_decisions`), are an **Answered**
+group after Updates, closed and counted ("Answered 4"): its label is a
+disclosure button inside the heading, so a reader moving by heading lands on
+it and Enter opens it. Each row names who asked, the question, and who
+answered and how ("Maya Ops chose **Ship anyway**"), since a colleague may
+answer a question put to you. A coding run's question the reader answered is
+a row of the same group, drawn the same way: its pane reads the run's ask in
+full (the question, its context, its options with the chosen one marked) and
+links to the run, with no conversation, since a run's question has no thread.
+A row answered on this visit is in Needs you
+instead, never in both. Opened, its rows step with `j` and `k`; a link to one
+opens the group. An answered ask's pane reads like the one it was answered
+on, with the answer in place of the buttons, a line saying who answered for
+you where it was not you, **What happened next** as four steps (asked,
+answered, picked up, acted on: the last two from the asker's seat as it is now
+and its first record on the task since, with a paused or stopped seat marked
+for attention), and the conversation with a reply box.
 
 **The conversation is the last part of the reading.** It is labelled by what
 it holds: "Replies to this question" under an ask, "Replies to this comment"
@@ -3045,7 +3265,10 @@ under an update about a comment (whose comment is quoted above, so it is not
 listed again unless the update carries only a preview of it), and
 "Conversation on this task" under any other update. It is read a page at a
 time from `work_comments`, the newest page polled, and **Earlier comments**
-reads the page before. A comment's author is the seat a person wrote it as
+reads the page before. A reply thread is narrowed by the engine (`thread`), so
+the button appears only when that conversation has earlier comments, and an
+empty one reads as its heading, "No replies yet." and the reply box, one
+spacing step apart. A comment's author is the seat a person wrote it as
 (the engine records it so), one by a credential bound to no seat is drawn
 under its own login, and a comment with no author reads "The engine"; never
 the credential it came through. The reply box at its end writes as you:
@@ -3080,13 +3303,17 @@ holds rows, the pane says **All clear**; beside a list that is empty, whose own
 empty state already says so, the pane holds one quiet line ("New updates open
 here.") rather than a second empty state.
 
-**Two panes above a phone, one below it.** Both columns are present from the
-first paint and the first item not yet dealt with is open until the reader
-picks one, so the pane is never an empty box beside a list with something in
-it; stepping down the list, or `j` and `k`, replaces history, so four rows
-read through one pane are one place the reader has been. Under 640px the list
-is the screen and an item opens in its place, with Back at the start of its
-byline.
+**Two panes on a wide screen, one on a narrow one.** Both columns are present
+from the first paint and the first item not yet dealt with is open until the
+reader picks one, so the pane is never an empty box beside a list with
+something in it; stepping down the list, or `j` and `k`, replaces history, so
+four rows read through one pane are one place the reader has been. Under 640px
+of the SCREEN's width the list is the screen and an item opens in its place,
+with Back at the start of its byline: on a phone, and beside Ask Crewlet,
+whose column can leave a desktop window's screen a phone's width. Whether the
+page then scrolls as a whole is the window's: on a phone it does, and beside
+Ask Crewlet the screen still fills the window and the one pane scrolls
+itself.
 
 **Three viewer states, three sentences.** A reader with no credential, a
 reader whose credential no seat claims, and a bound reader. The unbound reader
@@ -3096,10 +3323,10 @@ would add (`crewlet iam bind`, or a row created with `-seat`). The conditions a 
 updates and decisions need a credential bound to their seat, and every write
 control is drawn for all three, disabled with the reason.
 
-**Without Crewlet Works the Inbox stays, and says where the rest went.** The
-asks and the updates are the tracker's notices, but the seats stopped on a
+**Without Worklet the Inbox stays, and says where the rest went.** The
+asks and the updates are Worklet's notices, but the seats stopped on a
 spent budget and the conditions a person decides arrive under every backend,
-so the Inbox is never hidden with the tracker (see [the sidebar](#the-sidebar)).
+so the Inbox is never hidden with Worklet (see [the sidebar](#the-sidebar)).
 It draws those, and one line in place of its updates naming where asks and
 mentions go instead: "Jira handles work items, so asks and mentions arrive
 there.", or that the company runs no work tracker.
@@ -3117,8 +3344,8 @@ empty is what the page was rebuilt to stop. A section holds at most twenty
 rows of its claim, and one holding fewer than its count says which ones. The
 page opens straight on its sections, as the working screens do: no paragraph
 explains it, and each empty section says in its own words what would fill it. Every
-section is a question about work items, so where the company runs no Crewlet
-Works My work is hidden, never locked (see [the sidebar](#the-sidebar)).
+section is a question about work items, so where the company does not run
+Worklet, My work is hidden, never locked (see [the sidebar](#the-sidebar)).
 
 **Every figure for one person's day counts one named thing.** The Queue's is
 the open work ASSIGNED to the person, and on your own day it is the same
@@ -3167,25 +3394,27 @@ open on that desk), and its panel is tall enough for six of them before it
 scrolls. Every row of a list is the same height whether or not somebody holds
 its task — the holder's cell keeps a badge's height with nobody in it.
 
-**Whose day it is decides the pronoun and the controls.** The band above the
-sections names whose day is on screen and carries the stamp when somebody else
-put the queue in order — by the person's name. On somebody ELSE's day every
+**Whose day it is decides the pronoun and the controls.** The page bar's
+"Whose day" picker names whose day is on screen, and a note above the
+sections carries the stamp when somebody else put the queue in order, by the
+person's name; no row repeats the seat's chip, handle or "yours" (a seat's
+page is reached from Company › Org chart). On somebody ELSE's day every
 row speaks about them ("Rui is the approver") and every change on the page is
 HELD (`HoldWrites`): drawn, disabled, and explained once in words above the
 rows, because the questions put to them are theirs to answer and their work is
 changed from the work screens. The one change released there is a LEAD's
-reorder — anybody above them in the chart, as the tracker defines a lead — and
+reorder (anybody above them in the chart, as Worklet defines a lead), and
 the page says before the press that the person is told when the reader
 reorders.
 
 ### A task's page is one reading
 
-`#/work/{KEY}` is the approved Issue artboard: a reading column and a rail
+`#/worklet/{KEY}` is the approved Issue artboard: a reading column and a rail
 beside it, each its own scroller and flush with the sheet (the page asks the
 shell for the window's height, as the Inbox does, and gives it back below a
 phone's width, where the rail follows the column in one scroller). There is no
 header card: the page bar's trail names the project by its name with its key as
-a chip ("Work › ENG Core platform › ENG-412"), and the bar carries ↑ ↓ "3 of 18"
+a chip ("Worklet › ENG Core platform › ENG-412"), and the bar carries ↑ ↓ "3 of 18"
 when the task was opened from a list — by its row's link or through the peek's
 **Open**, which carries the list the peek was opened from — with `k` and `j`
 stepping to the task before and after it (the list's own two keys, standing
@@ -3211,7 +3440,15 @@ at a time — `work_activity` for what changed, `work_comments` for what was
 said, `work_item_turns` for the agent turns charged to the task — and merged
 only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
-history that stopped there. All | Comments | Agent turns | Changes narrows it.
+history that stopped there. Each history stays whole while its newest page
+moves under a reader who paged back (`lib/usePaged.ts`, which a seat's Turns
+tab pages through too): an arrival at the top pushes the newest page's oldest
+entry off its foot, so before the list moves the range between the newest page
+and the pages held is read and spliced in, and until it has been the list stays
+as it was drawn. A gap longer than everything the reader paged back through,
+or one a read failed on, drops the older pages instead, so the reader pages
+back again from a list with no hole in it.
+All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
 "CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
@@ -3223,16 +3460,16 @@ turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
 it did in the agent's own words (a turn that failed or parked before it wrote an
 account of itself says "No summary. See the trace." in one quiet line), the reviewer's request on the raised rung with the
-caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
+caution ink on its mark, the tools it called as chips ("comment_on_work_item ×4"), and under them, on
 a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
 so the newest card and the cost panel agree. While a seat's turn is running on
 this task — joined on the item the engine charges it to, and only while the
 seat is `working` — the foot of the timeline is the live row in the working
-state's own ground ("SWE is on turn 3 · executing · round 7 of 25 · for 2m",
+state's own ground ("SWE is on turn 3 · coding run · for 2m",
 with a pulse that is static under reduced motion) linking to the live trace.
 The words after the turn are the task card's strip's own, from one derivation
 — the round counted from one, as the stepper counts it, and the phase named
-("reading context", "reviewing", "3 workers running", "coding run") — so the
+("reading context", "reviewing", "coding run") — so the
 card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
 seat, optionally with two to six options, the one recommended and whether the
@@ -3440,8 +3677,8 @@ tabs draw). Those sections, and Schedules, open on their work, with no
 introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
-tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 of
-25 · coding run in progress", where the turn number is the task's own count
+tinted by the state — the line, how long the turn has run, "Turn 2 · coding
+run in progress", where the turn number is the task's own count
 (`work_item_turns`, asked by the task's id — see [An item's
 address](#an-items-address)) — then Reports to, Model (the phase chain from
 the org projection, which carries it only to an admin —
@@ -3466,8 +3703,8 @@ the seat yet, or is still being read, rather than leaving the fact out. It asks 
 and for a human seat one REST read of the directory (`GET /iam/seats`), which
 every signed-in reader is answered (masked per reader) and which is never
 asked for an agent's seat, whose holder is the engine. The open work and the
-turn number are the tracker's questions, asked only of a reader holding
-Tracker. While the
+turn number are Worklet's questions, asked only of a reader holding
+Worklet. While the
 seat is working the state card ends with **Watch live**, the turn's watch link,
 so the chart's node, then that link, is the way from the company running to
 a turn running: two presses, with no link nested inside the chart's tree item,
@@ -3478,11 +3715,14 @@ vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox — there is no
-person-to-seat chat. Message files a task, so where the company runs no
-Crewlet Works it is not drawn, nor is a seat's Assign (see
+work the seat owes an answer on and the answer lands in the Inbox. Where the
+company runs the engine's own chat and you hold Chatlet, **Direct message** sits
+beside it and opens a conversation with the seat instead
+(`#/chatlet?dm={handle}`), a remark that obliges nothing; it never replaces
+Message. Message files a task, so where the company does not run
+Worklet it is not drawn, nor is a seat's Assign (see
 [the sidebar](#the-sidebar)). **The peek of your own seat is your own seat's page in
-small**: Message is held, saying it is your own seat — held by the button
+small**: Message and Direct message are held, saying it is your own seat — held by the button
 itself (`useMessageSeatAccess`), never by the screen drawing it, because the
 page held it while the peek drew it bare and offered a person who found
 themselves on the chart an enabled Message to themselves — and under the state
@@ -3565,7 +3805,10 @@ for a reader who cannot make it:
 
 - **Message** opens the New task sheet with the seat as assignee and `ask` set:
   the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. There is no person-to-seat chat.
+  lands in the asker's Inbox. Where the company runs the engine's own chat and
+  the reader holds Chatlet, **Direct message** beside it opens chat's New direct
+  message with the seat chosen — a conversation rather than an ask, so neither
+  stands in for the other; it folds into "More" on a phone.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -3575,9 +3818,9 @@ for a reader who cannot make it:
   holds still offers eight it could be handed.
 - **Pause** (agents only) asks why, and whether to **also stop the current
   turn**: without it the turn the seat is on finishes first, and only a ticked
-  box sends `stop_running`, which also keeps the seat's coding runs from
-  pushing or changing anything until it is resumed — the box says so whether
-  or not a turn is running, since a coding run outlives its turn (see [pausing
+  box sends `stop_running`, which also ends a coding run the turn has out. Either
+  way the seat's coding runs can push or change nothing until it is resumed,
+  and the box says so whether or not a turn is running (see [pausing
   a seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**.
 
@@ -3598,8 +3841,8 @@ tone: its last error, a pause, another stop, or a coding run parked on a
 question — answerable from the notice.
 
 **The Overview is the seat's week and its charter.** Four figures, all ONE
-answer (`seat_activity` with `previous`, every node's usage rows summed): turns
-over seven company days with the change against the week before, the
+answer (`seat_activity` with `previous`, every data node's usage rows summed):
+turns over seven company days with the change against the week before, the
 engine's first-pass rate over the turns it REVIEWED (a week nobody reviewed has
 no rate, never 0%) with how many reviews sent work back, the median turn with
 its p90, and tokens — the seat's capped window nearest its ceiling, over that
@@ -3608,7 +3851,7 @@ has no ceiling of its own — "company cap 60M/day +1" (and "no seat cap" on hov
 company's own budget caps a window, because that ceiling binds every seat (one
 line in the tile, the whole sentence on hover). A shortened token count carries
 no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where the turn is — Context, Execute
-("round 7 of 25", against the cap the phase was granted), Review; there is no
+("coding run" once the turn parks on its run), Review; there is no
 delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
 turn's own task, by its id — see [An item's address](#an-items-address) —
@@ -3649,9 +3892,9 @@ reading on your own day, "50+" past a page), their priorities — the engine's
 count of what on the list is still open, the figure My work and their Work tab
 read, never the stored list's length, which still names a task they finished
 until their next reorder — and who set them, and pinned views, for the person
-and whoever leads them, holding Tracker, and an admin, and withheld with that
+and whoever leads them, holding Worklet, and an admin, and withheld with that
 sentence for anybody else; their open
-work, for a reader holding Tracker; and About. On your own seat the whole page speaks to you, not only its
+work, for a reader holding Worklet; and About. On your own seat the whole page speaks to you, not only its
 day — the holder line says "Held by you, as `jane.doe`", the work card "Nothing
 open is assigned to you", the Work tab "What you mean to do first" and "Waiting
 on your answer" — and **Message** is held, saying it is your own seat, because
@@ -3688,7 +3931,7 @@ beside the running clock as a second unlabelled figure. A phase that finishes wh
 tab is open reaches its transcripts off the push, matched on the seat's own id
 as Live's recent phases are — never on its role name, which two unit seats
 stamped from one template share. A row for a turn still running says what the seat is doing
-and what it is on, from the push ("running — executing · round 2 of 24",
+and what it is on, from the push ("running — reviewing · round 2 of 4",
 ENG-32), and draws its iterations and tokens as not settled rather than as
 zeros — `#/live/turns` does the same. On a phone a row's summary takes two
 lines with its item under it, and a settled turn has no State line at all. And
@@ -3712,7 +3955,7 @@ relative, as every list on the profile says it), each header
 the holder's total ("Latest 50 of 142" where the list is a page of it), and the
 **Conversations** it holds a ledger in (`conversation=` opens one) — each
 thread's KEY on a line of its own, since it is the thread's only identity, with
-its turns and when it last moved under it, and a native task's uuid cut to its
+its turns and when it last moved under it, and a Worklet task's uuid cut to its
 head (`work:task:4d631f6d`) with the whole key on the row's title. Choosing a
 thread shows it: beside the list (a wide screen column) the list scrolls
 inside a box bounded by the scroller's view, handing the wheel back to the page
@@ -3832,8 +4075,9 @@ content it read somewhere else:
   are files of its version, fetched with the reader's credential, and are
   unaffected. A link inside a link's label is that label's text.
 
-An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
-in-app `#/` link does neither, because it *is* this application. A task
+An outbound link opens in a new tab with `rel="noopener noreferrer"`, and a
+screen reader is told it does; an in-app `#/` link does neither, because it
+*is* this application. A task
 list's checkboxes are disabled — this surface performs no writes, and a box a
 reader could tick would report a change that never reached the page.
 
@@ -3926,6 +4170,149 @@ look like one rewritten in the middle. "This save did not change the body" is
 its own answer, because a title, a label and a move are saved beside a body
 and a pane of unmarked lines reads as one that failed to load.
 
+### What prose names is drawn as what it is
+
+Operator-facing words are full of things a reader has to stop and decode:
+`gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
+`~design-review` is a Mattermost channel, `#launch` is a chat room, `GP-66` is
+a task. Every surface `lib/markdown.ts` renders (a page, a description, a
+comment, the Inbox, an Ask Crewlet answer, a transcript) draws each with the
+mark that says what it is, a little below the text's size and just before its
+words (`InlineRef` from `@crewlethq/ui`), and a seat's handle by its words
+alone:
+
+| Written | Drawn |
+|---|---|
+| `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
+| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, `DES page 123`) in place of the whole address, which the link's title keeps |
+| `[label](address)` | Its label as written, after the mark of the app its address belongs to |
+| `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
+| `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
+| `#11`, where its message places it | The code host's mark, linked to the issue or pull request |
+| A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
+| `GP-66` | The task glyph, linked to the work item |
+| `#launch`, a chat room the reader may read | The room's mark, linked to the room; `#e2e` and `#2026` too where the company has rooms of those names |
+| `@miles` | Its words, linked to the seat |
+
+`lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
+Each rule is a guess that can go wrong in two directions, and both are
+refused:
+
+- **Too eager.** A colour in words needs a digit and a letter, so `#123` (an
+  issue) and `#facade` (a hashtag) are words; a colour inside a longer code
+  span (`color: #fff;`) is code; a SHA needs a reference or the word *commit*
+  before it, so `deadbeef1` is a word; a key needs its project to be one of
+  the company's, so `ISO-8601` and `UTF-8` are words; a handle needs a seat,
+  so `@nobody` is a word and an email address is never a mention; a bare
+  `owner/repo` needs its owner to be one the company's code hosts name, so
+  `and/or`, `src/app` and `2024/10` are words; a `#name` is a room only
+  where the reader may read a room of that name, and a room's name wins the
+  colour or the issue number spelled the same, so `#e2e` and `#2026` are rooms
+  where the company has them, and colours and numbers where it does not. A
+  room the reader cannot see (a private room they are outside, or a company
+  whose chat is a vendor's) reads by those rules exactly as a vendor's channel
+  does, and a code span holding just a room's `#name` is code; and an address
+  swallows every key and colour spelled inside it.
+- **Too trusting.** A mark is chosen from the address a link GOES TO, parsed,
+  and never from its words: a link labelled "github.com/…" that goes
+  elsewhere carries no GitHub mark, and a look-alike host
+  (`github.com.login.example.net`, `github.com@login.example.net`) is
+  nobody's. An app is recognised at its public host exactly (github.com,
+  gitlab.com), under its own domain on a dot (`*.slack.com`,
+  `*.atlassian.net`), or at a host the company configured for it. A link's
+  label is read as its words and never as a token, so
+  `[https://github.com/a/b/pull/1](https://login.example.net)` draws no
+  GitHub mark. A label built from an address names what anybody could have
+  chosen only with its site: an Atlassian Cloud tenant the company did not
+  configure is said after its key or page ("DES page 123
+  (evil.atlassian.net)"), a page is named by its space and id and never by
+  the title its address carries, a Mattermost channel only by a name
+  Mattermost allows, and a path segment that decodes to a slash
+  (`a%2Fevil`) or that no code host allows labels nothing, so the address
+  shows as its host and path.
+- **Too slow.** Every pattern runs in time linear in its run, since a
+  comment an agent wrote is rendered by every reader, and a run is read once
+  rather than on every render of the surface around it.
+
+**The company's hosts reach every reader, and nothing else of its integrations
+does.** A self-hosted GitLab, an Enterprise Server, a Mattermost or a Jira
+site lives at an address no rule can guess, so the frame reads `link_hosts`
+once ([API Endpoints](api-endpoints.md)): a kind and a base address per
+configured app, which every reader may ask for, where `integrations` is an
+administrator's. A code host's row also names its owners (the organizations or
+top-level groups the company works in), which is what makes a bare
+`owner/repo` a repository, and it carries no repository, project, team,
+credential or health. A link to a code host is built only to a repository
+under an owner its row names: `attacker/exfil#1` keeps GitHub's mark and links
+nowhere, since an owner and a name are the writer's words, and a code host
+whose row names no owners (a company that configured no organization, group or
+repository) links no reference at all. With both GitHub and GitLab configured,
+a reference goes to the host whose owners hold it, and one neither or both
+hold is left as words. On GitHub a repository is exactly `owner/repo`, so a
+longer path is words. With no code host configured, `owner/repo#14` keeps
+GitHub's mark and links nowhere. The project keys a key needs are the reader's
+own `work_projects`, read once by the frame where Worklet is served to them, and
+the rooms a `#name` may be are the reader's own `chat_room_names`, every room
+they may read, joined or not, read once by the frame where Chatlet is served
+to them as a seat, with a room this tab has seen a live frame for since.
+No mark is ever fetched from anywhere: every mark is the design system's.
+
+**A bare `#11` is placed by its message.** `#11` alone is a list's number, a
+rank or an issue in some repository, so it is a reference only where the
+message it is in says which: the same sentence binds it (`#7 in
+gophrase/frontend`, `gophrase/frontend PR #7`, read as one reference); the
+message names that number in full (`gophrase/backend#11`); or the message
+names exactly one repository. Anything else leaves it words. The trade-off
+is chosen: in a message that names one repository, a rank or a heading's
+number ("our #1 priority", a heading "#2 Rollout") is read as an issue in
+it too, as GitHub's own autolinking reads one in that repository's
+comments, rather than guess at the words around a number. A message is
+one comment, one page or one answer, and an ask's question, context,
+reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
+body" is placed by the `gophrase/backend` its context names. A render is part
+of a scope only when it says so (`scoped`): a reply drawn under an ask is its
+own message, and its numbers are placed by its own words. A number with a
+leading zero, inside a word, a path or an entity, or in code is never one.
+
+**A token is a link only where a link may be.** Inside a control or a link (an
+Inbox row, an answer's option, a link's own label) a link would be invalid or
+steal the press, so those draw marks and swatches alone (`renderTokens`).
+Where the words were written by an agent or a model that may have read
+anything (Ask Crewlet's answers, the Inbox and a coding run's question,
+`links: "checked"`), a link
+is live only where the dashboard built it, from parts it checked, to a place
+that is the company's: a key's, a room's and a handle's routes, a reference
+on the configured code host, and an address on a configured host rebuilt from
+what it names, with no query or fragment. Any other address there is drawn
+inert, as written and with the host it names, readable and copyable and never
+a control, because `https://evil.example/?q=<what it read>` is how an
+injected instruction would carry words away. An address an ask cites as
+evidence is the same: a button only when it is rebuilt on the company's host,
+labelled by the dashboard with the reference it is and its app's mark, and
+otherwise the address as written, never the asker's label ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
+A chat message is read the same way, whoever wrote it, with one addition
+(`links: "own"`, `CHAT_WORDS`): a page of the dashboard's own (a `#/` route,
+or the whole address a Copy link writes on its origin) opens in place, rebuilt
+from its path alone (`lib/appRoute.ts`), so the task or page a message is about
+is one click away and no query a writer chose rides along. Ask Crewlet's
+answers never take it: their one way to move the page is an Open in app card
+the engine built. A message's links (`routes/chatlet/MessageLinks.tsx`): a task, a page, an artifact or a pull
+request the reader may open unfurls into a preview the engine resolved as the
+reader (`chat_unfurls`, with an address the engine built), an address of an app
+the dashboard knows unfurls into its mark, name and reference, every other is
+the address token, and one whose scheme the allowlist refuses is its words.
+A coding run's question is read so wherever it is answered: its Answer dialog
+(`components/writes.tsx`), opened from Live › Runs, a seat's page and every
+decision row, reads the run's context and reasoning `checked`.
+An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
+and says so to a screen reader, as every outbound link in rendered Markdown
+does.
+
+**The caller reads first.** Ask Crewlet's record chips
+(`RenderOptions.prose`) are drawn before any token is read, and tokens are
+read only in the words the chips left, so a record the turn read stays its
+chip; a search's highlight marks the words left after that.
+
 ## ⌘K: search, answer, act
 
 The command palette is one box for the whole product: where to go, what the
@@ -3986,10 +4373,12 @@ the engine's by a Go gate. A term past the engine's search bound (400 bytes —
 a pasted passage) asks neither search nor the answer, and the lead says so,
 naming its size and the limit, where the answer would be: sent, all three
 would be refused, and a list that lost its tasks and pages with nothing saying
-why reads as nothing matching. The work search and the knowledge screen do the
+why reads as nothing matching. Worklet's search and Doclet's do the
 same with a phrase in their address, and so do the two pickers that find a
-task — handing one over and linking one — in place of their list. Every
-`work_search` and `knowledge` read is asked through one hook,
+task — handing one over and linking one — in place of their list, and the
+chat screen's search and its room finder, whose `chat_search` takes the same
+bound. Every `work_search`, `knowledge` and `chat_search` read is asked
+through one hook,
 `useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
 and holds no answer from a shorter phrase under one it never sent; a source
 test fails on a ranked search asked any other way, so a new picker cannot skip
@@ -4134,6 +4523,213 @@ restored history entry. `Mod+K` closes it from its own field. The step-up
 confirmation is deliberately not in that rule: it is holding a refused request
 open until the reader answers it, and a navigation answers nothing.
 
+## Ask Crewlet: a panel of the frame
+
+Ask Crewlet answers questions about the company and prepares
+changes for the person to approve, acting strictly as the signed-in person:
+it reads only what they can open, and nothing changes until they approve it.
+The engine's half is its own section of the docs; what the dashboard owns is
+where the panel stands, what it is told about the page, and how a turn is
+drawn.
+
+**It is a panel of the frame, never of a screen.** The **Ask** button ends
+the page bar (above the panel it opens), carries Ask Crewlet's spark mark
+and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
+An open artifact, which draws its own head, places the same button at the end
+of its bar.
+It is never hidden: where the reader may not ask it is drawn disabled with the
+engine's reason (`viewer.assistant`: turned off, no model, a session that is
+not a person's, or access that does not include it). While the panel is
+closed, a dot on the button says an answer is on its way or a change waits on
+the reader.
+
+**The frame decides its shape by arithmetic, as it decides the peek's**
+(`app/layout.ts`): a third track of the frame, mirroring the rail, where the
+window holds the page's sheet beside it with the list at its floor (1168 px
+on a screen and 1404 beside Settings' column, at the normal density); over
+the page's end edge below that, leaving the page beside it live, with no veil
+and no Tab trap; and the whole window on a phone, as a modal. Its
+track is one more term of every other width, so a peek beside it becomes a
+drawer first (both are columns only from 1588 px) and Settings' column folds
+sooner. It rests at 420 px and is dragged between 360 and 640, from the
+pointer or the keyboard, capped where the page keeps its floor, and kept per
+browser (`crewlet.assistant.width`). It stays open across a navigation, and a
+reload brings back what the tab had (`crewlet_assistant_tab`, in the tab's
+own storage, which the hand-over to another person empties).
+
+**What a page tells it is identifiers, never a record's content**
+(`app/assistant/context.ts`): the screen, its parameters and query, the
+records in view by kind and id, what is selected, a revision, and the draft
+the person has open with its values (below), which exists nowhere a tool
+could read it. A screen
+that knows more registers it with `useAssistantContext`, along with the page
+actions it takes from Ask Crewlet (each parsed, gated and applied by the
+screen's own code). The page goes with a question as a chip in the composer,
+named by the last two crumbs; removing it sends the question with no page
+until the reader adds it back or opens another page. The drawer and a screen
+talk over a typed module-scoped bus (`app/assistant/bus.ts`), never
+`postMessage` or a DOM event, which an artifact's frame or any script could
+reach.
+
+**A page action is carried out exactly once** (`app/assistant/chunk/pageActions.ts`).
+Every tab open on the conversation hears it, so the tab it was meant for (the
+one that approved it or asked the question, or else a tab showing the very
+page it was prepared against) claims it first (`PUT /assistant/actions/{id}`,
+`applying`), and every later claim is answered `409 action_already_claimed`.
+A claim nobody answered applies nothing. The screen then applies it through
+its own parser, gate and setters with a fresh look at the page's revision,
+and the outcome goes back on the same claim, so the turn hears it as the
+action's result. An approved change shows its outcome on its card; a pure
+view change the screen declared needs no approval (D11) shows a receipt in
+the thread, with Undo while the page still shows what the change made of it.
+
+**The page behind the drawer reads every change Ask Crewlet applied.** Each
+server write an approval lands is followed on the turn's stream by a
+`context.invalidate` action naming the domain and the position its record
+landed at, where the route answered one, and arriving all the same where it
+did not (a brand adopted, a seat changed through the configuration). The tab
+raises its read floor for that domain, exactly as a press of its own would,
+and asks every live question again, quietly: each `useQuery` and each
+`useRest` read (`protocol/session.ts`'s `EVERY_QUESTION`). No table maps
+routes to the screens they move, so none can drift.
+
+**What each screen offers** is one id per change, the same list the engine's
+catalogue holds, each parsed, gated and applied by the screen's own code over
+the vocabulary its own controls offer (`app/assistant/urlAction.ts` builds the
+ones that are address keys). **Each declares what it takes** (`args`, sent as
+the page context's `action_args`), built from the declaration its parser
+reads: `urlArgs` from the same keys, the Budgets ceiling from the seats and
+windows it draws, the org builder's operations from the vocabulary its parser
+reads, and `draft.set` from the open draft's editable fields. The engine holds
+every proposal to it before a card is drawn, and
+`app/assistant/actionArgs.test.ts` feeds every declaration's examples and
+listed values through the real parser. **Each also states what it depends
+on** (`tracks`: the address, the selection, the data), and its own revision
+(`action_revisions`) is what a proposal is bound to and a claim reports: a
+view change tracks the address without the peek, `draft.set` the draft, and
+the Budgets ceiling only the screen, since its parser checks the seat and the
+window again when it applies. Pure view changes apply at once: Home's window
+and feed (`home.range.set`, `home.feed.set`), the work list's filters, Clear
+and arrangement (`work.filter.apply`, `work.filters.clear`, `work.arrange.set`,
+never widening the person `#/me` is about), a project's lens
+(`project.lens.set`), a task's activity tab (`item.activity.set`), Spend's
+window and split (`spend.range.set`, `spend.group.set`), Live's and the Turns
+list's filters (`live.filter.apply`, `turns.filter.apply`) and Doclet's
+search (`knowledge.search.set`). Changes to a draft ask for approval and write
+into the draft only, saving staying the person's: the open draft's fields on
+any screen that declares one (`draft.set`, below), the org builder's draft
+(`org.draft.apply_ops`, recorded through the builder's own door so undo, the
+dry run and the review work unchanged) and a ceiling filled in for its editor
+(`budgets.ceiling.prefill`). A page of several components offers every one's
+actions together.
+
+**Every screen with a draft says what is open** (`app/assistant/draft.ts`).
+One hook, `useAssistantDraft`, takes the draft, its identity (`client` while
+the values live in the page, `server` where they are saved at an id and a
+revision), the step or section, the screen's help (what Ask Crewlet can and
+cannot do there, said by the screen rather than the prompt), and its fields,
+each a `read` from the draft and, where Ask Crewlet may set it, a `write`
+that refuses a value in the sentence the field's own control would. The page
+context carries the snapshot redacted (a field marked `secret`, or whose path
+names a credential by the engine's rule, is sent empty) and bounded (forty
+fields, a thousand characters a value, the rest counted in `more`, and fields
+shed from the end before the turn is ever refused). The same hook declares
+`draft.set`, whose card shows each field's value now beside the proposed one,
+which applies through the screen's setter, and which offers Undo while the
+draft still says what the change made of it. A gate
+(`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
+(a leave guard, an editing status, a setup wizard, a rich, inline or list
+editor, a form field) that neither declares a draft nor is listed as part of a
+screen that does, or as a modal or signed-out form with its reason. A page
+with several boxes open at once declares ONE draft whose fields are every box
+open on it (`app/assistant/boxes.ts`), each read from its box and set through
+the box's own setter, and the draft's step names the box written in last: the
+page context carries one draft, and a box that declared its own hid every
+other box from Ask Crewlet at its next keystroke. A chat room is such a page
+(its message box, the reply box of a thread open beside it and each of the
+person's messages open for a rewrite), and so is a task's, with its title and
+its description open together. The brand
+setup and the Brand page share one field list (`lib/brand/assistantDraft.ts`):
+name, tagline, colours, typefaces and voice are settable, and a logo is a
+`file` field, set only by a reference to one of the person's files in the
+conversation (the engine checks it is theirs before the card is drawn). The
+card draws a proposed image through the owner's route in `LogoSlot`'s
+thumbnail, an `<img>`, never inlined (`app/assistant/chunk/DraftFile.tsx`);
+once approved, the screen fetches the bytes and keeps them as a picked file
+for its own save. The help tells Ask Crewlet it makes no images there and
+offers an SVG starting point only when asked. The palette offers
+"Ask Crewlet" for a typed question, which the panel asks as its own box would.
+
+**A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
+one pure reducer over every gesture and every frame, a frame at or below the
+sequence a turn holds dropped, so a resumed stream never draws a delta twice.
+The stream is server-sent events over `fetch` (`protocol/assistant.ts`):
+`Last-Event-ID` on every resume, a stall after two missed keepalives dialled
+again, a refusal or another protocol version stopping it for good.
+
+**What it draws is the design system's** (`app/assistant/chunk/blocks.tsx`
+maps every wire state to exactly one component state): the question in a
+`MessageBubble` with the page it carried, a `RunChip` that opens on the
+`StepList` of the ordinary requests it made, the answer as prose with no
+container, and the engine's cards (`ResultTableCard` with its CSV and XLSX
+downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
+`RefusalCard`, `ProposalCard` with the before and after of every change, and,
+where the result's visibility changes, who will see it). A refusal of access
+is a `RefusalCard` (a value not accepted or a record not found is a warning
+`Callout`), and it names a missing permission, with a request to copy for an
+admin and the line that Ask Crewlet acts with your access only, only where
+access is the way past it, which the refusal's `reason` decides
+(`lib/authorityRemedy.ts`, the table a screen's refusal asks too); any other
+says the engine's own sentence, with nothing to copy. A conversation an
+administrator read for compliance says so at its top, with each reader, when
+and the reason they gave.
+
+**Deep work is one card, redrawn in place.** When Ask Crewlet hands a large
+task to a deep-work run, its step carries the run's progress and the engine
+sends it again under the same step id as the run moves. The drawer draws it as
+a `DeepWorkCard`: the goal, its state, its time against its deadline, its
+Crewlet calls against their cap and the share of its budget used (each a
+meter), and its latest activity lines in mono. The steps the run made (`parent`
+is its index) are nested under the card, folded behind their count when there
+are more than three, rather than listed in the `RunChip`, which says "Deep
+work" while the run works. The turn's Stop ends it; a stopped or failed run
+says why, and a waiting run says it waits on the change card below it.
+
+**Files are bytes read as the person, previewed only as pictures.** A file
+card lists what a run delivered in a `FileList`, each with its name, type,
+size and a `DownloadButton` that fetches its `download` route under the
+session. An image (an SVG included) is previewed through an object URL in an
+`<img>`, typed from the reference rather than from the response, so nothing
+a file carries reaches the page as markup; any other file shows no preview.
+
+**A question can carry images.** The person attaches up to four PNG, JPEG,
+WebP or GIF images of at most 5 MiB each by Attach image, by dropping them on
+the composer, or by pasting (a screenshot). Each uploads at once
+(`POST /assistant/conversations/{id}/files`, under its own operation key and
+through the same request path as every other Ask Crewlet write), stands in the
+composer as an `AttachmentChip` with its thumbnail, and its file id travels
+in the question's `attachments`. One the engine would refuse is refused above
+the composer in a sentence that says what to do, and Send waits while an
+image is still uploading. A sent question shows its images as chips under its
+bubble.
+**A model's words are drawn inert**: a link is its label and the host it
+names, never an anchor; a picture is its alt text, never fetched
+(`ASSISTANT_WORDS` in `lib/markdown.ts`). Ask Crewlet moves the page only
+through an engine-built Open in app card, whose address the drawer checks is
+one of this dashboard's own framed routes before it follows it, or through a
+page action the screen itself declared. There is no
+answer rating, and the one toast is "Conversation cleared". The toast stack
+keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
+column or over the page, above its composer while it is the whole window on a
+phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
+at the top right instead (see
+[Chatlet](#chatlet-a-top-bar-a-rooms-panel-a-room-and-where-you-have-read-to)).
+
+**The panel is a chunk of its own**: the first paint carries the Ask button,
+the page context registry, the bus and the one-word status the button reads,
+and the drawer, its store, its reducer, its cards and its stream client load
+the first time it opens, second in the idle prefetch after the palette.
+
 ---
 
 ## Acting, as yourself
@@ -4192,7 +4788,7 @@ same, under its own login:
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
-| Without the app the change lands in — the tracker for a change to work, the knowledge base for one to a page (read off the act's own `domain`) | This change needs Tracker access. An admin can give it to you. (Knowledge, for a page.) |
+| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, Chatlet for one in a room, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Chatlet, in a room; Worklet or Doclet, for a question.) |
 | Somebody the engine does not make this change for | This can’t be changed from here. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
@@ -4237,7 +4833,7 @@ A change is **never queued**: a write sent when the connection came back would
 be one you walked away from believing it had happened, onto a company that may
 have moved since. `viewer.acts` is the engine's own list of what it makes for
 you, and the last row is read from it, never guessed from a tool's name — a
-company whose tracker is Jira has no native writer, and its task page shows
+company whose tracker is Jira has no Worklet to write to, and its task page shows
 Assign disabled rather than a button the engine refuses.
 
 ### Writes are confirmed, not optimistic
@@ -4247,7 +4843,7 @@ four, and each tells you something different:
 
 | Outcome | What you see |
 |---|---|
-| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
+| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. When the engine answered **caveats** beside the change, the toast carries them in a person's words: it stays until you dismiss it when one of them needs somebody to act (a project's default assignee who has left the chart), and goes by itself when they are only something to know (a time stored as its date). |
 | `pending` | "Sent. This node has not applied it yet." The re-read waits until this node has. |
 | `unknown` | "Could not confirm. It may have landed", which **stays** until you dismiss it, with Retry. |
 | refused | The engine's reason, beside the control that caused it, until your next press. |
@@ -4262,8 +4858,7 @@ only rises. From then on every question that reads that log
 the serving node holds that position. So the list you just changed never comes
 back from a node that has not applied the change, whether the next read is the
 refetch your press fires or a poll a second later. A question read from more
-than one log — Home's feed is the tracker's work and the knowledge base's pages
-— is listed under each of its domains, and names the floor of every one of
+than one log — Home's feed is Worklet's work and Doclet's pages — is listed under each of its domains, and names the floor of every one of
 them the tab has written, one `min_position` per log: a page you saved is in
 the feed drawn after the save, as a task you closed is, and each half of the
 answer waits for your write to its own log alone
@@ -4276,8 +4871,12 @@ one, beside its class). The dashboard never retries on its own. When you press
 Retry it sends the **same operation key** it sent the first time, from which the
 engine derives the same operations; a new press is a new key. Each Retry is
 bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy, draining or
-starting node caused offers "Try again" on the same terms; one the request caused does not,
+sends the first press, never the second — and to the person it was pressed
+for: it names the tab's reader as every request does, so a Retry from a tab
+whose browser somebody else has signed in to since is refused
+`reader_changed` unrun, and the tab handed to them, rather than made as their
+write. A refusal a busy, draining or starting node caused offers "Try again"
+on the same terms; one the request caused does not,
 because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.
@@ -4285,14 +4884,20 @@ object it is drawn for, so one notice's refusal never appears under another's.
 **The refusal is in the dashboard's words**, except where the engine's own
 sentence names the argument that was wrong (`invalid`) or the rule that
 forbade it (`forbidden`): every other tool sentence is written for a model
-reading a tool result. Those two carry the writer's sentence alone — the
-tracker's refusals hold their words apart from the `tracker:` a Go error opens
-with (`tracker.Sentence`), so a person reads "create_work_item refused that: a
+reading a tool result. Those two carry the writer's sentence alone:
+Worklet's refusals hold their words apart from the `worklet:` a Go error opens
+with (`worklet.Sentence`), so a person reads "create_work_item refused that: a
 decision has 0 option(s) …" rather than the package's name in front of it, and
 a forbidden one no longer ends by repeating the sentinel's own "not this
 actor's to write". `contract/errors.ts` `ACT_ERRORS` holds one sentence per
 code and is held against the engine's codes both ways
-(`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
+(`TestTheDashboardKnowsExactlyTheActRefusals`), but for a refusal on authority:
+`unauthorized` is every rule's, so it is the engine's sentence for the rule
+that refused, which follows its `reason`. A refused change names the access to
+ask an admin for ("You need Worklet access for this. Ask an admin.") only where
+that access is the way past the rule (`lib/authorityRemedy.ts`): a proof gone
+stale names the access that admitted you, and an artifact's role is cleared by
+its owner's share. A conditional edit that lost
 the race reads "Changed by somebody else since you opened it." — somebody
 else, not a name, because the refusal carries the version it lost to and not
 its author. That refusal, and every other that says the screen is out of date
@@ -4321,7 +4926,7 @@ route and is not a read, every argument is one the tool takes, every required
 one can be sent. It carries a row for each tool a control presses and no
 other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
 a tool arrives in it with the control that sends it. The controls
-(`components/writes.tsx`):
+(`components/writes.tsx`, and chat's in its own screen, `routes/chatlet`):
 
 | Control | Where | Tool |
 |---|---|---|
@@ -4331,6 +4936,7 @@ a tool arrives in it with the control that sends it. The controls
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
+| Direct message (chat's New direct message, the seat chosen) | A seat's page and peek, on the engine's own chat | `open_dm{to}` — opening one that exists is that conversation |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
@@ -4340,14 +4946,32 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| Send answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
+| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, launch_id, choice}` / `answer_run{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
-| Publish · Save as draft | The composer (`#/knowledge/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
+| Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
 | Create › Folder | A space's outline, at the end of an open level | `write_page{title, body: "", container, parent?}`: a page with an empty body is a folder |
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
+| Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
+| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
+| Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
+| Delete, then Delete in its dialog | A chat message of your own (its More menu), and anybody's to an admin | `delete_message{channel, message_id}`: the author's, or an admin's moderation, and the tombstone records who. The dialog shows the message as the room draws it and says that everybody in the room sees who deleted it. Reaches past membership and past an archive; held on a room this build cannot classify |
+| A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
+| Join · Leave | Join on a room you are not in and in **Browse rooms**; Leave in the room's **More** | `join_channel{channel}` / `leave_channel{channel}`, refused on a unit's room and a direct conversation, so neither offers it |
+| Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
+| New room | The Rooms switcher's and the Rooms panel's foot, and Browse rooms | `create_channel{channel, kind, topic?, members?}`: the name is claimed, never renamed, and a name somebody holds goes back to its field; the visibility opens on the company's own default |
+| A new message | **New message** (`#/chatlet/new`) | `open_dm{to}`, then `post_message` to the conversation it answers: only once there is something to say; the people chosen may already share a conversation, which the view shows and sending adds to |
+| Add people | A room's details (Members), its first-step card and More | `add_channel_members{channel, members}`: never on a unit's room (the org chart's) or a direct conversation (its people are its identity); the answer names who it actually put in. Leaving a new room's dialog with nobody chosen asks once |
+| When new agents and people join, add them | Add people, to an admin, on a public room | `update_channel{channel, auto_join}`: an admin's alone, on a public room alone; it adds the seats that join the company from then on and nobody already in it |
+| Topic · Description · A template | A room's details (About), its first-step cards and More | `update_channel{channel, topic?, purpose?, template?}`: only the field changed; each held to 250 characters, counted as the engine counts them (code points, so an emoji is one); a template sets both in one change that names it, one line in the transcript. Archiving and the room's horizon are not offered anywhere in the dashboard: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| Every message · Mentions · Muted | The top bar's notification choice, and a room's details (Notifications) | `mark_chat_read{notify}`: the reader's own mark, waking nobody; Muted is the mute |
+| Follow · Unfollow | A thread's pane, and Threads | `mark_chat_read{follow}` / `{unfollow}`: the reader's own mark; a thread they started, replied in or were named in is followed without one, and replying in one they unfollowed follows it again |
+| Save for later · Remove from Saved | A chat message's tray, and Saved | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending, and a saved message that is gone stays listed until it is removed |
+| Mark unread | A chat message's More menu | `mark_chat_read{rewind}`: the room's place set to just before the message, the one way it moves back |
+| Join room | The bar in place of a room's composer, for a room you may read but are not in | `join_channel{channel}` |
+| — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company's configuration** is not an act. The company
 document — its ceiling, an MCP server, a model — is a new configuration
@@ -4398,7 +5022,24 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and `closed` — as a sentence saying which.
   `bad_params` is the one that names the SCREEN as the fault: the engine
   understood the question and refused it, so retrying sends the same bad
-  request again. `unavailable` is the opposite: the node will answer in a
+  request again. `unauthorized` says the rule that refused — the access the
+  refusal names where access is a way past it, the rule's own sentence
+  (`contract/authority.ts`, keyed by the engine's reasons) where it is not —
+  and offers the ONE control that clears that rule (`lib/authorityRemedy.ts`):
+  **Sign in** for a reader short of access or an agent's seat on a verb only a
+  person makes, **Confirm it’s you** for a proof gone stale (the step-up
+  ceremony, after which the screen asks again on the socket's reconnect),
+  **Sign in as yourself** for a credential acting as no seat or a token on a
+  gesture that needs the person, **Try again** once an admin has activated an
+  account that is not active or an artifact's owner has shared it at the role
+  the verb needs, **Reload** for a request this engine's build has no rule
+  for, and nothing where no reader can clear it from here (a verb only an
+  agent's seat makes, a request that named no record, an agent acting for
+  somebody who could not take the verb, a request Ask Crewlet made
+  for a gesture it never takes or a change its person did not approve, which
+  only its own panel meets). A stale proof's `grants` are what
+  admitted the reader, and an artifact refusal's `admin` is the override beside
+  the share its owner makes, so neither is drawn as access to ask for. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload — WHEN the engine's frame says (`retry_after`, read through
   `protocol/retry.ts`), never after a constant of the client's. A hint is
@@ -4420,15 +5061,19 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   answer's own `traffic_known`. The budgets answer says `durable: false` when
   the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration.
+  a company with no seats says roles come from the configuration; and an
+  address under a service the company does not run says what runs instead
+  ("This company talks on Mattermost" under Chatlet) rather than asking a
+  question the engine does not serve there and drawing the `unknown_query` it
+  would get as a node fault.
 - **Everything in the window** vs **everything that arrived.** Where a screen
   narrows client-side it says so, naming the SOURCE rather than hedging the
   whole answer. **Audit** is the case that made this a rule: it composes four
-  subsystems and only one of them — the tracker's feed — takes a wall-clock
+  subsystems and only one of them, Worklet's feed, takes a wall-clock
   window, so the other three are asked for their newest page and narrowed on
   the client. A page that fills up before it reaches the start of the window is
   older rows the screen never saw, and a caption reading "some of this may be
-  missing" is one nobody can act on where "Knowledge shows only its newest
+  missing" is one nobody can act on where "Doclet shows only its newest
   rows" says where to look.
 - **The engine** vs **a stated writer.** An empty actor on a tracker or wiki
   commit is the engine's own write, and the Audit screen draws it as "the
@@ -4473,7 +5118,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   **And the directory is not the only reader of it.** Every surface that draws
   a conclusion from an empty project listing reads the same census, because
   every one of them asks the ACTIVE set: the project switcher, and the
-  Tasks lens (`#/work/tasks`), which replaces the whole list with "No work has been
+  Tasks lens (`#/worklet/tasks`), which replaces the whole list with "No work has been
   filed yet". Read from the ROWS, each concluded the first state — so a
   company that had archived all four of its projects was told by the sidebar that
   no project had been created and by the landing that nothing could be filed
@@ -4482,7 +5127,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   ever filed. `active + archived === 0` is the only thing that draws the
   first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
   and gives it an empty state with the way to
-  `#/work?shown=archived`, the same sentence the directory's own
+  `#/worklet?shown=archived`, the same sentence the directory's own
   Active state writes, because it is the same fact. An answer carrying no
   census concludes neither, on the rule its rows already followed.
 
@@ -4496,7 +5141,9 @@ turns for the last one it ended. Until that read existed, every one of these
 screens started blank after a restart, a deploy or a node joining a fleet,
 which is the one empty state a reader has no way to question; a seed that
 missed a node is named on `/health` (`seeded_from`) rather than drawn as a
-quieter company. Spend is not among them: the Overview and Spend screens read
+quieter company, and every screen drawing the seeded feed names it too: Live ›
+Events and Live now's Activity card add it to the coverage note above their
+rows, and Home's Latest events widget says it as its gap. Spend is not among them: the Overview and Spend screens read
 named windows — whole company days from the replicated `usage` domain, the
 same on every node — so a restart never empties them, and the 24-hour spend
 window the seed also fills is the `tokens` push's, which no screen draws.
@@ -4617,9 +5264,9 @@ rules fix it, and each one names a specific mechanism:
    report, whose rounds happened in its box.
 
    **A round that answered in prose where a call was owed says what became of
-   it.** A phase that finishes only by a tool call — the executor's
-   `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
-   can still get words and no call, and the commonest form is the model
+   it.** A phase of the engine's tool loop that finishes only by a tool call —
+   the reviewer's `submit_review`, a worker's `submit_result`, the onboarding
+   pass's `mark_onboarded` — can still get words and no call, and the commonest form is the model
    printing its own submission as a fenced JSON block. Without a word about it
    the reader saw that block, then "incomplete, no report" and "rescued" on
    the header, and nothing connecting the two. The engine flags such a round
@@ -5011,9 +5658,19 @@ rules fix it, and each one names a specific mechanism:
    closed folds, so what the order costs a reader who only wants the
    transcript is two header rows; what it buys is a card that can be read top
    to bottom as the story of one phase. Their own order is the request's: the
-   prompt is what was sent, and the tool surface is the schema array that went
-   *with* it — one payload described in two folds, so they belong beside each
-   other rather than either side of the transcript.
+   prompt is what was sent, and the tool surface is the tools that went *with*
+   it — served to the CLI as its MCP server's for the length of each run — one
+   call described in two folds, so they belong beside each other rather than
+   either side of the transcript.
+
+   **What it did is grouped by CLI run.** Most phases are one run of their
+   CLI's loop; one that was steered, delegated or corrected is several, each a
+   process handed the conversation so far. So the rounds sit under a head per
+   run (`RunHead`): *CLI run N*, the entry that served it, how many rounds it
+   made, how long it lived, what it spent and how it ended — or, for the run
+   still in flight, that it is running. A run whose CLI's record showed no
+   requests is one round, and its head says so, since that round's timing is
+   the run's.
 
    The error callout is the one thing that does not wait its turn. It is a
    banner rather than a section — the reason the reader opened the card at all
@@ -5105,8 +5762,8 @@ shown to you** (`WITHHELD_WORDS`, `lib/access.ts`) — a run's question as *Its
 question is not shown to you* — with the one sentence why: what a seat says is
 its trail, which its lead and an admin read. Never as an empty value, because
 "the prompt was empty" and "you may not read the prompt" are opposite facts. A
-work item a call names is the tracker's, and is left off the row for a reader
-without Tracker.
+work item a call names is Worklet's, and is left off the row for a reader
+without Worklet.
 
 **Now running** (`#/live`) is five cards in fixed places, each saying so when
 it is empty, because a screen whose sections come and go with the data cannot
@@ -5116,8 +5773,8 @@ be read at a glance:
   Home's Live now draws (`LiveTurnRow`): what it is doing and on what — the
   item's key, or on a turn charged to no item the trigger's own summary
   ("Executing · Drafting the 2.4 launch brief") rather than a bare verb —
-  where the turn is (Context → Execute "round 7 of 25" → Review, and "round 1
-  of 25" from the phase's opening frame, before the model has answered once;
+  where the turn is (Context → Execute "coding run" → Review, and "round 1
+  of 1" from the executor's opening frame, while its run is being launched;
   on a phone the round leads the call line instead, so Review keeps its place
   on the stepper's one line),
   how long it has run from the turn's own start —
@@ -5132,7 +5789,9 @@ be read at a glance:
 - **Waiting on a person** — every coding run parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, answer}` as the person reading.
+  which sends `answer_run{turn_id, launch_id, choice}` for an option or
+  `answer_run{turn_id, launch_id, answer}` for words, as the person reading,
+  naming the question it drew.
 - **In a box** — the rest of the detached runs in flight, eight before it
   says how many more. Empty, it says *Finished runs are on their turn’s
   trace*: a settled run's row is deleted, so the sentence it replaced,
@@ -5259,7 +5918,7 @@ What replaced it:
   groups.** The class is not decoration: `.screen:has(.toolbar)` publishes
   `--sticky-top`, and every other band that sticks to the same scroller — a
   grid's column heads, a grouped list's group heads, an item's side rail —
-  starts at that offset. The tracker's filter bar restated every one of
+  starts at that offset. Worklet's filter bar restated every one of
   `.toolbar`'s declarations under a name of its own, so the property stayed at
   its `0px` default and the table's own header parked underneath an opaque
   band. Inside the bar, what narrows the rows is one group and what switches
@@ -5527,8 +6186,8 @@ Four rules replace it, and each one names what it fixes.
    self-iterating turns where the question gets asked — and so does every
    **nested** call, a delegate's worker and the round-cap judge included, which
    publish no start and so could never have been given one. Zero means *not
-   measured*, never *took no time*: an agent-mode executor's rounds ran inside
-   a coding CLI's own loop in another process, and that run's wall clock is on
+   measured*, never *took no time*: an executor's rounds ran inside its
+   coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
    **And the page says where each one went.** *Relocated* is only better than
@@ -5605,17 +6264,14 @@ Four rules replace it, and each one names what it fixes.
    tiles above already report that — nor any single thing that was ever sent.
 
    Every term of the approximation gets a column — **System**, **User**,
-   **Messages**, **Tools**, **Approx. tokens** — so the total can be checked
-   against the row rather than taken on trust. *Tools* is the
-   tool-definition array as compact JSON, with the definition count on its
-   hover, and it is usually the largest: while the engine did not measure it, a
-   turn reported ~6,900 tokens on a prompt the provider billed 205,000 input
-   tokens for. *Messages* is what a **resumed** phase sends in place of a
-   system and user pair — a detached coding run re-enters its saved
-   conversation, counted as its messages' text and the arguments of its tool
-   calls — and reads 0 on every phase that opens one of
-   its own. Five fixed columns overflow a phone, which is what the sideways
-   scroll on `.num-block` is for.
+   **Tools**, **Approx. tokens** — so the total can be checked against the row
+   rather than taken on trust. *Tools* is the tool-definition array as compact
+   JSON, with the definition count on its hover, and it is usually the
+   largest: while the engine did not measure it, a turn reported ~6,900 tokens
+   on a prompt the provider billed 205,000 input tokens for. For the executor,
+   *System* and *User* are the system prompt and the brief its run was
+   launched with. Four fixed columns beside the phase overflow a phone, which
+   is what the sideways scroll on `.num-block` is for.
 
    **One row per measurement**, and the phase key is deliberately not the
    row's identity. This half used to collapse a repeated
@@ -5628,25 +6284,18 @@ Four rules replace it, and each one names what it fixes.
    attempts land on two Turn screens, which is what the attempt banner at the
    top of the page is for. A re-run cannot put two rows in this table at all.
 
-   What can is a **suspend**, which that ADR excludes by name: a detached
-   coding run re-enters the run that parked it. The executor publishes its
-   opening frame, parks mid-loop, and the resume re-enters the *same* phase at
-   the *same* iteration and publishes the parked conversation it sends
-   instead. Measured on a real suspend and resume, that pair is
-   `system=3,166 user=31 message=0 ~1,753 tokens` and
-   `system=0 user=0 message=3,329 ~1,814 tokens`. Collapsed it drew one row
-   reading `EXECUTE ×2`, System 0 B, User 0 B, over a tooltip saying the phase
-   "ran 2 times" and "ranged ~1,753–1,814 tokens" — and every clause of that
-   is false. The phase ran once; its opening carried 3,166 bytes of system
-   prompt, not zero; and the two figures are not a range of one quantity but
-   two different prompts, both sent and both billed, which is the whole of
-   what this panel is for. So both are drawn, in publish order, and the second
-   is marked **resumed** — which is also what makes its empty System and User
-   columns read as a fact about a re-entered phase rather than as a failed
-   render.
+   Nor does a parked turn put two there: the executor publishes its prompt
+   once, when it launches its run, and the collection that re-enters the
+   *same* phase at the *same* iteration sends no prompt of its own — the
+   run's was the one it was launched with — while a send-back's relaunch is
+   the next iteration, a row of its own. So a row is one prompt this turn
+   sent, and the panel draws every measurement it is given, in publish order,
+   rather than folding any under a phase key: a fold reads two different
+   prompts as a range of one quantity, which is the one thing this panel must
+   never say.
 
    The figures are **bytes** — `len()` of a Go string, and the wire keys say
-   so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`). They only
+   so (`system_bytes`, `user_bytes`, `tool_bytes`). They only
    agree with a character count on ASCII, so a roster of non-Latin names or a
    chat thread with emoji in it would make "the count" a different quantity
    per company under a character label. See `PromptSize`.
@@ -5814,13 +6463,19 @@ hidden: the document is not allowed to grow, so the invariant is unreachable
 rather than merely unused.
 
 Two other kinds of scroller sit inside it, and both are covered below. A
-**full-height screen** (`useFillScreen`: a task, the Inbox, a knowledge page)
-holds `#screen-scroll` still and lets its own columns scroll — `.task-main` and
-`.task-rail`, `.inbox-list` and `.inbox-pane-scroll`, `.kpage-main` and
-`.kpage-rail`. Each is exactly the main region's height, so `100cqb` is its view
-too, and on that screen those columns are the page's scrollers: a box inside
-one hands the wheel to the column, not to `#screen-scroll`. And a **box inside
-the page** may scroll its own content, on the two conditions below.
+**full-height screen** (`useFillScreen`, whose doc in `app/fill.tsx` is the one
+list of the screens that ask and of when each withdraws) holds `#screen-scroll`
+still. A canvas fills it and pans rather than scrolls; a screen of two columns
+lets each column scroll on its own, as a task does with its body and its rail
+(`.task-main`, `.task-rail`) and the Inbox with its list and its pane
+(`.inbox-list`, `.inbox-pane`). Each column is exactly the main region's
+height, so `100cqb` is its view too, and on that screen those columns are the
+page's scrollers: a box inside one hands the wheel to the column, not to
+`#screen-scroll`. Chatlet asks for the height FLUSH (`useFillScreen(true, {
+flush: true })`, the kit's `fill="flush"`): its conversation runs edge to edge
+under the page bar, so the content column drops its inset, its measure and
+its gap. And a **box inside the page** may scroll its own content, on
+the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the
 scroller finds it through ONE accessor, `screenScroller()` in `lib/scroller.ts`:
@@ -6144,17 +6799,17 @@ in the Timeline's Reflection lane instead.
 
 ---
 
-### The tracker is a workspace, not a table
+### Worklet is a workspace, not a table
 
-Everything above about rows is why the tracker's own screen is not one. It
+Everything above about rows is why Worklet's own screen is not one. It
 began as a flat filter row over a plain table beside a "board" that was three
 `<div>`s, and it read as a dump of a database rather than as the place a
 company does its work. What replaced it is a WORKSPACE, and every part of it
 is one of the rules on this page applied to a tracker.
 
-- **A project is a SCOPE, not a shape of it.** Work's trail names the scope,
+- **A project is a SCOPE, not a shape of it.** Worklet's trail names the scope,
   All projects or one project, and switches it
-  ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)), each
+  ([Worklet's scope](#worklets-scope-is-named-and-switched-in-the-trail)), each
   project with its key and its maintained open count. Its list, its board and
   its calendar are ways of drawing the scope you are already on, so a lens for
   each would make "Engineering ▸ Board" a destination competing with
@@ -6163,7 +6818,7 @@ is one of the rules on this page applied to a tracker.
   number at all.
 - **A SHAPE is a drawing, a VIEW is a query, and only the query was saved by
   anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-says-what-it-is-set-to)
-  states the general rule; what is the tracker's own is where the line falls.
+  states the general rule; what is Worklet's own is where the line falls.
   The engine ships SIX builtin views — one per shape, plus the trash — and
   neither the strip nor the sidebar draws them, for two different reasons worth
   keeping apart. The STRIP drops them because a way of drawing is not something
@@ -6243,7 +6898,7 @@ is one of the rules on this page applied to a tracker.
   separated nothing.
 - **The list and the table are ONE grid with two column sets**, which is
   [Every list is one grid](#every-list-is-one-grid) applied to the two shapes
-  that are rows in columns. What is the tracker's own is the KEYING: `cols.list=`
+  that are rows in columns. What is Worklet's own is the KEYING: `cols.list=`
   and `cols.table=`, because a column set carries an order as well as a
   selection and one key read against both draws the list's columns in the
   table's arrangement — a row nobody asked for that no validation catches,
@@ -6338,7 +6993,7 @@ is one of the rules on this page applied to a tracker.
   predicate that decides restates each mark's own emptiness rule — the price of
   asking BEFORE rendering — so a mark that gains a field adds it there. The
   last row is a STATE and the only part of a card with a hue: blue while a
-  seat's turn is on the task ("SWE · executing · round 7 of 20 · 6m"), amber
+  seat's turn is on the task ("SWE · coding run · 6m"), amber
   while a coding run on it is parked waiting for the READER. The turn is joined
   on the item the engine CHARGES it to (`live_call.work_item`), never on the
   trigger's `work_key`, which names whatever a webhook mentioned; and a run
@@ -6498,7 +7153,7 @@ is one of the rules on this page applied to a tracker.
   board once had a number of its own — three panes are
   the rail, the sidebar and the peek, a lane is 292px, and at 1280 exactly one
   lane was left beside a detail panel, "which is not a board", so the peek
-  should overlay below about 1500. That measured a peek the tracker's own
+  should overlay below about 1500. That measured a peek Worklet's own
   screen owned as a column of its own body grid; the frame took the peek over,
   the rules enforcing 1500 matched an attribute nothing ever set, and they are
   gone. A board's answer to a narrow body is fewer whole lanes and a pager to
@@ -6534,8 +7189,8 @@ is one of the rules on this page applied to a tracker.
   travels for the same reason: applied after a capped answer it orders the rows
   that survived the key order, which reads exactly like the answer to the
   question it is not. The corollary is that a column the engine cannot order by
-  is not sortable — Lead is resolved against the org chart at read time and the
-  tracker holds no chart, so there is no column behind it.
+  is not sortable: Lead is resolved against the org chart at read time and
+  Worklet holds no chart, so there is no column behind it.
 - **A census on the segments is what stops the directory guessing.** Selecting
   one set is what makes the listing honest and it is also what makes an empty
   answer ambiguous — no projects, or every project archived — so the engine
@@ -6562,13 +7217,13 @@ is one of the rules on this page applied to a tracker.
   which.** The event log asks the engine for its histogram; this question has
   no such read, so the axis is bucketed from the pages the screen is holding —
   and the caption says the bars cover the changes LOADED, the bar says the
-  same about its pickers' counts — once, rather than under each of three
-  facet rails, which the one compact bar Work narrows from replaced — and the histogram takes that scope as a REQUIRED
+  same about its pickers' counts (once, rather than under each of three
+  facet rails, which the one compact bar Worklet narrows from replaced), and the histogram takes that scope as a REQUIRED
   prop, so the sentence a screen reader hears cannot drift from the one on the
   card. A client-side count dressed as the engine's is the one thing this
   product never does.
 - **ONLY A SCREEN PUBLISHES TO THE FRAME.** The log is a screen at
-  `#/work/history` and a lens inside a project, and the frame holds one
+  `#/worklet/history` and a lens inside a project, and the frame holds one
   coverage slot with one setter — so a body publishing from inside another
   screen fought that screen's own answer: on a project's history lens both
   wrote it, whichever polled last won, and switching back to Tasks cleared the
@@ -6581,7 +7236,7 @@ is one of the rules on this page applied to a tracker.
 - **A project opens on its work.** The Tasks lens is the list at the top of
   the page, as the approved Board draws a project: no header about the
   container above the work, and no row of lenses either — the lenses sit on the
-  page bar beside the name they are lenses on (`Work › ENG Core · Tasks | About
+  page bar beside the name they are lenses on (`Worklet › ENG Core · Tasks | About
   | History | Files`, `PageLenses`, the chips All projects' lenses wear too),
   controlling the region below by id. A row of their
   own cost the first screenful a line the Board does not spend. What the container IS — who leads it, its unit,
@@ -6622,7 +7277,7 @@ is one of the rules on this page applied to a tracker.
   drew waiting and started work as one blank — and a SHARE before that, which
   drew a project holding one open item as finished. The legend names the three
   parts in the meter's own tokens. The one meter is drawn by
-  `dashboard/src/routes/work/census.tsx`, in the About lens's header, the peek
+  `dashboard/src/routes/worklet/census.tsx`, in the About lens's header, the peek
   and the directory's Progress column (beside the lead's Target date), so they
   cannot disagree about one row.
 
@@ -6649,8 +7304,8 @@ tab, then open the phase, to read a word of it.
 
 **A parked turn is watched on the same tab.** Its executor launched a detached
 coding run and suspended, so no phase is in flight while the engine still
-calls the seat working — for the whole of an agent-mode executor's turn, and
-for hours on a long native run. So while the turn is parked the Transcript
+calls the seat working — for most of the turn, and for hours on a long
+one. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
 `sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
 own open run span), the coding agent, and **Open the run** to the run's page
@@ -6698,11 +7353,19 @@ that can.
   its own value (`.fact-body`), never on a band a neighbour's two-line value
   can push away from it.
 - **The actions are the turn's.** *Steer* sends a note the turn reads at its
-  next round (`steer_turn`); it is held, with the reason, on a turn that has
-  ended and on one parked inside a coding agent's own loop, which reads no
-  notes. What became of a note is the turn's own `agent_turn_steered`, drawn
-  under the waterfall and at the round that read it — *delivered*, or
-  *expired — the turn finished before it read your note*. *Pause* is the seat's
+  next step (`steer_turn`) — offered on every turn still going, a turn parked
+  on its coding run included, whose note waits on the run's record, and held,
+  with the reason, only on a turn that has ended. The toast says when the turn
+  reads it, from the answer's `reads`: *at its next step*, or, for a run waiting
+  on a question, *once that is answered* (`lib/steer.ts`). What became of a note
+  is the turn's own `agent_turn_steered`, drawn under the waterfall and where it
+  was read — at the round (*read at round 2 of Review*), or for a read inside a
+  coding run on the run's bar, in the words of its step, owned by the phase
+  whose run it was: *read by the coding run of Execute in its brief*, *after a
+  tool batch*, *as it was finishing*, *at its next step*; a step a newer build
+  names and this one does not is *read by the turn in Execute*, on the run's
+  bar where its record names the run and never drawn or said as a round — or
+  *expired — the turn finished before it read the note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another
   task claimed first — and one menu
@@ -6713,7 +7376,12 @@ that can.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each
   tool call, a phase, the prefetch, a coding run — and the model only arranges
-  them: rounds under their phase, a round's tool calls after its model call (a
+  them: a phase's CLI runs under it, each a **CLI run N** span from its launch
+  to its exit (`invocations[]`) and its rounds under it — the entry that served
+  it, the rounds it made, whether its CLI's record showed them, how it ended and
+  what it spent in its detail, and the run still going drawn open from its
+  launch (`run_started_at`), saying what it made lands when its CLI exits —
+  a round's tool calls after its model call (a
   call the engine timed but did not stamp is run serially from the model's
   answer and says it was *placed*), a delegate's workers and the round-cap
   judge under the round that spawned them (`host_round`), each coding run as
@@ -6722,10 +7390,12 @@ that can.
   `auxiliary_spend` record of the `reflection` stage from its first call to
   its last, marked where a call failed — and *review pending* while an executor has finished and no
   reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
-  engine announced for it: every round publishes a frame as its provider call
-  is made, and `round_started_at` stays the previous round's while that
-  round's tools run — so a start no later than the last recorded round's is
-  that round's tools, never "the next round" drawn minutes early. The Turn row
+  engine announced for it: a request is in flight from the frame published as
+  its run opens or as the last call of the response before it is answered, and
+  `round_started_at` stays the previous round's while that round's tools run —
+  so a start no later than the last recorded round's is that round's tools,
+  never "the next round" drawn minutes early. Several calls of one response
+  running side by side are each drawn as running (`running_calls`). The Turn row
   ends at the turn's own measurement; the reflection pass, which runs after
   it, trails the bar. A turn that parked is one turn: its executor's record
   carries every round from both sides of the park, so the phase spans the run
@@ -6758,13 +7428,21 @@ that can.
   read as that call's alone; a coding run's box facts, and its transcript once
   collected.
 - **A running coding run is watched, not replayed.** While its span is open
-  the trace asks the node that owns the run for its live output every three
-  seconds (`sandbox_tail`, see [Watching a run
+  the trace asks the node that can read the run's box for its live output
+  every three seconds (`sandbox_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
-  paused before its record moves on (`box_paused`), a silent owner and a
-  failed read all keep asking, and keep what is on screen.
+  paused before its record moves on (`box_paused`), a box gone before its
+  record moves on, the job recorded lost and its round carried on in a
+  fresh one (`box_gone`), a silent node and a failed read all keep asking,
+  and keep what is on screen. The one failed read that
+  ends the poll is a refusal the engine says no wait clears (`unavailable`
+  whose `retry_after` is zero: a sandbox setup somebody has to fix, a refused
+  key), since every ask would be answered the same and logged on the node that
+  reads the box; a reconnect, or opening the view again, asks again. A failed
+  read is told in the engine's own sentence for it (`QueryState`, as every
+  screen tells one), never by its code, over what the view already shows.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
     says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
@@ -6828,7 +7506,8 @@ it, so a link to one run landed on a board with the run below the fold.
   - A parked run's banner says what it asked, **who it is put to** (the
     audience the engine resolved when the run parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer** — `answer_run{turn_id, answer}`, which reaches
+    held, and carries **Answer**: `answer_run{turn_id, launch_id, choice}` for
+    an option, or `{turn_id, launch_id, answer}` for words, which reaches
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it
@@ -6924,11 +7603,11 @@ table the socket's query errors use.
 
 Code is the company's git repositories as the engine hosts them
 ([Code Host](../concepts/code-host.md)), and the changes proposed to them: a
-Workspace row after Work, `g o`, landing on **Changes** at `#/code`, its
+Workspace row after Worklet, `g o`, landing on **Changes** at `#/code`, its
 sections drawn as tabs in the page header. It is drawn only where the company hosts code in the engine —
 `services.code` on the org projection — and is hidden, never locked, where it
 is `none`, an address under it answered by the service notice. It names no
-app: every person reads every repository (ADR-0058), and the engine holds each
+app: every person reads every repository (ADR-0081), and the engine holds each
 answer to the reader's own grant on the repository, leaving out of a listing
 what a seat may not read, so nothing waits on the reader's access before a
 section mounts.
@@ -7019,7 +7698,7 @@ section mounts.
 - **Repositories** is the engine's listing, `code_repos`, by name and a page
   at a time. A page is what the engine SCANNED, not what it kept, so one can
   be short, or empty with a cursor, and the grid pages with Load more until no
-  cursor comes back, its first page held still from the press
+  cursor comes back, its first page kept live and joined to the pages loaded
   ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)); the
   order is the engine's and no head re-sorts the pages held. A row says its
   state where it is not active (archived, deleted, being
@@ -7144,12 +7823,253 @@ names it and a `304` is the answer it already holds. The engine's reader gates
 read a code question where it is asked, as they read every other:
 `useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
 
-## Knowledge: the spaces, a landing, and search with real modes
+## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 
-Knowledge is the approved **Home** layout. No column of navigation stands
+The company's own chat (`chat.backend: chatlet`), read AS A SEAT: the engine
+answers every chat question for the seat the session's principal holds, so the
+workspace is guarded whole and a principal that acts as no seat is told so and
+how to give it one (see [The sidebar](#the-sidebar)). On a company whose chat
+is a vendor's or none there is no Chatlet: its row is hidden and its addresses
+say where the company talks, as every service the company does not run is
+(see [The sidebar](#the-sidebar)).
+
+Chatlet runs edge to edge under the page bar (the shell's flush fill), and
+every place in it is an address: a room by its id, or one of the views beside
+the rooms, with at most ONE pane named by the `pane=` parameter (see the
+address table above), so Back closes a pane, a reload keeps it and a thread is
+a link from any place (`routes/chatlet/nav.tsx`). While it is open, a toast
+stands under its top bar at the top right (`app/toastInset.tsx`'s
+`useToastTop`), held off the window's top by where the bar ends: at the
+window's foot it would lie over the room's composer and a thread's, which grow
+as they are typed in.
+
+- **The top bar** holds, on one line and at one height: **Menu**, which slides
+  the Rooms panel in from the start edge of the chat area (or hides it while it
+  is pinned), its badge the sidebar's own figure of what waits on you; the
+  **Rooms** switcher, named after the open room, listing your rooms (Starred,
+  Rooms, Team rooms) with Browse rooms and New room at its foot; the
+  **Messages** switcher, named after the open conversation or Direct messages,
+  listing your conversations and then the people and agents to start one with,
+  with New message at its foot; and the open room's actions: its members (three
+  faces and the count, which open the details' Members), Search this room, the
+  notification choice (Every message, Mentions, the default, or Muted), and
+  **More**, which leads with **Catch up with Ask Crewlet** (or **Summarize**,
+  with nothing unread) and then the details, what was shared, Add people, the
+  description and topic, the star, Mark as read, Copy link and Leave. Each is
+  offered only where the engine would take it, by the room's one reading of its
+  rules. Ask Crewlet itself is the page bar's button, so the bar has none.
+  While the panel is pinned it lists what the switchers do, so they are not
+  drawn; a narrow bar drops Menu's word, and under 480px the search and the
+  notification choice move into More.
+- **The Rooms panel is the row's renderer** (`panel`, `app/nav.ts`): a find row
+  (the filter, a menu for unread rooms only and the order, and the pin), the
+  row's views (Activity, with the accent badge of what waits there; Threads;
+  Drafts and sent; Saved), then the rooms in four collapsible sections
+  (Starred, Channels, Team rooms, Direct messages) in dense rows: a room with
+  unread messages in the primary ink and the medium weight, a muted one dimmed
+  with a bell, one holding a draft with a pencil, and the accent badge of what
+  waits on you in it (in a conversation, every unread message; elsewhere, the
+  unread messages that name you or the whole room). A collapsed section still
+  shows the open room and the unread ones. The counts are the ENGINE'S, and
+  when the cursors could not be read the badges are absent and the panel says
+  so, because a zero would claim the reader is caught up; a list past its bound
+  says so too. Browse rooms and New message stand at its foot. Pinned (a
+  per-browser choice), it is a column beside the conversation; on a chat area
+  under 760px it is never pinned. Pinning and unpinning ease the column open
+  and shut with the kit's motion, the panel sliding in and out at its own
+  width, so the conversation resizes beside it rather than jumping; under
+  reduced motion the column simply appears and goes.
+- **Panes** stand beside the conversation, and lie over it on a screen under
+  980px (a whole narrow chat area under 760px); the widths are
+  `app/layout.ts`'s, which keep the transcript to its floor at every step.
+- **Keys** (the legend's "In Chatlet"): `Alt+Up` and `Alt+Down` move between
+  rooms, with `Shift` between rooms with unread messages; `Mod+F` searches the
+  open room; `Escape` marks the open room read when nothing else is listening
+  for it (a pane, the slid-in panel, a peek, a menu); `Mod+/` lists Chatlet's
+  keys.
+- **A room** (`#/chatlet/{id}`) is the transcript, paged back on request, who is
+  looking at it, typing in it or working on a reply in it, and the composer
+  (`Mod+Enter` sends; `Enter` is a new line). **A room's name carries one
+  `#`**: beside the room's glyph (its intro, a row, a card) the glyph is the
+  sigil and the name is bare; in words that stand alone (a toast, the
+  composer's placeholder, a search result) a channel reads `#name`, a team's
+  room its team's name and a conversation the people in it (`rooms.ts`'
+  `roomWhere`). A message's links are drawn under
+  it, in the room and in a thread alike, as rendered prose draws an address in
+  an agent's words (`links: "checked"`,
+  [above](#what-prose-names-is-drawn-as-what-it-is)), whoever wrote the
+  message: an address on a host the company configured opens as the dashboard
+  rebuilds it, in a new tab, a GitHub or GitLab address only under an owner
+  that host's row names; any other, a link to the company's own dashboard
+  among them, is drawn whole and inert with the host it names; and one whose
+  scheme the allowlist refuses is its words. Ask Crewlet reads
+  every box open on the room as one draft, the message, the reply in a thread
+  open beside it and each message open for a rewrite, and proposes text into
+  any of them; Send, Reply and Save stay the person's. A room that takes no messages from
+  you — archived, a private room you are outside, a kind this build cannot
+  classify — closes the box and says why in it; a browser that cannot send
+  (offline, a reader the engine posts nothing for) leaves the box open and holds
+  Send, with the sentence written beside it, as every composer does. Its
+  membership, notification and settings gestures are the top bar's (above).
+  Each of a message's changes (Edit, Delete, a reaction) is held by its own
+  tool, because the engine serves each to a person on its own — and by that
+  tool's own rule in the room rather than the composer's: an archive closes a
+  room to new messages and to nothing else, a delete reaches past membership,
+  and every one of them is drawn and held with its sentence where the engine
+  would refuse it, never hidden. A room whose own read failed says so on every
+  control rather than reading for ever. A public room or a unit's room is
+  readable by every seat, joined or not, so arriving from a search outside a
+  room whose whole transcript is on screen is ordinary. A public room's header
+  then offers to join it; a unit's room offers neither Join nor Leave, because
+  its membership is the org chart's — a seat is in it by being in the unit — and
+  says so instead. A message is not drawn until the engine has it: what you sent
+  waits beneath the transcript until a read carries it — with **Send again**
+  where nobody can say whether it landed (asked under the same operation key,
+  because the engine derives the message's id from it and a fresh key would
+  say it twice), **Try again** where the node refused it, and **Take it off
+  the screen**, which unsays nothing. A message the node accepted without having
+  applied it yet (`pending`) is not yet decided — the room may have been
+  archived, or its author taken out of it, just ahead of it — so the screen asks
+  again under the same key, first after the two seconds the node's applier is
+  given to reach it (`contract/chat.ts`'s `PENDING_REASK_MS`, the engine's
+  `chatlet.DecisionWait`) and then at doubling intervals up to thirty seconds,
+  until the answer is a decision: it landed, and the transcript brings it, or it
+  was refused, and the row says why. It waits there while you look at another
+  room, and is there when you come back.
+- **The panes** draw in the kit's side panel, so opening one moves focus to
+  its heading, Escape inside closes it, and closing gives focus back to what
+  opened it (to a menu's trigger, when a menu item opened it and is gone).
+  **A thread** (`pane=thread:{room}:{root}`), opened beside the conversation
+  or over it, is its root, the reply count, the
+  replies as the room draws them, an agent writing a reply, the reply box
+  where the room takes one, who a reply reaches, and Follow. It is one level
+  deep, so a reply offers no thread of its own, and it pages forwards from its
+  root. Its read place moves to the newest reply on screen. **Details**
+  (`pane=details:{room}:{tab}`) groups the room's facts in cards (its name,
+  which never changes; its topic and description, each with Edit where the
+  engine would take the change; its team, who made it and when, how long it
+  keeps what is said, and Leave where a person may leave), its Members (find,
+  Add people where the engine adds anybody, people before agents, each opening
+  their profile), what it **Shared** (every link said in it, newest first, as
+  the room unfurls it, each opening the message it came in) and its
+  **Notifications**. **A profile** (`pane=profile:{handle}`) is the seat's
+  face, team and what it is doing now, Message, its page in the org chart, and
+  the rooms you share with it (`chat_channels{with}`). **Catch up**
+  (`pane=catchup:{room}`, or `summarize` with nothing unread) is Ask Crewlet's
+  brief of the room: the gist, what waits on you, and what was said, each
+  point opening the message it came from; it reads only what you can read and
+  posts nothing, and goes on in Ask Crewlet.
+- **Activity** (`#/chatlet/activity`) is where Chatlet opens: its sidebar row
+  leads here, and the bare `#/chatlet` is replaced with it. It is every message
+  that named your seat, in every room, every reply in a thread you follow and every reaction to what you
+  said (`chat_activity`): the whole away story, because the engine sends no
+  email, push or SMS. It filters to mentions, replies or reactions, and to the
+  unread alone; the row chosen is read beside the list as the room draws it
+  (`chat_message`: the message, and for a reply its root and the replies just
+  before it) with a reply box under it, and choosing an unread row marks it
+  read through its room's cursor. A narrow column draws no reading pane, so a
+  row opens where it was said instead. Each row is the moment it happened and
+  is dated by it.
+- **Threads** (`#/chatlet/threads`) lists the threads you follow, newest reply
+  first (`chat_threads`), each its root and newest replies with Unfollow and
+  Reply; **Drafts and sent** (`#/chatlet/drafts`) lists what you have not sent
+  (a message the engine did not confirm, and the words left in a box, kept in
+  the tab and never in the address or the browser's storage) and what you sent
+  (`chat_sent`); **Saved** (`#/chatlet/saved`) lists what you saved, the newest
+  save first (`chat_saved`). A card there quotes its message read-only: its
+  actions are a press away in the thread or the room.
+- **New message** (`#/chatlet/new`, `to=`) takes people and agents as chips in
+  its To field (`#` there finds one of your rooms instead), shows the
+  conversation you already share with them, and opens one only when you send.
+- **Browse rooms** (`#/chatlet/browse`) lists every room you can read, joined or
+  not, archived ones under their own filter (`chat_rooms`), with each room's
+  topic, size and last message, sorted by activity, name or size; Join where
+  the engine would take one, Open everywhere else.
+- **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
+  room your seat may READ (wider than your own rooms) by keyword alone: chat is not
+  in the vector corpus
+  ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
+  It searches as you type, once the words rest (`lib/useQuiet.ts`), and keeps
+  the settled words in the address by replacement. In and From narrow it at
+  the engine (`channel_id`, `author`); Who (people or agents) narrows the page
+  the engine ranked, and says so. A phrase past the engine's bound is not sent,
+  and the screen says why. It asks for the engine's own page (forty hits,
+  `contract/chat.ts`'s `CHAT_SEARCH_PAGE`, the engine's
+  `search.MaxChatSearchLimit`), and the ranking has no next page, so a full
+  page says there may be more matches and how to narrow the search, rather
+  than reading as everything that matched. Its People tab matches the org
+  chart's seats and its Rooms tab every room you can read, on the words each
+  row draws.
+- **On Home**, Chatlet offers two widgets for the reader's board
+  (`routes/chatlet/home.widgets.tsx`; see
+  [Home is the reader's board](#home-is-the-readers-board)), each asking what
+  its page asks and re-reading on the frames its page re-reads on: **Unread
+  rooms**, the rail's rooms with something unread and the engine's count on
+  each (a muted room left out and counted, a rail cut at the engine's bound
+  said to count only the reader's most recently active rooms, a room a newer
+  engine made counted as left out, a rail that met a record this build cannot
+  read said to be incomplete, and where the cursors could not be read a
+  sentence saying so, none of them ever drawn as "caught up"), and **Mentions**,
+  Activity's newest mentions, a mention in a thread opening the thread. The
+  rooms are the frame's one reading of the reader's rooms, the one the
+  sidebar's badge and the Rooms panel draw. Neither marks anything read. Like every chat page
+  they are the Chatlet app's: a credential acting as no seat is told so in a line
+  and asked nothing, and a company whose chat is a vendor's or none is offered
+  neither, as Home offers no widget of a service it does not run.
+- **Live, by evidence.** A chat frame carries no body: it says a room moved, and
+  the screen re-reads, a burst coalesced into one read. What a reader has paged
+  to is read again only where a frame names something on it: a room's newest
+  page on every frame in it, and then — once that page has caught up with the
+  frame on the log — the page that ends at an edited, deleted or reacted-to
+  message it does not reach, or every page held below it for an erase or a
+  prune; a thread's first page for its root, the page holding a changed reply,
+  and its last page for a new reply; Mentions' newest page on every frame, and
+  a page held below it for a change to a mention on it, an erase or prune in a
+  room it holds a mention from, or a membership change. A page read again is
+  put back only once it still meets the page after it: a room joined makes the
+  mentions said in it visible, so a page can come back holding the same number
+  over a shorter range, and the range it no longer reaches is read in before
+  anything moves rather than drawn as a hole. A tab that let a frame go unseen —
+  a bound, or a frame naming no room, which is the engine saying it dropped
+  some — reads everything it holds again, because what it missed is unknown.
+  Presence is pushed whole for the rooms the tab says it has open. Your seat's
+  read state reaches every tab of yours as `chat_cursor_moved` — the one that
+  wrote it included, which also has the write's own answer — and the rail asks
+  again once when its revision moves, whichever of the two lands first.
+- **Where you have read to** is written as you read — every `READ_FLUSH_MS`
+  (15 s), at once on leaving a room, hiding the tab or closing it — through
+  `mark_chat_read`, the same audited act every other change is. A badge
+  therefore clears when a flush lands, not on the scroll. A message counts as
+  read only once it has been on screen while the room is in view: the tab in
+  front, and nothing over the page. Ask Crewlet as the whole window or over
+  the page's end edge covers the room, and so does a dialog or the palette;
+  Ask Crewlet's column only narrows the page. What arrived while the room
+  was covered counts once it is in view again.
+- **A seat that moves is a new screen.** A write goes out as the seat the
+  engine resolves when it arrives, so the whole screen is mounted under the
+  seat the viewer names and is drawn again when the directory binds the person
+  elsewhere: the last seat's unsent messages with their Retry, a draft, an open
+  thread and a half-filled dialog go with it, and what it had read and not yet
+  written is not written as the next seat — a cursor only moves forward, so it
+  would mark rooms read for good. A different person signing in hands the
+  whole tab over by a reload with its storage emptied, which is the same thing
+  for every screen.
+- **Offline**, chat is every other socket screen: it keeps what it last read,
+  the frame's banner says the live channel is down, and it reads again on
+  reconnect. Nothing is said while the socket is down; a message is never
+  queued for later.
+- **On a narrow screen**, a phone's or one Ask Crewlet's column has
+  narrowed, the rail stacks above the room and each takes its share. The
+  screen still takes the window's height, because a transcript inside a page
+  that also scrolls is two scrollers under one wheel. The widths are in
+  [The frame](#the-frame).
+
+## Doclet: the spaces, a landing, and search with real modes
+
+Doclet is the approved **Home** layout. No column of navigation stands
 beside the screen (the workspace's section renderer is `none`, `app/nav.ts`):
-the spaces are ONE ROW at the top of every Knowledge screen, the search sits in
-the page bar of every Knowledge screen, and a page is read at the full width
+the spaces are ONE ROW at the top of every Doclet screen, the search sits in
+the page bar of every Doclet screen, and a page is read at the full width
 of the sheet. The landing, a space and the search's answer take the sheet's
 whole width as every screen's column does, with no cap of their own: capped at
 the kit's content maximum, they sat in a 1600px column against the left edge
@@ -7198,7 +8118,7 @@ palette and the trail.
   time of day on that same clock (its age is the time's title, since an age
   under a date heading contradicted it) and its note: a save's own, a
   comment's words or a new page's first line, never the title again. **Every
-  change** opens the audit log narrowed to the knowledge base. With nothing
+  change** opens the audit log narrowed to Doclet's changes. With nothing
 written beside the featured change the column is not drawn, since the big
 tile is then the whole of it. The tiles share one inset and three equal
 columns. Four small
@@ -7230,18 +8150,18 @@ columns. Four small
   was asked (`served_mode`, `degraded`), and a warning when the fan-out was
   PARTIAL, naming the buckets nobody scanned and the node that did not answer
   (`coverage`), because a short list from two thirds of the corpus is
-  otherwise indistinguishable from a small corpus. On the native backend the
+  otherwise indistinguishable from a small corpus. On Doclet the
   search reads this node's own copy of the pages. The results end with how to
   move through them (`j` and `k` move, Enter opens).
 - **A search that did not run** says which of `no_company`, `no_backend`,
   `no_scope` or `building` it was, with the remedy that reason names: a
   backend to set, spaces to add to `knowledge.scope`, or, while a node that
   joined recently is still indexing, to try again shortly. The fifth reason,
-  `no_access`, is the READER'S rather than the company's — a caller holding
-  Tracker and not Knowledge, whose question searched nothing of the knowledge
-  base — and is said in the words every lock uses ("Search needs Knowledge
+  `no_access`, is the READER'S rather than the company's (a caller holding
+  Worklet and not Doclet, whose question searched nothing of the knowledge
+  base) and is said in the words every lock uses ("Search needs Doclet
   access. An admin can give it to you."), with nothing to configure. The
-  dashboard asks the question only of a Knowledge holder
+  dashboard asks the question only of a Doclet holder
   (`lib/useSearchQuery.ts`), so it is drawn only for an answer that raced an
   access change.
 - **A space's peek** (opened from a list elsewhere) reads one window of 500
@@ -7260,7 +8180,7 @@ key, not only in a tooltip.
 
 ### A space: its head and its outline
 
-`#/knowledge/{CONTAINER}` is the space's head over its pages as an OUTLINE. The
+`#/doclet/{CONTAINER}` is the space's head over its pages as an OUTLINE. The
 head names the space and its key, what it is for, how many pages it holds,
 when somebody last wrote in it (the newest change to what a page says, from
 the space's own change log, `page_activity{container, kinds}`, never the
@@ -7289,7 +8209,7 @@ was made.
 
 ### A page: the document, its outline, and what it is connected to
 
-`#/knowledge/pages/{id}` is the document in one column with its outline to
+`#/doclet/pages/{id}` is the document in one column with its outline to
 the left, following the scroll (`Outline`, `useActiveHeading`), so where the
 reader is in a long page is always in view. Below the phone breakpoint the
 page is one column and the outline is not drawn.
@@ -7365,12 +8285,12 @@ page is one column and the outline is not drawn.
   answer for whether a save can be sent. A page link is inserted from the
   slash menu's "Link to a page", by picking a page, and is written in the
   address the backlinks read (`PAGE_ADDRESS_PREFIX`, held against
-  `pages.AddressPrefix` by a test). The note kept with the revision is a line
+  `doclet.AddressPrefix` by a test). The note kept with the revision is a line
   under the page, beside its word count.
 
 ### The composer: a new page
 
-`#/knowledge/new` writes a new page, with where it is filed in the address
+`#/doclet/new` writes a new page, with where it is filed in the address
 (`?space=…&parent=…`): **New page** in the bar, a space's Create row and a
 page's **New sub-page** each open it filed where they were pressed. The page is
 written at the measure it is read at (`--size-measure`, the page's own reading
@@ -7387,7 +8307,7 @@ lines its readers will see.
   that has it, and holds both presses. Its size, the body's (512 KB) and the
   labels' (32, each 64 bytes) are held at the engine's own caps
   (`PAGE_TITLE_MAX_BYTES`, `PAGE_BODY_MAX_BYTES`, `PAGE_LABELS_MAX`,
-  `PAGE_LABEL_MAX_BYTES`, held against `internal/pages` by a test) and said,
+  `PAGE_LABEL_MAX_BYTES`, held against `internal/doclet` by a test) and said,
   never cut.
 - **Similar pages** is the knowledge search on the title, asked once the title
   rests, so the page that already answers this is found before a second one is
@@ -7404,24 +8324,37 @@ unavailable, never a button that fails.
 
 ### Agent skills
 
-`#/knowledge/skills` has two kinds behind one address. **Tool skills**
+`#/doclet/skills` has two kinds behind one address. **Tool skills**
 (`kind=pages`, the default) lists every published tool-skill page with who it
 reached over thirty company days — the `pages` listing's `skill_loaded_by`,
 read with the listing rather than per row — and the total the listing counts,
-with Load more past a window. **Learned** (`kind=learned&seat=`) is one agent
+with Load more past a window. Their order is the ENGINE's, chosen in the
+toolbar's **Order** and kept in `sort=`: **Name** (`sort=title`, the
+knowledge base's own order) or **Newest** (`sort=-updated`, the listing's
+`order: "newest"`, by when each skill last changed, read from the skill rows'
+own index). The column heads are not sortable: a head would order the rows
+one window held, so past a window "Updated" put the newest of the
+alphabetically first skills at the top. Home's **Agent skills** widget asks
+for the newest the same way, a widget's window of the engine's order.
+**Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
-the seat, with "n of total" when the page is cut.
+the seat, with "n of total" when the page is cut. Their order is the HOLDER's
+for the same reason, chosen in the same toolbar **Order** and kept in `sort=`:
+**Most used** (`sort=-uses`, the default) or **Recently changed**
+(`sort=-updated`), asked as the question's `skills_order` (`uses`, `updated`)
+and applied to the seat's whole set before the page is cut. The heads are not
+sortable: sorted here, "most used" was the most used of the newest fifty.
 
 ### Agent diaries
 
-`#/knowledge/diaries` lists EVERY agent seat in the chart — the old Knowledge
-home stopped at a dozen — from `memory_overview`: each agent's newest note,
+`#/doclet/diaries` lists EVERY agent seat in the chart (the landing it
+replaced stopped at a dozen), from `memory_overview`: each agent's newest note,
 when it was written, and its entry, episode and skill TOTALS, counted by the
 node holding the agent, which the row names. An agent no node holds says so
 and shows no counts, since no copy of its memory is current; an agent whose
 holder did not answer says that instead of drawing zeros, and the partial
 callout every fleet answer draws names the node and why. The landing's **Agent
-diaries** row counts the agents listed. `#/knowledge/diaries/{handle}` is one
+diaries** row counts the agents listed. `#/doclet/diaries/{handle}` is one
 agent's diary and episodes — the same two cards its profile's Memory tab
 draws, from the same holder-answered `agent_memory` — with the node that
 answered, or the reason nothing is shown, and the way to its whole memory.
@@ -7462,7 +8395,7 @@ in a row stretches to the tallest, so the row's edges line up and nothing
 leaves a hole under it. A stretched card keeps its content at the top and its
 foot on the floor, the stacked lists' last card takes what the stack leaves,
 and a card whose partner is absent (no task spend to rank on a tracker that is
-not the engine's) takes the whole row. In the top row the hero's figure stays
+not Worklet) takes the whole row. In the top row the hero's figure stays
 at its top while the budget and the tiles stand on its floor, level with the
 chart's split control; a tile with nothing to say is not drawn, and the other
 takes the tiles' whole row. Where the hero is the taller card, the chart's plot
@@ -7487,14 +8420,14 @@ the page column's, not the window's.
   already includes the cached prefix). A window in which nothing reported a
   cache has **no cache tile** — not 0%, which would be a claim about caching
   nobody made.
-- **The median task** is the tracker's own `totals=spend_tokens:median` over
+- **The median task** is Worklet's own `totals=spend_tokens:median` over
   the tasks FINISHED in the window that spent anything, with how many. On a
-  company whose tracker is not the engine's, `work_items` is not served and the
+  company whose tracker is not Worklet, `work_items` is not served and the
   tile is not drawn.
-- **A reader without Tracker is asked nothing about tasks.** The overview is
-  everybody's and a task is the tracker's, so the median tile and the most
-  expensive tasks card each say *Needs Tracker access* — the card with no
-  **All** link, since the list is the tracker's too — and no `work_items` is
+- **A reader without Worklet is asked nothing about tasks.** The overview is
+  everybody's and a task is Worklet's, so the median tile and the most
+  expensive tasks card each say *Needs Worklet access* (the card with no
+  **All** link, since the list is Worklet's too), and no `work_items` is
   sent: asked, the engine's refusal drew a callout offering to sign in to
   somebody already signed in.
 - **Daily tokens by phase** is the kit's `StackedColumns` over the engine's four
@@ -7536,7 +8469,7 @@ the page column's, not the window's.
   guarded so a spreadsheet opens a name as text rather than a formula.
 
 `#/settings/spend/tasks`, **Expensive tasks** (the Spend group's second row,
-not offered where the company runs no Crewlet Works), is the tasks last changed inside the
+not offered where the company does not run Worklet), is the tasks last changed inside the
 window, bounded at both edges (`closed_since` plus `updated=range:<since>..<until>`
 from the spend answer's own instants, so a window that ended last month lists
 nothing that moved only this week), most tokens first
@@ -7544,7 +8477,7 @@ nothing that moved only this week), most tokens first
 `fields=spend`: its turns, and its reopens, workers and send-backs where they
 are not zero, and a bar beside the figure scaled to the top task (not a
 percentage: a lifetime's tokens are a share of no window's total). A task's
-tokens are its whole life's — the tracker charges a task, not a day — and the
+tokens are its whole life's (Worklet charges a task, not a day), and the
 list says so. The overview shows the top three. A
 window the engine refused has no list: the page says the refusal and nothing
 under it waits for an answer that will never be asked. On a phone each task is
@@ -7563,7 +8496,13 @@ seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. The company's row stands
 on the table's own columns (one track list handed to both), so each window
 sits over its column, and its first track says once what the windows are:
-every seat together, on the company clock, and when each turns over. A window's bar is a kit
+every seat together, on the company clock, and when each turns over.
+**Ask Crewlet, per person** follows the company, on the same tracks: the ceiling every
+person's Ask Crewlet questions are held to (`assistant.token_budget`),
+each person on their own. Its figures are the reader's own spend against it,
+drawn only where the engine counts one (`counted`: a person, under a company
+that caps a person's spend); elsewhere the row draws the ceilings and no figure,
+since a zero nobody measured is not "0 tokens". A window's bar is a kit
 `Meter` handed the engine's `state`, and the page divides nothing itself; a
 window with no ceiling draws no bar, because a bar needs something to be a
 fraction of. A
@@ -7577,12 +8516,24 @@ save is **checked first**, against the revision it was read from, and only the
 warnings the change *introduces* are shown — a seat ceiling at or above the
 company's, which can never refuse a turn, is the one this screen exists to
 catch — with **Save anyway** to store it regardless. The company's ceilings are
-written as a merge patch of the windows that changed (`null` removes one); a
+written as a merge patch of the windows that changed (`null` removes one), and
+each person's Ask Crewlet ceiling as the same patch one level down
+(`{assistant: {token_budget: {...}}}`), which leaves the rest of the
+`assistant:` block as it was; a
 seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
 request with `dry_run=true`), because a patch cannot address one seat in a
 roster. The revision's summary says whose ceiling, which window, and from what
 to what. After a save the figure shows the new ceiling marked **applying…**
-until this node reports the saved epoch, and then re-reads. A conflict saves
+until this node has applied the saved revision, and then re-reads — judged by
+where this node stands on that revision (`lib/nodeStanding.ts`), never by its
+applied epoch alone, which a refusal leaves where it was. A node that refused
+it puts the figure back to the ceiling the gate still enforces, marked
+**refused by this node**, until the pencil is pressed again or a later
+revision it applies settles it; a save a later activation passed before this
+node applied it settles on the re-read like an apply. The mark follows this
+node's LAST health push (`lib/useLastHealth.ts`): a dropped socket clears the
+store's health slice, and is no news of the save, so a refusal stays said
+through it rather than turning back into the saved figure, applying. A conflict saves
 nothing and offers **Reload**; so does a request that may have landed. The
 pencils are drawn for every reader and disabled, with the reason said once
 above the page in the standard notice, for a reader without Admin — except a seat's, for
@@ -7590,10 +8541,28 @@ the lead of the unit it sits in, whom the engine admits to that seat's write
 (`useOrgWriteAccess`, `lib/leadScope.ts`).
 
 **There is no reset.** A window's `used` is what it spent; the room comes back
-when it turns over, or now by raising its ceiling. Home's and the Inbox's
-**Raise budget** open the same write as a dialog of one scope's three ceilings
-(`RaiseBudgetDialog`), each field captioned with what that window has spent and
-when it resets.
+when it turns over, or now by raising its ceiling. The Inbox's and a stopped
+seat's **Raise budget** open the same write as a dialog of one scope's three
+ceilings (`RaiseBudgetDialog`), each field captioned with what that window has
+spent and when it resets. A reader who may not raise that scope's ceiling is
+not handed the button: the row says who can instead ("An admin can raise this
+ceiling.", the units a lead leads, or who manages the document).
+
+**Each ceiling is a section a refusal opens.** A refusal or a notice a token
+budget caused names the setting behind it (ADR-0060's remedy), and
+`lib/remedy.ts` is the one table from a setting to this screen and its
+section: `section=company`, `section=assistant`, or `section=seat:<handle>`
+for a seat's row. The section is brought into view, focused, and marked as the
+one the reader came for (the card's `selected`, the seat's row as current); a
+press on the address already open arrives again; and a section the screen does
+not draw for the reader (a seat it no longer lists) reveals nothing. The press
+is offered by the gate the editor there is drawn by (`useOrgWriteAccess`), so
+the link and the pencils it opens cannot disagree: a reader the gate refuses
+for who they are is told who can raise it, and never handed a link to a screen
+whose controls are all locked for them. It is drawn on Ask Crewlet's refusal
+of a question and on a turn a budget stopped, on a refused act (the palette's
+knowledge answer among them), on the Inbox's company budget condition, and on
+Home's spent week.
 
 ## Account: the reader's own page
 
@@ -7684,10 +8653,10 @@ saying the opposite.
 
 Settings is what the ENGINE runs, and nothing the company decides. It is the
 one workspace that draws its sections as a **column** beside the screen rather
-than as tabs in the page bar, in four groups: **Runtime** (Models & keys, MCP
+than as tabs in the page bar, in four groups: **Runtime** (Models, MCP
 Tools, Secrets and Limits: what a turn runs on and the caps it is held to),
 **Spend** (Token spend and Expensive tasks: the readings, never the
-ceilings; the row is not called Spend, since without Crewlet Works it is the
+ceilings; the row is not called Spend, since without Worklet it is the
 group's only row and read "Spend › Spend"),
 **Access** (People, Service accounts, API tokens, Sign-in policy and Audit
 log) and **Engine** (Nodes, Configuration, Backups & retention and File
@@ -7706,17 +8675,19 @@ section takes the screen's width. At 1024 the column beside it left a 489px
 section, whose tables drew their columns 46px wide. A section closed to the reader draws a lock naming what it
 lacks and **is never hidden**: a section that vanished for a reader without
 its access is one they cannot know exists. Closed is one rule, `sectionOpen`:
-Token spend's readings are open to everybody, Expensive tasks is
-the tracker's, and every other Settings section is admin's. It is the same rule
+Token spend's readings and Models are open to everybody (each model's
+condition is what tells a member why a seat waits; every action on it stays
+an admin's), Expensive tasks is Worklet's, and every other Settings section is
+admin's. It is the same rule
 the sidebar locks a row by (a row only when nothing in its workspace is open,
 so Settings never, since Spend always is) and the frame draws a section's
 refusal by. A section that reads a service the company does not run is not
-drawn at all, by the sidebar's rule: Expensive tasks, where the company runs
-no Crewlet Works. The landing page, Models & keys (`#/settings/models`, where
+drawn at all, by the sidebar's rule: Expensive tasks, where the company does
+not run Worklet. The landing page, Models (`#/settings/models`, where
 the sidebar's Settings row goes), is one of the column's sections, so its
-trail reads **Settings › Models & keys** rather than "Settings" alone. **On a
+trail reads **Settings › Models** rather than "Settings" alone. **On a
 phone the column folds to one row naming the section** the reader is on,
-"Section · Models & keys", the word said and not only spoken, since a
+"Section · Models", the word said and not only spoken, since a
 section's name alone read as the page's title rather than as a control
 holding the others. It opens the list and folds again once a section is
 picked, the one the reader is already on included: stacked whole above the
@@ -7725,7 +8696,7 @@ fold. So a LINK to a section arrives folded, the section it named starting
 right under the picker. But the Settings row's own address names no section
 anybody chose, so **arriving there opens the list**, every group in it:
 folded, a phone reader saw one row naming the first section and never learned
-what else Settings holds. A pick that lands on that address (Models & keys)
+what else Settings holds. A pick that lands on that address (Models)
 folds it like any other. **Beside a
 section the column stays put**: it is the scroller's height rather than the
 section's, so it sticks while the section scrolls, its hairline runs the height
@@ -7748,7 +8719,7 @@ screen shares rather than at an inset of its own.
 
 | Row | Figure | From |
 |---|---|---|
-| Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node has applied an older epoch than the fleet activated (the Nodes screen's own "Behind on config" count) | the health push, and `fleet` |
+| Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node does not run the revision the fleet activated — an older epoch, a refusal or a partial apply of the activated one, another revision, or no apply reported (the Nodes screen's own "Behind on config" count, by one rule: `lib/configStanding.ts`) | the health push, and `fleet` |
 | Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
 | Backups & retention | how many alarms stand, the count the engine panel shows, drawn only when one does | `retention` |
 
@@ -7835,8 +8806,17 @@ edits as one revision was declined. The source is
   the charter again and writes it with only this part replaced, conditional
   on its tag (`PUT /config/charter`, `If-Match`), so a colleague's change to
   another part is kept. The card then shows the saved words until this
-  browser's chart carries them, with *Sent. This node has not applied it yet.*
-  under them, and a toast says it saved. A refusal keeps the draft and says
+  browser's chart carries them, with *Saved. This page shows it as soon as
+  this node applies the new revision.* under them, and a toast says it saved.
+  The save's answer names the revision it stored beside its epoch, and the
+  card follows this node's standing on that revision (`lib/nodeStanding.ts`):
+  once this node refused it, the card draws the part as this node still runs
+  it, with *Saved, but this node refused the new revision and goes on running
+  the one before. Settings › Nodes says why.*, until a later revision settles
+  it; once it applied the revision, or passed it for a later one, the card
+  draws the chart. It reads this node's last push (`lib/useLastHealth.ts`), so
+  a dropped socket leaves a refusal said rather than drawing the saved words
+  again. A refusal keeps the draft and says
   why once, beside the Save that caused it (the editor's own alert, so no toast
   reads it a second time); a save that got no answer is settled by reading the
   charter back rather than sent twice.
@@ -7866,13 +8846,15 @@ switches its limit off (the answer's `off` and `default_off`). Limits is
 read-only and admin's, and Principles offers it as a related row to a reader
 who may open it.
 
-**The brand is Company's too, and adopted.** **Company › Brand**
+**The brand is Company's too, and published.** **Company › Brand**
 (`#/company/brand`) is how the company looks and sounds in everything its
 agents make. A brand KIT is an artifact of kind `brand` (its `brand.json` and
 the logo and font files it names), versioned like any artifact, which agents
 and editors may draft; the company's brand is the one version an
-administrator ADOPTED (`brand{}`), which the engine snapshots and serves by
-its bytes. The page draws that adoption as four cards in the Principles card
+administrator PUBLISHED (`brand{}`; an adoption in the engine's word, which
+`POST /brand/adoptions` and `artifacts.brand.adopt` keep, while every label a
+person reads says publish), which the engine snapshots and serves by its
+bytes. The page draws that adoption as four cards in the Principles card
 grammar, Logos (`image`: the name and tagline over three `LogoSlot`s, primary
 on a light ground, one for dark grounds and the square mark, each with a
 download), Colours (`blend`: each set role as a `ColorSwatch` with its value
@@ -7883,20 +8865,33 @@ doc or a slide, light or dark) in an `AsideLayout` that stacks it under the
 cards on a narrow page. An administrator, a person, edits one card at a time
 in place, the preview drawing every change; Save opens one dialog listing
 what changes (each colour with both values, each logo by its bytes), the
-contrast pairs that fall short, and what adopting makes public, then
-publishes a version of the company's kit and adopts it, the engine asking
-for a recent sign-in when the proof is stale. Text on the light ground below
-4.5:1 holds Save with the engine's own reason; every other pair warns. A
-version somebody else published is offered under the header ("Version 9 by
-@brand-agent is newer than the adopted version 7", with **Review and adopt**
-for an administrator). With no brand adopted, an administrator is offered
-**Set up your brand**, which opens the setup on a page of its own
+contrast pairs that fall short, and what publishing makes public (**Save
+and publish**), then publishes a version of the company's kit and adopts it,
+the engine asking for a recent sign-in when the proof is stale. Text on the
+light ground below 4.5:1 holds Save with the engine's own reason; every other
+pair warns. With no brand published, an administrator is offered **Set up
+your brand**, which opens the setup on a page of its own
 (`#/company/brand/setup`, six steps, each Continue saving a draft), and
-everyone else reads "No brand yet". A draft nobody adopted yet (one a setup
-left, or a version an agent or an editor published) is offered under the
-header with **Continue setting up**, and a draft that lacks a primary logo or
-colour says so ("Draft, not ready to adopt: add a primary logo and colour")
-and is never offered for adoption; the engine publishes such a draft and
+everyone else reads "No brand yet". A draft nobody published yet (one a setup
+left, or a version an agent or an editor published on the published kit) is
+offered under the header in a notice that says it is not live ("This draft
+of the Acme brand is not published yet, so artifacts still use Crewlet's
+look.", or "Version 9 of the Acme brand is a draft. Artifacts keep using the
+published version 7 until this one is published."), who last changed it and
+when (its version's author and day), and ONE primary action chosen by its
+readiness: **Publish brand** for an administrator once it is ready (the
+review of that version, then "Publish version 9 as the Acme brand?"), with
+**Edit draft** beside it; **Finish draft** while it lacks a primary logo or
+colour, beside the sentence saying so ("Not ready to publish: add a primary
+logo and colour"), never offered for publishing; an editor who may not
+publish reads that an administrator can review and publish it. With none
+published, the draft itself is drawn under the notice in the four cards,
+read-only, its preview tagged **Draft**, in place of "No brand yet". Its
+owner or an administrator, a person, may **Discard draft**, which confirms
+and moves the kit to the trash (`DELETE /artifacts/{id}`, `artifacts.trash`),
+restorable by its owner until it is purged; a newer version of the published
+kit is a version, not a kit, and is never offered for discarding. The engine
+publishes a draft that lacks a primary logo or colour as a version and
 refuses only to adopt it. **Run setup again** in the bar walks every part
 again, prefilled from the kit where it stands. The bar holds
 the kit's **History** and **Stop using this brand**. The brand meets people
@@ -7907,7 +8902,8 @@ Details (current, an older brand that changes at the next publish, or
 Crewlet's look; a deck, which copies the brand when it is made and never
 follows it, says "Made with the Acme brand of" the day it was made). A kit's
 own page draws the same cards and preview for the
-version on show, and says whether it is the adopted one.
+version on show, says whether it is the published one, and offers an
+administrator **Publish this version**.
 
 **Access** is the identity directory, over the routes `/iam` serves to an
 admin, split over three pages so that no row is drawn twice: People, Service
@@ -7917,7 +8913,7 @@ is every principal in the directory but its service accounts (`/iam/people`), th
 saying the set in the one line the dashboard says it everywhere (`accessLine`
 in `lib/access.ts`): **Admin** for anybody holding it, since every app is
 included and naming them beside it would read as separate; otherwise the apps
-they hold, **Tracker · Knowledge**; **Overview only** for none; and a name this
+they hold, **Worklet · Doclet**; **Overview only** for none; and a name this
 build does not know appended raw, so it is never silently dropped — and a row opens that
 person in the frame's **peek** (`peek=person:{id}`), which reads their row
 (`/iam/people/{id}`), their credentials (`/iam/credentials`) and their
@@ -8112,9 +9108,9 @@ that answer the same need:
 
 | Category | Lines |
 |---|---|
-| Chat | Crewlet Chat (coming soon), Slack, Mattermost |
-| Work tracking | Crewlet Works, Jira |
-| Docs and knowledge | Crewlet Knowledge, Confluence |
+| Chat | Chatlet, Slack, Mattermost |
+| Work tracking | Worklet, Jira |
+| Docs and knowledge | Doclet, Confluence |
 | Code | GitHub, GitLab |
 | Observability | Datadog |
 
@@ -8122,8 +9118,9 @@ that answer the same need:
 so Jira sits under work tracking and Confluence under docs, each with its own
 product's state, and both open the one Atlassian page, since it is one key and
 one account per agent. A line stands at the rail's row step (30px) and carries
-its mark, its name (a product's app inline after it, in the quiet ink) and its
-state only where it carries one: **In use**, **Not in use** or **Soon** for a
+its mark, its name (a product's vendor inline after it, in the quiet ink:
+Atlassian after Jira and Confluence, Crewlet after Worklet and Doclet) and its
+state only where it carries one: **In use** or **Not in use** for a
 service, which is Crewlet's own and so never *connected* (none on a node
 running no company, which is "not known yet", never Not in use), and
 for an app the engine's bucket (*Connected*, *Needs attention*, *Setting up*),
@@ -8141,7 +9138,7 @@ products) and the Crewlet services in use, each a **compact card** (the kit's
 `CatalogTile` at `density` `compact`: one header line with the mark, the name,
 the state and a figure, the one action at its end, and one line of what it
 gives), two to a row. The action is named for its card to a screen reader
-(`actionName` in `parts.tsx`: "Open Crewlet Works", "Replace key GitLab", the
+(`actionName` in `parts.tsx`: "Open Worklet", "Replace key GitLab", the
 spelling the app's own page uses), because a column of cards each saying Open
 is a list of links nobody can tell apart. And, for an Admin while only Crewlet's services are in
 use, one line saying apps connected from the list show there too. Then the
@@ -8156,8 +9153,8 @@ delivery. Sections stand one small step apart (the kit's `Section` at
 
 **The address is the selection**: `#/company/integrations/{kind}` selects an
 app's key, a surface (`jira`, `confluence`, and the `forge` relay and
-`atlassian` select Jira's line) or a service (`works`, `knowledge`, `chat`), so
-every address an earlier version printed still lands on its tool. An arrival's
+`atlassian` select Jira's line) or a service (`worklet`, `doclet`, `chat`), so
+an address naming any surface of a tool lands on that tool. An arrival's
 `open=` names the form to open (`connect`, `continue`, `rotate`, `settings`,
 `agents`), taken out of the address once read and held for the selection it
 arrived with: a fix followed from the home opens its form on a page that is
@@ -8205,22 +9202,31 @@ check carries **Test key** under its field: one read-only call to the app
 (`POST /setup/integrations/{kind}/verify`), whose verdict (*works*, *refused*,
 *unreachable*, or not checked, with the app's reason) shows under the field
 and goes when the value is typed over; a credential the app proves only by
-using it says how, in its help. A check the engine turned away (a `${NAME}`
+using it says how, in its help. Credentials the app checks together
+(`check_with`, Datadog's API key and application key) share one **Test keys**
+control after the last of them: it is disabled, with an accessible reason
+naming the empty fields, until all of them hold a value, shows one verdict
+that names the key that failed, and that verdict goes when any of them is
+typed over. A check the engine turned away (a `${NAME}`
 naming no secret) says why and claims no verdict.
 
 **Crewlet's own services** have pages laid out as an app's and filled only
-with what the engine answers. Crewlet Works counts projects and their open
+with what the engine answers. Worklet counts projects and their open
 tasks, lists the projects, every agent with its open, blocked and overdue
-work, the newest changes, and the `tracker` block's settings; Crewlet
-Knowledge counts spaces and pages, lists the spaces, every agent's own space
+work, the newest changes, and the `tracker` block's settings; Doclet
+counts spaces and pages, lists the spaces, every agent's own space
 and onboarding pages, the newest edits, and the `knowledge` block's settings.
 An unset key reads *The engine's default* rather than a copy of the engine's
 constant. A service the company runs elsewhere says what does its work instead
 (*Jira does this for your company*, with the way to Jira's page), what running
 it here would give, and that the company document decides it: turning a
 service on or off is not offered, since a switch here that did nothing would
-be a lie. Crewlet Chat is coming soon, pointing at Slack and Mattermost
-meanwhile.
+be a lie. Chatlet counts nothing, since the rooms it answers for are the
+reader's own seat's: in use, its page says what it gives and, to a reader
+holding Chatlet, opens it (a reader without Chatlet is told it needs Chatlet access); on a
+vendor's chat it says which (*Slack does this for your company*, named from the
+`viewer` answer, which tells it to a holder of Chatlet), with the way to that
+app's line.
 
 **A reader without Admin** sees the whole directory: the services with their
 states and their pages in full (each count read only where the reader holds
@@ -8312,64 +9318,58 @@ asks the engine nothing. That list is derived from each seat's configuration
 an admin; an absent list on this admin's screen means a node older than the
 field, and the panel says so.
 
-**Models & keys** draws the company document's `providers.llm` entries, read
-through the same Admin-only `config` question the Configuration screen asks,
-in config order (the order a seat that names no model falls back through), each
-**as the engine will run it**: a field the entry leaves out is said as the
-default the engine applies — the CLI (`claude-code`), the mode (`text`), the
-sign-in (`subscription`), the 600-second timeout and four processes at once —
-from `contract/models.ts`, which
-`internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
-engine's own defaults, so a default that drifted cannot name a CLI or a
-sign-in the engine does not apply. There is **no per-key state** to draw and
-nothing is asked of a node: a model is one CLI, which holds one sign-in and
-rotates nothing, so what an operator needs is how it signs in and whether
-anything still runs on it. Three tiles count the models (and how many no seat
-names), the models in **agent mode**, which run the executor in their CLI, and
-the models **on an API key**, the ones billed to a metered account. Each row is the entry's key over its CLI and model
-(`claude-code · sonnet`), its mode (*Text*, or *Agent* with the cell its
-`run_in` names), how it **signs in** — *Subscription*, *API key* or *Engine
-environment* — over where that credential comes from: the variable the entry's
-`auth.token` or `auth.api_key` names, or, where it names none, what the CLI
-reads instead (*CLI login*, *from a bundle*; *the CLI's own key variable*; *the
-engine's own variables*) — and **Runs**, the seats whose resolved chain (the
-org projection's `llm`, the engine's own resolution) starts with the model and
-how many fall back to it. A credential is **never a value**: one written as a
-whole `${NAME}` is that name, and anything else is the document's mask, said to
-be *written inline* and never drawn. The list is read again on every company the
-engine publishes — the org projection the seats ride on moves with it — and
-never on a clock, since the document changes only with a revision.
+**Models** is every model the company runs and every task an operator does on
+one, read from the engine's own reading, `llm_entries`, which every member may
+ask: a member's names no credential, no account and no vendor sentence, and
+every action on the page is an admin's. It is kept current on a fifteen-second
+poll while the page is open, when the fleet applies a new configuration and
+when a seat's provider limit moves on the live state. Two lenses sit in the
+page bar. **Models** has stat tiles (the models, how many are ready, how many
+sit out or cannot sign in, and the week's tokens), then the model alarms
+the engine raised (`llm_credential_expiring`, `llm_credential_expires_soon`,
+`llm_sign_in_refused`, `llm_limit`, `llm_limit_waiting`), each naming its cause
+and what it stops, grouping the models one credential or one plan holds, its
+vendor's sentence behind **Details**, and offering the one gesture that fixes
+it. A limit that holds seats also offers **Use a different model for these
+seats**: a menu of the models that answer now (never one on the limited plan,
+and for coding only a CLI that runs it), or a line saying none can, and **Add a
+model**, each opening the wizard on *Use it for* with every seat's category on
+the limited models added (`?add=`), for Review to show before anything is
+written. The address only preselects: a seat the company no longer has, or
+coding on a CLI that runs none, is dropped. Then a row per model: its CLI's mark, key and model; its status (one word
+from the engine's reading, and when it changes); how it signs in and the secret
+it reads; what it is used for, by category; when it last answered; and its
+menu. **By job** is every agent seat as a row with the model it runs for each
+category of work (*Coding*, *Reviewing and delegations*, *Routines and
+evaluations*), Ask Crewlet's model above the grid, a cell's model's condition
+in the cell, a split category said job by job, and a quiet note where a model
+under a fixed deadline is not a fast one; a pick opens that model's wizard on
+*Use it for* with the seat's category added.
 
-A row opens the **model's page** (`models/{id}`): its facts (model, CLI, mode,
-timeout, processes at once, seats — each default said as one), a **Signing
-in** card naming the mode, the credential that mode reads (the token under
-`subscription`, the API key under `api-key`, none under `inherit-env`) or, where
-the entry names none, the sentence saying what the engine reads instead (the
-CLI's own token variable or the login `crewlet llm login` wrote; the CLI's own
-key variable, from the secret store and then the environment), the login
-bundle's variable, where the login is kept (`state_dir`, or a directory derived
-from the key on each node) and each `env` variable with the name its value
-comes from; then **Seats on it** — each seat and which phases run on it or fall
-back to it. A seat's model chain on its Settings tab links here. Changing the
-CLI, the mode or the sign-in is Configuration's, where the whole entry is in
-view, and the card links to that entry there. **Edit** (the page's action, and
-a row's pencil) is drawn for every reader and disabled with the reason for one
-who cannot change the configuration: it reads the entry (`GET
-/config/llm-providers/{id}`) and edits its model, the ONE credential its
-sign-in reads (a secret field — `$` offers the sealed entries, and one the
-document holds inline is a locked row that can be kept or replaced, never shown
-— and none at all under `inherit-env`, since the engine refuses a credential
-under a mode that does not read it) and, under a **Limits** fold, its two caps,
-the wall clock on one CLI invocation and how many run at once, empty meaning
-the default. It checks the whole company twice with `dry_run` — as stored and
-with the edit — so only a warning the edit introduces is said, places a problem
-the engine names at one of those fields beside it and any other above the form,
-then stores it with `PUT /config/llm-providers/{id}` and `If-Match`, sending
-back every field it did not show — the CLI, the mode, `run_in`, `state_dir`,
-`env`, `overrides` and the bundle — exactly as read. With no entry, or no
-company configured, the tiles read 0 and the card says to add one under
-`providers.llm`; an address naming no entry says so and links back to every
-model.
+A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
+by whom it was stored, its expiry, and on a CLI login each node's state with the
+command that makes it there), its sit-out with **Retry now** and **Clear
+sit-out** for every model on its plan, its last answer and failure, its usage
+over seven days, its limits and every place that runs on it, grouped by
+category with backups apart and Ask Crewlet named. **Test** runs the CLI's
+own checks on the answering node and says each in words. A Codex model signs
+in with a device code: the page shows the address and the code and follows the
+session until it ends. **Remove** names every place that runs on the model in
+words, asks where each moves, checks each choice with a dry run and removes the
+model and every repoint as one revision.
+
+**Adding and editing a model is one wizard**, a page of its own in place of the
+list: the name and the coding CLI (fixed once the model exists), how it signs
+in, the model (the CLI's aliases and the public catalogue's models, or any name
+as text), where its coding runs (for a CLI with a runner), what it is used for,
+its limits, a test call and a review of exactly what changes. A pasted
+credential is tested before anything is stored and sealed before the document
+that names it is written; the document is checked with a dry run against the
+revision it edits and stored with `If-Match`, so a colleague's save in between
+is a conflict to re-read. *Use it for* writes each category's fields as one
+model each, as
+[Managing models from the dashboard](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+lists, and the review names every fallback a write drops.
 
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.
@@ -8422,7 +9422,14 @@ most, named again by the Broker members panel), **Up since**, **Roles**, then
 Lease and Broker give way; beside a peek at 1440, Node, Seats, In flight,
 Posture and Config stay. The **Broker** column is the kind the node's presence
 advertises — `member`, `leaf` or `client` as a neutral tag, `unknown` as a
-warning since it is the one reading that is a guess. Then
+warning since it is the one reading that is a guess. The **Posture** column,
+like the Posture fact on a node's page and in its peek, is the node's own word,
+`serve` as a success tag and any other as a warning. Its dash says which of two
+absences it is, in its title and to a screen reader alike: a node that could
+not read the control plane on its last heartbeat publishes the rest of its
+status without a posture, rather than the `serve` its readiness probe falls
+back to, and one whose last heartbeat carried no status has no in-flight count
+either. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved
@@ -8484,8 +9491,12 @@ once, named in words, with the engine's measurement as a sentence, the logs it
 stands on (logs one term holds are one line, "Trim held by the backup on
 tracker, vectors, pages and usage, for 46h", with each log's own measurement
 under it, since what a log keeps past its replay window is why it is listed and
-no shared date says it; each log a link to its page; a single log whose
-measurement is the alarm's is said once), and the engine's remedy, each a row
+no shared date says it; each log a link to its page; a single measurement that
+is the alarm's is said once with the logs it was taken on beside it, so a fleet
+with no backup yet reads "tracker, vectors, pages, iam and usage: No verified
+backup of this log has been recorded…" once — the engine carries a sentence
+measured alike on several logs once, naming them, and the page draws what it
+is given), and the engine's remedy, each a row
 of the one Alarms card with its warning glyph rather than a callout framed
 inside it. The backup they ask for is the page bar's **Take a backup**, the
 only one on the screen. Then the record of
@@ -8517,36 +9528,44 @@ log_recreated`) or a log missing records the copy needs (`503 log_gap`) — in t
 engine's own hint. The request
 waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
-newest backup the trim counts, the `backup_floor` policy, how many were
-requested and failed (over the span the event log reads, named from the
-`event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), and the
+oldest backup any log's trim reads (each log reads the newest counted backup
+that covers it, so under `operator` there is one per log acknowledged, and the
+stalest is the one the backup-age alarm leads with), the `backup_floor` policy,
+how many were requested and failed (over the span the event log reads, named
+from the `event_history_seconds` the engine reports rather than written into
+the screen, or "in the newest N" when the history filled its page), and the
 backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
 nothing backed up and every node's history read, the figure says "none yet"
-and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
-the operator's acknowledgement, with its directory, size (none for an
-acknowledgement, never 0), reach, and whether the trim counts it: exactly one
-row reads **counted · newest**, the engine's choice rather than the latest
+and the two lists are not drawn. Otherwise come **Newest per node and log**,
+each node's newest copy and the operator's newest acknowledgement of each log,
+one row per log, with its directory, size (none for an acknowledgement, never
+0), reach, and whether the trim counts it: a row reads **counted · newest**
+where some log's trim reads it, the engine's choice rather than the latest
 date, so a newer copy nobody verified reads **not verified**. Then **Backup
 history**: every backup a person asked any node for over the event log's 30
 days, with the node that holds it, the person, the directory and whether its
 manifest was written. A failure is drawn as one. Neither table is derived from
-the other: the register keeps each owner's newest point only, which is why a
-failed night shows in the history alone.
+the other: the register keeps each node's newest point and each log's newest
+acknowledgement only, which is why a failed night shows in the history alone.
 
-**Audit log** reads five sources over one window: the tracker's feed, the
-knowledge base's changes, the configuration history, the credential rows —
+**Audit log** reads five sources over one window: Worklet's feed, Doclet's
+changes, the configuration history, the credential rows,
 and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
 every call a person made through a running node whatever became of it: each
 operator tool call that is not a proven read — through the act route, an
-assistant over `/operator/mcp` or the human write surface — and every backup.
+assistant over `/operator/mcp` or the human write surface, whose chat erase,
+prune and horizon are rows named by their verbs (`chat.erase`, `chat.prune`,
+`chat.channel.retention`) — and every backup. **Chatlet is not a source of its
+own**: the other four are change records and a transcript is content — a
+private room's is not an administrator's to read — while what a person *did*
+in chat is already here, every chat write being a call this source records.
 A runtime row names the tool (or "backup" and its directory), who made the
 call as the engine recorded it (`actor` and `actor_kind`: the seat a bound
 person acted as, or a credential's own login) with the credential it came
 through (`operator_id`) beside it, and in its detail's title the node that
 served it; its arguments are
 never recorded and the cell says so. A refused or failed call is marked as a
-failure. The tracker's feed and the runtime audit are windowed by the engine,
+failure. Worklet's feed and the runtime audit are windowed by the engine,
 the other three are narrowed here, and a page that filled before it reached
 the window's start is named in a notice above the card — windowed or not. A
 long value in the To column is cut with an ellipsis and carries the whole of
@@ -8585,7 +9604,10 @@ current row is (the raised neutral surface and its hairline), never as the
 primary button: the accent belongs to the one primary action, and a violet
 fill under a handle in its own grey ink was 1.5:1. `#/settings/config/revisions`
 is the history, so it lands on the History lens. **A revision's own page is the
-revision** — its header, where it came from and which nodes report it — with
+revision** — its header, where it came from and which nodes run it (a node
+whose last attempt of it failed is listed as refusing it, naming what it
+runs, even when that is this revision: the refused re-activation a credential
+rotation makes, and not counted among those that run it) — with
 no lens bar and no running document under it, and **See its changes** opens
 the Diff lens against the revision's *parent*, which is what that save
 changed (against the active revision, the active revision's own changes were
@@ -8607,15 +9629,23 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/ui/                   the component library and the chart kit
   src/components/           the pieces more than one screen draws, composed
                             out of the design system
-  src/routes/<workspace>/   one directory per workspace — home, inbox, me,
-                            work, agents, live, knowledge, spend, settings — and
-                            one file per screen inside it, with an index.ts
-                            naming what its lazy chunk exports. Two things sit
+  src/routes/<dir>/         one directory per group of framed screens, each
+                            its own lazy chunk, as ScreenDir in
+                            app/lazyScreen.ts declares them (home, inbox, me,
+                            worklet, code, chatlet, agents, live, doclet,
+                            artifacts, brand, spend, settings, account), with
+                            one file per screen inside it and an index.ts
+                            naming what its chunk exports. Four things sit
                             outside that shape: NotFound, which belongs to no
-                            workspace and is what the dispatch falls through
-                            to, and routes/org/, the organization builder — one
+                            directory and is what the dispatch falls through
+                            to; routes/org/, the organization builder, one
                             screen big enough to be a directory, and a chunk,
-                            of its own (see below)
+                            of its own; routes/signin/, the screens drawn
+                            outside the frame, a chunk the idle prefetch
+                            leaves alone; and
+                            routes/artifacts/new/, where each kind's create
+                            page is a chunk of its own, never prefetched either
+                            (see below)
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
@@ -8658,7 +9688,7 @@ forwarding its caller's path, which is named with its reason.
 exist on both sides by necessity — the dashboard is a separate build in a
 separate language and cannot import a Go identifier — so where a screen must
 know a set the engine owns (the event categories, the turn bands, the wake
-reasons, the work tracker's sort keys, change kinds and grouping axes, the
+reasons, Worklet's sort keys, change kinds and grouping axes, the
 config kinds, the query error codes, the push kinds, the feed length, the
 write vocabulary and its refusal codes, the questions a write is read back
 through) or read
@@ -8716,23 +9746,69 @@ count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold
 all of it, so a red run says which side stopped.
 
-The capture ends with a **write**, made AS THE PERSON A SESSION RESOLVES TO:
-a browser holding the cookie a password sign-in minted, whom the identity
-directory binds to the founder's seat, pins a project through
-`POST /operator/act/set_pins` under its own operation key in
-`Idempotency-Key`, exactly as the dashboard's `act` sends it. The route is the
-node's own operator surface, the one `crewlet run` builds inside
-`api.NewHumanSurfaces`, whose catalogue every call builds from what the node
-serves then, so the harness wires no second catalogue, and the
-viewer names the write among its `acts` before it is pressed. The Go
-half holds the answer to the read it promises: its `position` is in the grammar
-a read accepts back, and `GET /work/people/{handle}` at
+The captured tab is a **person's**: a browser holding the cookie a password
+sign-in minted, whom the identity directory binds to the founder's seat, holding
+`admin` — every permission there is, so the one tab is sent every kind of frame
+a tab can be. It is the only kind of socket the company's own chat is pushed to,
+since every chat frame is decided per recipient seat; one tab is one person, as
+on the dashboard. So the capture also carries the founder using **Chatlet** the way
+its screen does: a room made from the tab with a seat in it, looked at (the
+chat room's `presence` frame), a message said and reacted to, and the seat asked in that
+message's thread. The seat's turn claims to have answered, is refused for
+having said nothing, replies in the thread — held on that round until the
+room's presence has shown it at work, which is true only while its turn runs —
+and submits citing the reply: three rounds, the captured company's cap, so the
+turn ends on its own `delivered` rather than on the engine's rescue, which the
+Go half reads off the turn's phase record. Then the first message is edited and
+deleted, the room read through the seat's answer with `mark_chat_read`, left,
+and pruned through the human write surface's
+`POST /chatlet/channels/{channel_id}/prune` — an administrator's gesture, with the
+step-up the sign-in has just proved. Every other change is a press of the act
+transport. Every chat push kind is then on the capture, held against the
+engine's own list (`stream.ChatPushKinds`), so a kind the engine adds is a
+capture that stops passing until it is produced. The replay is handed an
+account of the room written beside the frames, never read from them — its id,
+the person and the seat, the highest `channel_seq` the engine minted, every
+record it took (its op, the message it names, its author and their kind, and a
+post's thread), where its last record sits and the cursor the founder flushed.
+What the engine minted is read from its answers: the room's id, each message's
+id from its post's receipt (the seat's from the room's transcript), the
+numbering, the prune's position. Each record is otherwise the gesture the
+capture made, written down as it made it — the founder as the human seat a
+person writes as, through the act transport and the prune route alike, and the
+seat as an agent in the thread it was asked in — so an author or a thread the
+write path recorded wrongly is a failure rather than part of the expectation.
+The replay holds the store to that account: the room filed with that
+high-water mark, a frame filed for every record naming exactly what the capture
+did and none naming anything else (the Go half holds the frames to the same
+account first, so a red run says which side stopped), its newest moment the
+prune's position, presence that at some frame showed the founder looking and
+the seat working, and the founder's read state with that cursor and a
+revision. Each record is held on its own because the room's messages taken
+together are named by its posts alone: an edit, a delete or a reaction filed
+under the wrong message is a screen re-reading the wrong range of a room, and
+only a comparison per frame sees it.
+
+The capture also carries two **writes** whose floors the replay holds, each
+made AS THE PERSON THE SESSION RESOLVES TO under its own operation key in
+`Idempotency-Key`, exactly as the dashboard's `act` sends it. The founder pins
+a project through `POST /operator/act/set_pins` after the frames are taken, and
+the founder's first message in the room is `POST /operator/act/post_message`.
+The route is the node's own operator surface, the one `crewlet run` builds
+inside `api.NewHumanSurfaces`, whose catalogue every call builds from what the
+node serves then, so the harness wires no second catalogue, and
+the viewer names each write among its `acts` before it is pressed. The Go half
+holds each answer to the read it promises: its `position` is in the grammar a
+read accepts back, and `GET /worklet/people/{handle}` (for the pin) or
+`GET /chatlet/channels/{channel_id}/messages` (for the message) at
 `read_level=session&min_position=<position>` is served at `session` and already
-holds the pin. The replay hands the same answer, byte for byte, to the client's
-own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
-and a read of `work_person` or `work_items` — each read from that one log —
-must name it as its one `min_position`. A floor the client could not parse raises nothing, and the screen that pressed
-the button would redraw from before the press with nothing to say so.
+holds the write. The replay hands the same answers, byte for byte, to the
+client's own `act` and one tab's `SessionFloors`: the `tracker` floor must be
+the pin's position and the `chat` floor the message's, and a read of
+`work_person` or `work_items` — or of `chat_messages` or `chat_channels` — must
+name its log's as its one `min_position`. A floor the client could not parse raises
+nothing, and the screen that pressed the button would redraw from before the
+press with nothing to say so.
 
 The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and
 `src/test/environment.test.tsx` says so by what the zone produces — both
@@ -8757,23 +9833,28 @@ or a reference the crawl cannot read — and a crawl that silently skipped a laz
 chunk would certify a screen nobody can open. Every stylesheet the crawl
 reaches, a lazy one included, is also held to the Content-Security-Policy.
 
-**A chunk per workspace, and the next one fetched while nobody waits.** Every
-screen is loaded by `app/lazyScreen.ts`, one chunk per workspace's
-`routes/<workspace>/index.ts` plus one for the org builder, which is a section
-of the Org chart and larger than any whole workspace. The entry the shell loads holds
+**A chunk per screen directory, and the next one fetched while nobody waits.**
+Every screen is loaded by `app/lazyScreen.ts`, one chunk for each directory the
+tree above lists (`routes/<dir>/index.ts`, held to `ScreenDir` by
+`app/lazy.test.tsx` in both directions), plus one for the org builder, which is a
+section of the Org chart and larger than any whole workspace, one for the
+sign-in screens drawn outside the frame, and one for each kind's create page
+(`routes/artifacts/new/`). The entry the shell loads holds
 the frame (the sidebar, the page header, the socket client) and nothing a
 screen draws, so a reader who came to read the Inbox parses the Inbox and not
-the org builder. The command palette is a layer mounted only while it is open
-and the largest single piece of the frame, so it is a chunk of its own, the
-first the idle prefetch fetches; `app/lazy.test.tsx` refuses a static path to
-it from `main.tsx`. A screen's peek lives in its workspace's chunk
-beside it. Two things keep the second click fast: hovering or focusing a
-sidebar row starts fetching the chunk it leads to, and once the first screen is
-up every other chunk is fetched in turn, one at a time, each in an idle moment
-the browser reports (and not at all for a reader whose browser asks to save
-data). `app/lazy.test.tsx` refuses a static import of a screen's module from
-outside `routes/`, because the bundler follows one wherever it is and it would
-pull that workspace back into the entry with nothing failing.
+the org builder. The command palette and Ask Crewlet's panel are layers
+mounted only while open, each a large piece of the frame, so each is a chunk of
+its own, and they are the first two the idle prefetch fetches;
+`app/lazy.test.tsx` refuses a static path to either from `main.tsx`. A
+screen's peek lives in its directory's chunk beside it. Two things keep the
+second click fast: hovering or focusing a sidebar row starts fetching the chunk
+it leads to, and once the first screen is up every other chunk is fetched in
+turn, one at a time, each in an idle moment the browser reports (and not at all
+for a reader whose browser asks to save data), except the sign-in screens and
+the create pages, which a reader who is signed in, or who opened Artifacts to
+look, never needs. `app/lazy.test.tsx` refuses a static import of a screen's
+module from outside `routes/`, because the bundler follows one wherever it is
+and it would pull that directory back into the entry with nothing failing.
 
 **A chunk that does not arrive says so, and can be retried.** The usual reason
 is an upgrade: the page names its chunks by content hash, and an engine
@@ -8805,10 +9886,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 326 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49) took it to 320.3 KiB, most of it their rules in the one sheet; the brand setup wizard (uilet 0.50) to 321.1 KiB; uilet 0.51 to 322.6 KiB, splitting Select and Kbd out of the entry into chunks compressed apart; and the code host's own changes to the frame (a refusal's sentence, a wait said in hours, Not Found's hint) to 323.0 KiB. The formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the fixes beside them took it from 323.7 KiB to 323.8 KiB, which 324 KiB still held. The Code workspace took it to 325.6 KiB: its row, routes, trail, service notice and words in the entry (about 0.3 KiB), and the bundler regrouping what the first paint already loaded (about 1.4 KiB) — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are now compressed apart — and 326 KiB holds it |
-| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
+| The initial load: the entry, its static imports and the linked stylesheet | 382 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under. The code host, merged beside it, adds about 3 KiB: its own changes to the frame (a refusal's sentence among the act errors, a wait said in hours, Not Found's hint said as a sentence), the formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the Code workspace's row, routes, trail, service notice and words in the entry, with the bundler regrouping what the first paint already loaded — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are compressed apart. On the code host's own branch they took the load from 322.6 KiB to 325.6 KiB; merged, it moved to 382 KiB |
+| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 4.25 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB for artifact folders and the company brand, which took it from about 3.99 MiB to about 4.14 MiB: the brand page, its adoption review and the brand kind's view (about 65 KB), the folder screens, the Move dialog and the gallery's selection (about 50 KB), and the design system's new rules in the one sheet (about 41 KB), each but the rules fetched only when it is opened. A doubled 2.3 MB baseline is still refused |
+| The whole of `static/dashboard`, which every binary and image carries | 5254 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -8927,8 +10008,8 @@ brings that carries a design-system rule.
   re-asking it only repeats it — see
   [Honest empty states](#honest-empty-states). There is no retry constant of
   the client's own beyond the engine's health tick, because a flat one is
-  wrong both ways on one fleet — too early for a node grinding through a bulk
-  apply, too late for one that caught up in milliseconds.
+  wrong both ways on one fleet — too early for a node grinding through a long
+  backlog, too late for one that caught up in milliseconds.
 - **A newer peer's frame is ignored and counted.** A push kind this build does
   not dispatch is dropped rather than thrown on or applied by a guess, and the
   store counts it (`unknownPushes`), because the same fall-through is what a
@@ -9175,7 +10256,7 @@ brings that carries a design-system rule.
   touch** (`TOUCH_MEDIA` in `app/layout.ts`, no hover and a coarse pointer,
   read through `lib/media.ts`'s `useKeyHints`): the drawer's search drew
   "Ctrl + K" on a phone, a key nobody there has, and the keycap cut the
-  trigger's own label to "Ask or jump t…"; the palette's key legend and its
+  trigger's own label short; the palette's key legend and its
   rows' chords go the same way. It asks "is this touch?" rather than "is there
   a keyboard?", because no media feature can see a keyboard, and a browser
   that answers neither keeps its hints. The keys still work for a reader who
@@ -9447,10 +10528,90 @@ while the screen binds the real chart, table, editor and dialogs, and
   than replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
   keeps `{revision_id, epoch}` in a tab-lived store outside any screen
-  (`savedRevision.ts`), reads this node's `applied_epoch` off the health push
-  (which carries it every five seconds, so there is nothing to poll) and the
+  (`savedRevision.ts`), reads this node's `applied_epoch` and
+  `config_attempt` off the health push (which carries both every five
+  seconds, so there is nothing to poll) and the
   `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
-  N of M nodes, or the node that refused it with a link to Settings › Nodes.
+  N of M nodes, the node that refused it with a link to Settings › Nodes, or
+  "Revision … has been activated since". Each node's fleet row is judged by
+  the rule a lead's strip judges this node's push by
+  (`lib/nodeStanding.ts`, `fleetNodeStanding` beside `nodeStanding`, one
+  predicate over the facts both wires carry): the row's
+  `config_applied_epoch` is the push's `applied_epoch`, and its
+  `config_epoch`, `config_revision_id` and `config_status` are the push's
+  `config_attempt`. So a node counts as having applied the save only on
+  evidence — its attempt at that epoch on that revision went ok, or it has
+  applied that epoch or a later one (a node that applied 5 and refused 6 has
+  applied a save at 4), or it runs that revision
+  (`config_serving_revision_id`) — and one that attempted a later epoch
+  without applying the save's has PASSED it (two activations inside one
+  reconcile tick are never attempted one by one) and is neither applied nor
+  waited on: once every node has applied or passed it and one passed it, the
+  strip settles on "activated since", rather than calling Applied a save no
+  node may run. An Admin and a lead are told the same of the same node, and
+  the row's one fact more is the revision a node runs: one running the saved
+  revision has applied it. A
+  report at the same epoch on another revision — one number names two once a
+  rebuilt coordination store restarts the count — is that revision's, neither
+  this save applied nor refused. A save whose
+  answer was lost carries no epoch: it takes the fleet activation's only
+  while that names the saved revision, never `target_epoch`, which is the
+  newest activation's whatever it names (and 0 for none). An activation
+  naming another revision settles the strip on "Revision … has been
+  activated since" — said as since, not as a replacement, because the
+  history walk that found the save finds it as readily beneath a revision
+  built on it — and no activation keeps it applying and asking. A reader
+  without Admin, who reads no fleet, follows a save by this node's push
+  alone (`lib/nodeStanding.ts`, the rule a ceiling's mark and a charter
+  card follow their own writes by too): the last attempt first — applied when
+  it names that revision at that epoch and went ok, refused when it failed
+  there, since the applied epoch cannot say it (a failed attempt leaves it
+  where it was) and, from a pointer before a rebuilt coordination store, can
+  stand above the save's — then applied once the applied epoch reaches the
+  save's, or passed once it attempted a later epoch first; and a save whose
+  answer was lost takes its epoch from that
+  attempt only while it names the saved revision, and is otherwise told it
+  cannot be followed from here rather than that it is applying, which nothing
+  would ever correct. An epoch an answer supplied for such a save is pinned
+  to it in the store (`pinSavedEpoch`), so the next activation, which moves
+  this node's attempt and the fleet's activation on, does not turn an applied
+  or refused save into one that cannot be followed. What neither wire can tell
+  is a node holding an applied epoch from the previous pointer above the
+  save's that has not attempted the save yet: it reads as applied, on the
+  push and the row alike, since an epoch orders activations within one
+  pointer only, and telling the two apart takes the applied activation whole,
+  which [#322](https://github.com/crewlet/crewlet/issues/322) has the engine
+  keep. Nor does either wire keep the applied epoch across a RESTART: the
+  push's `applied_epoch` and the row's `config_applied_epoch` start again at
+  0 with the process, and move only on the node's next apply that goes ok,
+  while a node with the `data` role boots on the revision it applied before
+  (one without it boots on nothing, runs no company, and has truly passed the
+  save until it applies one). Until it applies
+  again, a restarted node that refused a later activation reads as having
+  passed the save — on its push alone when it booted on the saved revision,
+  which its row says it runs, and on both when it booted on a revision
+  activated after the save — so a verdict said before the restart can turn:
+  the strip's "Applied." into "activated since" (a lead's on the next push,
+  an Admin's on the fleet read a reconnect makes), and the org chart's note,
+  gone once the node applied the save, back as "did not apply". Neither wire
+  carries the epoch of the activation a restarted node booted on, so the
+  dashboard cannot tell this node from one that never ran the save; carrying
+  that epoch across a restart belongs with #322 too, an activation's identity
+  across pointer lifetimes. Every follower reads this node's LAST push
+  (`lib/useLastHealth.ts`), never the store's live health slice: a dropped
+  socket clears that, and is no news of the save — read as a standing, it
+  turned the strip's verdict and the chart's note back into applying for as
+  long as the socket was down. The TAB keeps that push
+  (`StoreState.lastHealth`, written with every frame and left by a drop),
+  not each follower: the strip mounts afresh on every return to the Builder
+  and the note on the chart, Teams and a unit's page, and a follower that
+  kept its own had nothing to read when it mounted during a drop, and said
+  the save was applying. The org chart's `PreviousRevisionNote` reads the same
+  standing, and learns a lost save's epoch from this node's attempt itself,
+  so a node that refused the save says so rather than "still
+  applying" for good. The Builder's toast says the same of the same save: one settled
+  beneath a later revision (`Landed.activeRevisionId`) names that revision as
+  the one active now, rather than saying the save is being applied.
   Its View changes opens the saved revision against its parent
   (`against=`), since against the active revision a save that is active now
   differs from nothing; the conflict banner's Show what changed is the newer
@@ -9723,7 +10884,7 @@ to.
     dash in JSX, its `EMPTY_VALUE` constant in a string a module returns. No
     module spells one itself. Half the screens adopted it while the rest kept a
     local `Dash`, an em dash the design system says it "does not use anywhere",
-    so the tracker's trash screen drew a 12px em dash in the table's DUE column
+    so Worklet's trash screen drew a 12px em dash in the table's DUE column
     beside a 6px en dash in the activity feed's object column — one fact, two
     glyphs, one viewport. `cells.test.tsx` scans the tree for a string literal
     or a JSX text node that is nothing but a dash; an em dash inside prose is

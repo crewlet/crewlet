@@ -24,7 +24,8 @@ import (
 // written to, and the dispatch ledger its scheduler claimed fires in. Nothing
 // here reads the replicated estate, and nothing here decides what a record
 // looks like — [internal/usage] folds these values into one record per
-// (node, day, object) and publishes it, and every node's applier writes it.
+// (node, day, object) and publishes it, and every data node's applier writes
+// it.
 // Keeping the SQL here is what lets the estate boundary's static walk see it,
 // and keeping the record there is what keeps this package from knowing about
 // a stream.
@@ -512,6 +513,46 @@ func (d *DB) SetUsageWatermark(ctx context.Context, since time.Time) error {
 		INSERT INTO usage_watermark (id, since) VALUES (1, ?)
 		ON CONFLICT (id) DO UPDATE SET since = excluded.since`, EncodeTime(since)); err != nil {
 		return fmt.Errorf("store: write the usage watermark: %w", err)
+	}
+	return nil
+}
+
+// UsageRepublished reads the usage log's generation on every data node, in the
+// usage publisher's canonical spelling, as it last republished every day its
+// event log holds under — and false when it never has.
+//
+// THREE ANSWERS, for [DB.UsageRederive]'s reason: a publisher that could not
+// read what it last answered must not take a reanchor it has not answered for
+// one it has, nor republish every day on every tick.
+func (d *DB) UsageRepublished(ctx context.Context) (string, bool, error) {
+	if d == nil || d.sql == nil {
+		return "", false, ErrNoEstate
+	}
+	var generations string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT generations FROM usage_republished WHERE id = 1`).Scan(&generations)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("store: read the usage generations last republished under: %w", err)
+	}
+	return generations, true, nil
+}
+
+// SetUsageRepublished records the usage log's generation on every data node
+// that the usage publisher has answered: every day its event log holds is
+// published again under them — or, where they moved without any node
+// re-anchoring, nothing needed publishing. See the migration that made the
+// table for why it is kept across a restart.
+func (d *DB) SetUsageRepublished(ctx context.Context, generations string) error {
+	if d == nil || d.sql == nil {
+		return ErrNoEstate
+	}
+	if _, err := d.sql.ExecContext(ctx, `
+		INSERT INTO usage_republished (id, generations) VALUES (1, ?)
+		ON CONFLICT (id) DO UPDATE SET generations = excluded.generations`, generations); err != nil {
+		return fmt.Errorf("store: write the usage generations republished under: %w", err)
 	}
 	return nil
 }
@@ -1114,7 +1155,7 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 //
 // READ OUT OF THE PAYLOAD, never promoted columns: a seat opens and reviews at
 // most a change a turn, so a day holds a few of these records against the tens
-// of thousands of spend and read rows node/0052 promoted columns for.
+// of thousands of spend and read rows node/0059 promoted columns for.
 func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *UsageSeat) error {
 	query, args := usageCodeSQL(w)
 	rows, err := d.sql.QueryContext(ctx, query, args...)
@@ -1184,7 +1225,7 @@ func usageCodeSQL(w UsageWindow) (string, []any) {
 // reads their records count, what they were sent, the newest, and the
 // repository's name as the newest of its reads named it.
 //
-// OFF THE COLUMNS node/0052 and node/0053 promoted, never the payload: a day is
+// OFF THE COLUMNS node/0059 and node/0060 promoted, never the payload: a day is
 // derived again on every tick it moves, and read out of each row's JSON the
 // grouping cost more than the rest of the day did — 272 ms a busy day of 50
 // 000 rows, past the 150 ms (1 % of the publisher's 15 s tick) a derived day

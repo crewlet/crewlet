@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ADOPTED BRAND (ADR-0048: the adopted brand is the company's public face,
@@ -149,8 +150,13 @@ type BrandIncomplete struct {
 }
 
 func (e *BrandIncomplete) Error() string {
+	// FIELD PATHS AS THE KIT WRITES THEM, said as they are rather than quoted.
+	missing := make([]words.Said, len(e.Missing))
+	for i, field := range e.Missing {
+		missing[i] = words.Said(field)
+	}
 	return fmt.Sprintf("artifactsdomain: the brand leaves out %s, which an adopted brand holds: "+
-		"add them to the kit and adopt the version that holds them", strings.Join(e.Missing, " and "))
+		"add them to the kit and adopt the version that holds them", words.And(missing))
 }
 
 // Unwrap is the sentinel the estate and the API branch on.

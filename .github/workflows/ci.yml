@@ -374,7 +374,7 @@ jobs:
   # THE LONGEST PACKAGES START FIRST in `test (race)`, which needs no second
   # runner. `go test` starts package runs in command-line order and go list's
   # is alphabetical, which started internal/search, internal/store and
-  # internal/tracker last of their half; `go doc ./internal/solo/partition` has
+  # internal/worklet last of their half; `go doc ./internal/solo/partition` has
   # the measurement. So the job restores the package durations main's last
   # passing run of it measured, hands them to the partition as TEST_WEIGHTS,
   # and on main keeps its own run's as the next one's. With none (the first
@@ -454,6 +454,17 @@ jobs:
         name: install what building git needs
         if: steps.git.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
+      # NODE, because this half runs internal/sandbox/codingagent's probe of
+      # the OpenCode notes plugin the engine embeds, which drives the plugin
+      # under plain `node` against a stand-in of the bridge's notes route — and
+      # `make test` refuses to start without it (require-node). The probe
+      # never skips here: with CI set, a missing node fails it, and the skip a
+      # bare local loop takes is declared nowhere in internal/skipgate.
+      # `latest`, and no npm or install, for the reasons the `gates` job below
+      # gives.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # same command CI runs, or it is a lie" was therefore held by hand —

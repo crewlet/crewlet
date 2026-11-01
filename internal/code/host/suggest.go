@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // AN APPLY_SUGGESTIONS' BUILD: findings' suggestions put in place of the lines
@@ -110,8 +111,8 @@ func (b *building) applySuggestions(ctx context.Context, j judgement) (string, c
 
 // outdatedSentence is an outdated apply's sentence, every finding named.
 func outdatedSentence(outdated []string) string {
-	return fmt.Sprintf("%s: nothing was applied — read the findings at the change's head with code_get_change "+
-		"and apply those still in place", strings.Join(outdated, "; "))
+	return fmt.Sprintf("%s: nothing was applied; read the findings at the change's head with %s "+
+		"and apply those still in place", strings.Join(outdated, "; "), toolname.CodeGetChange)
 }
 
 // place is where each suggestion's lines are in the head's file, by path,

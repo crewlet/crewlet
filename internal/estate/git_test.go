@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fakeGit is one git node's git half: it records every read it is asked —
@@ -315,7 +315,7 @@ func previewsAsked(halves map[string]*fakeGit) map[string]int {
 	return out
 }
 
-// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0059): for each of a
+// A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0082): for each of a
 // thousand repositories, the first git node asked — and the one that answers,
 // every node answering — is the first of rendezvous.Order(repository, every
 // live git node), from a node that holds nothing and from a git node whose own
@@ -1013,7 +1013,7 @@ func TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp(t *testing.T) {
 	}
 }
 
-// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0059, the scale critic's rule):
+// ONLY THE EFFECTIVE HOME IS ASKED TO FILL (ADR-0082, the scale critic's rule):
 // over four git nodes, the walk's first attempt is stamped home and every later
 // one is not — the one node a walk lets start a download of a repository it
 // holds no copy of — and once the home has gone silent, the router asks it
@@ -1103,7 +1103,7 @@ func stamped(halves map[string]*fakeGit) []string {
 	return out
 }
 
-// A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0059). A
+// A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0082). A
 // home confirmed behind the company's configuration — shed, or stuck because
 // its apply failed while a peer applied, and live in the git placement all the
 // while — refuses every seat's read `behind_config` before it syncs anything,
@@ -1838,14 +1838,14 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 		t.Errorf("a git read nobody answered says %q, want it to name the git nodes", err)
 	}
 	// A DATA OPERATION IS NOT ASKED OF THE GIT NODES: the placements are two.
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) ||
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.As(err, &unserved) ||
 		unserved.Git || !strings.Contains(err.Error(), "no data node serves") {
 		t.Errorf("a tracker read with no data node = %v, want it unserved, naming the data nodes", err)
 	}
 }
 
-// AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0059,
-// ADR-0062). A write is idempotent by its push id, derived from its
+// AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0082,
+// ADR-0085). A write is idempotent by its push id, derived from its
 // operation, so wherever its home ran none of it the walk asks the runner-up
 // the very write the home was asked — the same operation, the same push:
 //

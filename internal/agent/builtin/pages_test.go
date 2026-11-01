@@ -10,8 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -19,16 +19,16 @@ import (
 
 type fakeKB struct {
 	renames []renamed
-	page    pages.Detail
+	page    doclet.Detail
 
-	created  []pages.NewPage
-	saved    []pages.Save
-	comments []pages.NewComment
+	created  []doclet.NewPage
+	saved    []doclet.Save
+	comments []doclet.NewComment
 	edits    []commentEdit
-	actors   []pages.Actor
+	actors   []doclet.Actor
 
 	// keys is the operation key every write's actor arrived with
-	// ([pages.Actor.OpKey]), in order, so a tool that derived its operation
+	// ([doclet.Actor.OpKey]), in order, so a tool that derived its operation
 	// from something other than the caller's own key — or forgot to pass
 	// one — is visible.
 	keys []string
@@ -50,7 +50,7 @@ type fakeKB struct {
 	// that landed a record; a test pins it to model the idempotent shape,
 	// where nothing was appended and the answer carries the revision this
 	// node had already applied.
-	rename func(pageID, title string) pages.Written
+	rename func(pageID, title string) doclet.Written
 
 	// levels is every read level these tools asked for, so a tool that
 	// stopped naming one — or named the wrong one — is visible. A seat
@@ -63,7 +63,7 @@ type fakeKB struct {
 }
 
 // written is a write's answer, carrying the pinned outcome where there is one.
-func (f *fakeKB) written(w pages.Written) pages.Written {
+func (f *fakeKB) written(w doclet.Written) doclet.Written {
 	if f.outcome != nil {
 		w.Outcome = *f.outcome
 	}
@@ -71,59 +71,60 @@ func (f *fakeKB) written(w pages.Written) pages.Written {
 }
 
 func newFakeKB() *fakeKB {
-	return &fakeKB{page: pages.Detail{
-		Page:     pages.Page{ID: "p1", Container: "ENG", Title: "Deploy Runbook", Version: 4},
+	return &fakeKB{page: doclet.Detail{
+		Page:     doclet.Page{ID: "p1", Container: "ENG", Title: "Deploy Runbook", Version: 4},
 		Revision: 9,
 	}}
 }
 
-func (f *fakeKB) List(_ context.Context, _ pages.Filter,
-	fresh statelog.Freshness) (pages.Listing, error) {
+func (f *fakeKB) List(_ context.Context, _ doclet.Filter,
+	fresh statelog.Freshness) (doclet.Listing, error) {
 
 	f.levels = append(f.levels, fresh.Level)
 	if f.readErr != nil {
-		return pages.Listing{}, f.readErr
+		return doclet.Listing{}, f.readErr
 	}
-	return pages.Listing{
-		Pages:    []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
+	return doclet.Listing{
+		Pages: []doclet.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title,
+			Author: f.page.Page.Author, Labels: f.page.Page.Labels}},
 		Level:    fresh.Level,
 		Complete: true,
 	}, nil
 }
 
 func (f *fakeKB) Get(_ context.Context, ref string,
-	fresh statelog.Freshness) (pages.Detail, error) {
+	fresh statelog.Freshness) (doclet.Detail, error) {
 
 	f.levels = append(f.levels, fresh.Level)
 	if f.readErr != nil {
-		return pages.Detail{}, f.readErr
+		return doclet.Detail{}, f.readErr
 	}
 	if ref == f.page.Page.ID || strings.EqualFold(ref, "ENG/Deploy Runbook") {
 		return f.page, nil
 	}
-	return pages.Detail{}, pages.ErrNotFound
+	return doclet.Detail{}, doclet.ErrNotFound
 }
 
-func (f *fakeKB) Create(_ context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error) {
+func (f *fakeKB) Create(_ context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error) {
 	if f.writeErr != nil {
-		return pages.Written{}, f.writeErr
+		return doclet.Written{}, f.writeErr
 	}
 	f.created = append(f.created, in)
 	f.actors = append(f.actors, actor)
 	f.keys = append(f.keys, actor.OpKey)
-	return f.written(pages.Written{Page: pages.Page{ID: "new", Container: in.Container,
+	return f.written(doclet.Written{Page: doclet.Page{ID: "new", Container: in.Container,
 		Title: in.Title, Version: 1}, Revision: 10}), nil
 }
 
-func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save pages.Save) (pages.Written, error) {
+func (f *fakeKB) SavePage(_ context.Context, actor doclet.Actor, _ string, save doclet.Save) (doclet.Written, error) {
 	if f.writeErr != nil {
-		return pages.Written{}, f.writeErr
+		return doclet.Written{}, f.writeErr
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
 	f.keys = append(f.keys, actor.OpKey)
-	return f.written(pages.Written{
-		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
+	return f.written(doclet.Written{
+		Page: doclet.Page{ID: "p1", Version: 5}, Revision: 11,
 		Outcome: landedAt(11),
 	}), nil
 }
@@ -136,14 +137,14 @@ type renamed struct {
 	awaitedBefore []uint64
 }
 
-func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool) (pages.Written, error) {
+func (f *fakeKB) Rename(_ context.Context, actor doclet.Actor, pageID, title string,
+	_ bool) (doclet.Written, error) {
 
 	if f.writeErr != nil {
-		return pages.Written{}, f.writeErr
+		return doclet.Written{}, f.writeErr
 	}
 	if f.renameErr != nil {
-		return pages.Written{}, f.renameErr
+		return doclet.Written{}, f.renameErr
 	}
 	f.renames = append(f.renames, renamed{
 		pageID: pageID, title: title,
@@ -154,30 +155,30 @@ func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title stri
 	return f.renameResult(pageID, title), nil
 }
 
-func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (f *fakeKB) Comment(_ context.Context, actor doclet.Actor, _ string, in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	if f.writeErr != nil {
-		return pages.Comment{}, pages.Written{}, f.writeErr
+		return doclet.Comment{}, doclet.Written{}, f.writeErr
 	}
 	f.comments = append(f.comments, in)
 	f.actors = append(f.actors, actor)
 	f.keys = append(f.keys, actor.OpKey)
-	return pages.Comment{ID: "m1", Mentions: in.Mentions},
-		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 12}), nil
+	return doclet.Comment{ID: "m1", Mentions: in.Mentions},
+		f.written(doclet.Written{Page: doclet.Page{ID: "p1"}, Revision: 12}), nil
 }
 
 // commentEdit is one EditComment call the fake took.
 type commentEdit struct{ commentID, body string }
 
-func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID,
-	body string) (pages.Comment, pages.Written, error) {
+func (f *fakeKB) EditComment(_ context.Context, actor doclet.Actor, _, commentID,
+	body string) (doclet.Comment, doclet.Written, error) {
 	if f.writeErr != nil {
-		return pages.Comment{}, pages.Written{}, f.writeErr
+		return doclet.Comment{}, doclet.Written{}, f.writeErr
 	}
 	f.edits = append(f.edits, commentEdit{commentID: commentID, body: body})
 	f.actors = append(f.actors, actor)
 	f.keys = append(f.keys, actor.OpKey)
-	return pages.Comment{ID: commentID, Body: body},
-		f.written(pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}), nil
+	return doclet.Comment{ID: commentID, Body: body},
+		f.written(doclet.Written{Page: doclet.Page{ID: "p1"}, Revision: 13}), nil
 }
 
 // landedAt is a write that appended a record at one position on the pages log.
@@ -190,12 +191,12 @@ func landedAt(seq uint64) statelog.Result {
 
 // renameResult is the fake's answer to a rename: an ordinary one a record
 // landed for, unless the test pinned another shape.
-func (f *fakeKB) renameResult(pageID, title string) pages.Written {
+func (f *fakeKB) renameResult(pageID, title string) doclet.Written {
 	if f.rename != nil {
 		return f.rename(pageID, title)
 	}
-	return pages.Written{
-		Page: pages.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
+	return doclet.Written{
+		Page: doclet.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
 		Outcome: landedAt(13),
 	}
 }
@@ -227,8 +228,8 @@ func TestThePageWritesCountAsDeliveries(t *testing.T) {
 		// answers a turn asked to document something; it does not answer
 		// somebody waiting in a chat thread, and the surface is what keeps
 		// those two apart.
-		if deliveries[name] != pages.Source {
-			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], pages.Source)
+		if deliveries[name] != doclet.Source {
+			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], doclet.Source)
 		}
 	}
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
@@ -276,7 +277,7 @@ func TestASaveNeedsTheVersionItRead(t *testing.T) {
 func TestATitleCollisionPointsAtTheExistingPage(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
-	kb.writeErr = pages.ErrTitleTaken
+	kb.writeErr = doclet.ErrTitleTaken
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 
 	got := callWork(t, reg, builtin.WritePageTool, map[string]any{
@@ -297,7 +298,7 @@ func TestATitleCollisionPointsAtTheExistingPage(t *testing.T) {
 func TestAStaleSaveTellsTheModelToReRead(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
-	kb.writeErr = pages.ErrStaleVersion
+	kb.writeErr = doclet.ErrStaleVersion
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 
 	got := callWork(t, reg, builtin.SavePageTool, map[string]any{
@@ -318,26 +319,26 @@ func TestListingReturnsOnlyPublishedPages(t *testing.T) {
 	if len(kb.filters) != 1 {
 		t.Fatalf("filters = %v", kb.filters)
 	}
-	if !slices.Equal(kb.filters[0].Status, []pages.Status{pages.StatusPublished}) {
+	if !slices.Equal(kb.filters[0].Status, []doclet.Status{doclet.StatusPublished}) {
 		t.Errorf("the listing asked for %v, want published only", kb.filters[0].Status)
 	}
 }
 
-type listRecorder struct{ filters []pages.Filter }
+type listRecorder struct{ filters []doclet.Filter }
 
-func (l *listRecorder) List(_ context.Context, f pages.Filter,
-	_ statelog.Freshness) (pages.Listing, error) {
+func (l *listRecorder) List(_ context.Context, f doclet.Filter,
+	_ statelog.Freshness) (doclet.Listing, error) {
 	l.filters = append(l.filters, f)
-	return pages.Listing{}, nil
+	return doclet.Listing{}, nil
 }
 
 func (l *listRecorder) Get(context.Context, string,
 	statelog.Freshness,
-) (pages.Detail, error) {
-	return pages.Detail{}, pages.ErrNotFound
+) (doclet.Detail, error) {
+	return doclet.Detail{}, doclet.ErrNotFound
 }
 
-// A COMPANY RUNNING CONFLUENCE GETS NO NATIVE PAGE TOOLS.
+// A COMPANY RUNNING CONFLUENCE GETS NO DOCLET PAGE TOOLS.
 func TestNoKnowledgeBaseMeansNoTools(t *testing.T) {
 	t.Parallel()
 	reg := kbRegistry(t, builtin.PageDeps{})
@@ -360,7 +361,7 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("comment failed: %s", got.Output)
 	}
-	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != pages.AuthorAgent {
+	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != doclet.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", kb.actors)
 	}
 	// AND ITS OPERATION KEY IS THE TURN'S: an id the engine's grammar
@@ -550,11 +551,11 @@ func TestAnIncompleteListingTellsTheModel(t *testing.T) {
 // partialKB answers a listing it could not account for.
 type partialKB struct{ fakeKB }
 
-func (p *partialKB) List(_ context.Context, _ pages.Filter,
+func (p *partialKB) List(_ context.Context, _ doclet.Filter,
 	fresh statelog.Freshness,
-) (pages.Listing, error) {
-	return pages.Listing{
-		Pages:    []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
+) (doclet.Listing, error) {
+	return doclet.Listing{
+		Pages:    []doclet.Summary{{ID: "p1", Title: "Deploy Runbook"}},
 		Level:    fresh.Level,
 		Complete: false,
 	}, nil
@@ -579,11 +580,11 @@ func TestASaveThatAlsoRenamesReportsTheLaterWriteAndWaitsForBoth(t *testing.T) {
 	kb := newFakeKB()
 	// The idempotent rename: nothing appended, and the revision is the one
 	// this node had already applied — three behind the save's.
-	kb.rename = func(pageID, title string) pages.Written {
-		return pages.Written{
-			Page:     pages.Page{ID: pageID, Title: title, Version: 5},
+	kb.rename = func(pageID, title string) doclet.Written {
+		return doclet.Written{
+			Page:     doclet.Page{ID: pageID, Title: title, Version: 5},
 			Revision: 8,
-			Outcome:  pages.Written{}.Outcome,
+			Outcome:  doclet.Written{}.Outcome,
 		}
 	}
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
@@ -688,9 +689,9 @@ func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
-	kb.rename = func(pageID, title string) pages.Written {
-		return pages.Written{
-			Page: pages.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
+	kb.rename = func(pageID, title string) doclet.Written {
+		return doclet.Written{
+			Page: doclet.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
 			Outcome: statelog.Result{
 				Outcome:  statelog.OutcomePending,
 				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 13},
@@ -754,11 +755,11 @@ type cutKB struct {
 	total int
 }
 
-func (c *cutKB) List(_ context.Context, _ pages.Filter,
+func (c *cutKB) List(_ context.Context, _ doclet.Filter,
 	fresh statelog.Freshness,
-) (pages.Listing, error) {
-	return pages.Listing{
-		Pages: []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
+) (doclet.Listing, error) {
+	return doclet.Listing{
+		Pages: []doclet.Summary{{ID: "p1", Title: "Deploy Runbook"}},
 		Total: c.total, Level: fresh.Level, Complete: true,
 	}, nil
 }
@@ -767,7 +768,7 @@ func (c *cutKB) List(_ context.Context, _ pages.Filter,
 // seat how to link a page, and left to guess it writes `[[ENG/Title]]` — a
 // grammar nothing resolves, drawn as literal brackets and invisible to the
 // target's "Linked from". The example each writing tool carries must be one
-// [pages.Links] reads back, or the help teaches a link that counts for nothing.
+// [doclet.Links] reads back, or the help teaches a link that counts for nothing.
 func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -788,7 +789,7 @@ func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 			continue
 		}
 		link := "[x](" + m[1] + id + ")"
-		if got := pages.Links("See " + link + "."); !slices.Equal(got, []string{id}) {
+		if got := doclet.Links("See " + link + "."); !slices.Equal(got, []string{id}) {
 			t.Errorf("%s: the example link %s reads back as %v — the backlinks never see it",
 				name, link, got)
 		}
@@ -827,6 +828,51 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 		t.Errorf("the remark made again after \"unblocked\" carried the first "+
 			"one's key %q, so its id is the first one's and it is that one's "+
 			"retry (keys %v)", keys[0], keys)
+	}
+}
+
+// A PAGE REMARK CARRIES THE CALL'S OWN ARGUMENTS in its operation key, so a
+// call that named the page another way is another call. The repeat count
+// compares the arguments as typed and the store's parts are what the call
+// resolved to, so without the digest "ok" on p1, the same again, "ok" on "p1 "
+// (trimmed to p1), "other" on p1 and "ok" on p1 once more gave the last call
+// the third one's key: it was answered with that comment's success and
+// nothing was written. Held end to end over the real store in internal/doclet
+// (TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage).
+//
+// Mutation: drop the digest from callOpKey's identity and keys[4] equals
+// keys[2].
+func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	turn := workTurn(t)
+	turn.Calls = turnctx.NewCallLog()
+	surface := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
+	for _, call := range [][2]string{{"p1", "ok"}, {"p1", "ok"}, {"p1 ", "ok"},
+		{"p1", "other"}, {"p1", "ok"}} {
+		res, err := surface.Execute(t.Context(), llm.ToolCall{
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": call[0], "body": call[1]},
+		})
+		if err != nil || res.Failed {
+			t.Fatalf("comment %q on %q = (%+v, %v)", call[1], call[0], res, err)
+		}
+	}
+	keys := kb.keys
+	if len(keys) != 5 {
+		t.Fatalf("five remarks reached the store as %d", len(keys))
+	}
+	if keys[1] != keys[0] {
+		t.Errorf("a remark repeated with nothing between carried key %q after %q", keys[1], keys[0])
+	}
+	if keys[2] == keys[0] {
+		t.Errorf("a remark naming the page another way carried the first one's key %q", keys[0])
+	}
+	if keys[4] == keys[2] {
+		t.Errorf("\"ok\" on p1 after other calls carried key %q, the one the call "+
+			"naming \"p1 \" carried — it is that comment's retry and writes nothing "+
+			"(keys %v)", keys[4], keys)
 	}
 }
 
@@ -885,8 +931,8 @@ func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
 	// answers the same way — so it is SAFE, never "a second comment", which
 	// is what a seat was told. An operator's comment has no turn to derive
 	// from, so its repeat is a new one.
-	operator := func(context.Context, *turnctx.Turn) (pages.Actor, error) {
-		return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+	operator := func(context.Context, *turnctx.Turn) (doclet.Actor, error) {
+		return doclet.Actor{Handle: "founder", Kind: doclet.AuthorOperator,
 			OperatorID: "founder"}, nil
 	}
 	for _, tc := range []struct {
@@ -975,8 +1021,8 @@ func TestWritePageTakesADraftAndRefusesAnyOtherStatus(t *testing.T) {
 			t.Fatalf("%v was refused: %s", args, got.Output)
 		}
 	}
-	got := []pages.Status{kb.created[0].Status, kb.created[1].Status, kb.created[2].Status}
-	if !slices.Equal(got, []pages.Status{pages.StatusDraft, pages.StatusPublished, pages.StatusPublished}) {
+	got := []doclet.Status{kb.created[0].Status, kb.created[1].Status, kb.created[2].Status}
+	if !slices.Equal(got, []doclet.Status{doclet.StatusDraft, doclet.StatusPublished, doclet.StatusPublished}) {
 		t.Fatalf("the pages were written as %v, want a draft and two published", got)
 	}
 
@@ -1039,5 +1085,25 @@ func TestSavePageRefusesAWatchThatIsNotABoolean(t *testing.T) {
 	}
 	if len(kb.saved) != 1 || kb.saved[0].Watch == nil || *kb.saved[0].Watch {
 		t.Fatalf("the unwatch reached the store as %+v", kb.saved)
+	}
+}
+
+// A RENAME IS TO THE TITLE THE CHECK READS (ADR-0059): one reader per declared
+// type, so a string argument is read by argString, which writes a number as
+// JSON writes it. The rename read its title with fmt.Sprint, a reader of its
+// own, which writes a float by `%g`.
+//
+// Mutation: read the title with fmt.Sprint again and the rename is to "1e+06".
+func TestARenameIsToTheTitleTheCheckReads(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	if got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "title": 1000000.0,
+	}); got.Failed {
+		t.Fatalf("the rename failed: %s", got.Output)
+	}
+	if len(kb.renames) != 1 || kb.renames[0].title != "1000000" {
+		t.Errorf("the title 1000000 renamed the page as %+v, want \"1000000\"", kb.renames)
 	}
 }

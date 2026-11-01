@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENGINE WRITE'S CASES (ADR-0062): a commit a seat or a person makes
+// THE ENGINE WRITE'S CASES (ADR-0085): a commit a seat or a person makes
 // through a tool, built on the repository's git node and landed as a push —
 // asked through Fleet.Write, as the tools ask it.
 

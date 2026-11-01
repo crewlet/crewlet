@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // Result is what one tool call produced.
@@ -49,6 +52,57 @@ type Result struct {
 	// 409 and 503, and reading those back out of a sentence would make the
 	// wording of a refusal an API.
 	Cause error
+
+	// Note is what the caller tells the MODEL beside Output: on a success,
+	// the arguments the call sent outside its tool's schema, which the tool
+	// did not read as sent (ADR-0059). NEVER PART OF OUTPUT, because a
+	// caller may parse Output (a write tool's JSON receipt, which the work
+	// API decodes); each renderer for a model places it where the model
+	// reads it: the model's text, an MCP answer's own content. A person's
+	// answer never carries it (ADR-0060); a surface answering a person tells
+	// it in process to an assistant's model instead (internal/modelnote).
+	Note string
+
+	// Caveats are what a call that LANDED says beside its answer, each in the
+	// words of every reader ([caveat.Caveat]). Nil on a failure and on a
+	// success that has nothing to add.
+	//
+	// NEVER RENDERED, for Cause's reason: Output already carries each
+	// caveat's MODEL phrasing under `warnings`, written from these same
+	// values, so a model reads nothing here it has not read there. It exists
+	// for the caller that answers a PERSON (the act route, ADR-0060), which
+	// must answer the person's phrasing and never the model's, and could
+	// only otherwise read the model's out of Output.
+	Caveats []caveat.Caveat
+
+	// PersonRefusal is a call that was REFUSED, in a person's words
+	// ([caveat.Refusal]). Zero on a success, and on a refusal nobody has
+	// worded for a person yet.
+	//
+	// NEVER RENDERED, for Cause's reason: Output is the model's sentence
+	// about the same refusal, and stays the whole of what a model reads. It
+	// exists for the caller that answers a PERSON (the act route,
+	// ADR-0060), which answers this phrasing as the refusal's `detail` and
+	// never Output; where it is zero, that caller answers the refusal
+	// code's own sentence and no detail, so a refusal nobody worded for a
+	// person tells them less, and never a model's words.
+	PersonRefusal caveat.Refusal
+
+	// PersonReceipt is a call that LANDED, its answer as a surface
+	// answering a person answers it, where the tool wrote one apart from
+	// Output: an answer that echoes words other principals wrote — a
+	// room's topic, a parked run's question, a page's title — labels them
+	// in Output for a model, fenced or defused under an envelope that says
+	// how far to believe them, and here they are as they were stored. Nil
+	// where Output is that answer already, and on a failure, which a
+	// person's surface answers from PersonRefusal.
+	//
+	// NEVER RENDERED, for Cause's reason: a model reads Output, labelled,
+	// and nothing here. It exists for the caller that answers a PERSON (the
+	// act route, ADR-0060), to whom the labels are a model's framing (a
+	// fence is a model's concern, ADR-0040): read off Output, a room's
+	// topic reached a person's answer wrapped in a fence's two lines.
+	PersonReceipt json.RawMessage
 }
 
 // Callable is the least a phase surface needs to offer something to a model

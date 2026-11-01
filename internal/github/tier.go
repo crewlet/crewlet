@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-// How much of a repository one agent may do.
+// The three tiers a seat's GitHub access was once stored as.
 //
-// THREE TIERS, and the same three the control plane's console offers, because
-// an operator who sets a seat to Review there and reads "Review" here is
-// looking at one decision rather than two that happen to share a word. The
-// vocabulary is the contract; the permission maps below are this engine's
-// reading of it.
+// RETIRED: a seat now stores GitHub's own permissions ([Permissions]), and
+// nothing grants by tier. What remains here is what the migration reads
+// ([TierPermissions]): the closed set and each tier's permission list.
+// [Denied] and [Excess] are not about tiers at all and are kept here beside
+// the lists they were written against.
 
 // Tier is how much of a repository an agent may do.
 type Tier string
@@ -66,39 +66,6 @@ func ParseTier(raw string) (Tier, bool) {
 	}
 }
 
-// Label is the tier as a person writes it.
-func (t Tier) Label() string {
-	switch t {
-	case TierReadOnly:
-		// HYPHENATED, which is the control plane's spelling and so the
-		// one on the roster this screen is the counterpart of. The
-		// tier-picker in the console writes "Read only"; the pill beside
-		// an agent's name writes "Read-only", and two engines labelling
-		// one agent differently is what a reader notices first.
-		return "Read-only"
-	case TierReview:
-		return "Review"
-	case TierFullAccess:
-		return "Full access"
-	default:
-		return string(t)
-	}
-}
-
-// Hint is the one line a form puts under the tier, matching the console's.
-func (t Tier) Hint() string {
-	switch t {
-	case TierReadOnly:
-		return "Reads code and issues, changes nothing."
-	case TierReview:
-		return "Reads code and writes about it: issues, comments, reviews."
-	case TierFullAccess:
-		return "Branches, commits, pull requests, issues and checks. No administration."
-	default:
-		return ""
-	}
-}
-
 // Permissions is what this tier asks for on an installation token, in
 // GitHub's own permission keys and levels.
 //
@@ -109,6 +76,16 @@ func (t Tier) Hint() string {
 //
 // `metadata` is on every tier because GitHub requires it for almost every
 // read. Without it a token cannot resolve a repository at all.
+//
+// `actions` IS READ ON EVERY TIER, and never write. Read is what lets an
+// agent see why a check failed and read the job's log, which is most of what
+// fixing a red pull request takes. Write re-runs, cancels and dispatches
+// workflows, a deploy among them, and starting a release is a person's act
+// here, never an agent's.
+//
+// `workflows` is on no tier. It is what lets a push change a file under
+// `.github/workflows`, and a full-access seat opted in to it on its own
+// ([TierPermissions]).
 func (t Tier) Permissions() map[string]string {
 	switch t {
 	case TierReview:
@@ -182,24 +159,6 @@ func Excess(held map[string]string) []string {
 	var out []string
 	for _, name := range Denied {
 		if level := strings.TrimSpace(held[name]); level != "" {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// Shortfall is what a tier needs and an installation does not hold.
-//
-// The other half of the same question, and the one an operator can act on: an
-// app installed with fewer permissions than its tier asks for mints tokens
-// that are refused by the calls the tier exists to allow, and GitHub says so
-// only at the call site.
-func Shortfall(tier Tier, held map[string]string) []string {
-	var out []string
-	for name, want := range tier.Permissions() {
-		got := strings.TrimSpace(held[name])
-		if got == "" || (want == "write" && got == "read") {
 			out = append(out, name)
 		}
 	}

@@ -153,9 +153,11 @@ var stateEvents = map[string]struct{}{
 
 // failureEvents are the engine-detected failures that end a seat's work and
 // are HELD on it until it works again: the seat's frozen call and its
-// `last_error` outlive the turn's own completion. Only one of them stops the
-// seat — [providerFailure]; the budget's stop is read from the meters, which
-// say when it lifts, and a breached guard is a failed turn, not a stop.
+// `last_error` outlive the turn's own completion. None of them stops the seat.
+// A chain that ran out (`llm_unavailable`) is a failed turn, since nothing
+// says the failure lasts; the stop for a limit that does is the provider
+// park's (provider.go). The budget's stop is read from the meters, which say
+// when it lifts, and a breached guard is a failed turn.
 var failureEvents = map[string]struct{}{
 	"llm_unavailable":   {},
 	"turn.guard_breach": {},
@@ -163,12 +165,13 @@ var failureEvents = map[string]struct{}{
 }
 
 // sandboxEvents feed the running-sandboxes panel: started → tracked;
-// clarification → awaiting a person; completed or failed → dropped.
+// clarification → awaiting a person; completed, failed or stopped → dropped.
 var sandboxEvents = map[string]struct{}{
 	"sandbox_run_started":             {},
 	"sandbox_clarification_requested": {},
 	"sandbox_run_completed":           {},
 	"sandbox_run_failed":              {},
+	"sandbox_run_stopped":             {},
 }
 
 // agentLive is the incrementally-maintained state of one seat.
@@ -220,6 +223,12 @@ type agentLive struct {
 	// pause.go.
 	paused   *Paused
 	pausedAt stamp
+
+	// providerLimit is the seat's models at their usage limit, nil when they
+	// are not, and providerLimitAt the instant of the event that last moved
+	// it, its own reorder guard. See provider.go.
+	providerLimit   *ProviderLimit
+	providerLimitAt stamp
 }
 
 // overlay renders the seat's own fields. Its state is the projection's to
@@ -236,6 +245,7 @@ func (a *agentLive) overlay() Overlay {
 		Turn:             a.turn.clone(),
 		LastTurn:         a.lastTurn.clone(),
 		Paused:           a.paused.clone(),
+		ProviderLimit:    a.providerLimit.clone(),
 	}
 }
 
@@ -312,11 +322,12 @@ type LiveState struct {
 	// live call to match and seed a fresh one — an in-flight row for a
 	// phase that finished, which nothing would ever clear.
 	//
-	// The timestamp is what makes this safe for a SUSPENDED Execute phase:
-	// it publishes a completion checkpoint under these exact coordinates
-	// and then, when the detached run lands, resumes the same loop and
-	// streams more rounds under them. Those rounds are strictly newer than
-	// the checkpoint, so only a round at or before it is dropped.
+	// The timestamp is what makes this safe for a phase published under the
+	// same coordinates more than once — the review of a parked turn's resume
+	// that runs again, held or retried, under the turn, phase and iteration
+	// of the attempt before it (see [CallVersions]): whatever comes later is
+	// strictly newer than that attempt's completion, so only a round at or
+	// before it is dropped.
 	finishedCalls *boundedSet[stamp]
 
 	// spend holds per-phase RECORDS rather than a folded rollup, so the
@@ -657,6 +668,13 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		return change
 	}
 
+	// THE MODELS' LIMIT, on its own guard, and BEFORE the turn and the state
+	// machine, which read the same phase completion and the same spawn: what
+	// the limit makes of them does not depend on what they make of the seat.
+	if s.applyProviderLimit(agent, *env, payload) {
+		change.agentMoved(id)
+	}
+
 	// THE TURN FIRST, and on its own guards: an event the state machine
 	// below discards as older than the seat's newest (a completion that
 	// lost a race to the next turn's first phase) still ended its turn.
@@ -679,7 +697,8 @@ func movesSeat(eventType string) bool {
 		return true
 	}
 	switch eventType {
-	case "agent_turn_started", "seat_paused", "seat_resumed":
+	case "agent_turn_started", "seat_paused", "seat_resumed",
+		"seat_provider_parked", "seat_provider_released", "provider_fallback":
 		return true
 	}
 	return false
@@ -694,7 +713,13 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 	turnID := str(payload, "turn_id")
 	switch env.Type {
 	case "agent_phase_started", "agent_phase_completed":
-		s.touchTurn(agent, env, payload, StagePhase)
+		// ONE OF THE TURN'S OWN PHASES MOVES IT; a worker's record, a
+		// judge's or the run's own leaves its stage alone. See [phaseStage].
+		if stage, moves := phaseStage(payload); moves {
+			s.touchTurn(agent, env, payload, stage)
+		} else {
+			s.noteTurn(agent, env, payload, stage)
+		}
 	case "agent_turn_completed":
 		if flag(payload, "suspended") {
 			// A SUSPENSION IS NOT AN END. The segment parked on a
@@ -702,7 +727,7 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 			// when the run is collected.
 			s.touchTurn(agent, env, payload, StageParked)
 		} else {
-			s.endTurnRecord(agent, env, turnID, env.Failed)
+			s.endTurnRecord(agent, env, turnID, env.Failed, flag(payload, "stopped"))
 		}
 	case "reflection_completed":
 		s.extendLastTurn(agent, env, turnID)
@@ -781,7 +806,12 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// model, a response and tool calls with an empty placeholder. The
 		// reorder guard cannot catch it — applyProgress never advances
 		// stateTS — so the check belongs here.
-		if !agent.liveCall.sameCall(str(payload, "turn_id"),
+		//
+		// A CALL ITS PHASE'S FAILURE FROZE IS NOT THAT CALL: a start the
+		// reorder guard above let through is no older than the failure, so
+		// it is the phase running again and seeds a call of its own — see
+		// [LiveCall.runningAs].
+		if !agent.liveCall.runningAs(str(payload, "turn_id"),
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
 			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)
@@ -820,7 +850,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		}
 		agent.lastError = &ErrorInfo{
 			Kind:    kind,
-			Message: str(payload, "last_error", "detail", "error"),
+			Detail:  str(payload, "last_error", "detail", "error"),
 			Phase:   agent.currentPhase,
 			TurnID:  str(payload, "turn_id"),
 			At:      env.Timestamp,

@@ -16,7 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE CHANGE WRITES: a seat's and a person's assistant's writes of a
@@ -73,7 +74,7 @@ import (
 // # The work a change carries
 //
 // An open carries a work item: the one the turn is charged to, unless the call
-// names another — a native item by its key, resolved by the tracker's own
+// names another — a Worklet item by its key, resolved by Worklet's own
 // read ([CodeDeps.Tasks]), or any tracker's by its identity, `<backend>:<id>`
 // — or `none`. A change implements one work item and carries no spend of its
 // own (the turn that opened it is charged as ever).
@@ -203,8 +204,8 @@ func branchArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 // noWorkItem is what `work_item` says to carry none.
 const noWorkItem = "none"
 
-// workItemArg is the `work_item` a call names — a native item's key, resolved
-// by the tracker's own read ([CodeDeps.Tasks]); any tracker's item by its
+// workItemArg is the `work_item` a call names — a Worklet item's key, resolved
+// by Worklet's own read ([CodeDeps.Tasks]); any tracker's item by its
 // identity, `<backend>:<id>`; or `none` — read before anything of the change
 // is: given false where the call names none, and clear where it names `none`.
 // Every field is FITTED to the bound a change's row holds a label to
@@ -231,24 +232,24 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 			r := failed(fmt.Sprintf("%s: `work_item` %q names a tracker and no item in it.", tool, clip(named)))
 			return nil, false, false, &r
 		}
-		if types.WorkBackend(backend) != types.WorkNative {
+		if types.WorkBackend(backend) != types.WorkWorklet {
 			return fittedItem(types.WorkItem{Backend: types.WorkBackend(backend), ID: strings.TrimSpace(id)}),
 				true, false, nil
 		}
 		named = strings.TrimSpace(id)
 	}
-	// A NATIVE ITEM, by its key or its id: read, so the change carries the
+	// A WORKLET ITEM, by its key or its id: read, so the change carries the
 	// item's identity — its id, which a key renamed or moved does not change
 	// — beside the key a reader is shown.
 	if d.Tasks == nil {
-		r := failed(fmt.Sprintf("%s: %q is no item this company's tracker can name here — the engine's own "+
-			"tracker is not served on this surface. Name an item as `<backend>:<id>`.", tool, clip(named)))
+		r := failed(fmt.Sprintf("%s: %q is no item this company's tracker can name here — Worklet "+
+			"is not served on this surface. Name an item as `<backend>:<id>`.", tool, clip(named)))
 		return nil, false, false, &r
 	}
-	detail, err := d.Tasks.Task(ctx, named, tracker.DetailWants{}, seatRead)
+	detail, err := d.Tasks.Task(ctx, named, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
-		r := failed(fmt.Sprintf("%s: `work_item` %q names no work item. Check its key with list_work_items "+
+	case errors.Is(err, worklet.ErrNoTask):
+		r := failed(fmt.Sprintf("%s: `work_item` %q names no work item. Check its key with "+worklet.ListWorkItemsTool+" "+
 			"rather than guessing — a change carrying an item that does not exist names nothing it implements.",
 			tool, clip(named)))
 		return nil, false, false, &r
@@ -257,7 +258,7 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 		return nil, false, false, &r
 	}
 	t := detail.Task
-	return fittedItem(types.WorkItem{Backend: types.WorkNative, ID: t.ID, Key: t.Key, Project: t.Project}), true,
+	return fittedItem(types.WorkItem{Backend: types.WorkWorklet, ID: t.ID, Key: t.Key, Project: t.Project}), true,
 		false, nil
 }
 
@@ -291,7 +292,7 @@ func (t *codeOpenChange) Description() string {
 }
 
 // workItemParam is the `work_item` argument as the change writes describe it:
-// a native item's key or id by the tracker's own rule — its id where the row
+// a Worklet item's key or id by Worklet's own rule — its id where the row
 // a model read it from carries `key_collision`, whose key opens the task that
 // claimed it first (workaddress.go's itemRef) — any tracker's identity, or
 // none.
@@ -577,11 +578,17 @@ func (t *codeUpdateChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (code.ChangeProposal, *tools.Result) {
 	tool := t.Name()
 	var edit code.ChangeEdit
-	if v, ok := args["title"].(string); ok {
-		edit.Title = &v
+	// PRESENCE IS THE ASK, read by the check's own text reader: a null
+	// `title` never reaches a tool (the entry leaves it out, toolargs.Of),
+	// and an empty one is an edit to an empty title, which the change
+	// writer refuses by its own rule.
+	if _, held := args["title"]; held {
+		title := argString(args, "title")
+		edit.Title = &title
 	}
-	if v, ok := args["body"].(string); ok {
-		edit.Body = &v
+	if _, held := args["body"]; held {
+		body := argString(args, "body")
+		edit.Body = &body
 	}
 	item, given, clear, refusal := t.deps.workItemArg(ctx, tool, args)
 	if refusal != nil {
@@ -589,7 +596,7 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 	}
 	edit.WorkItem, edit.ClearWorkItem = item, clear
 	edits := edit.Title != nil || edit.Body != nil || given
-	_, draft := args["draft"].(bool)
+	_, draft := argval.Bool(args["draft"])
 	retarget := strings.TrimSpace(argString(args, "target")) != ""
 	asked := 0
 	for _, set := range []bool{edits, draft, retarget} {

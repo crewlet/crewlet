@@ -16,22 +16,22 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // DefaultFlowPoints is a fortnight of days: the landing screen's
 // "completed per day" chart, and enough weeks behind a week-on-week delta.
 const DefaultFlowPoints = 14
 
-// workFlow answers the status and completion series — see [tracker.Reader.Flow].
+// workFlow answers the status and completion series (see [worklet.Reader.Flow]).
 func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 	bucket := period.Period(strings.TrimSpace(p.String("bucket")))
 	if bucket == "" {
@@ -41,15 +41,15 @@ func (s Sources) workFlow(ctx context.Context, p Params) (any, error) {
 		return nil, badParams("bucket", string(bucket), []string{"day", "week"})
 	}
 	points := p.Int("points", DefaultFlowPoints)
-	if points < 1 || points > tracker.MaxFlowPoints {
+	if points < 1 || points > worklet.MaxFlowPoints {
 		return nil, badParams("points", p.String("points"),
-			[]string{fmt.Sprintf("1 to %d", tracker.MaxFlowPoints)})
+			[]string{fmt.Sprintf("1 to %d", worklet.MaxFlowPoints)})
 	}
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	return s.Work.Flow(ctx, tracker.FlowQuery{
+	return s.Work.Flow(ctx, worklet.FlowQuery{
 		Project: strings.TrimSpace(p.String("project")),
 		Bucket:  bucket, Points: points,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -101,19 +101,28 @@ func (k FeedKind) object() authz.ObjectKind {
 func (k FeedKind) half() string {
 	switch k {
 	case FeedPage:
-		return "knowledge base"
+		return "Doclet"
 	case FeedSchedule:
-		return "usage domain"
+		return "the usage domain"
 	}
-	return "tracker"
+	return "Worklet"
 }
 
 // DefaultFeedPage is what one screen of the landing feed shows before "Load
-// older"; the ceiling is the tracker's [tracker.MaxFeedPage], shared by every
+// older"; the ceiling is the tracker's [worklet.MaxFeedPage], shared by every
 // source so one merged page never needs more than one page of any of them.
 const DefaultFeedPage = 20
 
 // The three sources, as the cursor names them.
+//
+// AND NOT CHAT'S, deliberately. The feed is what the company DID — a task
+// finished, filed or handed on, a page written, a schedule run — and a message
+// is conversation: a busy company says thousands a day, so merged here they
+// would bury every row the landing screen exists to show. And a room's
+// contents are decided by its membership, which this question has no viewer
+// to resolve: an unscoped merge of every room's messages would put a private
+// room's words on the screen of everybody who may read the feed. Chat has its
+// own reads, each scoped to who is asking (chat_activity is the away story).
 const (
 	feedSourceWork     = "work"
 	feedSourcePages    = "pages"
@@ -129,21 +138,21 @@ type FeedEntry struct {
 	Kind FeedKind  `json:"kind"`
 	At   time.Time `json:"at"`
 
-	Work     *tracker.FeedRow `json:"work,omitempty"`
+	Work     *worklet.FeedRow `json:"work,omitempty"`
 	Page     *FeedPageChange  `json:"page,omitempty"`
 	Schedule *FeedScheduleRun `json:"schedule,omitempty"`
 }
 
 // FeedPageChange is a page created or saved.
 type FeedPageChange struct {
-	ID        string           `json:"id"`
-	PageID    string           `json:"page_id"`
-	Title     string           `json:"title,omitempty"`
-	Container string           `json:"container,omitempty"`
-	Change    pages.ChangeKind `json:"change"`
-	Actor     string           `json:"actor,omitempty"`
-	ActorKind string           `json:"actor_kind,omitempty"`
-	TurnID    string           `json:"turn_id,omitempty"`
+	ID        string            `json:"id"`
+	PageID    string            `json:"page_id"`
+	Title     string            `json:"title,omitempty"`
+	Container string            `json:"container,omitempty"`
+	Change    doclet.ChangeKind `json:"change"`
+	Actor     string            `json:"actor,omitempty"`
+	ActorKind string            `json:"actor_kind,omitempty"`
+	TurnID    string            `json:"turn_id,omitempty"`
 }
 
 // FeedScheduleRun is one run of one schedule — or several in a row.
@@ -249,11 +258,11 @@ const feedSourceReads = 4
 // stops being asked.
 //
 // EVERYBODY'S, AND EACH KIND SHOWN BY ITS APP (ADR-0033): the work the
-// tracker records to whoever holds the tracker, the pages to whoever holds the
+// tracker records to whoever holds Worklet, the pages to whoever holds the
 // knowledge base, and the schedules' runs — the company's own machinery — to
 // everybody, through [authz.Shows]. A kind the caller may not see is DROPPED
 // from what is read, named in `kinds=` or not, never refused: a refusal of
-// `kinds=page` would confirm to somebody without the knowledge base that the
+// `kinds=page` would confirm to somebody without Doclet that the
 // company keeps pages, and an answer of the rows they may see is the one they
 // asked for.
 //
@@ -281,10 +290,10 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	for _, kind := range kinds {
 		if !slices.Contains(kept, kind) {
 			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node, because "+
-				"the company has no native %s here", ErrBadParams, kind, kind.half())
+				"%s is not running here", ErrBadParams, kind, kind.half())
 		}
 	}
-	limit := Clamp(p.Int("limit", 0), DefaultFeedPage, tracker.MaxFeedPage)
+	limit := Clamp(p.Int("limit", 0), DefaultFeedPage, worklet.MaxFeedPage)
 	cursor, err := parseFeedCursor(strings.TrimSpace(p.String("cursor")))
 	if err != nil {
 		return nil, err
@@ -490,17 +499,17 @@ func feedKinds(raw string, kept []FeedKind) ([]FeedKind, error) {
 }
 
 // trackerKinds is the tracker's share of the asked kinds.
-func trackerKinds(kinds []FeedKind) []tracker.FeedKind {
-	var out []tracker.FeedKind
+func trackerKinds(kinds []FeedKind) []worklet.FeedKind {
+	var out []worklet.FeedKind
 	for _, kind := range kinds {
-		if k := tracker.FeedKind(kind); k.Valid() {
+		if k := worklet.FeedKind(kind); k.Valid() {
 			out = append(out, k)
 		}
 	}
 	return out
 }
 
-func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
+func (s Sources) feedWork(ctx context.Context, kinds []worklet.FeedKind, actor,
 	position string, limit int, fresh statelog.Freshness) (
 	feedPageOf, bool, statelog.ReadLevel, error) {
 
@@ -508,13 +517,13 @@ func (s Sources) feedWork(ctx context.Context, kinds []tracker.FeedKind, actor,
 	if s.Work == nil {
 		return src, true, "", nil
 	}
-	q := tracker.FeedQuery{
+	q := worklet.FeedQuery{
 		Kinds: kinds, Actor: actor, Limit: limit,
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		Floors: fresh.Floors,
 	}
 	if position != "" {
-		before, err := tracker.ParseFeedCursor(position)
+		before, err := worklet.ParseFeedCursor(position)
 		if err != nil {
 			return src, false, "", badParams("cursor", position, nil)
 		}
@@ -537,8 +546,8 @@ func (s Sources) feedPages(ctx context.Context, actor, position string, limit in
 	fresh statelog.Freshness) (feedPageOf, bool, statelog.ReadLevel, error) {
 
 	var src feedPageOf
-	q := pages.PageActivityQuery{
-		Kinds: []pages.ChangeKind{pages.ChangeCreated, pages.ChangeSaved},
+	q := doclet.PageActivityQuery{
+		Kinds: []doclet.ChangeKind{doclet.ChangeCreated, doclet.ChangeSaved},
 		Actor: actor, Limit: limit, Freshness: fresh,
 	}
 	if position != "" {
@@ -607,13 +616,13 @@ type DecisionItem struct {
 	Kind string    `json:"kind"`
 	At   time.Time `json:"at"`
 
-	Ask *tracker.AskRow `json:"ask,omitempty"`
+	Ask *worklet.AskRow `json:"ask,omitempty"`
 	Run map[string]any  `json:"run,omitempty"`
 }
 
 // decisions answers what is waiting on one person — the open asks put to
 // them and the coding runs parked on a question to them — newest first, at
-// most [tracker.MaxDecisions], with the full count and the oldest one's
+// most [worklet.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
 // THE SAME SCOPE RULE AS `work_my_work` — see [Sources.recordHandle]: no
@@ -660,7 +669,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		asks, err := s.Work.Decisions(ctx, tracker.DecisionsQuery{
+		asks, err := s.Work.Decisions(ctx, worklet.DecisionsQuery{
 			Handle: handle,
 			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 			Floors: fresh.Floors,
@@ -694,21 +703,16 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			if !putTo(run, handle) {
 				continue
 			}
-			r := reach(run)
-			calls, err := s.bridgeLogFor(ctx, run, r)
-			if err != nil {
-				return nil, err
-			}
 			at := waitingSince(run)
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, calls, r)})
+				Run: serialiseRun(run, reach(run), s.answeredBy(run))})
 			total++
 			older(at)
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].At.After(items[j].At) })
-	if len(items) > tracker.MaxDecisions {
-		items = items[:tracker.MaxDecisions]
+	if len(items) > worklet.MaxDecisions {
+		items = items[:worklet.MaxDecisions]
 	}
 	if items == nil {
 		items = []DecisionItem{}
@@ -720,6 +724,114 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		answer["oldest_at"] = oldest.UTC()
 	}
 	return answer, nil
+}
+
+// answeredDecisions answers what one person decided lately, within
+// [worklet.AnsweredWindow], newest closing first, at most [worklet.MaxAnswered]:
+//
+//   - A work item's asks put to them and closed, by them or by somebody else.
+//     Each is the ask as `decisions` listed it while it was open, who answered
+//     it and when, the option chosen or the words, and the asker's first
+//     record on the task since.
+//   - A coding run's questions THEY answered, and only those ([Sources.answeredRuns]):
+//     a run's question can be put to a whole team, and one teammate's answer
+//     is that teammate's decision, so a question somebody else answered is in
+//     the other person's list and not in this one.
+//
+// THE SAME SCOPE AS `decisions` ([Sources.recordHandle] with
+// [authz.ActionPersonRead]): no `handle` is the caller's own record, and
+// anybody else's is theirs, their lead's or an admin's. And for the same
+// reason it is everybody's: a person kept off the tracker was still asked
+// these questions, and what they answered is theirs to read.
+//
+// BUT WHAT THE ASKER DID NEXT IS THE TASK'S, not the ask's: it is a record on
+// the task beyond the question put to the reader, so it is shown only to a
+// reader the tracker shows a task to ([shows]) and dropped for the rest, a
+// filter rather than a refusal, as the company feed filters.
+//
+// A COMPANY THAT KEEPS NO TRACKER HERE ([keptHere]) has no asks in the engine:
+// it is answered with none, and with no `read_level`, since none was read.
+func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
+	}
+	answer := map[string]any{"handle": handle, "items": []any{}}
+	since := s.clock().Add(-worklet.AnsweredWindow).UTC()
+	var (
+		asks      []worklet.AnsweredAsk
+		truncated bool
+	)
+	work, err := keptHere(s.Work)
+	if err != nil {
+		return nil, err
+	}
+	if work {
+		fresh, freshErr := Freshness(p)
+		if freshErr != nil {
+			return nil, freshErr
+		}
+		got, readErr := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
+			Handle: handle,
+			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+			Floors: fresh.Floors,
+		}, s.clock(), s.zone())
+		if readErr != nil {
+			return nil, readErr
+		}
+		asks, truncated = got.Asks, got.Truncated
+		if !shows(ctx, authz.KindTask) {
+			// A COPY, never the reader's own rows, which another caller of
+			// the same answer may still hold.
+			asks = make([]worklet.AnsweredAsk, len(got.Asks))
+			for i, ask := range got.Asks {
+				ask.FollowedUp = nil
+				asks[i] = ask
+			}
+		}
+		answer["read_level"] = got.Level
+		answer["complete"] = got.Complete
+	}
+	// AND THE CODING RUNS' QUESTIONS THEY ANSWERED (ADR-0068), over the same
+	// window, whether or not this company keeps a tracker: a run asks in a
+	// decision's shape on every company, and is read back beside a work
+	// item's answered ask.
+	runs, more, err := s.answeredRuns(ctx, handle, since)
+	if err != nil {
+		return nil, err
+	}
+	items, cut := newestAnswered(asks, runs, worklet.MaxAnswered)
+	answer["items"] = items
+	answer["since"] = since
+	answer["truncated"] = truncated || more || cut
+	return answer, nil
+}
+
+// newestAnswered is a work item's answered asks and a run's together, newest
+// closing first, at most limit, with whether any were left out.
+func newestAnswered(asks []worklet.AnsweredAsk, runs []AnsweredRunAsk, limit int) ([]any, bool) {
+	type dated struct {
+		at   time.Time
+		item any
+	}
+	all := make([]dated, 0, len(asks)+len(runs))
+	for _, ask := range asks {
+		all = append(all, dated{ask.At, ask})
+	}
+	for _, run := range runs {
+		all = append(all, dated{run.At, run})
+	}
+	slices.SortStableFunc(all, func(a, b dated) int { return b.at.Compare(a.at) })
+	cut := len(all) > limit
+	if cut {
+		all = all[:limit]
+	}
+	out := make([]any, len(all))
+	for i, d := range all {
+		out[i] = d.item
+	}
+	return out, cut
 }
 
 // waitingSince is when a parked run began waiting on its question: when its

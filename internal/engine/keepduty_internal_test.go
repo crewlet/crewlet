@@ -285,7 +285,7 @@ func TestARefusedRenewalStopsTheWorkAtOnce(t *testing.T) {
 	}
 }
 
-// A KEPT DUTY THIS NODE DECLINES ENDS ITS WORK UNRENEWED (ADR-0049): once a
+// A KEPT DUTY THIS NODE DECLINES ENDS ITS WORK UNRENEWED (ADR-0072): once a
 // copy the work decides from has gone out of service, the renewal due next
 // asks the store nothing, ends the work at once, and none is asked after it —
 // renewed, the work would go on deciding from the copy that went wrong. Stop

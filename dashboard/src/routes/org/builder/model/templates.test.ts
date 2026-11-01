@@ -24,7 +24,7 @@ import { toDocument } from "./document.ts";
 import { isMintedKey } from "./keys.ts";
 import { apply, record } from "./operations.ts";
 import { reportingForest } from "./reporting.ts";
-import { seatsWithoutContact, templateIntent, type TemplateOptions } from "./templates.ts";
+import { templateIntent, type TemplateOptions } from "./templates.ts";
 import { countingKeys, fixtureDerived } from "./testkit.ts";
 
 const FOUNDER = { name: "Alex Rivera", identity: "slack_user_id", value: "U0FOUNDER" } as const;
@@ -249,25 +249,5 @@ describe("templates", () => {
       ok: false,
       message: expect.stringContaining("people or agents"),
     });
-  });
-
-  test("the human seats with no contact identity are listed for the review's notice", () => {
-    const { draft } = build({
-      template: "established_company",
-      name: "Acme",
-      leads: "people",
-      founder: FOUNDER,
-    });
-    const needing = seatsWithoutContact(draft).map(
-      (key) => [...allSeats(draft)].find(({ seat }) => seat.key === key)!.seat.data.name,
-    );
-    expect(needing).toEqual([
-      "Engineering Lead",
-      "Reliability Lead",
-      "Product Lead",
-      "Design Lead",
-      "Go to Market Lead",
-    ]);
-    expect(seatsWithoutContact(build({ template: "new_company", name: "Acme" }).draft)).toEqual([]);
   });
 });

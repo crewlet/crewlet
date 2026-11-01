@@ -20,7 +20,7 @@ import "github.com/crewlet/crewlet/internal/inbox"
 // THAT DOMAIN SERVES. A copy out of service keeps its node in rotation, and its
 // applier is the one thing on that node nobody vouches for, so for as long as
 // it is out that domain's movements come from a sound peer's applier instead,
-// relayed (inboxrelay.go), and its own are withheld — that domain's alone:
+// relayed (liverelay.go), and its own are withheld — that domain's alone:
 // every other domain's copy still serves, and its applier is still heard. A
 // node that serves no sockets simply has nobody registered here.
 //
@@ -49,20 +49,11 @@ func (e *Engine) SetOnInboxGap(fn func(source string)) {
 }
 
 // inboxMoved is what a domain's applier calls after a committed batch that
-// moved somebody's inbox.
-//
-// NUMBERED FOR PEERS' RELAY FOLLOWERS whatever this node's copy's state — kept
-// while a follower may still ask for it ([inboxRelay.record]), and answered
-// only while this node's copy of the source serves ([inboxRelay.answerNow]) —
-// and handed to this node's own sockets only for the sources they are not
-// being relayed from a peer: one source of each domain's movements at a time.
+// moved somebody's inbox: announced to this node's sockets and kept for its
+// relay followers, one source of each domain's movements at a time
+// ([Engine.announce]).
 func (e *Engine) inboxMoved(moved []inbox.Movement) {
-	if relay := e.inboxRelay.Load(); relay != nil {
-		moved = relay.record(moved)
-	}
-	if len(moved) > 0 {
-		e.deliverInbox(moved)
-	}
+	e.announce(liveBatch{Inbox: moved})
 }
 
 // inboxListening reports whether anything on this node registered for its

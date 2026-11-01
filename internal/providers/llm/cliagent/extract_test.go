@@ -15,11 +15,16 @@ import (
 // verbatim rather than hand-written so the built-in profile is measured
 // against what the vendor actually emits — a synthetic sample would agree
 // with the profile by construction and prove nothing.
-const claudeCodeAnswer = `{"is_error":false,"duration_api_ms":2046,"num_turns":1,
-"stop_reason":"end_turn","session_id":"3f2a","total_cost_usd":0.0373944,
-"usage":{"input_tokens":2,"cache_creation_input_tokens":7319,
-"cache_read_input_tokens":35502,"output_tokens":5,"service_tier":"standard"},
-"permission_denials":[],"subtype":"success","result":"PONG","type":"result"}`
+//
+// The stream's LAST event, after the run's other events: the result event is
+// the very object `--output-format json` printed alone, on one line of the
+// stream-json record the profile reads now (both measured on 2.1.310).
+const claudeCodeAnswer = `{"type":"system","subtype":"init","model":"claude-sonnet-4-5"}` + "\n" +
+	`{"is_error":false,"duration_api_ms":2046,"num_turns":1,` +
+	`"stop_reason":"end_turn","session_id":"3f2a","total_cost_usd":0.0373944,` +
+	`"usage":{"input_tokens":2,"cache_creation_input_tokens":7319,` +
+	`"cache_read_input_tokens":35502,"output_tokens":5,"service_tier":"standard"},` +
+	`"permission_denials":[],"subtype":"success","result":"PONG","type":"result"}` + "\n"
 
 func TestTheClaudeCodeProfileReadsARealAnswer(t *testing.T) {
 	t.Parallel()
@@ -54,7 +59,7 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "sonnet", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: claudeCodeAnswer}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeAnswer}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -97,7 +102,7 @@ func TestAnInputCountThatHoldsTheCacheIsChargedOnce(t *testing.T) {
 			},
 		}
 		prov := &Provider{profile: p, model: "m", now: time.Now}
-		comp, err := prov.completion(t.Context(), "prompt", false, &rawResult{stdout: answer}, "")
+		comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: answer}, "")
 		if err != nil {
 			t.Fatalf("completion: %v", err)
 		}
@@ -175,7 +180,7 @@ func TestUnreportedUsageIsMarkedRatherThanReportedAsZero(t *testing.T) {
 	}
 
 	prov := &Provider{profile: p, model: "m", now: time.Now}
-	comp, err := prov.completion(t.Context(), "a prompt of some length", true, &rawResult{stdout: `{"result":"hi"}`}, "")
+	comp, err := prov.completion(t.Context(), "a prompt of some length", &rawResult{stdout: `{"result":"hi"}`}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -207,7 +212,7 @@ func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "sonnet", agent: "claude-code", now: time.Now}
-	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{
 		stdout: `{"is_error":true,"result":"the model refused","type":"result"}`,
 	}, "")
 	if err == nil {
@@ -219,7 +224,7 @@ func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "the model refused") {
 		t.Errorf("err = %v, want what the CLI said", err)
 	}
-	if err := prov.benched(); err != nil {
+	if err := prov.SittingOut(); err != nil {
 		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }
@@ -288,7 +293,7 @@ func TestAToolsPromptIsChargedAsInput(t *testing.T) {
 	}
 	stdout := `{"response":"hi","usage":{"input":40,"output":2,"cached":100,"tool":5000}}`
 	prov := &Provider{profile: p, model: "m", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: stdout}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: stdout}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
@@ -367,7 +372,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 	}
 
 	p := &Provider{profile: cliprofile.Profile{}, model: "m", now: time.Now}
-	_, err := p.completion(t.Context(), "prompt", true, &rawResult{
+	_, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: buf.String(), droppedStdout: buf.Truncated(),
 	}, "")
 	if err == nil {
@@ -388,7 +393,7 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
 	t.Parallel()
 	p := &Provider{profile: cliprofile.Profile{}, model: "m", now: time.Now}
-	comp, err := p.completion(t.Context(), "prompt", true, &rawResult{
+	comp, err := p.completion(t.Context(), "prompt", &rawResult{
 		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
 	}, "")
 	if err != nil {
@@ -412,13 +417,14 @@ func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
 // the SHAPE: an envelope this large, parsed and handed back as an answer, is
 // what a reader saw on the dashboard as the sentence their CEO agent had
 // spoken, and what the reviewer then judged the turn on.
-const claudeCodeEmptyAnswer = `{"duration_api_ms":11377,"stop_reason":"end_turn",
-"session_id":"59756a06-ceb5-417c-a88e-601097145e01","total_cost_usd":0.0348807,
-"usage":{"input_tokens":9,"cache_creation_input_tokens":10525,
-"cache_read_input_tokens":11308,"output_tokens":627,
-"output_tokens_details":{"thinking_tokens":537},"service_tier":"standard"},
-"permission_denials":[],"is_error":false,"num_turns":1,"subtype":"success",
-"api_error_status":null,"result":"","type":"result","duration_ms":10207}`
+const claudeCodeEmptyAnswer = `{"type":"system","subtype":"init","model":"claude-haiku-4-5"}` + "\n" +
+	`{"duration_api_ms":11377,"stop_reason":"end_turn",` +
+	`"session_id":"59756a06-ceb5-417c-a88e-601097145e01","total_cost_usd":0.0348807,` +
+	`"usage":{"input_tokens":9,"cache_creation_input_tokens":10525,` +
+	`"cache_read_input_tokens":11308,"output_tokens":627,` +
+	`"output_tokens_details":{"thinking_tokens":537},"service_tier":"standard"},` +
+	`"permission_denials":[],"is_error":false,"num_turns":1,"subtype":"success",` +
+	`"api_error_status":null,"result":"","type":"result","duration_ms":10207}` + "\n"
 
 // An empty answer is an EMPTY ANSWER, never the envelope that carried it —
 // and never a transport fault either.
@@ -442,16 +448,13 @@ func TestAnEmptyResultIsAChargedCompletionAndNotTheCLIsOwnTelemetry(t *testing.T
 	}
 
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: claudeCodeEmptyAnswer}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: claudeCodeEmptyAnswer}, "")
 	if err != nil {
 		t.Fatalf("an empty answer was reported as a failure: %v", err)
 	}
 	if comp.Content != "" {
 		t.Errorf("content = %q, want the empty answer — the envelope that carried "+
 			"it is not the model's reply", comp.Content)
-	}
-	if len(comp.ToolCalls) != 0 {
-		t.Errorf("tool calls = %v, want none", comp.ToolCalls)
 	}
 	// CHARGED. The round burned 627 output tokens against the subscription
 	// whether or not it said anything, and the branch this replaced
@@ -478,7 +481,7 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 	}
 
 	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding", now: time.Now}
-	if _, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: drifted}, ""); err == nil {
+	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: drifted}, ""); err == nil {
 		t.Fatal("a drifted profile produced a completion")
 	} else {
 		for _, want := range []string{"text_paths", "result", "crewlet llm doctor",
@@ -544,7 +547,7 @@ func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 		t.Fatalf("an unrecognised stream extracted text = %q located = %v", got.text, got.located)
 	}
 	prov := &Provider{profile: p, model: "m", agent: "codex", key: "coding", now: time.Now}
-	if _, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: log}, ""); err == nil {
+	if _, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: log}, ""); err == nil {
 		t.Fatal("an unrecognised stream produced a completion")
 	} else if !strings.Contains(err.Error(), "text_paths") {
 		t.Errorf("the message does not name the field to change: %v", err)
@@ -561,7 +564,7 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
-	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{stdout: "  \n ", stderr: "node: bad flag"}, "")
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: "  \n ", stderr: "node: bad flag"}, "")
 	if err == nil {
 		t.Fatal("a silent CLI produced a completion")
 	}
@@ -620,11 +623,11 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 			if out := extract(p, tc.stdout); out.located {
 				t.Fatalf("the answer was located (%q) — this case is about one that is not", out.text)
 			}
-			_, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: tc.stdout}, "")
+			_, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: tc.stdout}, "")
 			if got := llm.KindOf(err); err == nil || got != tc.want {
 				t.Fatalf("kind = %v (err %v), want %v", got, err, tc.want)
 			}
-			if sat := prov.benched() != nil; sat != (tc.want == llm.KindRateLimit) {
+			if sat := prov.SittingOut() != nil; sat != (tc.want == llm.KindRateLimit) {
 				t.Errorf("sat out = %v, want it only for a spent plan", sat)
 			}
 		})
@@ -656,7 +659,7 @@ func TestAMarkerThatCarriesAResetInstantSitsTheEntryOutUntilIt(t *testing.T) {
 	// literal would quietly become a reset in the past and turn this into a
 	// test that asserts nothing.
 	reset := time.Now().Add(45 * time.Minute).Unix()
-	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{stdout: fmt.Sprintf(
+	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: fmt.Sprintf(
 		`{"type":"result","result":"quota spent|%d"}`, reset)}, "")
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")
@@ -668,7 +671,7 @@ func TestAMarkerThatCarriesAResetInstantSitsTheEntryOutUntilIt(t *testing.T) {
 	if failure.Kind != llm.KindRateLimit {
 		t.Errorf("kind = %v, want rate limit", failure.Kind)
 	}
-	if left := time.Until(prov.sitOut.until); left < 40*time.Minute || left > 46*time.Minute {
+	if left := time.Until(sitOutUntil(prov)); left < 40*time.Minute || left > 46*time.Minute {
 		t.Errorf("the entry sits out %v, want the reset instant the sentinel carried", left)
 	}
 }

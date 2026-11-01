@@ -25,18 +25,26 @@
  * to exist first, so the next steps after a successful create open that page
  * in edit rather than this form asking for one of the three in passing.
  *
- * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen adds), so the next steps after a successful
- * create name it too and give the terminal steps for the one step that has no
- * screen at all (`contract/providersteps.ts`) — unless another system manages
- * the document, which is where its model is added then
- * ([managedModelSentence]).
+ * WHAT A CREATE CANNOT DO. A create writes no model provider (that is
+ * `providers.llm`, which Settings › Models adds, signed in and tested), so the
+ * next steps after a successful create send the reader there, with the
+ * terminal steps beside it for a reader at the node's host
+ * (`contract/providersteps.ts`), unless another system manages the document,
+ * which is where its model is added then ([managedModelSentence]).
  */
 
 import { useState } from "react";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 import { href } from "~/app/router.tsx";
+import { MODELS_PATH } from "~/app/routes.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
+import {
+  DraftRefusal,
+  refuse,
+  useAssistantDraft,
+  type AssistantDraftSpec,
+  type DraftValue,
+} from "~/app/assistant/draft.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { managerOf } from "~/protocol/configAnswer.ts";
 import type { HumanContactKey } from "~/protocol/index.ts";
@@ -52,6 +60,7 @@ import {
   Card,
   Checkbox,
   CodeBlock,
+  Disclosure,
   InlineCode,
   SegmentedControl,
 } from "@crewlethq/ui";
@@ -75,6 +84,144 @@ const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
   },
 ];
 
+/** What the create form holds. */
+export interface CreateForm {
+  readonly name: string;
+  readonly template: TemplateId;
+  readonly leads: LeadsAre;
+  readonly ownSeat: boolean;
+  readonly seatName: string;
+  readonly identity: HumanContactKey;
+  readonly value: string;
+}
+
+/** What the assistant is told about the create form, beside its fields. */
+const CREATE_HELP =
+  "The company does not exist yet. You can propose its name, the shape it starts from, " +
+  "whether unit leads are people or agents, and the person's own seat; the person " +
+  "presses Create, and units and seats are then edited in the builder.";
+
+const textOf = (value: DraftValue) => (typeof value === "string" ? value.trim() : null);
+
+/** The create form as the page declares it (`useAssistantDraft`), each value refused in the form's own words. */
+export function createCompanyDraft(
+  form: CreateForm,
+  apply: (next: CreateForm) => void,
+): AssistantDraftSpec<CreateForm> {
+  const one = <T extends string>(
+    choices: readonly { value: T; label: string }[],
+    what: string,
+  ) => ({
+    hint: `One of ${choices.map((c) => `${c.value} (${c.label})`).join(", ")}`,
+    pick: (value: DraftValue): T | DraftRefusal =>
+      choices.find((c) => c.value === textOf(value))?.value ??
+      refuse(`Choose ${what}: ${choices.map((c) => c.value).join(", ")}.`),
+  });
+  const template = one(
+    TEMPLATES.map((t) => ({ value: t.id, label: t.label })),
+    "the shape to start from",
+  );
+  const leads = one<LeadsAre>(
+    [
+      { value: "agents", label: "Leads are agents" },
+      { value: "people", label: "Leads are people" },
+    ],
+    "whether the unit leads are people or agents",
+  );
+  const own = one(
+    [
+      { value: "yes", label: "Add a seat for yourself" },
+      { value: "no", label: "No seat of your own" },
+    ],
+    "whether to add a seat for yourself",
+  );
+  const reach = one(
+    CONTACT_IDENTITIES.map((c) => ({ value: c.key, label: c.label })),
+    "how agents reach you",
+  );
+  return {
+    kind: "client",
+    step: "create",
+    scope: "The company you are creating (not created)",
+    help: CREATE_HELP,
+    value: form,
+    fields: [
+      {
+        path: "name",
+        label: "Company name",
+        read: (f) => f.name,
+        write: (f, v) => {
+          const name = textOf(v);
+          return name ? { ...f, name } : refuse("Enter the company name.");
+        },
+      },
+      {
+        path: "template",
+        label: "Start from",
+        hint: template.hint,
+        read: (f) => f.template,
+        write: (f, v) => {
+          const picked = template.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, template: picked };
+        },
+      },
+      {
+        path: "leads",
+        label: "Unit leads",
+        hint: `${leads.hint}; for an established company`,
+        read: (f) => f.leads,
+        write: (f, v) => {
+          const picked = leads.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, leads: picked };
+        },
+      },
+      {
+        path: "own_seat",
+        label: "Add a seat for yourself",
+        hint: own.hint,
+        read: (f) => (f.ownSeat ? "yes" : "no"),
+        write: (f, v) => {
+          const picked = own.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, ownSeat: picked === "yes" };
+        },
+      },
+      {
+        path: "seat.name",
+        label: "Your seat's name",
+        hint: "Name the role, not the person",
+        read: (f) => f.seatName,
+        write: (f, v) => {
+          const seatName = textOf(v);
+          return seatName
+            ? { ...f, seatName }
+            : refuse("Enter a name for your seat, or leave your seat out.");
+        },
+      },
+      {
+        path: "seat.reach",
+        label: "How agents reach you",
+        hint: reach.hint,
+        read: (f) => f.identity,
+        write: (f, v) => {
+          const picked = reach.pick(v);
+          return picked instanceof DraftRefusal ? picked : { ...f, identity: picked };
+        },
+      },
+      {
+        path: "seat.contact",
+        label: "Your contact identity",
+        hint: "Empty if you will work only through the dashboard",
+        read: (f) => f.value,
+        write: (f, v) => {
+          const value = textOf(v);
+          return value === null ? refuse("A contact identity is one value.") : { ...f, value };
+        },
+      },
+    ],
+    apply,
+  };
+}
+
 export function CreateCompany({
   keys,
   onApply,
@@ -96,6 +243,20 @@ export function CreateCompany({
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const chosen = TEMPLATES.find((t) => t.id === template)!;
+
+  // WHAT IS OPEN, for the assistant: the form as filled in so far, each
+  // value set through the form's own setters; Create stays the person's.
+  useAssistantDraft(
+    createCompanyDraft({ name, template, leads, ownSeat, seatName, identity, value }, (next) => {
+      setName(next.name);
+      setTemplate(next.template);
+      setLeads(next.leads);
+      setOwnSeat(next.ownSeat);
+      setSeatName(next.seatName);
+      setIdentity(next.identity);
+      setValue(next.value);
+    }),
+  );
 
   const start = () => {
     const built = templateIntent(
@@ -156,7 +317,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each team lead is a person, with no contact identity until you add one, so no agent can mention them yet."
+                ? "Each team lead is a person, reached through the dashboard until you give them a contact identity in another system."
                 : "Each team lead is an agent."}
             </span>
           </div>
@@ -193,7 +354,7 @@ export function CreateCompany({
               onChange={setValue}
               required={false}
               disabled={disabled}
-              help="Leave it empty if you will work only through the dashboard: no agent can then mention you."
+              help="Leave it empty if you will work only through the dashboard: no other system will then know you."
             />
           </div>
         )}
@@ -234,9 +395,9 @@ export function managedModelSentence(managedBy: readonly string[]): string {
 /**
  * What is left to do once the company exists: write the principles every
  * agent reads, connect the tools it works in, and give it a model provider,
- * which no dashboard screen adds. The company
- * this card follows is in the store and in no file, which is where the steps
- * start (`contract/providersteps.ts` says why each one is the one it is). On a
+ * on Settings › Models or from a terminal. The company this card follows is
+ * in the store and in no file, which is where the terminal steps start
+ * (`contract/providersteps.ts` says why each one is the one it is). On a
  * document another system manages, `managedBy` names it, and the card says the
  * model is added there instead ([managedModelSentence]).
  */
@@ -285,12 +446,26 @@ export function NextSteps({
           {managedBy === null ? (
             <>
               <span className="t-caption">
-                Agents can’t work until one is added. Every model runs through a coding CLI, signed
-                in on the node’s host. These steps write the company you just created to a file, add
-                Claude Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and
-                import the file:
+                Agents can’t work until one is added. Every model runs through a coding CLI: Models
+                adds one, signs it in and tests it.
               </span>
-              <CodeBlock plain wrap code={PROVIDER_STEPS} />
+              <div className="row">
+                <ButtonLink
+                  variant="secondary"
+                  size="small"
+                  href={href(MODELS_PATH, { flow: "add" })}
+                >
+                  Add a model
+                </ButtonLink>
+              </div>
+              <Disclosure title="Or from a terminal" size="compact" headingLevel="none">
+                <span className="t-caption">
+                  These steps write the company you just created to a file, add Claude Code to it,
+                  sign it in with <InlineCode>crewlet llm login</InlineCode> on the node’s host and
+                  import the file:
+                </span>
+                <CodeBlock plain wrap code={PROVIDER_STEPS} />
+              </Disclosure>
             </>
           ) : (
             <span className="t-caption">

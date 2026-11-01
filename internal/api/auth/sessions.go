@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -112,6 +113,22 @@ type Refusal struct {
 	// spares names the routes this refusal does not reach — see
 	// [Refusal.Applies].
 	spares func(r *http.Request) bool
+
+	// fields is the machine-readable detail beside the sentence, or nil:
+	// an assistant grant's refusal carries the authority table's reason
+	// under its own keys ([assistRefusal]).
+	fields httpjson.Detail
+}
+
+// write answers the refusal in the engine's envelope: the sentence as
+// `detail`, and any machine-readable fields beside it.
+//
+// THE ONE WRITER, so a refusal the guard writes looks the same whichever frame
+// decided it.
+func (f *Refusal) write(w http.ResponseWriter) {
+	detail := httpjson.Detail{"detail": f.Detail}
+	maps.Copy(detail, f.fields)
+	httpjson.FailWithFields(w, f.Status, f.Code, detail)
 }
 
 // Applies reports whether this refusal answers r, or whether r is one of the
@@ -241,13 +258,34 @@ const RetryIdentitySeconds = 2
 // IT TAKES THE CAUSE because the identity surfaces answered every state-log
 // refusal with the constant: an identity write refused `record_too_large` or
 // `log_full` told a client to come back in two seconds for a write that could
-// never land, which the same refusal on /work did not. /iam and
+// never land, which the same refusal on /worklet did not. /iam and
 // /auth are held to naming the cause at every 503 by a gate in each package,
 // which refuses the constant there — a site with nothing in hand passes nil,
 // so the absence of a cause is written down rather than defaulted.
 func RetryIdentity(cause error) int {
 	return httpjson.RetrySeconds(statelog.RetryAfter(cause,
 		RetryIdentitySeconds*time.Second))
+}
+
+// UnavailableIdentity answers a request the identity estate could not serve:
+// `503 identity_unavailable` under the hint [RetryIdentity] gives cause, and,
+// where cause is a refusal the state log made, its sentence for a person
+// ([statelog.ConditionSentence]) in `detail`, whose advice agrees with that
+// hint. nil where nothing caused it, which answers the code's own words.
+//
+// THE REFUSAL'S OWN WORDS, NOT THE CODE'S, because the code's ("can't check
+// who you are right now, try again in a moment") asked for a wait under no
+// Retry-After where none clears the refusal — a full log, an evicted node — and
+// on a directory listing was not about who the caller is at all. One writer
+// for every site on /iam and /auth, so a read and a write of one surface tell
+// one refusal in one sentence.
+func UnavailableIdentity(w http.ResponseWriter, cause error) {
+	var detail httpjson.Detail
+	if said, ok := statelog.ConditionSentence(cause); ok {
+		detail = httpjson.Detail{"detail": said}
+	}
+	httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+		RetryIdentity(cause), detail)
 }
 
 // UnreadLevel is the level an identity read a request could not make is
@@ -364,11 +402,11 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 			"same answer as refused")
 	case deps.Directory == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"directory — a bearer's signature says it was minted here and " +
+			"directory: a bearer's signature says it was minted here and " +
 			"the rows say whether it is still live")
 	case deps.Applier == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"applier to wait on — a sign-in answers before this node applies " +
+			"applier to wait on: a sign-in answers before this node applies " +
 			"the session it opened, so without it every write made straight " +
 			"after signing in is refused 503")
 	case deps.Chart == nil:
@@ -457,6 +495,10 @@ type sessionAnswer struct {
 	// lifetime is the served session's absolute deadline, which no
 	// re-issue moves — see [Lifetime].
 	lifetime time.Time
+
+	// session is what the presented bearer says about when it ends besides
+	// its absolute deadline, for an assistant grant derived from it.
+	session presentedSession
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -535,7 +577,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			s.reissue(w, v)
 			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
 				via:      iam.SessionName(v.Bearer.Lineage.String()),
-				lifetime: v.Bearer.AbsoluteExpiresAt}
+				lifetime: v.Bearer.AbsoluteExpiresAt, session: presentedOf(v)}
 		}
 	}
 
@@ -593,7 +635,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	return sessionAnswer{
 		principal: s.principal(v, binding, admin, proof), how: iam.Resolved,
 		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
+		session: presentedOf(v),
 	}
+}
+
+// presentedOf is what a validated bearer says about when its session ends,
+// beside its absolute deadline.
+//
+// THE IDLE DEADLINE AS PRESENTED, never the re-issue's: a re-issue only moves it
+// later, so a grant bounded by the presented one never outlives the cookie the
+// browser actually held.
+func presentedOf(v session.Validation) presentedSession {
+	return presentedSession{idle: v.Bearer.IdleExpiresAt, enrolmentOnly: v.EnrolmentOnly()}
 }
 
 // awaitStart waits for this node to apply the start of the session a write

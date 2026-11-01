@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -11,15 +14,16 @@ import (
 const appSeatsDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
   - name: SRE Lead
     handle: sre-lead
     llm: primary
-    code: {access: full_access}
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: Acme-SRE-Lead
         installation_id: 7
@@ -27,59 +31,13 @@ roles:
   - name: Reviewer
     handle: reviewer
     llm: primary
-    code: {access: review}
     integrations:
       github:
-        repos: [acme/api]
+        enabled: false
   - name: Writer
     handle: writer
     llm: primary
 `
-
-// A SEAT'S GITHUB APP IS CREATED, AND MINTS, AT ITS CODE ACCESS.
-//
-// role.code.access is the one tier every code host reads, so the app's
-// permission set is the seat's code access and not a field of its GitHub
-// block: a seat whose access says review mints review tokens, one that says
-// full_access mints its whole set, and one that says nothing mints the least.
-// A seat with no GitHub block is no app at all, whatever its access.
-func TestASeatsGitHubAppIsCreatedAtItsCodeAccess(t *testing.T) {
-	t.Parallel()
-	c := companyWith(t, appSeatsDoc+`  - name: Builder
-    handle: builder
-    llm: primary
-    integrations:
-      github:
-        repos: [acme/web]
-`)
-	got := map[string]github.Tier{}
-	for _, app := range (&Engine{}).githubSeatApps(c, config.NewResolver(nil)) {
-		got[app.Handle] = app.Tier
-	}
-	want := map[string]github.Tier{
-		"sre-lead": github.TierFullAccess,
-		"reviewer": github.TierReview,
-		"builder":  github.TierReadOnly,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("seat apps %v, want one per seat with a GitHub block: %v", got, want)
-	}
-	for handle, tier := range want {
-		if got[handle] != tier {
-			t.Errorf("%s's app runs at %q, want its code access %q", handle, got[handle], tier)
-		}
-		// The token a seat's app mints carries exactly its tier's set.
-		if perms := got[handle].Permissions(); perms["contents"] == "" {
-			t.Errorf("%s's tier %q grants no contents permission: %v", handle, got[handle], perms)
-		}
-	}
-	if perms := got["sre-lead"].Permissions(); perms["contents"] != "write" {
-		t.Errorf("a full_access seat's app mints contents:%s, want write", perms["contents"])
-	}
-	if perms := got["reviewer"].Permissions(); perms["contents"] != "read" || perms["pull_requests"] != "write" {
-		t.Errorf("a review seat's app mints %v, want contents read and pull requests write", perms)
-	}
-}
 
 // AN AGENT'S OWN APP IS ITS IDENTITY, AND IT COSTS NO REQUEST.
 //
@@ -134,6 +92,7 @@ func TestATokenResolvedAccountIsRegisteredFolded(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -165,6 +124,7 @@ func TestAnAppOutranksALeftoverToken(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -176,6 +136,7 @@ roles:
         GITHUB_TOKEN: ghp-old
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -202,6 +163,7 @@ func TestASeatWithNoAppKeepsItsToken(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -210,6 +172,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -230,5 +193,83 @@ roles:
 	}
 	if party, ok := reg.ByExternalID(github.Backend, "rev-account"); !ok || party.Handle != "reviewer" {
 		t.Fatalf("the token seat resolved to %v (found=%v)", party.Handle, ok)
+	}
+}
+
+// A SEAT WHOSE GITHUB CREDENTIAL IS ITS OWN APP'S TOKEN IS NEVER LOOKED UP.
+//
+// The documented tool credential of a seat with its own app is
+// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}`. Read as a personal credential, the
+// wiring spent a GET /user on it: before the app existed the variable was
+// unissued and the request carried the bare scheme (401 Bad credentials, on
+// every wiring), and once it existed GitHub refuses GET /user for every
+// installation token. The identity is the app's slug, so no request is made,
+// the seat with an app is registered under it, and the seat without one is
+// named as waiting for it.
+func TestASeatActingAsItsOwnAppIsNeverLookedUpWithGetUser(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    primary: {model: claude-sonnet-5}
+  sandbox: {fake: true}
+integrations:
+  github:
+    enabled: true
+    webhook_secret: "${GH_SECRET}"
+roles:
+  - name: SRE Lead
+    handle: sre-lead
+    llm: primary
+    mcp_env:
+      github:
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_SRE_LEAD}"
+    integrations:
+      github:
+        enabled: false
+        app_id: 41
+        app_slug: acme-sre-lead
+        installation_id: 7
+        private_key: pem
+  - name: Backend Engineer
+    handle: backend-engineer
+    llm: primary
+    mcp_env:
+      github:
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"
+    integrations:
+      github:
+        enabled: true
+        permissions: {contents: write}
+`
+	var lookups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookups.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	c := companyWith(t, doc)
+	env := config.NewResolver(nil)
+	ids := &githubIdentities{}
+	ids.resolve(t.Context(), server.URL, server.URL, github.SeatCredentials(c.Org, env.Value))
+	if n := lookups.Load(); n != 0 {
+		t.Fatalf("%d requests were made to look up seats whose credential is their own app's", n)
+	}
+
+	reg := notify.NewRegistry(c.Org, nil)
+	if got := ids.register(reg, c, env); got != 1 {
+		t.Fatalf("registered %d seats, want the one whose app exists", got)
+	}
+	if party, ok := reg.ByExternalID(github.Backend, "acme-sre-lead[bot]"); !ok || party.Handle != "sre-lead" {
+		t.Errorf("the app's account resolved to %v (found=%v)", party.Handle, ok)
+	}
+	if got := githubAppsPending(c); len(got) != 1 || got[0] != "backend-engineer" {
+		t.Errorf("seats waiting for their app = %v, want backend-engineer", got)
+	}
+	if got := ids.unresolved(c, env); len(got) != 0 {
+		t.Errorf("seats reported unresolved = %v, want none: each acts as its own app", got)
 	}
 }

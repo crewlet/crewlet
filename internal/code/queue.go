@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A PROTECTED BRANCH'S MERGE QUEUE: a branch whose merge gate requires a check
@@ -440,7 +441,7 @@ func (p QueueProposal) validFields() error {
 	case !gitref.ValidOID(e.HeadOID) || e.HeadOID == ZeroOID:
 		return badField("enqueue.head_oid", "%q is not a whole object id", e.HeadOID)
 	case !e.Method.Valid():
-		return badField("enqueue.method", "%q is not one of %v", e.Method, MergeMethods())
+		return badField("enqueue.method", "%q is not one of %s", e.Method, words.Or(MergeMethods()))
 	case e.Principal != (Principal{}):
 		return badField("enqueue.principal", "the committer stamps who enqueued it from the asker, and an asker "+
 			"sends none")

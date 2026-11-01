@@ -13,14 +13,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,7 +25,7 @@ import (
 )
 
 // THE CODE WRITE TOOLS THROUGH THE ENGINE'S OWN PATHS: a bridged call of an
-// agent-mode run, a native turn that suspends on a launch, and a native turn
+// executor's run, a turn whose holds its executor's launch carries, and a turn
 // still running — each through the real tools, the real launchers and the
 // reader the code-retention pass asks which repositories a live turn holds.
 
@@ -220,43 +217,25 @@ func liveHolds(t *testing.T, runs interface {
 	return got
 }
 
-// modellessCompany is splitLoginCompany's one-seat epoch with its executor on
-// an API-key entry that names no model: the launch leaves the coding CLI to
-// choose its own.
+// modellessCompany is [executorCompany]'s one-seat epoch with its executor on
+// an entry that names no model: the launch leaves the coding CLI to choose its
+// own.
 func modellessCompany(t *testing.T) (*Company, *org.Role) {
 	t.Helper()
-	api, err := cliagent.New(cliagent.Config{
-		Key: "api", Agent: "claude-code", StateDir: t.TempDir(), Timeout: time.Minute,
-		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "api", Provider: api}})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"api"}}
-	return &Company{
-		Models: models,
-		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
-		Config: &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"api": {Auth: config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"}},
-		}}},
-	}, seat
+	return chainCompany(t, chainMember{key: "api", agent: "claude-code"})
 }
 
-// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: an agent-mode run's coding
-// CLI makes its calls through the bridge, in rounds the engine never sees, so
-// each bridged call is made on the model the run's launch pointed the CLI at —
-// the one a seat's code write names on its push, as a native round's call
-// names its round's — and a launch that named none names none.
+// A BRIDGED CODE WRITE NAMES ITS LAUNCH'S MODEL: an executor's coding CLI
+// makes its calls through the bridge, in rounds the engine never sees, so each
+// bridged call is made on the model the run's launch pointed the CLI at — the
+// one a seat's code write names on its push, as a tool loop round's call names
+// its round's — and a launch that named none names none.
 //
 // Mutation: the bridge leaving the call's context unset → the first write
 // names no model, red.
 func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 	t.Parallel()
-	named, namedSeat := splitLoginCompany(t, "api", "codex")
+	named, namedSeat := executorCompany(t)
 	modelless, modellessSeat := modellessCompany(t)
 	for _, c := range []struct {
 		company *Company
@@ -287,7 +266,7 @@ func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 	}
 }
 
-// A BRIDGED RUN HOLDS THE SCRATCH REPOSITORY IT WROTE: an agent-mode run's
+// A BRIDGED RUN HOLDS THE SCRATCH REPOSITORY IT WROTE: an executor's run's
 // bridged code_commit_files on a scratch repository takes the turn's hold, and
 // the hold is on the run's row before the write is sent — so a node that
 // restarts under the parked run, its bridge session and every hold in its
@@ -298,7 +277,7 @@ func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 // in memory only, and the restarted node answers the repository unheld, red.
 func TestABridgedRunHoldsTheScratchRepositoryItWrote(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	scratch := scratchOf(seat, "lab")
 	host := newCodeWriteHost(scratch)
 	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat,
@@ -335,7 +314,7 @@ func commitOn(repo, branch, head string) map[string]any {
 }
 
 // A BRIDGED RUN'S BRANCH HOLD OUTLIVES ITS NODE (M3-decisions M3-O64): an
-// agent-mode run's bridged code_commit_files creates a seat's branch on a
+// executor's run's bridged code_commit_files creates a seat's branch on a
 // project repository — a branch no launch granted — and the turn's hold on it
 // is on the run's row before the write is sent, so a node that restarts under
 // the parked run, its bridge session and every hold in its memory gone, still
@@ -345,7 +324,7 @@ func commitOn(repo, branch, head string) map[string]any {
 // red.
 func TestABridgedRunsBranchHoldOutlivesItsNode(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	web := webOf()
 	host := newCodeWriteHost(web)
 	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat,
@@ -364,64 +343,55 @@ func TestABridgedRunsBranchHoldOutlivesItsNode(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN RESOLVES ITS BRANCH AGAIN (M3-decisions M3-O65): a native
-// executor writes a seat's branch twice at its head — one resolve, before the
-// first write, which confirms its hold — launches run_sandbox and suspends;
-// the resumed executor, its holds built from the row, holds the branch's key
-// and confirms none, so its write resolves the branch once more, before it.
+// A RESUMED TURN RESOLVES ITS BRANCH AGAIN (M3-decisions M3-O65): an
+// executor's run writes a seat's branch twice at its head through its bridge —
+// one resolve, before the first write, which confirms its hold — and the turn
+// its collection resumes, its holds built from the run's row
+// ([Engine.rowHolds]), holds the branch's key and confirms none, so its write
+// resolves the branch once more, before it.
 //
 // Mutation: NewHolds confirming its seed, or the mark riding the row → the
 // resumed write resolves nothing, red.
 func TestAResumedTurnResolvesItsBranchAgain(t *testing.T) {
 	t.Parallel()
-	c := specCompany(t, runEnvDoc)
-	e, _ := codeWorkRig(t, c)
-	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
-	e.secretsMu.Unlock()
-	seat := c.Org.AgentSeatByHandle("swe")
+	c, seat := executorCompany(t)
 	web := webOf()
 	host := newCodeWriteHost(web)
 	branch := code.SeatNamespace(seat.Handle()) + "x"
 	head := strings.Repeat("d", 40)
 	host.refs[web.Name] = map[string]string{branch: head}
-	commit := codeTool(t, host, builtin.CodeCommitFilesTool).(tools.SeatCallable)
 	args := commitOn(web.Name, strings.TrimPrefix(branch, "refs/heads/"), head)
 
 	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat, Org: c.Org,
 		Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
+	run := launchBridgedOn(t, c, turn, codeTool(t, host, builtin.CodeCommitFilesTool))
 	for range 2 {
-		if got, err := commit.CallForTurn(t.Context(), turn, args); err != nil || got.Failed {
-			t.Fatalf("the executor's write answered %v %q", err, got.Output)
-		}
+		run.bridgedCall(t, builtin.CodeCommitFilesTool, args)
 	}
 	if got := host.asked(); !slices.Equal(got, []string{"resolve_ref", "git_write", "git_write"}) {
-		t.Fatalf("the executor's two writes asked %v, want one resolve, before the first", got)
+		t.Fatalf("the run's two writes asked %v, want one resolve, before the first", got)
 	}
-	if _, err := (&launcher{engine: e}).Launch(t.Context(), turn,
-		builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-	row, found, err := e.sandbox.Load().pending.Get(t.Context(), turn.RunID)
-	if err != nil || !found || !slices.Contains(row.CodeHolds, code.RefHoldKey(web.ID, branch)) {
-		t.Fatalf("the launched run's row holds %v (found %v, %v), want %s's key", row.CodeHolds, found, err, branch)
+	row := run.row(t, turn.RunID)
+	if !slices.Contains(row.CodeHolds, code.RefHoldKey(web.ID, branch)) {
+		t.Fatalf("the launched run's row holds %v, want %s's key", row.CodeHolds, branch)
 	}
 	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: seat, Org: c.Org, Lookups: turnctx.NewLookups(),
-		Holds: e.rowHolds(row)}
+		Holds: run.engine.rowHolds(row)}
+	commit := codeTool(t, host, builtin.CodeCommitFilesTool).(tools.SeatCallable)
 	mark := len(host.asked())
 	if got, err := commit.CallForTurn(t.Context(), resumed, args); err != nil || got.Failed {
-		t.Fatalf("the resumed executor's write answered %v %q", err, got.Output)
+		t.Fatalf("the resumed turn's write answered %v %q", err, got.Output)
 	}
 	if got := host.asked()[mark:]; !slices.Equal(got, []string{"resolve_ref", "git_write"}) {
-		t.Errorf("the resumed executor's write asked %v, want the branch resolved again, before it", got)
+		t.Errorf("the resumed turn's write asked %v, want the branch resolved again, before it", got)
 	}
 }
 
-// suspendedRun is a native executor's run as the suspended-turn cases leave
-// it: the engine, its run store, the run's turn id, the two scratch
-// repositories its turn wrote — the first before its launch, the second from
-// the resumed turn — and the node's running turns, the resumed turn's frame
-// still among them until done is called.
+// suspendedRun is an executor's run as the suspended-turn cases leave it: its
+// run store, the run's turn id, the two scratch repositories its turn wrote —
+// the first before the launch, the second from the turn the run's collection
+// resumes — and the node's running turns, the resumed turn's frame still
+// among them until done is called.
 type suspendedRun struct {
 	pending       sandbox.PendingStore
 	turnID        string
@@ -430,18 +400,14 @@ type suspendedRun struct {
 	done          func()
 }
 
-// suspendRun drives a native executor through the code write tools and a
-// run_sandbox launch: it writes a scratch repository — held in its memory, it
-// has no row — launches and suspends, its frame returning; and the resumed
-// executor, built from the row as the engine builds it, writes a second.
+// suspendRun drives a turn through the code write tools and its executor's
+// launch: it writes a scratch repository — held in its memory, it has no row —
+// launches its executor's run, and its frame returns, as a turn's does once its
+// run is launched; and the turn the run's collection resumes, built from the
+// row as the engine builds it, writes a second.
 func suspendRun(t *testing.T) suspendedRun {
 	t.Helper()
-	c := specCompany(t, runEnvDoc)
-	e, _ := codeWorkRig(t, c)
-	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
-	e.secretsMu.Unlock()
-	seat := c.Org.AgentSeatByHandle("swe")
+	c, seat := executorCompany(t)
 	first, second := scratchOf(seat, "lab"), scratchOf(seat, "lab2")
 	host := newCodeWriteHost(first, second)
 	commit := codeTool(t, host, builtin.CodeCommitFilesTool).(tools.SeatCallable)
@@ -451,33 +417,28 @@ func suspendRun(t *testing.T) suspendedRun {
 	turns := &runningTurns{}
 	frame := turns.running(turn.Holds)
 	if got, err := commit.CallForTurn(t.Context(), turn, commitTo(first.Name)); err != nil || got.Failed {
-		t.Fatalf("the executor's write answered %v %q", err, got.Output)
+		t.Fatalf("the turn's write answered %v %q", err, got.Output)
 	}
-	if _, err := (&launcher{engine: e}).Launch(t.Context(), turn, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-	frame() // the turn suspends, and its frame returns
-	pending := e.sandbox.Load().pending
-	row, found, err := pending.Get(t.Context(), turn.RunID)
-	if err != nil || !found {
-		t.Fatalf("the launched run's row: found %v, %v", found, err)
-	}
+	run := launchBridgedOn(t, c, turn)
+	frame() // the run is launched, and the turn's frame returns
+	row := run.row(t, turn.RunID)
 	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: seat, Org: c.Org, Lookups: turnctx.NewLookups(),
-		Holds: e.rowHolds(row)}
+		Holds: run.engine.rowHolds(row)}
 	done := turns.running(resumed.Holds)
 	if got, err := commit.CallForTurn(t.Context(), resumed, commitTo(second.Name)); err != nil || got.Failed {
-		t.Fatalf("the resumed executor's write answered %v %q", err, got.Output)
+		t.Fatalf("the resumed turn's write answered %v %q", err, got.Output)
 	}
-	return suspendedRun{pending: pending, turnID: turn.RunID, first: first, second: second, turns: turns,
+	return suspendedRun{pending: run.pending, turnID: turn.RunID, first: first, second: second, turns: turns,
 		done: done}
 }
 
-// A SUSPENDED TURN HOLDS THE SCRATCH REPOSITORY IT WROTE: a native executor
-// writes a scratch repository — held in its memory, it has no row — and then
-// launches run_sandbox and suspends: the launch carries the turn's holds onto
-// the row it opens, so once the turn's frame has returned the pass reads the
-// repository held from the row. The resumed executor, built from the row,
-// writes a second scratch repository, held on the same row before its write.
+// A SUSPENDED TURN HOLDS THE SCRATCH REPOSITORY IT WROTE: a turn writes a
+// scratch repository — held in its memory, it has no row — and then launches
+// its executor's run: the launch carries the turn's holds onto the row it
+// opens, so once the turn's frame has returned the pass reads the repository
+// held from the row. The turn the run's collection resumes, built from the
+// row, writes a second scratch repository, held on the same row before its
+// write.
 //
 // Mutation: the launch handing the row no holds (LaunchRequest.CodeHolds
 // empty) → the first repository is unheld once the turn suspends, red.

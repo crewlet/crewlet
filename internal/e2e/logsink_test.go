@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/solo"
 )
 
@@ -37,17 +38,29 @@ import (
 // before anything else: the hook's stdout is git's protocol and its stderr
 // reaches the pushing client, so a log line on either is a corrupted push.
 //
-// And it is where this binary becomes the scripted model's CLI when it was
-// re-executed as one ([scriptedCLIEnv]) — also before the sink or the
-// framework, so the child's stdout is exactly the answer it prints, and as
-// a dispatch here rather than a test function, which every ordinary run would
-// otherwise report as a skip. A process is one or the other, never both.
+// And it is where this binary becomes one of the three processes a model call
+// re-executes it as: also before the sink or the framework, so the child's
+// stdout is exactly the stream it speaks, and as a dispatch here rather than a
+// test function, which every ordinary run would otherwise report as a skip. A
+// process is one of these or a test run, never two:
+//
+//   - the relay to a seat's tools, `<binary> mcp-relay <socket>`, which the
+//     engine names its own executable as ([mcprelay.DispatchIfRelay]) — this
+//     binary, under `go test`. Dispatched on ARGV, and BEFORE the scripted
+//     CLI's variable: the scripted CLI starts the relay, and hands it its own
+//     environment, that variable included.
+//   - the scripted model's CLI ([scriptedCLIEnv]).
+//   - the executor's coding CLI in its box ([codingCLIEnv]).
 func TestMain(m *testing.M) {
 	if status, ok := codetest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
+	mcprelay.DispatchIfRelay()
 	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
 		os.Exit(runScriptedCLI(endpoint))
+	}
+	if endpoint := os.Getenv(codingCLIEnv); endpoint != "" {
+		os.Exit(runCodingCLI(endpoint))
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -56,6 +69,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	scriptedCLIBinary = binary
+	if scriptedShape, err = claudeCodeRun(binary); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: every company here runs its model's CLI as Claude Code "+
+			"runs: %v\n", err)
+		os.Exit(1)
+	}
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
 	os.Exit(solo.Run(m))
 }
@@ -253,6 +271,14 @@ func (r *traceRecorder) attribute(t *testing.T) {
 			t.Log(strings.TrimRight(line, "\n"))
 		}
 	})
+}
+
+// loudMark is the number the next loud line will take: what a case hands
+// [traceRecorder.loudSince] to read the lines logged after it.
+func (r *traceRecorder) loudMark() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loudSeen
 }
 
 // loudSince is every loud line from number from on that the ring still holds,

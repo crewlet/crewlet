@@ -121,7 +121,7 @@ type checkQueue struct {
 // claims, and one errored at its dispatch for a checks file that does not
 // run, which ends as it is queued — neither of which is ever overdue.
 // code_checks_overdue_idx holds the queued attempts by it, so the backlog's
-// walk reads them in the order they fell overdue (replicated 0083).
+// walk reads them in the order they fell overdue (replicated 0106).
 func (q checkQueue) overdueAt() int64 {
 	if q.timeoutSeconds <= 0 {
 		return 0

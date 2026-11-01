@@ -86,7 +86,7 @@ func decideSeats(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]P
 	return entries, answers
 }
 
-// THE DECIDE REFUSES WHAT THE GRANT REFUSES (decide rule 2b, ADR-0058): every
+// THE DECIDE REFUSES WHAT THE GRANT REFUSES (decide rule 2b, ADR-0081): every
 // command of every kind — a branch created, fast-forwarded and deleted, a tag
 // created and deleted, a command under the pusher's own namespace, one under
 // another seat's, and one under refs/heads/<its handle>/, which is NOT its

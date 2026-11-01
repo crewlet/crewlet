@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVICTING A PEER THAT RE-ANCHORED AND VANISHED RELEASES THE FLEET IT STRANDED.
@@ -43,7 +43,7 @@ func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 		// stranded is what a reanchor says before the eviction.
 		stranded string
 	}{
-		{"its row names the generation it opened", true, "re-anchored peers: [node-x]"},
+		{"its row names the generation it opened", true, `"node-x" has re-anchored it past this node`},
 		{"it died before its row said so", false, "nothing to re-anchor"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -57,10 +57,10 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	t.Helper()
 	e, _ := aRunningNode(t)
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	name := running.domain.Name()
 	spec := running.spec
-	mustApply(t, "a write before the peer's move", func() (tracker.WriteResult, error) {
+	mustApply(t, "a write before the peer's move", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-before")
 	})
 	own := running.runner.Committed()
@@ -72,7 +72,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 
 	// THE PEER'S MOVE: its generation record, a record it wrote in that
 	// generation, and — when it lived long enough — its row.
-	rec, _, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
+	rec, _, err := worklet.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: own.Generation + 1, Case: statelog.ReanchorRestored,
 		Inputs: statelog.ReanchorInputs{Stream: spec.Name, StreamCreatedAt: live},
 		By:     "ops-x", Writer: "node-x", At: time.Now().UTC(),
@@ -119,7 +119,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	confirm := statelog.ConfirmationOf(live)
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: spec.Name, Confirm: confirm, By: reanchorOperator, Force: true,
-	}); !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), stranded) {
+	}); !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(toldOrError(err), stranded) {
 		t.Fatalf("a forced reanchor while node-x counts = %v, want a refusal saying %q",
 			err, stranded)
 	}
@@ -201,7 +201,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 		WHERE generation = ?`, own.Generation+1); got != 0 {
 		t.Errorf("node-x's generation record applied into this node's rows (%d row)", got)
 	}
-	after := mustApply(t, "a write after the reanchor", func() (tracker.WriteResult, error) {
+	after := mustApply(t, "a write after the reanchor", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-after")
 	})
 	if after.Position.Generation != plan.Generation {

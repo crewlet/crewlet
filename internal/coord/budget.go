@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/period"
 )
 
@@ -74,6 +76,15 @@ const OrgScope = "org"
 // Keyed on the seat's DERIVED agent id — the uuid over its handle (ADR-0013) —
 // as its lease, its mailbox and its diary are.
 func AgentScope(agentID string) string { return "agent:" + agentID }
+
+// PersonScope is one person's counter key: their Dashboard Assistant spend,
+// judged by the company's `assistant.token_budget` (internal/engine).
+//
+// Keyed on the person's id, never a seat: the assistant acts as the person
+// and spends nothing a seat's ceiling was set for. A row of its own beside
+// the seats' only where a company caps a person, so a listing holds no scope
+// no ceiling can judge.
+func PersonScope(person uuid.UUID) string { return "person:" + person.String() }
 
 // Windows is the window of each period a charge is counted in, or a read is
 // read against, in [period.Periods] order: the day, the week, the month.

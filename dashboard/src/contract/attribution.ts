@@ -1,5 +1,5 @@
 /**
- * The tracker's own field names, exactly as `tracker.TaskDeltas` writes them
+ * The tracker's own field names, exactly as `worklet.TaskDeltas` writes them
  * into a history row's `fields` bag.
  *
  * THE NAMES ARE THE ENGINE'S, NOT THE RAIL'S. A property is labelled "Due" and
@@ -8,7 +8,7 @@
  * "Routes to" is `routing_unit`. A key that names no field produces no
  * attribution and no error — the line simply never appears — so the list is
  * declared once here, `lib/attribution.ts`'s `ChangeField` makes a typo a
- * compile failure, and `internal/tracker/attribution_test.go` holds it against
+ * compile failure, and `internal/worklet/attribution_test.go` holds it against
  * `TaskDeltas` so a field added or renamed in Go cannot leave this silently
  * short.
  *

@@ -30,9 +30,9 @@ func TestAnUnknownRouteAndAWrongMethodAnswerJSONWithACode(t *testing.T) {
 		{"a route nothing serves", http.MethodGet, "/no/such/route",
 			http.StatusNotFound, "no_route"},
 		{"the purge on a node serving no human write surface", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1", http.StatusNotFound, "no_route"},
+			"/worklet/items/t-1/purge?confirm=ENG-1", http.StatusNotFound, "no_route"},
 		{"a served route under another method", http.MethodGet,
-			"/work/retention/ack", http.StatusMethodNotAllowed, "method_not_allowed"},
+			"/worklet/retention/ack", http.StatusMethodNotAllowed, "method_not_allowed"},
 		{"a missing dashboard asset", http.MethodGet, "/static/no-such-asset.js",
 			http.StatusNotFound, "no_route"},
 	} {

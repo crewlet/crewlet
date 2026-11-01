@@ -39,7 +39,7 @@ import (
 // browser never sends to any server — so neither half reaches a proxy's access
 // log by the person following it. The screen then calls these routes with the
 // id in the path and the secret beside it, never in a URL: the view in the
-// [inviteSecretHeader] header and the redemption in its JSON body. The id
+// [InviteSecretHeader] header and the redemption in its JSON body. The id
 // alone is in every snapshot, backup
 // and access log and opens nothing; what the estate keeps of the secret is its
 // verifier ([iamdomain.InvitationRow.Admits]).
@@ -50,13 +50,19 @@ import (
 // secret against a real id would say the id exists, and the id is the half
 // that leaks.
 
-// inviteSecretHeader carries an invitation link's secret to the view.
+// InviteSecretHeader carries an invitation link's secret to the view.
 //
 // A HEADER because the view is a GET and a GET has no body, and never the
 // query string, which every access log between the browser and this node
 // records: the secret rode in the URL's fragment precisely so that none of
 // them would see it.
-const inviteSecretHeader = "X-Crewlet-Invite-Secret"
+//
+// SPELLED TWICE BY NECESSITY — here, and by the dashboard's invitation screen
+// in `contract/identity.ts` `INVITE_SECRET_HEADER` — and held equal by
+// [TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads]: a screen sending
+// it under another name presents no secret, and every invitation it opens is
+// the one `410` an id nobody issued answers.
+const InviteSecretHeader = "X-Crewlet-Invite-Secret"
 
 // inviteView is what the form renders from.
 type inviteView struct {
@@ -114,7 +120,7 @@ type inviteSeat struct {
 // inviteRedeem is what redeeming presents.
 type inviteRedeem struct {
 	// Secret is the half of the link after the id — REQUIRED, and in the
-	// body rather than the path for [inviteSecretHeader]'s reason.
+	// body rather than the path for [InviteSecretHeader]'s reason.
 	Secret string `json:"secret"`
 
 	// Login is REQUIRED: every person enrols with one, in the person
@@ -128,18 +134,18 @@ type inviteRedeem struct {
 // ViewInvite renders an invitation without spending it.
 //
 // UNGUARDED, because holding the link IS the credential — its secret, in
-// [inviteSecretHeader], 256 bits nobody can walk — and on no curve, because a
+// [InviteSecretHeader], 256 bits nobody can walk — and on no curve, because a
 // link names nobody until it opens: see [Service.uncounted].
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
 	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"),
-		r.Header.Get(inviteSecretHeader))
+		r.Header.Get(InviteSecretHeader))
 	if !ok {
 		return
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	view := inviteView{
@@ -214,7 +220,7 @@ func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
 // short is the invited person's to fix, told to nobody else.
 func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
@@ -245,7 +251,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	opID := redemptionOpID(held.ID)
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	verifier, hashed := s.hash(w, r, adm, in.Password, "invite")
@@ -299,7 +305,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 			return
 		}
-		refuseEnrolment(w, r, "api_invite_enrol_failed", opID, err)
+		refuseEnrolment(w, r, "api_invite_enrol_failed", opID, held.ID, err)
 		return
 	}
 	if !landed(enrolled) {
@@ -371,23 +377,32 @@ const redemptionNamespace = "crewlet.authapi.invite-redeem"
 // [iamdomain.ErrRefused] and never [iamdomain.ErrSeatRequired]: the invitee
 // left nothing out, and the 400 that asks for a seat would send them looking
 // for a field the form does not have.
-func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
-	err error) {
+//
+// # The invitation by id goes to the log, and only there
+//
+// Every line here names the invitation the redemption was for, because the
+// domain's sentences name it as "this invitation" — what the invitee reads —
+// and the operation id a redemption is published under is derived from the
+// invitation one way: an operator holding the op id could not get back to it.
+func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID,
+	invitation string, err error) {
 	var taken *iamdomain.ErrTaken
 	switch {
 	case errors.Is(err, iamdomain.ErrInvalidLogin),
 		errors.Is(err, iamdomain.ErrNotFindable),
 		errors.Is(err, iamdomain.ErrNotEnrollable),
 		errors.Is(err, iamdomain.ErrInvalid):
-		log.InfoContext(r.Context(), event, "refused", "invalid", "error", err)
+		log.InfoContext(r.Context(), event, "refused", "invalid",
+			"invitation", invitation, "error", err)
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": iamdomain.Sentence(err)})
 	case errors.As(err, &taken) && taken.Field == iamdomain.UniqueEmail:
-		log.InfoContext(r.Context(), event, "refused", "address enrolled")
+		log.InfoContext(r.Context(), event, "refused", "address enrolled",
+			"invitation", invitation)
 		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 	case errors.As(err, &taken):
 		log.InfoContext(r.Context(), event, "refused", "taken",
-			"field", string(taken.Field))
+			"invitation", invitation, "field", string(taken.Field))
 		detail := "That login is already taken. Choose another."
 		if taken.Field == iamdomain.UniqueSeat {
 			// NAMING NEITHER THE SEAT'S HOLDER NOR THE SEAT'S OTHER
@@ -400,7 +415,7 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})
 	default:
-		writeFailed(w, r, event, opID, err)
+		gestureFailed(w, r, event, opID, err, "invitation", invitation)
 	}
 }
 
@@ -423,7 +438,7 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.InvitationByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return iamdomain.InvitationRow{}, false
 	}
 	switch {

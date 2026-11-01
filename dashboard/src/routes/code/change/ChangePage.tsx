@@ -29,6 +29,8 @@
 
 import { useId, useState } from "react";
 import { Button, EmptyState, Input, Modal, Skeleton, Tabs, Textarea, tabId } from "@crewlethq/ui";
+import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -68,6 +70,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   );
   const [tab, setTab] = useTab<ChangeTab>("tab", CHANGE_TABS);
   const panelId = useId();
+  const [boxes] = useState(() => new DraftBoxes());
   if (!named) {
     return (
       <EmptyState
@@ -87,7 +90,8 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
     );
   }
   return (
-    <>
+    <DraftBoxesContext.Provider value={boxes}>
+      <ChangeDraft boxes={boxes} change={change} />
       <PageActions>
         <ChangeActions change={change} />
       </PageActions>
@@ -125,8 +129,32 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         {tab === "provenance" && <Provenance change={change} />}
         {tab === "woke" && <Woke change={change} />}
       </div>
-    </>
+    </DraftBoxesContext.Provider>
   );
+}
+
+/**
+ * The change page's ONE DRAFT for the person's own assistant: every box open
+ * on it (`app/assistant/boxes.ts`), the comment on the change, each reply box
+ * of a thread or a finding, and a finding being written on picked lines.
+ * The review, ask and close dialogs are modal, and the drawer is inert while
+ * one holds the page, so none of their fields is among them.
+ */
+function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeDetail }) {
+  const open = useOpenBoxes(boxes);
+  useAssistantDraft(
+    boxesDraft(open, {
+      id: change.ref,
+      revision: change.revision,
+      scope: `What you are writing on ${change.ref} (not sent)`,
+      help:
+        `Every box open on ${change.ref} is a field: the comment on the change, the reply ` +
+        "box of each thread and finding, and a finding being written on picked lines. You " +
+        "can propose text for any of them; commenting, replying and adding a finding to " +
+        "the review stay the person's.",
+    }),
+  );
+  return null;
 }
 
 /** The change's header: its reference, title, state and the facts a reader places it by. */

@@ -219,7 +219,7 @@ func TestAPathOwnerChangeIsResolvedInsideTheDecide(t *testing.T) {
 // reads it as, a `visibility: unit` repository's outsider still refused, and
 // whether each may change it — because a path owner is whom a review is asked
 // of, and a seat's standing is its grant, read off the chart and its tier
-// (ADR-0058). The detail that answers the owners answers the same access
+// (ADR-0081). The detail that answers the owners answers the same access
 // beside them.
 //
 // Mutation: answer a path owner's detail at maintain (Reader.repo reading the

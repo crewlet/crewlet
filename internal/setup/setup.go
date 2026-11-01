@@ -253,6 +253,19 @@ type Requirement struct {
 	// in each vendor's probe as well.
 	CheckNote string `json:"check_note,omitempty"`
 
+	// CheckWith names the other fields of the same list that a check of
+	// this credential is made with, for a vendor that proves several
+	// values in one check: Datadog's API key and application key are
+	// accepted or refused together, against the region they belong to.
+	//
+	// It is set on a [Requirement.Checkable] field only. A form offers one
+	// Test control for the group, after this field, enables it once this
+	// field and every one named here has a value, and sends them together.
+	// A credential named here is tested through this field rather than on
+	// its own, so it is not Checkable itself and its [Requirement.CheckNote]
+	// says so. Empty, the field is checked on its own, as before.
+	CheckWith []string `json:"check_with,omitempty"`
+
 	// Shape is what a minted value has to LOOK like, for the fields where
 	// the third-party app accepts one form and no other.
 	//
@@ -499,40 +512,13 @@ func ValidSecretName(name string) bool { return nameRule.MatchString(name) }
 // the common path asks a person for nothing: VENDOR_FIELD, plus _HANDLE for a
 // per-seat requirement, upper-snaked. Every character the grammar refuses
 // becomes an underscore, which is what makes a handle like `nova-1` into
-// `NOVA_1` rather than an unreferenceable name.
+// `NOVA_1` rather than an unreferenceable name. The derivation is
+// [envref.SealedName], the one every layer shares.
 func SecretNameFor(kind integration.Kind, r Requirement) string {
 	if r.SecretName != "" {
 		return r.SecretName
 	}
-	parts := []string{string(kind), r.Field}
-	if r.Seat != "" {
-		parts = append(parts, r.Seat)
-	}
-	return slug(strings.Join(parts, "_"))
-}
-
-// slug upper-snakes a string into the whole-reference grammar.
-//
-// Every character the grammar refuses becomes an underscore rather than being
-// dropped, which is what keeps two different seats on two different names: a
-// handle of `nova.1` and one of `nova-1` are different seats, and trimming
-// the separator would seal one seat's credential under the other's name.
-//
-// It does not guard the grammar's leading-digit rule, and does not need to:
-// a derived name always begins with the third-party app's own kind, every one
-// of which is letters. [TestEveryVendorKindDerivesAReferenceableName] is what
-// holds that true as kinds are added.
-func slug(in string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(strings.TrimSpace(in)) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
+	return envref.SealedName(string(kind), r.Field, r.Seat)
 }
 
 // ErrStaleBase reports a submission built on a revision that is no longer

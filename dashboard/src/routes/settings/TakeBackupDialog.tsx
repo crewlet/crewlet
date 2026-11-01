@@ -14,9 +14,9 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Callout, InlineCode, Modal, useToast } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, Modal, useToast, ValueField } from "@crewlethq/ui";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
-import { Field } from "~/ui/Field.tsx";
+import { withProblems } from "~/ui/Problems.tsx";
 import { rest } from "~/protocol/index.ts";
 import { fmtBytes, fmtDuration } from "~/lib/format.ts";
 import {
@@ -118,7 +118,7 @@ export function TakeBackupDialog({
         Copies everything <InlineCode>{host}</InlineCode> holds, credentials included, to a
         directory on <strong>its host</strong>.
       </p>
-      <Field
+      <ValueField
         label="Directory"
         value={dir}
         onChange={(value) => {
@@ -129,13 +129,13 @@ export function TakeBackupDialog({
         required
         disabled={busy}
         placeholder="e.g. /var/backups/crewlet-20260930"
-        error={
+        error={withProblems(
           error?.field
             ? error.message
             : dir.trim() !== "" && !absolute
               ? "Use an absolute path on the engine’s host."
-              : undefined
-        }
+              : undefined,
+        )}
         help="An absolute, empty path on the engine’s host."
       />
       {busy && (

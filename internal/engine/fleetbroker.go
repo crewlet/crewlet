@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE FLEET'S BROKER MEMBERSHIP, as an operator reads and changes it.
@@ -50,7 +51,7 @@ import (
 // every node's connections, a leaf's link included, are bound to — and it
 // changes the quorum every election and every create runs on. The broker's
 // admission vouches for a CONNECTION, never a message: an embedded broker
-// admits only a key derived from the keyring (ADR-0064), but a route's
+// admits only a key derived from the keyring (ADR-0087), but a route's
 // password crosses the fleet network in clear, and an external cluster admits
 // whom its operator chooses. So unsigned, anything the broker admitted could
 // remove a voter, past the grant, the step-up, the confirmation and the
@@ -230,7 +231,7 @@ type BrokerView struct {
 	// Client is the ANSWERING node's own loopback client listener,
 	// host:port — where an operator on that node's host reaches its broker
 	// with the nats tool and the operator key `crewlet fleet broker
-	// credential` writes (ADR-0064) — and absent where it opens none: a solo
+	// credential` writes (ADR-0087) — and absent where it opens none: a solo
 	// member, a member with only a leaf listener, a leaf, an external
 	// cluster's client. The node's, as Node and Kind are, never the fleet's:
 	// a client listener is reachable from its own host alone.
@@ -536,7 +537,7 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.
 			"detail", admitted.Why+"; nothing in it ran")
 		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeUnauthenticated,
 			Detail: fmt.Sprintf("%s does not hold the key the request is signed under "+
-				"(it holds %v)", e.id, e.brokerWire.HeldKeys())}
+				"(it holds %s)", e.id, words.And(e.brokerWire.HeldKeys()))}
 	case signedask.Undecodable:
 		return brokerReply{Node: e.id, Code: brokerCodeFailed,
 			Detail: fmt.Sprintf("%s could not decode a request the fleet signed: %s", e.id, admitted.Why)}

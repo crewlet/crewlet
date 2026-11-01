@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
@@ -40,6 +40,12 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 		nodeID: "node-a",
 		alarms: statelog.NewTracker(nil, nil),
 		pooled: map[string]poolCounters{},
+		// A SEARCH OVER ITS TARGET, so the table has something to raise:
+		// this node runs no log, and every alarm a log could raise is
+		// evaluated per log.
+		index: func(_ context.Context, out *statelog.Reading) {
+			out.SearchP95 = 2 * statelog.InteractiveSearchTarget
+		},
 	}
 	e := &Engine{}
 	if standing, evaluated := e.Alarms(); evaluated {
@@ -56,8 +62,8 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	for _, a := range report.Alarms {
 		want = append(want, a.Kind)
 	}
-	// A FLOOR: a fleet with no backup recorded raises `backup_age`, so a
-	// comparison of two empty lists cannot pass as agreement here.
+	// A FLOOR: the slow search above raises `search_slow`, so a comparison
+	// of two empty lists cannot pass as agreement here.
 	if len(want) == 0 {
 		t.Fatal("the report raised no alarm, so this compares nothing")
 	}
@@ -91,11 +97,20 @@ func TestTheHeartbeatCarriesTheAlarmsFiringOnTheNode(t *testing.T) {
 		nodeID: "node-a",
 		alarms: statelog.NewTracker(nil, func() time.Time { return raised }),
 		pooled: map[string]poolCounters{},
+		// A SEARCH OVER ITS TARGET, as the case above has: this node runs
+		// no log, and every alarm a log could raise is evaluated per log.
+		index: func(_ context.Context, out *statelog.Reading) {
+			out.SearchP95 = 2 * statelog.InteractiveSearchTarget
+		},
 	}
 	e := &Engine{}
 	heard := func() coord.NodeStatus {
 		t.Helper()
-		got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: e.nodeStatus(t.Context()).Meta()})
+		status, err := e.nodeStatus(t.Context())
+		if err != nil {
+			t.Fatalf("the heartbeat's status: %v", err)
+		}
+		got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
 		if !ok {
 			t.Fatal("the heartbeat carried no status")
 		}
@@ -111,8 +126,8 @@ func TestTheHeartbeatCarriesTheAlarmsFiringOnTheNode(t *testing.T) {
 
 	r.beat(t.Context())
 	standing, _ := e.Alarms()
-	// A FLOOR: a fleet with no backup recorded raises `backup_age`, so a
-	// comparison of two empty lists cannot pass as agreement here.
+	// A FLOOR: the slow search above raises `search_slow`, so a comparison
+	// of two empty lists cannot pass as agreement here.
 	if len(standing) == 0 {
 		t.Fatal("the beat raised no alarm, so this compares nothing")
 	}
@@ -144,7 +159,7 @@ func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
 	ctx := t.Context()
 	e := bootDirectoryNode(t, nil)
 	r := quietRetention(t, e)
-	logs := []string{tracker.Domain{}.Name(), iamdomain.Domain{}.Name()}
+	logs := []string{worklet.Domain{}.Name(), iamdomain.Domain{}.Name()}
 	for _, name := range logs {
 		generation := r.state.Domain(name).runner.Committed().Generation
 		ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,

@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -18,8 +19,20 @@ import (
 // TestMain silences the engine logger. Every Open logs a line per applied
 // schema file and the suite opens a database per subtest — several hundred
 // lines of successful boot ahead of the one that says what failed.
+//
+// It also runs a box's teardown in a loop, when this binary was re-executed
+// as one ([runWriteBackWriter]), rather than the suite.
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
+	// THE LANDLOCK HELPER IS THE ENGINE'S OWN BINARY, re-executed; in this
+	// suite the binary is the test's, so it answers the helper's command.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.ConfineCommand {
+		os.Exit(sandbox.ConfineMain(os.Args[2:]))
+	}
+	if dir := os.Getenv(writeBackWriterEnv); dir != "" {
+		runWriteBackWriter(dir)
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -255,5 +268,29 @@ func TestALaunchWhoseRowVanishesCreatesItAgain(t *testing.T) {
 	}
 	if got.LaunchID != opened.LaunchID || got.Status != sandbox.StatusLaunching {
 		t.Fatalf("the row holds job %q in %q; the launch answered %q", got.LaunchID, got.Status, opened.LaunchID)
+	}
+}
+
+// A LAUNCH UNDER A LEASE THE ROW HAS OUTGROWN IS THIS NODE NOT HOLDING THE
+// SEAT: the seat's next holder has the row. Said as anything else, a caller
+// told only that the record refused the launch could not tell the seat's move
+// from a launch that broke, and a resumed turn whose relaunch it refused was
+// handed back for a retry rather than on to the seat's holder
+// ([sandbox.SeatLost]).
+//
+// Mutation: drop the %w ErrSeatNotHeld from writeFound's refusal of an
+// outranked fence.
+func TestALaunchUnderAnOutgrownLeaseIsASeatNotHeld(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	ctx := context.Background()
+	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+		sandbox.Fence{Owner: "node-b:1", Epoch: 9}); err != nil {
+		t.Fatalf("the newer lease's launch: %v", err)
+	}
+	_, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"},
+		sandbox.Fence{Owner: "node-a:1", Epoch: 3})
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("a launch under an outgrown lease = %v, want ErrSeatNotHeld", err)
 	}
 }

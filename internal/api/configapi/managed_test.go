@@ -269,7 +269,7 @@ func TestAReloadOfAManagedDocumentIsOpenToEveryCredential(t *testing.T) {
 				t.Errorf("a reload changed the document:\n%s\n%s", before, after)
 			}
 			by := iam.ActorFor(caller)
-			active, _, err := s.configs.Active(t.Context())
+			active, _, err := s.active(t.Context())
 			if err != nil || active.ID == first || active.CreatedBy != by.Name ||
 				active.OperatorID != by.OperatorID {
 				t.Errorf("the reload is not a new revision by %+v: %+v, %v", by, active, err)

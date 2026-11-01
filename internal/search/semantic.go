@@ -148,7 +148,7 @@ type SemanticQuery struct {
 	Sources []Source
 
 	// Containers narrows to these containers. EMPTY IS EVERY ONE, which
-	// on the native backend means the whole company — the engine IS the
+	// on Worklet and Doclet means the whole company: the engine IS the
 	// boundary here, and there is no second account to launder a read
 	// through.
 	Containers []string

@@ -52,8 +52,9 @@ var applyLog = logging.Get("iam.apply")
 // record here that is not a row. A suspension withdraws the seat's contact
 // identities from this node's notify registry with no configuration change at
 // all, and closes every dashboard socket the person holds open; the apply is
-// the only thing that sees either happen on EVERY node — the change feed
-// relays a record to one. So a committed batch hands the engine a [Moved]
+// the only thing that sees either happen on EVERY data node — the change feed
+// relays a record to one, and a node without `data`, which applies nothing,
+// re-reads the directory through a data node instead. So a committed batch hands the engine a [Moved]
 // saying whose standing it moved, and each listener re-reads the rows it
 // needs.
 
@@ -125,14 +126,18 @@ func (a *Applier) movedPerson(ctx context.Context, tx *sql.Tx, id string) error 
 // token's `token:<id>` row — is named too ([Moved.Logins]).
 func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
 	var login string
-	err := tx.QueryRowContext(ctx,
-		`SELECT login FROM iam_people WHERE id = ?`, id).Scan(&login)
+	err := tx.QueryRowContext(ctx, personLoginStatement, id).Scan(&login)
 	if err != nil && !errorsIsNoRows(err) {
 		return "", fmt.Errorf("iamdomain: read the login of person %s, whose "+
 			"row this record moved: %w", id, err)
 	}
 	return login, nil
 }
+
+// personLoginStatement is the login one person's row holds, by the row's own
+// key: what an apply names a moved person by ([heldLogin]) and what a decide
+// forms a credential's reason from ([loginOf]).
+const personLoginStatement = `SELECT login FROM iam_people WHERE id = ?`
 
 // THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
 var _ statelog.RetentionHook = (*Applier)(nil)
@@ -162,12 +167,12 @@ var _ statelog.Deriver = (*Applier)(nil)
 // DerivationVersion is the rule set this build derives its columns at.
 //
 // 1 is an invitation's `seat_id` (replicated migration 0042); 2 adds a removal
-// tombstone's `seat_id` (0094), the seat its released identifiers name. Each is
+// tombstone's `seat_id` (0117), the seat its released identifiers name. Each is
 // written by the apply from the record, and recomputed by [Applier.Rederive]
 // from the row's own document or claims whenever the checkpoint's rule set
 // differs from this build's — a checkpoint a reanchor created (derivation 0),
 // or rows adopted from a build whose rules differ ([statelog.Deriver]), the
-// rows of a build before 0094 among them, whose tombstones hold the column's
+// rows of a build before 0117 among them, whose tombstones hold the column's
 // default. On rows this build applied it writes nothing. Bumped by any change
 // to what a derived column holds, so a node holding rows derived under another
 // rule set converges on this one.
@@ -189,6 +194,11 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // written, so a node whose rows this build maintained repairs none, and a row
 // re-derived here equals the row a node replaying the log writes — the column,
 // and nothing else; the version stays the record's.
+//
+// A PASS, by definition: every invitation and every removal tombstone, each
+// in the order of its own key ([invitationSeatsStatement],
+// [removalSeatsStatement]) and each repaired by that key
+// ([rederiveSeatStatement], [rederiveRemovalSeatStatement]).
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 	_ statelog.ApplyOptions) (int, error) {
 
@@ -207,8 +217,7 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 // cursor is still walking is a write the cursor may or may not see again.
 func rederiveInvitationSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 	type stale struct{ id, seat string }
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, seat_id, document FROM iam_invites ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, invitationSeatsStatement)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
 			"their seats: %w", err)
@@ -243,8 +252,7 @@ func rederiveInvitationSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 			"their seats: %w", err)
 	}
 	for _, r := range repair {
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE iam_invites SET seat_id = ? WHERE id = ?`,
+		if _, err = tx.ExecContext(ctx, rederiveSeatStatement,
 			r.seat, r.id); err != nil {
 			return 0, fmt.Errorf("iamdomain: re-derive invitation %s's "+
 				"seat: %w", r.id, err)
@@ -263,8 +271,7 @@ func rederiveInvitationSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 // every later read of one seat.
 func rederiveRemovalSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 	type stale struct{ person, seat string }
-	rows, err := tx.QueryContext(ctx,
-		`SELECT person_id, seat_id, claims_json FROM iam_removed ORDER BY person_id`)
+	rows, err := tx.QueryContext(ctx, removalSeatsStatement)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: read the removals to re-derive "+
 			"their seats: %w", err)
@@ -296,8 +303,7 @@ func rederiveRemovalSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 			"their seats: %w", err)
 	}
 	for _, r := range repair {
-		if _, err = tx.ExecContext(ctx,
-			`UPDATE iam_removed SET seat_id = ? WHERE person_id = ?`,
+		if _, err = tx.ExecContext(ctx, rederiveRemovalSeatStatement,
 			r.seat, r.person); err != nil {
 			return 0, fmt.Errorf("iamdomain: re-derive person %s's released "+
 				"seat: %w", r.person, err)
@@ -305,6 +311,18 @@ func rederiveRemovalSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 	}
 	return len(repair), nil
 }
+
+// The four statements [Applier.Rederive] runs: every invitation with the seat
+// its row holds and the document that states it, and one row's seat set to
+// what its document states; every removal tombstone with the seat its row
+// holds and the claims that state it, and one tombstone's seat set to what
+// its claims state.
+const (
+	invitationSeatsStatement     = `SELECT id, seat_id, document FROM iam_invites ORDER BY id`
+	rederiveSeatStatement        = `UPDATE iam_invites SET seat_id = ? WHERE id = ?`
+	removalSeatsStatement        = `SELECT person_id, seat_id, claims_json FROM iam_removed ORDER BY person_id`
+	rederiveRemovalSeatStatement = `UPDATE iam_removed SET seat_id = ? WHERE person_id = ?`
+)
 
 // Gated reports a record that must produce no rows at all.
 //
@@ -467,7 +485,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindTrimmed:
 		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
 		// below the floor its subject names, in this same transaction
-		// (ADR-0050); this domain writes nothing for it — no row and no
+		// (ADR-0073); this domain writes nothing for it — no row and no
 		// trail row, which is why it is listed as silent rather than
 		// classified.
 		return 0, nil
@@ -536,7 +554,7 @@ type applyContext struct {
 	packed int64
 
 	// brokerAt is the BROKER's own instant for this record, which is what
-	// makes a derived timestamp byte-identical on every node rather than a
+	// makes a derived timestamp byte-identical on every data node rather than a
 	// clock each one read for itself.
 	brokerAt time.Time
 

@@ -106,7 +106,7 @@ func TestAnUpgradeCarriesTheRowsInFlightAcross(t *testing.T) {
 			"own row alone: the batch's row is still in flight, and an entry naming half "+
 			"of the own row's identity names no row", mark.Events, mark.LastEvent)
 	}
-	if left, err := db.Events().UnsettledCustody(ctx, time.Now().Add(time.Hour), 10); err != nil ||
+	if left, err := db.Events().UnsettledCustody(ctx, time.Now().Add(time.Hour), UnsettledBatch{}, 10); err != nil ||
 		len(left) != 1 || left[0].ID != "batch" {
 		t.Errorf("after the upgrade the unsettled batches are (%v, %v), want the one written", left, err)
 	}

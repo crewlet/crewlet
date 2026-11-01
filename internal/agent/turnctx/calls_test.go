@@ -1,9 +1,11 @@
 package turnctx_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // A CALL'S COUNT IS THE DIFFERENT CALLS TO ITS TOOL BEFORE IT, so a call made
@@ -22,7 +24,7 @@ func TestACallCountsTheDifferentCallsBeforeIt(t *testing.T) {
 		var out []int
 		for _, c := range calls {
 			out = append(out, log.Ordinal(c.tool, c.args))
-			log.Record(c.tool, c.args)
+			log.Record(c.tool, toolargs.Of(nil, c.args))
 		}
 		return out
 	}
@@ -63,6 +65,75 @@ func TestACallCountsTheDifferentCallsBeforeIt(t *testing.T) {
 	}
 }
 
+// TWO TOOLS THAT WRITE ONE STATE COUNT EACH OTHER'S CALLS, so joining a room
+// again after leaving it is a new operation rather than the first join's
+// retry — the count a per-tool log cannot give, because the leave between the
+// two joins is another tool's call.
+func TestAFamilyCountsEachOthersCalls(t *testing.T) {
+	t.Parallel()
+	membership := []string{"join", "leave"}
+	room := map[string]any{"channel": "eng"}
+	other := map[string]any{"channel": "ops"}
+	type call = struct {
+		tool string
+		args map[string]any
+	}
+	cases := []struct {
+		name  string
+		calls []call
+		want  []int
+	}{
+		{"joining again after leaving is a new operation",
+			[]call{{"join", room}, {"leave", room}, {"join", room}}, []int{0, 1, 1}},
+		{"and so is leaving again after joining",
+			[]call{{"leave", room}, {"join", room}, {"leave", room}}, []int{0, 1, 1}},
+		{"a repeat with nothing in the family between is one operation",
+			[]call{{"join", room}, {"join", room}, {"leave", room}, {"leave", room}},
+			[]int{0, 0, 2, 2}},
+		{"a call outside the family counts for nothing",
+			[]call{{"join", room}, {"post", other}, {"join", room}}, []int{0, 0, 0}},
+		{"a family member's other arguments count",
+			[]call{{"join", other}, {"leave", room}, {"join", room}}, []int{0, 1, 2}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			log := turnctx.NewCallLog()
+			var got []int
+			for _, call := range c.calls {
+				// EACH TOOL IS COUNTED AMONG ITS OWN FAMILY, as a caller
+				// hands them: the membership pair, or the tool alone.
+				var family []string
+				if slices.Contains(membership, call.tool) {
+					family = membership
+				}
+				got = append(got, log.OrdinalAmong(family, call.tool, call.args))
+				log.Record(call.tool, toolargs.Of(nil, call.args))
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("counts = %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("counts = %v, want %v", got, c.want)
+				}
+			}
+		})
+	}
+
+	// A FAMILY OF ONE IS THE PER-TOOL COUNT, whether or not the tool names
+	// itself — which is what lets a caller hand every tool its family.
+	log := turnctx.NewCallLog()
+	log.Record("join", toolargs.Of(nil, room))
+	log.Record("leave", toolargs.Of(nil, room))
+	for _, family := range [][]string{nil, {"join"}} {
+		if got, want := log.OrdinalAmong(family, "join", other), log.Ordinal("join", other); got != want {
+			t.Errorf("a family of %v counts %d where the tool's own count is %d",
+				family, got, want)
+		}
+	}
+}
+
 // A RE-RUN REPRODUCES EVERY COUNT, because a count is a function of the calls
 // the run made and nothing else — which is what lets a re-run's writes
 // collapse onto the first run's call for call.
@@ -77,7 +148,7 @@ func TestARerunReproducesEveryCount(t *testing.T) {
 		var out []int
 		for _, args := range calls {
 			out = append(out, log.Ordinal("update", args))
-			log.Record("update", args)
+			log.Record("update", toolargs.Of(nil, args))
 		}
 		return out
 	}
@@ -94,8 +165,8 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	log := turnctx.NewCallLog()
-	log.Seed(turnctx.SeededCall{Tool: "update", Args: a},
-		turnctx.SeededCall{Tool: "update", Args: b})
+	log.Seed(turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, a)},
+		turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, b)})
 	if got := log.Ordinal("update", a); got != 1 {
 		t.Fatalf("a call made again after the seeded different one counts %d, "+
 			"want 1 — the resumed run would take the first copy's id", got)
@@ -108,13 +179,13 @@ func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	run := turnctx.NewCallLog()
-	run.Record("update", a)
+	run.Record("update", toolargs.Of(nil, a))
 
 	first, second := run.Fork(), run.Fork()
 	if got := first.Ordinal("update", b); got != 1 {
 		t.Fatalf("a fork counts %d different calls before it, want the run's 1", got)
 	}
-	first.Record("update", b)
+	first.Record("update", toolargs.Of(nil, b))
 	if got := second.Ordinal("update", a); got != 0 {
 		t.Fatalf("a sibling's call reached another fork (count %d, want 0) — a "+
 			"count that depends on which sibling finished first is one a re-run "+
@@ -133,12 +204,55 @@ func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
 	}
 }
 
+// CALLS THAT RUN SIDE BY SIDE COUNT IN THE ORDER THEY WERE ADMITTED, whatever
+// order they return in: each counts the run's calls admitted before it and
+// none admitted after, so a re-run that makes the same calls in the same order
+// reproduces every count however its tools happen to finish.
+//
+// Mutation: hand back the run's own log rather than a fork, and the first
+// call counts the second, admitted after it; leave the record to the return,
+// and the run counts nothing before a fourth.
+func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
+	t.Parallel()
+	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
+	run := turnctx.NewCallLog()
+	first := run.Admit("update", toolargs.Of(nil, a))
+	second := run.Admit("update", toolargs.Of(nil, b))
+	third := run.Admit("update", toolargs.Of(nil, a))
+	// Asked in the reverse of the admission order, as calls returning
+	// out of order would ask.
+	if got := third.Ordinal("update", a); got != 1 {
+		t.Fatalf("the third call counts %d different calls before it, want 1", got)
+	}
+	if got := second.Ordinal("update", b); got != 1 {
+		t.Fatalf("the second call counts %d different calls before it, want 1", got)
+	}
+	if got := first.Ordinal("update", a); got != 0 {
+		t.Fatalf("the first call counts %d, want 0: it saw a call admitted after it", got)
+	}
+	// Each is in the run's log from its admission, so a call admitted
+	// later counts all three without waiting for any to return.
+	if got := run.Ordinal("update", b); got != 2 {
+		t.Fatalf("the run counts %d calls before a fourth, want the two that differ", got)
+	}
+	// What a call recorded on its own fork reaches the run once absorbed.
+	second.Record("comment", toolargs.Of(nil, b))
+	run.Absorb(second)
+	if got := run.Ordinal("comment", a); got != 1 {
+		t.Fatalf("a call's own fork was not absorbed (count %d, want 1)", got)
+	}
+	var none *turnctx.CallLog
+	if none.Admit("update", toolargs.Of(nil, a)) != nil {
+		t.Fatal("a nil log admitted a call")
+	}
+}
+
 // A NIL LOG HOLDS NOTHING AND COUNTS ZERO, which is every call as its run's
 // first of its kind — the id every call derived before the log existed.
 func TestANilLogCountsNothing(t *testing.T) {
 	t.Parallel()
 	var log *turnctx.CallLog
-	log.Record("update", map[string]any{"status": "done"})
+	log.Record("update", toolargs.Of(nil, map[string]any{"status": "done"}))
 	log.Absorb(log.Fork())
 	if got := log.Ordinal("update", map[string]any{"status": "todo"}); got != 0 {
 		t.Fatalf("a nil log counted %d", got)

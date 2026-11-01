@@ -31,17 +31,18 @@ describe("expand", () => {
   // them.
   test("adds every app to a set holding admin, and nothing to one without", () => {
     expect(expand(["admin"])).toEqual(["admin", ...APPS]);
-    expect(expand(["tracker"])).toEqual(["tracker"]);
+    expect(expand(["worklet"])).toEqual(["worklet"]);
     expect(expand([])).toEqual([]);
   });
 
   test("keeps a name it does not know, and adds no app twice", () => {
-    expect(expand(["later", "admin", "knowledge"])).toEqual([
+    expect(expand(["later", "admin", "doclet"])).toEqual([
       "later",
       "admin",
-      "knowledge",
-      "tracker",
+      "doclet",
+      "worklet",
       "artifacts",
+      "chatlet",
     ]);
   });
 
@@ -56,15 +57,17 @@ describe("expand", () => {
 
 describe("holds", () => {
   test("counts every app an admin carries", () => {
-    expect(holds(["admin"], "tracker")).toBe(true);
-    expect(holds(["admin"], "knowledge")).toBe(true);
-    expect(holds(["tracker"], "knowledge")).toBe(false);
-    expect(holds(["tracker"], "admin")).toBe(false);
+    expect(holds(["admin"], "worklet")).toBe(true);
+    expect(holds(["admin"], "doclet")).toBe(true);
+    expect(holds(["admin"], "chatlet")).toBe(true);
+    expect(holds(["worklet"], "doclet")).toBe(false);
+    expect(holds(["worklet"], "chatlet")).toBe(false);
+    expect(holds(["worklet"], "admin")).toBe(false);
   });
 
   test("any one of a lock's permissions opens it, and a lock naming none is open", () => {
-    expect(holdsAny(["knowledge"], ["tracker", "knowledge"])).toBe(true);
-    expect(holdsAny([], ["tracker"])).toBe(false);
+    expect(holdsAny(["doclet"], ["worklet", "doclet"])).toBe(true);
+    expect(holdsAny([], ["worklet"])).toBe(false);
     expect(holdsAny([], [])).toBe(true);
     expect(holdsAny([], undefined)).toBe(true);
   });
@@ -84,31 +87,37 @@ describe("the words", () => {
   });
 
   test("a set is said as Admin, its apps, or the overview", () => {
-    expect(accessLine(["admin", "tracker", "knowledge"])).toBe("Admin");
-    expect(accessLine(["knowledge", "tracker"])).toBe("Tracker · Knowledge");
-    expect(accessLine(["tracker"])).toBe("Tracker");
+    expect(accessLine(["admin", "worklet", "doclet"])).toBe("Admin");
+    expect(accessLine(["doclet", "worklet"])).toBe("Worklet · Doclet");
+    expect(accessLine(["chatlet", "worklet", "doclet"])).toBe("Worklet · Doclet · Chatlet");
+    expect(accessLine(["worklet"])).toBe("Worklet");
     expect(accessLine([])).toBe("Overview only");
   });
 
   test("a name this build has no word for is said as itself, never dropped", () => {
-    expect(accessLine(["tracker", "later"])).toBe("Tracker · later");
+    expect(accessLine(["worklet", "later"])).toBe("Worklet · later");
     expect(accessLine(["later"])).toBe("later");
     expect(accessLabel("later")).toBe("later");
   });
 
   test("a lock names its access and who can give it", () => {
-    expect(accessNames(["tracker", "knowledge"])).toBe("Tracker or Knowledge");
-    expect(needsWords("Work", ["tracker"])).toBe(
-      "Work needs Tracker access. An admin can give it to you.",
+    expect(accessNames(["worklet"])).toBe("Worklet");
+    expect(accessNames(["worklet", "doclet"])).toBe("Worklet or Doclet");
+    // THREE OR MORE AS THE ENGINE SAYS THEM, commas and "or" before the last.
+    expect(accessNames(["worklet", "doclet", "artifacts"])).toBe("Worklet, Doclet or Artifacts");
+    expect(needsWords("Search", ["doclet"])).toBe(
+      "Search needs Doclet access. An admin can give it to you.",
     );
   });
 
-  // NOTHING THE ENGINE ACCEPTED WAS PRESENTED — a 401 — so the repair is to
-  // sign in, not to ask an admin for access.
-  test("a refusal naming no access asks for a credential, not an admin", () => {
+  // A LOCK NAMING NO ACCESS SAYS ONLY THAT THERE IS NONE: it said "Sign in
+  // to see this.", the 401's sentence, so a signed-in person a rule refused
+  // naming nothing was told to sign in. Which refusal it was is
+  // `authorityWords`', which is told what refused.
+  test("a lock naming no access never asks a signed-in reader to sign in", () => {
     const said = needsWords("Reading one pass", []);
-    expect(said).toBe("Sign in to see this.");
-    expect(said).not.toMatch(/admin|operator|token/);
+    expect(said).toBe("You don’t have access to this.");
+    expect(said).not.toMatch(/sign in|admin|operator|token/i);
   });
 });
 
@@ -131,7 +140,7 @@ describe("a lock's words", () => {
   test("a group carries the lock only where every row shares one reason", () => {
     expect(groupLock(["Needs Admin access", "Needs Admin access"])).toBe("Needs Admin access");
     expect(groupLock(["Needs Admin access", undefined])).toBeUndefined();
-    expect(groupLock(["Needs Admin access", "Needs Tracker access"])).toBeUndefined();
+    expect(groupLock(["Needs Admin access", "Needs Worklet access"])).toBeUndefined();
     expect(groupLock([])).toBeUndefined();
   });
 });

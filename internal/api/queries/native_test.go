@@ -13,14 +13,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // stubWork and stubPages record what filter the surface built, which is the
@@ -28,59 +28,61 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	places        map[string]tracker.TurnPlace
+	places        map[string]worklet.TurnPlace
 	placesAsked   []string
-	turns         tracker.TaskTurns
+	turns         worklet.TaskTurns
 	turnsRef      string
 	turnsCursor   string
 	turnsLimit    int
-	inbox         tracker.InboxAnswer
-	inboxQuery    tracker.InboxQuery
-	routing       tracker.RoutingAnswer
-	routingQuery  tracker.RoutingQuery
-	ranked        []tracker.Ranked
+	inbox         worklet.InboxAnswer
+	inboxQuery    worklet.InboxQuery
+	routing       worklet.RoutingAnswer
+	routingQuery  worklet.RoutingQuery
+	ranked        []worklet.Ranked
 	searchText    string
 	searchLimit   int
 	searchMode    knowledge.Mode
 	searchOutcome knowledge.Outcome
-	query         tracker.Query
-	answer        tracker.Answer
-	detail        tracker.TaskDetail
-	views         tracker.ViewQuery
-	every         tracker.EveryViewQuery
-	listing       tracker.ViewListing
-	personQuery   tracker.PersonQuery
-	person        tracker.PersonState
+	query         worklet.Query
+	answer        worklet.Answer
+	detail        worklet.TaskDetail
+	views         worklet.ViewQuery
+	every         worklet.EveryViewQuery
+	listing       worklet.ViewListing
+	personQuery   worklet.PersonQuery
+	person        worklet.PersonState
 
-	projectQuery  tracker.ProjectQuery
-	projects      tracker.ProjectListing
-	detailQuery   tracker.ProjectDetailQuery
-	project       tracker.ProjectDetail
-	workloadQuery tracker.WorkloadQuery
-	workload      tracker.WorkloadAnswer
+	projectQuery  worklet.ProjectQuery
+	projects      worklet.ProjectListing
+	detailQuery   worklet.ProjectDetailQuery
+	project       worklet.ProjectDetail
+	workloadQuery worklet.WorkloadQuery
+	workload      worklet.WorkloadAnswer
 
 	// The instant and the clock each day-cutting read was handed, so a
 	// test can hold a surface to the company's own midnight.
 	expandNow, workloadNow, myWorkNow    time.Time
 	expandZone, workloadZone, myWorkZone *time.Location
 
-	expandViewer  tracker.Viewer
-	activityQuery tracker.ActivityQuery
-	activity      tracker.ActivityAnswer
-	myWorkQuery   tracker.MyWorkQuery
-	myWork        tracker.MyWork
+	expandViewer  worklet.Viewer
+	activityQuery worklet.ActivityQuery
+	activity      worklet.ActivityAnswer
+	myWorkQuery   worklet.MyWorkQuery
+	myWork        worklet.MyWork
 
-	flowQuery      tracker.FlowQuery
-	flow           tracker.FlowAnswer
-	feedQuery      tracker.FeedQuery
-	feed           tracker.FeedPage
-	decisionsQuery tracker.DecisionsQuery
-	decisions      tracker.DecisionsAnswer
+	flowQuery      worklet.FlowQuery
+	flow           worklet.FlowAnswer
+	feedQuery      worklet.FeedQuery
+	feed           worklet.FeedPage
+	decisionsQuery worklet.DecisionsQuery
+	decisions      worklet.DecisionsAnswer
+	answeredQuery  worklet.DecisionsQuery
+	answered       worklet.AnsweredAnswer
 
-	catalogueQuery tracker.CatalogueQuery
+	catalogueQuery worklet.CatalogueQuery
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
-	taskWants      tracker.DetailWants
+	taskWants      worklet.DetailWants
 
 	// expandErr is what expanding a view's parameters fails with.
 	expandErr error
@@ -91,72 +93,72 @@ type stubWork struct {
 	// threadAsked every query it was handed.
 	asks        map[string]string
 	threadErr   error
-	threadAsked []tracker.ThreadQuery
+	threadAsked []worklet.ThreadQuery
 
 	err error
 }
 
 // Thread answers the asked probe from [stubWork.asks], as the tracker's own
 // inference would: the one open ask addressed to the author, or none.
-func (s *stubWork) Thread(_ context.Context, q tracker.ThreadQuery,
-	_ statelog.Freshness) (tracker.ResolvedThread, error) {
+func (s *stubWork) Thread(_ context.Context, q worklet.ThreadQuery,
+	_ statelog.Freshness) (worklet.ResolvedThread, error) {
 
 	s.threadAsked = append(s.threadAsked, q)
 	if s.threadErr != nil {
-		return tracker.ResolvedThread{}, s.threadErr
+		return worklet.ResolvedThread{}, s.threadErr
 	}
-	return tracker.ResolvedThread{Answers: s.asks[q.Author]}, nil
+	return worklet.ResolvedThread{Answers: s.asks[q.Author]}, nil
 }
 
-func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
+func (s *stubWork) Projects(_ context.Context, q worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
 
 	s.projectQuery = q
 	return s.projects, s.err
 }
 
-func (s *stubWork) Project(_ context.Context, q tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (s *stubWork) Project(_ context.Context, q worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 
 	s.detailQuery = q
 	return s.project, s.err
 }
 
-func (s *stubWork) Workload(_ context.Context, q tracker.WorkloadQuery,
-	now time.Time, loc *time.Location) (tracker.WorkloadAnswer, error) {
+func (s *stubWork) Workload(_ context.Context, q worklet.WorkloadQuery,
+	now time.Time, loc *time.Location) (worklet.WorkloadAnswer, error) {
 
 	s.workloadQuery = q
 	s.workloadNow, s.workloadZone = now, loc
 	return s.workload, s.err
 }
 
-func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
-	_ time.Time) (tracker.ActivityAnswer, error) {
+func (s *stubWork) Activity(_ context.Context, q worklet.ActivityQuery,
+	_ time.Time) (worklet.ActivityAnswer, error) {
 
 	s.activityQuery = q
 	return s.activity, s.err
 }
 
-func (s *stubWork) MyWork(_ context.Context, q tracker.MyWorkQuery,
-	now time.Time, loc *time.Location) (tracker.MyWork, error) {
+func (s *stubWork) MyWork(_ context.Context, q worklet.MyWorkQuery,
+	now time.Time, loc *time.Location) (worklet.MyWork, error) {
 
 	s.myWorkQuery = q
 	s.myWorkNow, s.myWorkZone = now, loc
 	return s.myWork, s.err
 }
 
-func (s *stubWork) EveryView(_ context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error) {
+func (s *stubWork) EveryView(_ context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error) {
 	s.every = q
 	return s.listing, s.err
 }
 
-func (s *stubWork) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+func (s *stubWork) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	s.views = q
 	return s.listing, s.err
 }
 
 func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
-	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 
 	// RECORDED, because the viewer is the one input to this call that the
 	// parsed query does not carry: it is a property of the surface rather
@@ -164,36 +166,36 @@ func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
 	s.expandViewer = viewer
 	s.expandNow, s.expandZone = now, loc
 	if s.expandErr != nil {
-		return tracker.Query{}, s.expandErr
+		return worklet.Query{}, s.expandErr
 	}
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	return worklet.ParseQuery(worklet.MapParams(params), now, loc)
 }
 
 func (s *stubWork) Catalogue(_ context.Context,
-	q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
+	q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
 
 	s.catalogueQuery = q
-	return tracker.CatalogueAnswer{}, nil
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time) (tracker.PersonState, error) {
+func (s *stubWork) Person(_ context.Context, q worklet.PersonQuery, _ time.Time) (worklet.PersonState, error) {
 	s.personQuery = q
 	return s.person, s.err
 }
 
-func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
+func (s *stubWork) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (worklet.InboxAnswer, error) {
 	s.inboxQuery = q
 	return s.inbox, s.err
 }
 
-func (s *stubWork) Flow(_ context.Context, q tracker.FlowQuery, _ time.Time,
-	_ *time.Location) (tracker.FlowAnswer, error) {
+func (s *stubWork) Flow(_ context.Context, q worklet.FlowQuery, _ time.Time,
+	_ *time.Location) (worklet.FlowAnswer, error) {
 
 	s.flowQuery = q
 	return s.flow, s.err
 }
 
-func (s *stubWork) CompanyFeed(_ context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
+func (s *stubWork) CompanyFeed(_ context.Context, q worklet.FeedQuery) (worklet.FeedPage, error) {
 	s.feedQuery = q
 	// AT THE LEVEL ASKED, as the reader answers, so a case can tell which
 	// half of a composed feed set the answer's level.
@@ -204,22 +206,29 @@ func (s *stubWork) CompanyFeed(_ context.Context, q tracker.FeedQuery) (tracker.
 	return page, s.err
 }
 
-func (s *stubWork) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.Time,
-	_ *time.Location) (tracker.DecisionsAnswer, error) {
+func (s *stubWork) Decisions(_ context.Context, q worklet.DecisionsQuery, _ time.Time,
+	_ *time.Location) (worklet.DecisionsAnswer, error) {
 
 	s.decisionsQuery = q
 	return s.decisions, s.err
 }
 
+func (s *stubWork) AnsweredAsks(_ context.Context, q worklet.DecisionsQuery, _ time.Time,
+	_ *time.Location) (worklet.AnsweredAnswer, error) {
+
+	s.answeredQuery = q
+	return s.answered, s.err
+}
+
 func (s *stubWork) TurnPlaces(_ context.Context, runs []string,
-	_ statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	_ statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 
 	s.placesAsked = runs
 	return s.places, s.err
 }
 
-func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Time) (
-	tracker.RoutingAnswer, error) {
+func (s *stubWork) Routing(_ context.Context, q worklet.RoutingQuery, _ time.Time) (
+	worklet.RoutingAnswer, error) {
 
 	s.routingQuery = q
 	return s.routing, s.err
@@ -229,25 +238,25 @@ func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Tim
 // [queries.WorkSearcher]. It is on this type for the harness's convenience
 // only; the surface takes the two independently, and a case that wants a node
 // with a board and no index leaves `WorkSearch` nil.
-func (s *stubWork) Search(_ context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+func (s *stubWork) Search(_ context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	s.searchText, s.searchLimit, s.searchMode = q.Text, q.Limit, q.Mode
-	return tracker.SearchAnswer{Hits: s.ranked, Outcome: s.searchOutcome}, s.err
+	return worklet.SearchAnswer{Hits: s.ranked, Outcome: s.searchOutcome}, s.err
 }
 
 func (s *stubWork) TurnsOf(_ context.Context, ref, cursor string, limit int,
-	fresh statelog.Freshness) (tracker.TaskTurns, error) {
+	fresh statelog.Freshness) (worklet.TaskTurns, error) {
 
 	s.turnsRef, s.turnsCursor, s.turnsLimit, s.taskFresh = ref, cursor, limit, fresh
 	return s.turns, s.err
 }
 
-func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (s *stubWork) Tasks(_ context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	s.query = q
 	return s.answer, s.err
 }
 
-func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
-	fresh statelog.Freshness) (tracker.TaskDetail, error) {
+func (s *stubWork) Task(_ context.Context, _ string, want worklet.DetailWants,
+	fresh statelog.Freshness) (worklet.TaskDetail, error) {
 
 	s.taskLevel, s.taskFresh = fresh.Level, fresh
 	s.taskWants = want
@@ -255,8 +264,8 @@ func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 }
 
 type stubPages struct {
-	filter pages.Filter
-	list   []pages.Summary
+	filter doclet.Filter
+	list   []doclet.Summary
 	total  int
 	after  string
 	err    error
@@ -273,53 +282,53 @@ type stubPages struct {
 	// activity and revision are what the two newest reads were asked, so a
 	// case can prove a filter reached the reader rather than only that
 	// rows came back.
-	activity     pages.PageActivityQuery
-	changes      []pages.PageChange
-	revision     pages.Revision
+	activity     doclet.PageActivityQuery
+	changes      []doclet.PageChange
+	revision     doclet.Revision
 	revisionHeld bool
 	askedPage    string
 	askedVersion int
 
 	// detail is what Get answers.
-	detail pages.Detail
+	detail doclet.Detail
 }
 
-func (s *stubPages) List(_ context.Context, f pages.Filter,
+func (s *stubPages) List(_ context.Context, f doclet.Filter,
 	fresh statelog.Freshness,
-) (pages.Listing, error) {
+) (doclet.Listing, error) {
 	s.filter, s.level, s.fresh = f, fresh.Level, fresh
-	return pages.Listing{
+	return doclet.Listing{
 		Pages: s.list, Total: s.total, After: s.after, Level: fresh.Level, Complete: true,
 	}, s.err
 }
 
 func (s *stubPages) Get(_ context.Context, _ string,
 	fresh statelog.Freshness,
-) (pages.Detail, error) {
+) (doclet.Detail, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return s.detail, s.err
 }
 
 func (s *stubPages) Containers(_ context.Context,
 	fresh statelog.Freshness,
-) ([]pages.ContainerListing, error) {
+) ([]doclet.ContainerListing, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
 }
 
-func (s *stubPages) Activity(_ context.Context, q pages.PageActivityQuery) (
-	pages.PageActivity, error) {
+func (s *stubPages) Activity(_ context.Context, q doclet.PageActivityQuery) (
+	doclet.PageActivity, error) {
 
 	s.activity = q
 	s.level, s.fresh = q.Freshness.Level, q.Freshness
-	return pages.PageActivity{
+	return doclet.PageActivity{
 		Changes: s.changes, Level: q.Freshness.Level, Complete: true,
 	}, s.err
 }
 
 func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	fresh statelog.Freshness,
-) (pages.Revision, bool, error) {
+) (doclet.Revision, bool, error) {
 	s.askedPage, s.askedVersion = pageID, version
 	s.level, s.fresh = fresh.Level, fresh
 	return s.revision, s.revisionHeld, s.err
@@ -339,6 +348,8 @@ var personalQuestions = map[string]bool{
 	"conversations": true,
 	"decisions":     true,
 	"inbox":         true,
+	// The other half of `decisions`, scoped as it is.
+	"answered_decisions": true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -465,12 +476,12 @@ func TestAReadThatFailedIsNotRenderedAsEmpty(t *testing.T) {
 // A RECORD THAT IS NOT THERE IS NOT A FAILURE. A mistyped item key must read
 // to an operator as a dead link, not as the server being broken.
 func TestAMissingRecordIsNotFound(t *testing.T) {
-	w := &stubWork{err: tracker.ErrNoTask}
+	w := &stubWork{err: worklet.ErrNoTask}
 	_, err := askNative(t, queries.Sources{Work: w}, "work_item", map[string]any{"id": "ENG-999"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing item answered %v, want not-found", err)
 	}
-	p := &stubPages{err: pages.ErrNotFound}
+	p := &stubPages{err: doclet.ErrNotFound}
 	_, err = askNative(t, queries.Sources{Pages: p}, "page", map[string]any{"id": "nope"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing page answered %v, want not-found", err)
@@ -493,7 +504,7 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	got := w.taskWants
 	// THE CLOCK IS CHECKED ON ITS OWN, below: a pointer compares by address.
 	got.Clock = nil
-	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
+	want := worklet.DetailWants{Comments: true, History: true, Links: true, Fields: true}
 	if got != want {
 		t.Errorf("work_item asked the reader for %+v, want %+v", got, want)
 	}
@@ -558,9 +569,9 @@ func TestTheItemQueryAsksWithTheChart(t *testing.T) {
 // exist is `not_found`, never an empty list a screen would draw as "no agent
 // has worked on this".
 func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
-	w := &stubWork{turns: tracker.TaskTurns{
+	w := &stubWork{turns: worklet.TaskTurns{
 		Task: "t-1", Key: "ENG-1",
-		Turns: []tracker.TaskTurn{{TurnID: "run-2", Ordinal: 2, Tokens: 900}},
+		Turns: []worklet.TaskTurn{{TurnID: "run-2", Ordinal: 2, Tokens: 900}},
 		Next:  "41",
 	}}
 	got, err := askNative(t, queries.Sources{Work: w}, "work_item_turns",
@@ -568,11 +579,11 @@ func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work_item_turns: %v", err)
 	}
-	if w.turnsRef != "ENG-1" || w.turnsCursor != "88" || w.turnsLimit != tracker.MaxTaskTurns {
+	if w.turnsRef != "ENG-1" || w.turnsCursor != "88" || w.turnsLimit != worklet.MaxTaskTurns {
 		t.Errorf("asked the reader for (%q, %q, %d), want (ENG-1, 88, %d)",
-			w.turnsRef, w.turnsCursor, w.turnsLimit, tracker.MaxTaskTurns)
+			w.turnsRef, w.turnsCursor, w.turnsLimit, worklet.MaxTaskTurns)
 	}
-	page, ok := got.(tracker.TaskTurns)
+	page, ok := got.(worklet.TaskTurns)
 	if !ok || page.Next != "41" || len(page.Turns) != 1 || page.Turns[0].Ordinal != 2 {
 		t.Errorf("answered %#v, want the reader's page with its cursor", got)
 	}
@@ -581,7 +592,7 @@ func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("no id answered %v, want bad_params", err)
 	}
-	gone := &stubWork{err: tracker.ErrNoTask}
+	gone := &stubWork{err: worklet.ErrNoTask}
 	if _, err := askNative(t, queries.Sources{Work: gone}, "work_item_turns",
 		map[string]any{"id": "ENG-404"}); !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a task that does not exist answered %v, want not_found", err)
@@ -597,9 +608,9 @@ func TestTheTurnsQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 // detail assembles. The page size is the caller's, held to the tracker's own
 // ceiling.
 func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
-	w := &stubWork{detail: tracker.TaskDetail{
-		Task:           tracker.Task{ID: "t-1", Key: "ENG-1"},
-		Comments:       []tracker.Comment{{ID: "c-21", Body: "older"}},
+	w := &stubWork{detail: worklet.TaskDetail{
+		Task:           worklet.Task{ID: "t-1", Key: "ENG-1"},
+		Comments:       []worklet.Comment{{ID: "c-21", Body: "older"}},
 		CommentsCursor: "1700000000:c-20",
 	}}
 	got, err := askNative(t, queries.Sources{Work: w}, "work_comments",
@@ -607,8 +618,8 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work_comments: %v", err)
 	}
-	want := tracker.DetailWants{
-		Comments: true, CommentCursor: "1800000000:c-41", CommentLimit: tracker.MaxCommentPage,
+	want := worklet.DetailWants{
+		Comments: true, CommentCursor: "1800000000:c-41", CommentLimit: worklet.MaxCommentPage,
 	}
 	if w.taskWants != want {
 		t.Errorf("work_comments asked the reader for %+v, want %+v", w.taskWants, want)
@@ -623,15 +634,27 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 	}
 	// AN EMPTY THREAD IS A LIST: an absent key reads like an answer that
 	// failed to carry one.
-	w.detail = tracker.TaskDetail{Task: tracker.Task{ID: "t-2", Key: "ENG-2"}}
+	w.detail = worklet.TaskDetail{Task: worklet.Task{ID: "t-2", Key: "ENG-2"}}
 	got, _ = askNative(t, queries.Sources{Work: w}, "work_comments",
 		map[string]any{"item": "ENG-2"})
-	if list, ok := got.(map[string]any)["comments"].([]tracker.Comment); !ok || list == nil {
+	if list, ok := got.(map[string]any)["comments"].([]worklet.Comment); !ok || list == nil {
 		t.Errorf("an empty thread answered %v rather than an empty list", got)
 	}
-	if w.taskWants.CommentLimit != tracker.DetailComments {
+	if w.taskWants.CommentLimit != worklet.DetailComments {
 		t.Errorf("a caller naming no page got %d, want the detail's own %d",
-			w.taskWants.CommentLimit, tracker.DetailComments)
+			w.taskWants.CommentLimit, worklet.DetailComments)
+	}
+	if w.taskWants.CommentThread != (worklet.CommentThread{}) {
+		t.Errorf("a caller naming no thread narrowed the read to %+v", w.taskWants.CommentThread)
+	}
+	// ONE COMMENT'S CONVERSATION IS NARROWED BY THE READ, so its cursor is
+	// that conversation's and not the task's.
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+		map[string]any{"item": "ENG-2", "thread": " c-7 ", "with_root": true}); err != nil {
+		t.Fatalf("work_comments with a thread: %v", err)
+	}
+	if want := (worklet.CommentThread{Root: "c-7", WithRoot: true}); w.taskWants.CommentThread != want {
+		t.Errorf("a thread asked the reader for %+v, want %+v", w.taskWants.CommentThread, want)
 	}
 }
 
@@ -661,7 +684,7 @@ func TestABoardFilterReachesTheReader(t *testing.T) {
 	if len(got.Tags.Tags) != 1 || got.Tags.Tags[0] != "urgent" || got.Text != "deploy" {
 		t.Errorf("a filter was dropped on the way: %+v", got)
 	}
-	if len(got.Status) != 2 || got.Status[0] != tracker.StatusTodo {
+	if len(got.Status) != 2 || got.Status[0] != worklet.StatusTodo {
 		t.Errorf("statuses reached the reader as %v", got.Status)
 	}
 	if got.Limit != 10 {
@@ -750,7 +773,7 @@ func TestAPageContainerReachesTheReaderCanonical(t *testing.T) {
 // beside the window — without them fifty pages and a container of four hundred
 // were one answer.
 func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
-	p := &stubPages{list: []pages.Summary{{ID: "p1", Title: "Runbooks"}}}
+	p := &stubPages{list: []doclet.Summary{{ID: "p1", Title: "Runbooks"}}}
 	p.total, p.after = 412, "next-window"
 	got, err := askNative(t, queries.Sources{Pages: p}, "pages",
 		map[string]any{"container": "ENG", "roots": true, "after": "cursor-1", "limit": 500})
@@ -773,10 +796,45 @@ func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
 		t.Errorf("roots with a parent answered %v, want bad params", err)
 	}
 	// AND A CURSOR THE READER REFUSES IS THE CALLER'S MISTAKE.
-	p.err = fmt.Errorf("wrapped: %w", pages.ErrBadCursor)
+	p.err = fmt.Errorf("wrapped: %w", doclet.ErrBadCursor)
 	_, err = askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"after": "junk"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a refused cursor answered %v, want bad params", err)
+	}
+}
+
+// A LISTING'S ORDER REACHES THE READER, AND ONE IT DOES NOT SERVE IS THE
+// CALLER'S MISTAKE.
+//
+// Agent skills asks for the newest tool skills, which the reader serves from
+// the skill rows' own index and nowhere else. So `order` reaches it as asked,
+// an order nobody reads is refused naming the set, and the reader's refusal of
+// the newest order over any other listing is bad params naming what it is
+// served beside — never a 500 for a question the caller can correct.
+func TestAPageListingsOrderReachesTheReader(t *testing.T) {
+	t.Parallel()
+	p := &stubPages{}
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"skills": true, "order": "newest"}); err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if p.filter.Order != doclet.OrderNewest {
+		t.Errorf("order=newest reached the reader as %q", p.filter.Order)
+	}
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", nil); err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if p.filter.Order != "" {
+		t.Errorf("an absent order reached the reader as %q, want the reader's own", p.filter.Order)
+	}
+	_, err := askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"order": "oldest"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "newest") {
+		t.Errorf("an unknown order answered %v, want bad params naming the orders", err)
+	}
+	p.err = fmt.Errorf("wrapped: %w", doclet.ErrUnservedOrder)
+	_, err = askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"order": "newest"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "skills=true") {
+		t.Errorf("an unserved order answered %v, want bad params naming skills=true", err)
 	}
 }
 
@@ -800,8 +858,8 @@ func TestAnUnknownStatusIsRefusedNamingTheSet(t *testing.T) {
 // more than fifty — and an EXACT total over an unbounded set is the one query
 // in this grammar that turns a poll into a scan, which is why it says hint.
 func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
-	w := &stubWork{answer: tracker.Answer{
-		Rows:      []tracker.TaskRow{{ID: "i1", Key: "ENG-1"}},
+	w := &stubWork{answer: worklet.Answer{
+		Rows:      []worklet.TaskRow{{ID: "i1", Key: "ENG-1"}},
 		TotalHint: 42, Level: statelog.ReadStale, Complete: true,
 	}}
 	got, err := askNative(t, queries.Sources{Work: w}, "work_items", nil)
@@ -840,7 +898,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -874,7 +932,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 		want error
 	}{
 		{"a min_position on another domain's log",
-			fmt.Errorf("tracker: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
+			fmt.Errorf("worklet: read: %w: this read floors at CREWLET_PAGES_LOG@1:5",
 				statelog.ErrForeignPosition),
 			queries.ErrBadParams},
 		{"a node whose stream was rebuilt under it",
@@ -885,7 +943,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 			t.Parallel()
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: tc.err}})
-			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items",
 				map[string]any{})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("answered %v, want %v", err, tc.want)
@@ -893,6 +951,10 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 			if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrUnavailable) {
 				t.Errorf("answered %v, which is also unavailable — a request "+
 					"every node refuses is not this node's to come back to", err)
+			}
+			if detail := queries.RefusalDetail(err); errors.Is(tc.want, queries.ErrBadParams) &&
+				(strings.Contains(detail, "worklet:") || strings.Contains(detail, "statelog")) {
+				t.Errorf("the refusal is told %q, a package's words", detail)
 			}
 		})
 	}
@@ -902,7 +964,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 //
 // `work_activity` and `work_inbox` read two positions off the wire — a cursor
 // and a `since` — and the reader refuses one it cannot use, before any row, as
-// [tracker.ErrBadQuery]: not a position, or a position from another log. That
+// [worklet.ErrBadQuery]: not a position, or a position from another log. That
 // is the caller's, so it is bad params. `work_activity` used to answer EVERY
 // failure that was not the state log's as bad params, so a store this node
 // could not read was told to the caller as their mistake; `work_inbox` answered
@@ -911,7 +973,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 func TestAFeedsRequestMistakeIsBadParamsAndItsFaultIsNot(t *testing.T) {
 	t.Parallel()
 	mistake := fmt.Errorf("%w: cursor: statelog: a position on another log",
-		tracker.ErrBadQuery)
+		worklet.ErrBadQuery)
 	fault := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
 	for _, what := range []struct {
 		name string
@@ -926,6 +988,10 @@ func TestAFeedsRequestMistakeIsBadParamsAndItsFaultIsNot(t *testing.T) {
 				what.name, what.args)
 			if !errors.Is(err, queries.ErrBadParams) {
 				t.Errorf("a refused request answered %v, want %v", err, queries.ErrBadParams)
+			}
+			if detail := queries.RefusalDetail(err); strings.Contains(detail, "worklet:") ||
+				strings.Contains(detail, "statelog") {
+				t.Errorf("a refused request is told %q, a package's words", detail)
 			}
 			_, err = askAsOperator(t, queries.Sources{Work: &stubWork{err: fault}},
 				what.name, what.args)
@@ -971,7 +1037,7 @@ func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
 
-			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items",
 				map[string]any{})
 			if !errors.Is(err, queries.ErrUnavailable) {
 				t.Fatalf("a read refused %s answered %v, want %v — it is this "+
@@ -992,11 +1058,11 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
 		RetryAfter: time.Second}
-	work := &stubWork{err: fmt.Errorf("%w: %w", tracker.ErrTooBroad, behind)}
+	work := &stubWork{err: fmt.Errorf("%w: %w", worklet.ErrTooBroad, behind)}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
@@ -1028,7 +1094,7 @@ func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
 	t.Parallel()
 	unserved := &estate.ErrUnserved{Detail: "data-a: no answer"}
 	notLive := fmt.Errorf("estate: tracker.expanded_query: %w", queue.ErrNotLive)
-	closed := fmt.Errorf("tracker: read the board: %w", store.ErrNoEstate)
+	closed := fmt.Errorf("worklet: read the board: %w", store.ErrNoEstate)
 	for _, tc := range []struct {
 		name   string
 		what   string
@@ -1066,11 +1132,11 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 		raw      string
 		kind, id string
 	}{
-		{"workspace", tracker.ContainerWorkspace, ""},
-		{"project:eng", tracker.ContainerProject, "ENG"},
-		{"project:ENG", tracker.ContainerProject, "ENG"},
-		{"unit:engineering", tracker.ContainerUnit, "engineering"},
-		{"person:ana", tracker.ContainerPerson, "ana"},
+		{"workspace", worklet.ContainerWorkspace, ""},
+		{"project:eng", worklet.ContainerProject, "ENG"},
+		{"project:ENG", worklet.ContainerProject, "ENG"},
+		{"unit:engineering", worklet.ContainerUnit, "engineering"},
+		{"person:ana", worklet.ContainerPerson, "ana"},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			w := &stubWork{}
@@ -1117,14 +1183,14 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 	for _, tc := range []struct {
 		archived   string
 		sort       string
-		wantSet    tracker.ArchivedMode
-		wantSort   tracker.ProjectSort
+		wantSet    worklet.ArchivedMode
+		wantSort   worklet.ProjectSort
 		descending bool
 	}{
-		{"", "", tracker.ArchivedExclude, "", false},
-		{"false", "key", tracker.ArchivedExclude, tracker.ProjectSortKey, false},
-		{"only", "-active", tracker.ArchivedOnly, tracker.ProjectSortActive, true},
-		{"true", "last_change", tracker.ArchivedInclude, tracker.ProjectSortLastChange, false},
+		{"", "", worklet.ArchivedExclude, "", false},
+		{"false", "key", worklet.ArchivedExclude, worklet.ProjectSortKey, false},
+		{"only", "-active", worklet.ArchivedOnly, worklet.ProjectSortActive, true},
+		{"true", "last_change", worklet.ArchivedInclude, worklet.ProjectSortLastChange, false},
 	} {
 		w := &stubWork{}
 		args := map[string]any{}
@@ -1187,7 +1253,7 @@ func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
 }
 
 // A PROJECT THAT IS THERE IS NEVER ANSWERED AS MISSING. A `for_type` the
-// company does not file was refused wrapped in tracker.ErrNoProject, so the
+// company does not file was refused wrapped in worklet.ErrNoProject, so the
 // route answered 404 about a project that exists — a dead link to a person,
 // for an argument they could fix. The key that names nothing is still 404.
 func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
@@ -1197,9 +1263,9 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 		err  error
 		want error
 	}{
-		{"no project", fmt.Errorf("tracker: no project \"ENGG\": %w", tracker.ErrNoProject),
+		{"no project", fmt.Errorf("worklet: no project \"ENGG\": %w", worklet.ErrNoProject),
 			queries.ErrNotFound},
-		{"no type", fmt.Errorf("tracker: no type \"epic\": %w", tracker.ErrNoType),
+		{"no type", fmt.Errorf("worklet: no type \"epic\": %w", worklet.ErrNoType),
 			queries.ErrBadParams},
 	} {
 		_, err := askNative(t, queries.Sources{Work: &stubWork{err: tc.err}},
@@ -1209,6 +1275,10 @@ func TestAProjectDetailClassesWhatIsMissing(t *testing.T) {
 		}
 		if errors.Is(tc.want, queries.ErrBadParams) && errors.Is(err, queries.ErrNotFound) {
 			t.Errorf("%s: an unknown type is also classed not-found", tc.name)
+		}
+		if detail := queries.RefusalDetail(err); errors.Is(tc.want, queries.ErrBadParams) &&
+			strings.Contains(detail, "worklet:") {
+			t.Errorf("%s: told %q, a package's words", tc.name, detail)
 		}
 	}
 }
@@ -1293,7 +1363,7 @@ func TestPinnedCountsReachTheReaderOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_views",
@@ -1323,13 +1393,13 @@ func TestPinnedCountsReachTheReaderOnlyForARecord(t *testing.T) {
 // NO flat rows by construction — so a populated board arrived as `items: []`
 // and a screen rendered a company with no work.
 func TestAGroupedAnswerReachesTheCaller(t *testing.T) {
-	w := &stubWork{answer: tracker.Answer{
-		Groups: []tracker.Group{{
+	w := &stubWork{answer: worklet.Answer{
+		Groups: []worklet.Group{{
 			Key: "todo", Count: 12,
-			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
+			Rows: []worklet.TaskRow{{ID: "t-1", Key: "ENG-1"}},
 		}},
 		GroupsDropped: 3, GroupsOverlap: true,
-		Totals:   []tracker.Total{{Key: "points:sum", Column: "points", Op: "sum"}},
+		Totals:   []worklet.Total{{Key: "points:sum", Column: "points", Op: "sum"}},
 		Complete: true,
 	}}
 	got, err := askNative(t, queries.Sources{Work: w}, "work_items",
@@ -1363,17 +1433,17 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		params map[string]any
-		answer tracker.Answer
+		answer worklet.Answer
 		held   bool
 		want   any
 	}{
 		{"placed", map[string]any{"container": "project:eng", "around": "ENG-3"},
-			tracker.Answer{Complete: true, Around: &tracker.Around{
+			worklet.Answer{Complete: true, Around: &worklet.Around{
 				Position: &position, Next: &next, TotalHint: 18}}, true, nil},
 		{"absent", map[string]any{"container": "project:eng", "around": "ENG-9"},
-			tracker.Answer{Complete: true}, true, (*tracker.Around)(nil)},
+			worklet.Answer{Complete: true}, true, (*worklet.Around)(nil)},
 		{"not asked", map[string]any{"container": "project:eng"},
-			tracker.Answer{Complete: true}, false, nil},
+			worklet.Answer{Complete: true}, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := askNative(t, queries.Sources{Work: &stubWork{
@@ -1537,6 +1607,11 @@ var sessionQuestions = []sessionQuestion{
 		func(s stubs) statelog.ReadLevel { return s.work.decisionsQuery.Level },
 		func(s stubs) []bound {
 			return handed(s.work.decisionsQuery.MaxLag, s.work.decisionsQuery.MaxLagSeq)
+		}, nil},
+	{"answered_decisions", []string{"tracker"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.answeredQuery.Level },
+		func(s stubs) []bound {
+			return handed(s.work.answeredQuery.MaxLag, s.work.answeredQuery.MaxLagSeq)
 		}, nil},
 	{"pages", []string{"pages"}, map[string]any{},
 		func(s stubs) statelog.ReadLevel { return s.pages.level },
@@ -1894,7 +1969,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 //
 // It was one, and `workItems` read it out of the bag and deleted the key again
 // before handing the rest to `ExpandedQuery` — because `viewer` is not in
-// `tracker.QueryKeys` and `checkKeys` refuses a key nothing parses. Which left
+// `worklet.QueryKeys` and `checkKeys` refuses a key nothing parses. Which left
 // exactly one honest value for the parameter and made every other one a free
 // choice of whose queue to render, on a surface where `preset=my_queue`,
 // `preset=priorities` and `f.<slug>=me` all resolve against it.
@@ -1932,7 +2007,7 @@ func TestTheViewerIsTheCallersOwnSeat(t *testing.T) {
 
 // A CHANGE KIND OFF THE WIRE IS CHECKED THE SAME WAY.
 //
-// It was trusted — [tracker.ChangeKind] over whatever string arrived — on the
+// It was trusted ([worklet.ChangeKind] over whatever string arrived) on the
 // reasoning that an empty feed was survivable. It is the same quiet wrong
 // answer: the history screen takes its kind from a URL a person can bookmark,
 // so a kind this build does not have drew an empty history that reads exactly
@@ -1955,8 +2030,8 @@ func TestAnUnknownChangeKindIsRefusedRatherThanFilteringToNothing(t *testing.T) 
 
 	// THE CONTROL: every kind this build has goes through as itself.
 	w = &stubWork{}
-	all := make([]string, 0, len(tracker.ChangeKinds))
-	for _, kind := range tracker.ChangeKinds {
+	all := make([]string, 0, len(worklet.ChangeKinds))
+	for _, kind := range worklet.ChangeKinds {
 		all = append(all, string(kind))
 	}
 	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
@@ -1964,9 +2039,9 @@ func TestAnUnknownChangeKindIsRefusedRatherThanFilteringToNothing(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("every change kind this build has was refused: %v", err)
 	}
-	if !slices.Equal(w.activityQuery.Kinds, tracker.ChangeKinds) {
+	if !slices.Equal(w.activityQuery.Kinds, worklet.ChangeKinds) {
 		t.Errorf("the kinds reached the reader as %v, want %v",
-			w.activityQuery.Kinds, tracker.ChangeKinds)
+			w.activityQuery.Kinds, worklet.ChangeKinds)
 	}
 }
 
@@ -2001,7 +2076,7 @@ func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("work_activity naming two real actor kinds: %v", err)
 	}
-	want := []tracker.AuthorKind{tracker.AuthorOperator, tracker.AuthorHuman}
+	want := []worklet.AuthorKind{worklet.AuthorOperator, worklet.AuthorHuman}
 	if got := w.activityQuery.ActorKinds; !slices.Equal(got, want) {
 		t.Errorf("the reader was asked for %v, want %v", got, want)
 	}
@@ -2037,7 +2112,7 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_saved_views",
@@ -2059,16 +2134,16 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 // decided before anything is read, and never asks the thread.
 //
 // A MISSING ITEM IS THE SAME REFUSAL as one they were not asked on, to
-// somebody without the tracker, so the refusal is no oracle for which keys
+// somebody without Worklet, so the refusal is no oracle for which keys
 // exist; and a thread this node cannot read is unavailable, never "you were not
 // asked".
 //
 // Mutation: answer the detail on the first ErrUnresolved without the probe, and
 // bo reads ana's item; return ErrNotFound for a missing item before deciding,
 // and the two refusals differ.
-func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
+func TestAnAskedPersonReadsTheItemWithoutWorklet(t *testing.T) {
 	t.Parallel()
-	item := tracker.TaskDetail{Task: tracker.Task{ID: "task-1", Key: "ENG-1", Project: "ENG"}}
+	item := worklet.TaskDetail{Task: worklet.Task{ID: "task-1", Key: "ENG-1", Project: "ENG"}}
 	ask := func(work *stubWork, ctx context.Context) (any, error) {
 		t.Helper()
 		r := queries.NewRegistry()
@@ -2086,7 +2161,7 @@ func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
 
 	// A TRACKER HOLDER, decided before the item is read.
 	holder := &stubWork{detail: item, asks: map[string]string{}}
-	if _, err := ask(holder, asSeat(t, "bo", iam.GrantTracker)); err != nil {
+	if _, err := ask(holder, asSeat(t, "bo", iam.GrantWorklet)); err != nil {
 		t.Fatalf("a tracker holder was refused: %v", err)
 	}
 	if len(holder.threadAsked) != 0 {
@@ -2099,7 +2174,7 @@ func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the person asked was refused the item: %v", err)
 	}
-	if detail, _ := got.(tracker.TaskDetail); detail.Task.Key != "ENG-1" {
+	if detail, _ := got.(worklet.TaskDetail); detail.Task.Key != "ENG-1" {
 		t.Errorf("the person asked was answered %v, want the item", got)
 	}
 	if len(asked.threadAsked) != 1 || asked.threadAsked[0].Task != "task-1" ||
@@ -2114,18 +2189,18 @@ func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
 		return err
 	}())
 	missing := refusalOf(func() error {
-		_, err := ask(&stubWork{err: tracker.ErrNoTask}, asSeat(t, "bo"))
+		_, err := ask(&stubWork{err: worklet.ErrNoTask}, asSeat(t, "bo"))
 		return err
 	}())
-	if !slices.Equal(notAsked.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Errorf("a person not asked was refused naming %v, want [tracker]", notAsked.Grants)
+	if !slices.Equal(notAsked.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Errorf("a person not asked was refused naming %v, want [worklet]", notAsked.Grants)
 	}
 	if missing.What != notAsked.What || missing.Reason != notAsked.Reason ||
 		!slices.Equal(missing.Grants, notAsked.Grants) {
 		t.Errorf("a missing item was refused %+v and an item not asked on %+v — "+
 			"the difference says which keys exist", missing, notAsked)
 	}
-	if _, err := ask(&stubWork{err: tracker.ErrNoTask}, asSeat(t, "bo", iam.GrantTracker)); !errors.Is(
+	if _, err := ask(&stubWork{err: worklet.ErrNoTask}, asSeat(t, "bo", iam.GrantWorklet)); !errors.Is(
 		err, queries.ErrNotFound) {
 		t.Errorf("a missing item asked by a tracker holder = %v, want not found", err)
 	}

@@ -52,6 +52,29 @@ func TestCursorAgentRunsUnpromptedWithoutWorkspaceContext(t *testing.T) {
 	}
 }
 
+// A CURSOR AGENT RUN IS CHARGED THE COUNTS ITS RESULT EVENT CARRIES, under the
+// names it gives them: `usage` in camelCase, the input with the cached parts
+// taken out, as the 2026.10.22 bundle writes it (not measured: no call through
+// a stand-in gets an answer).
+//
+// Mutation: read the counts under snake_case names, as the profile once did,
+// and the run is estimated; read the input as the whole prompt, and its cached
+// part is not charged.
+func TestCursorAgentIsChargedTheCountsItsResultCarries(t *testing.T) {
+	t.Parallel()
+	p := cursorAgent(t)
+	got := extract(p, `{"type":"result","subtype":"success","is_error":false,"result":"done",`+
+		`"usage":{"inputTokens":60,"outputTokens":12,"cacheReadTokens":30,"cacheWriteTokens":10}}`)
+	if !got.reported {
+		t.Fatal("the result's counts were not read, so the run would be charged an estimate")
+	}
+	if input := p.Usage.PromptTokens(got.input, got.cacheRead, got.cacheWrite); input != 100 ||
+		got.output != 12 || got.cacheRead != 30 || got.cacheWrite != 10 {
+		t.Errorf("charged %d in (%d read, %d written) and %d out, want 100 in (30, 10) and 12 out",
+			input, got.cacheRead, got.cacheWrite, got.output)
+	}
+}
+
 // THE ENGINE'S TEXT RIDES THE TRANSCRIPT, under the note that says which of the
 // two prompts is the role — for a seat and a side pass alike. The service
 // assembles the system prompt; the run request carries the user message and no

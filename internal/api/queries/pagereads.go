@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHO READ A PAGE, WHO LOADED IT AS A SKILL, AND WHO LINKS TO IT.
@@ -27,19 +27,19 @@ import (
 //
 //   - `page_reads{page, days}` — the seats that READ the page, how, how often
 //     and in which turn, over up to [PageReadsMaxDays] company days, from the
-//     replicated `usage` domain (ADR-0020): every node's reads, a departed
-//     node's included, the same on whichever node answers.
+//     replicated `usage` domain (ADR-0020): every data node's reads, a
+//     departed node's included, the same on whichever node answers.
 //   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
 //     carry this page's address, from a data node's own index
 //     ([search.Backlinks]) — the one the estate's router picks, whose copies
-//     of both the knowledge base and the tracker serve (ADR-0049).
+//     of both the knowledge base and the tracker serve (ADR-0072).
 //
 // ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
 // beside its own: the tasks that link a page, and the task each read happened
-// on. Those are shown to whoever holds the tracker and left out for anybody
-// else ([shows], ADR-0033): a person who reads the pages without the tracker
+// on. Those are shown to whoever holds Worklet and left out for anybody
+// else ([shows], ADR-0033): a person who reads the pages without Worklet
 // is not told what the company is working on through the pages' margins.
 
 // PageReadsMaxDays is how far back a page's readers are read: thirty company
@@ -87,7 +87,7 @@ type PageReadsAnswer struct {
 	DistinctSeatsToday int `json:"distinct_seats_today"`
 
 	// Elided is how many (page, via) entries the per-seat-day cap dropped
-	// across the window, on every node — entries of which some may have
+	// across the window, on every data node — entries of which some may have
 	// been this page's. Zero says the list is complete.
 	Elided int64 `json:"elided"`
 }
@@ -114,10 +114,10 @@ type PageReadRow struct {
 	// LastWorkItem is the task the newest read's run was charged to and
 	// its "Turn n" there — "turn 2 on ENG-412". Absent for a run charged to
 	// no task, or on a company whose tracker is not the engine's. A link to
-	// it is built by [tracker.ItemAddress] — the key, or the id where
+	// it is built by [worklet.ItemAddress]: the key, or the id where
 	// `key_collision` says another task claimed the key first and the key
 	// would open that one.
-	LastWorkItem *tracker.TurnPlace `json:"last_work_item,omitempty"`
+	LastWorkItem *worklet.TurnPlace `json:"last_work_item,omitempty"`
 }
 
 // SkillLoad is one seat a tool-skill page reached as a skill.
@@ -145,7 +145,7 @@ type PageBacklinks interface {
 // PageAnswer is the `page` answer: the page as its reader serves it, and what
 // the engine knows about it beside the page itself.
 type PageAnswer struct {
-	pages.Detail
+	doclet.Detail
 
 	// SkillLoadedBy is the seats this TOOL-SKILL page reached as a skill
 	// over the last [PageReadsMaxDays] company days, most recent first —
@@ -213,7 +213,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	}
 	detail, err := s.Pages.Get(ctx, ref, fresh)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
@@ -246,9 +246,9 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 
 // linksFor is a page's backlinks as the caller is shown them: the pages that
 // link here always — this question is the knowledge base's — and the TASKS
-// only to whoever holds the tracker, whose rows they are. Left out, the task
+// only to whoever holds Worklet, whose rows they are. Left out, the task
 // list is empty and its total zero rather than absent, because the shape a
-// reader parses is the same either way; a reader without the tracker is
+// reader parses is the same either way; a reader without Worklet is
 // shown no task anywhere, so an empty list here reads as the rest does.
 func linksFor(ctx context.Context, links search.Backlinks) *search.Backlinks {
 	if !shows(ctx, authz.KindTask) {
@@ -267,9 +267,8 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	if p.Has("days") {
 		days = p.Int("days", 0)
 		if days < 1 || days > PageReadsMaxDays {
-			return nil, fmt.Errorf("%w: days=%v, and a page's readers cover 1 to %d "+
-				"company days — ask for at most %d", ErrBadParams, p.Values()["days"],
-				PageReadsMaxDays, PageReadsMaxDays)
+			return nil, fmt.Errorf("%w: the days parameter is %q, and a page's readers cover 1 "+
+				"to %d company days", ErrBadParams, p.String("days"), PageReadsMaxDays)
 		}
 	}
 	now, loc := s.clock(), s.zone()
@@ -338,8 +337,8 @@ type pageReadsFold struct {
 	handles map[string]chartSeat
 }
 
-// foldPageReads sums every node's days into one row per (seat, via), keeps
-// the newest read's details, and counts today's distinct seats.
+// foldPageReads sums every data node's days into one row per (seat, via),
+// keeps the newest read's details, and counts today's distinct seats.
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes and days,
 // which read is the newest, what "today" is — is tested without a database.
@@ -397,7 +396,7 @@ func foldPageReads(rows []usage.PageRead, f pageReadsFold) PageReadsAnswer {
 // [PageReadsMaxDays] company days, keyed by page id — every page listed,
 // an unloaded one as an empty list, so "nobody loaded it" is an answer rather
 // than a missing key.
-func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[string][]SkillLoad, error) {
+func (s Sources) skillLoads(ctx context.Context, listed []doclet.Summary) (map[string][]SkillLoad, error) {
 	window := tokens.LastDays(PageReadsMaxDays, s.clock(), s.zone())
 	ids := make([]string, len(listed))
 	for i, p := range listed {

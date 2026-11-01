@@ -302,7 +302,7 @@ func (h *handmade) pack(ids []string) (bare, checksum string) {
 // the packs it merges hold — one that a pack it does not merge holds as well
 // among them — because a merge judges no reachability: two compactions decided
 // from different snapshots may each retire the pack the other relied on, and
-// both land (ADR-0060). A heavy pack and code.CompactMinMerge light ones share
+// both land (ADR-0083). A heavy pack and code.CompactMinMerge light ones share
 // a blob; the light ones are merged, and the blob is in the outputs.
 //
 // Mutation: hand the build the packs it does not merge as excluded packs (a

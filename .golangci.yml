@@ -59,10 +59,12 @@ linters:
       enable:
         - shadow
     staticcheck:
-      # `all` is every check, which is more than staticcheck's default: the
-      # SA (correctness) and ST (style) families including the ST checks it
-      # leaves off unless asked (a receiver named two ways, ST1016, among
-      # them), and the QF quickfix suggestions. Two QF checks are off
+      # `all` is every check, in all four families: SA (correctness), S
+      # (simplification), ST (style) and QF (quickfix suggestions). That is
+      # more than golangci-lint's default only by the six ST checks the
+      # default leaves off unless asked — ST1000, ST1003, ST1016 (a
+      # receiver named two ways), ST1020, ST1021 and ST1022; every SA, S
+      # and QF check is in the default already. Two QF checks are off
       # because they argue with how this tree writes code on purpose:
       # QF1008 ("you could remove the embedded field from this selector")
       # — it writes `db.Conn.Begin` rather than `db.Begin`, because naming
@@ -121,21 +123,18 @@ linters:
       # here: a helper whose parameter takes one value today is a helper
       # the next case widens.
       #
-      # THE RULE IS A PATTERN, NOT A LIST: every directory whose name ends
-      # in `test` is a harness in this tree's idiom (a2atest, coordtest,
-      # objstoretest, statelogtest, ...), so the pattern is the rule
-      # itself. It was a list twice, and short both times — six of nine,
-      # and then, once `statelogtest`, `integrationtest` and
-      # `jetstreamtest` had been added, nine of thirteen, missing
-      # `eventfantest`, `httpxtest`, `objstoretest` and `procgrouptest`.
-      # A rule the config states and applies to part of its subject is one
-      # the next author cannot tell from a deliberate exception, and a new
-      # harness should not have to remember to be named here.
-      #
-      # The cost is that a package named `*test` that is NOT a harness
-      # would be excused from these three linters too: name one that way
-      # and this has to become a list again.
-      - path: (^|/)[a-z0-9]+test/
+      # A PATTERN RATHER THAN A LIST, because the list never kept up: it
+      # named six of the nine `internal/**/*test/` directories when it was
+      # first corrected, and nine of fifteen when it was next read — six
+      # *test packages (`externaltest` and `httpxtest` among them) were
+      # simply never added. A rule the config states and applies
+      # to part of its subject is one the next author cannot tell from a
+      # deliberate exception. The pattern IS the claim, so a harness is
+      # covered the day it is written: any directory under internal/, at
+      # any depth, whose name ends in `test` — the standard library's own
+      # name for test support (`httptest`, `fstest`), and one no production
+      # package here takes.
+      - path: ^internal/(.+/)?[^/]*test/
         linters: [unparam, errcheck, gocritic]
 
       # A test's own HTTP call has no caller to cancel it and no connection

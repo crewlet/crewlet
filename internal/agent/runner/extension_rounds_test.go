@@ -76,6 +76,42 @@ func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
 	}
 }
 
+// AN EXTENSION'S CLI RUNS NAME THE PHASE'S ROUNDS. A run states the first and
+// last round it made, and the loop numbers them per invocation like every
+// other round, so an unshifted extension's first run claimed round 1 of a
+// phase twenty rounds in — a run a timeline draws over the phase's opening,
+// beside calls that are not its own. A run that made no request names none,
+// and stays naming none.
+//
+// Mutation: leave the runs out of the shift, or shift a run that made no
+// request, and this goes red.
+func TestAnExtensionsRunsNameThePhasesRounds(t *testing.T) {
+	t.Parallel()
+	live := toolloop.Result{
+		RoundsUsed: 3,
+		Invocations: []toolloop.Invocation{
+			{FirstRound: 1, LastRound: 2, Outcome: toolloop.OutcomeStopped},
+			{Outcome: toolloop.OutcomeFailed},
+			{FirstRound: 3, LastRound: 3, Outcome: toolloop.OutcomeEnd},
+		},
+	}
+
+	got := offsetRounds(live, 20)
+
+	if first := got.Invocations[0]; first.FirstRound != 21 || first.LastRound != 22 {
+		t.Errorf("the first run names rounds %d..%d, want 21..22", first.FirstRound, first.LastRound)
+	}
+	if none := got.Invocations[1]; none.FirstRound != 0 || none.LastRound != 0 {
+		t.Errorf("a run that made no request names rounds %d..%d, want none", none.FirstRound, none.LastRound)
+	}
+	if last := got.Invocations[2]; last.FirstRound != 23 || last.LastRound != 23 {
+		t.Errorf("the last run names rounds %d..%d, want 23", last.FirstRound, last.LastRound)
+	}
+	if live.Invocations[0].FirstRound != 1 {
+		t.Error("the loop's own run record was renumbered in place")
+	}
+}
+
 // COPIES. The Result handed to OnProgress is the loop's live snapshot,
 // published from another goroutine while the loop is still appending to those
 // same slices; renumbering in place would corrupt them under the writer.
@@ -120,10 +156,12 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 			Model:        "test/model",
 		},
 	}
+	done.Result.Invocations = []toolloop.Invocation{{FirstRound: 1, LastRound: 2}}
 	live := toolloop.Result{
 		RoundsUsed:   1,
 		Executions:   []toolloop.Execution{{Round: 1, Name: "post"}},
 		Narration:    []toolloop.Narration{{Round: 1, Content: "second"}},
+		Invocations:  []toolloop.Invocation{{FirstRound: 1, LastRound: 1}},
 		InputTokens:  100,
 		OutputTokens: 10,
 	}
@@ -139,6 +177,12 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 	if got.Executions[1].Round != 3 || got.Narration[1].Round != 3 {
 		t.Errorf("the folded round is numbered %d/%d, want 3",
 			got.Executions[1].Round, got.Narration[1].Round)
+	}
+	// Every CLI run of the phase, the extension's after the original's and
+	// on the phase's scale.
+	if len(got.Invocations) != 2 || got.Invocations[1].FirstRound != 3 {
+		t.Errorf("runs = %+v, want the original's and the extension's, the second at round 3",
+			got.Invocations)
 	}
 	if got.InputTokens != 500 || got.OutputTokens != 50 {
 		t.Errorf("tokens = %d in / %d out, want the phase total 500/50",

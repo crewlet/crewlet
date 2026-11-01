@@ -58,7 +58,7 @@ func tokenBoot(t *testing.T) config.Bootstrap {
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: opsValue, Grants: []iam.Grant{iam.GrantAdmin}},
-		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantTracker}},
+		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantWorklet}},
 	}
 	return b
 }
@@ -250,8 +250,8 @@ func TestAnExchangedSessionAnswersToItsTokensID(t *testing.T) {
 	}{
 		{"the value is rotated under the same id", func(tok *config.APIToken) {
 			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
-			tok.Grants = []iam.Grant{iam.GrantTracker}
-		}, http.StatusOK, []any{string(iam.GrantTracker)}},
+			tok.Grants = []iam.Grant{iam.GrantWorklet}
+		}, http.StatusOK, []any{string(iam.GrantWorklet)}},
 		{"the token is given a new id", func(tok *config.APIToken) {
 			tok.ID = "ops-2"
 			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
@@ -589,6 +589,9 @@ type sessionEstate struct {
 	epochs   map[string]uint64
 	bindings map[string]session.PersonRow
 	closed   []closed
+
+	// openErr, set, is what every session start answers.
+	openErr error
 }
 
 type sessionRow struct {
@@ -642,6 +645,9 @@ func (e *sessionEstate) OpenSession(_ context.Context, in iamdomain.SessionStart
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.openErr != nil {
+		return iamdomain.SessionOpened{}, e.openErr
+	}
 	e.seq++
 	epoch := e.epochs[in.Person]
 	e.sessions[in.Lineage] = sessionRow{person: in.Person, epoch: epoch}

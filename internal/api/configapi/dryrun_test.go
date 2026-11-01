@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,12 +24,17 @@ import (
 // wrapped around the real store and plane so everything else a request does is
 // exactly what production runs.
 
-// countingRevisions counts every revision stored, and every one this node
-// marked as its active revision.
+// countingRevisions counts every revision stored, and every activation this
+// node noted in its history.
 type countingRevisions struct {
 	configapi.RevisionStore
-	inserts      atomic.Int32
-	markedActive atomic.Int32
+	inserts atomic.Int32
+	noted   atomic.Int32
+}
+
+func (c *countingRevisions) InsertOn(ctx context.Context, base, r store.Revision) (string, error) {
+	c.inserts.Add(1)
+	return c.RevisionStore.InsertOn(ctx, base, r)
 }
 
 func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (string, error) {
@@ -36,9 +42,9 @@ func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (strin
 	return c.RevisionStore.Insert(ctx, r)
 }
 
-func (c *countingRevisions) Activate(ctx context.Context, revisionID string, at time.Time) (string, error) {
-	c.markedActive.Add(1)
-	return c.RevisionStore.Activate(ctx, revisionID, at)
+func (c *countingRevisions) NoteActivation(ctx context.Context, revisionID string, at time.Time) error {
+	c.noted.Add(1)
+	return c.RevisionStore.NoteActivation(ctx, revisionID, at)
 }
 
 // countingPlane counts every activation.
@@ -89,14 +95,23 @@ func newCountedSurface(t *testing.T) *counted {
 // the same plane it counts.
 func (c *counted) forget() {
 	c.revisions.inserts.Store(0)
-	c.revisions.markedActive.Store(0)
+	c.revisions.noted.Store(0)
 	c.plane.activations.Store(0)
 	c.queue.publishes.Store(0)
 }
 
-// writeCounts is what a surface has written: revisions stored, revisions this
-// node marked active, fleet activations, and events published.
-type writeCounts struct{ stored, markedActive, activated, published int32 }
+// seed is the surface's seed, uncounted: the fleet a case starts from is set
+// up through the plane the case counts, and is not a write the case makes.
+func (c *counted) seed(t *testing.T, doc string) string {
+	t.Helper()
+	id := c.surface.seed(t, doc)
+	c.forget()
+	return id
+}
+
+// writeCounts is what a surface has written: revisions stored, activations
+// this node noted in its history, fleet activations, and events published.
+type writeCounts struct{ stored, noted, activated, published int32 }
 
 // oneWrite is exactly what a write that lands makes.
 var oneWrite = writeCounts{1, 1, 1, 1}
@@ -104,7 +119,7 @@ var oneWrite = writeCounts{1, 1, 1, 1}
 // writes is how many of each the surface has made.
 func (c *counted) writes() writeCounts {
 	return writeCounts{
-		c.revisions.inserts.Load(), c.revisions.markedActive.Load(),
+		c.revisions.inserts.Load(), c.revisions.noted.Load(),
 		c.plane.activations.Load(), c.queue.publishes.Load(),
 	}
 }
@@ -133,7 +148,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
 		{"a patch the validator refuses", http.MethodPatch,
-			`{"providers": {"llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
+			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
 			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
 		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.
@@ -151,6 +166,10 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 				s.seed(t, companyDoc)
 			}
 			before := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
+			pointer, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			res := s.do(t, tc.method, "/config?dry_run=true", tc.body, nil)
 			if res.Code != tc.want {
@@ -162,8 +181,10 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			if after := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); after != before {
 				t.Errorf("a dry run changed the history:\nbefore %s\nafter  %s", before, after)
 			}
-			if _, found, err := s.plane.Target(t.Context()); err != nil || found {
-				t.Errorf("a dry run moved the fleet pointer (found=%v err=%v)", found, err)
+			if after, _, err := s.plane.Target(t.Context()); err != nil ||
+				after.Epoch != pointer.Epoch || after.RevisionID != pointer.RevisionID {
+				t.Errorf("a dry run moved the fleet pointer from %+v to %+v (err=%v)",
+					pointer, after, err)
 			}
 		})
 	}
@@ -387,8 +408,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
-	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {
-		t.Errorf("a stale patch check = %d %s, want 409 revision_advanced", stale.Code, stale.Body)
+	if stale.Code != http.StatusPreconditionFailed || decode(t, stale)["error"] != "revision_advanced" {
+		t.Errorf("a stale patch check = %d %s, want 412 revision_advanced", stale.Code, stale.Body)
 	}
 	created := s.do(t, http.MethodPut, "/config?dry_run=true", companyDoc,
 		map[string]string{"If-None-Match": "*"})
@@ -557,5 +578,67 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 	if got := s.writes(); got != oneWrite {
 		t.Errorf("an entity write counted %+v, want one of each", got)
+	}
+}
+
+// A DRY RUN MARKS THE WARNINGS ITS WRITE INTRODUCES. A company on a vendor chat
+// surface whose people's seats have no account there is warned about each of
+// them on every check; a write adding an agent seat introduces none of those,
+// and a write adding a person's seat with no account introduces exactly that
+// one, even though it moves every seat after it down the list. Mutation:
+// compare by path, or mark every warning introduced, and this fails.
+//
+// ON A VENDOR SURFACE (Slack here), the one chat a person's seat can be
+// unreachable on: on the engine's own chat nobody is warned about, since a
+// person reads its rooms as their seat.
+func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
+	t.Parallel()
+	s := newCountedSurface(t)
+	s.seed(t, heldDoc+"integrations:\n  slack: {typing_status: addressed}\n")
+	introduced := func(body string) map[string]bool {
+		t.Helper()
+		res := s.do(t, http.MethodPatch, "/config?dry_run=true", body, nil)
+		if res.Code != http.StatusOK {
+			t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)
+		}
+		var answer struct {
+			Warnings []struct {
+				config.Warning
+				Introduced *bool `json:"introduced"`
+			} `json:"warnings"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("decode: %v (%s)", err, res.Body)
+		}
+		out := map[string]bool{}
+		for _, w := range answer.Warnings {
+			if w.Introduced == nil {
+				t.Fatalf("warning %+v says nothing about whether the write introduces it", w)
+			}
+			if w.Seat != "" {
+				out[w.Seat] = *w.Introduced
+			}
+		}
+		return out
+	}
+	held := map[string]bool{"jane": false, "sam": false, "ana": false}
+
+	got := introduced(`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
+		{"name": "Writer", "handle": "writer", "llm": "zulu"},
+		{"name": "Jane Doe", "handle": "jane", "kind": "human"},
+		{"name": "Sam Lee", "handle": "sam", "kind": "human"}]}`)
+	if !maps.Equal(got, held) {
+		t.Errorf("adding an agent seat marks %v, want every held warning not introduced: %v",
+			got, held)
+	}
+
+	got = introduced(`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
+		{"name": "Rae Kim", "handle": "rae", "kind": "human"},
+		{"name": "Jane Doe", "handle": "jane", "kind": "human"},
+		{"name": "Sam Lee", "handle": "sam", "kind": "human"}]}`)
+	want := maps.Clone(held)
+	want["rae"] = true
+	if !maps.Equal(got, want) {
+		t.Errorf("adding a person's seat with no contact marks %v, want %v", got, want)
 	}
 }

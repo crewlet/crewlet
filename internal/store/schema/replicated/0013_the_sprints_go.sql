@@ -1,4 +1,4 @@
--- Sprints leave the native tracker: the two objects, the stay table, the size
+-- Sprints leave Worklet: the two objects, the stay table, the size
 -- history that only sprint figures valued from, and the columns each of them
 -- hung off.
 --

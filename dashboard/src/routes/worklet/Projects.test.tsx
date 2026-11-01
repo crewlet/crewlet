@@ -1,0 +1,873 @@
+/**
+ * The directory: where the company's overview went, and what a row claims.
+ *
+ * The four workspace totals and the ranked bar chart used to sit above every
+ * board and every list, on every visit. They are a question about the
+ * CONTAINERS rather than about the work, and the chart answered only one of
+ * them: it ranked projects by open work, so a project with four open and two
+ * hundred done drew the same bar as one with four open and nothing else.
+ *
+ * Every case here is a rendering that, drawn wrong, says something true about
+ * a different project — a missing lead drawn as a blank, a maintained
+ * last-change instant drawn as "nothing has happened", a meter over a project
+ * nobody has filed anything in — or a claim about the COMPANY that is really a
+ * claim about this page: the count in the toolbar, and the row whose click was
+ * meant to open a panel beside the list rather than leave it.
+ */
+
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+
+import { Projects } from "./Projects.tsx";
+import { Router, href } from "~/app/router.tsx";
+import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
+import { projectPath, targetLabel } from "~/lib/work.ts";
+import { withDerived } from "~/test/org.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  location.hash = "#/";
+});
+
+function serving(
+  answers: Partial<Record<QueryName, unknown>>,
+  refusing: Partial<Record<QueryName, string>> = {},
+) {
+  const query = vi.fn(async (what: string) => {
+    const refusal = refusing[what as QueryName];
+    if (refusal) throw new Error(refusal);
+    return answers[what as QueryName] ?? {};
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  vi.mocked(useOrg).mockReturnValue(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+    }) as never,
+  );
+  return query;
+}
+
+const project = (over: Partial<WorkProjectRow> = {}): WorkProjectRow => ({
+  key: "ENG",
+  name: "Engineering",
+  unit: { key: "platform", name: "Platform", resolved: true },
+  lead: { handle: "ada", kind: "agent" },
+  task_counts: { todo: 3, active: 0, done: 1, closed: 0 },
+  version: 1,
+  ...over,
+});
+
+/** A company with nothing filed, as the engine counts it. */
+const zero = { active: 0, archived: 0 };
+
+const mount = () =>
+  render(
+    <Router>
+      <ViewerProvider>
+        <Projects />
+      </ViewerProvider>
+    </Router>,
+  );
+
+/** What `work_projects` was actually asked, which is the claim the segment makes. */
+function asked(query: ReturnType<typeof serving>): Record<string, unknown> {
+  const calls = query.mock.calls as unknown as [string, Record<string, unknown>?][];
+  return calls.findLast(([what]) => what === "work_projects")?.[1] ?? {};
+}
+
+/** What the rail was opened on, read out of the address the click wrote. */
+function peeked(): string | null {
+  return new URLSearchParams(location.hash.split("?")[1] ?? "").get("peek");
+}
+
+/** The grid row whose key cell holds this project. */
+function rowFor(key: string): HTMLElement {
+  const cell = screen.getByText(key);
+  return cell.closest(".crewlet-data-grid__row, tr, [role='row']") as HTMLElement;
+}
+
+// THE TOTALS ARE ONE SENTENCE, not four tiles: they are context for the rows
+// under them rather than the point of the page. Four tiles above a list is how
+// the work itself came to start below the fold.
+test("the workspace totals are one line over the rows", async () => {
+  serving({
+    work_projects: {
+      projects: [
+        project(),
+        project({
+          key: "PROD",
+          name: "Product",
+          task_counts: { todo: 2, active: 0, done: 5, closed: 1 },
+        }),
+      ],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
+  expect(screen.getByText(/5 to do · 0 active · 6 done · 1 closed/)).toBeTruthy();
+});
+
+// THE COUNT IS THE COMPANY'S, NOT THE PAGE'S. The answer carries `total` and
+// `truncated` and the page read neither, so past the engine's own limit the
+// sentence said "200 projects" about a company that has more, with nothing on
+// screen to say the page had stopped short of it.
+test("the project count is the answer's total, and a short page says so", async () => {
+  serving({
+    work_projects: {
+      projects: [project(), project({ key: "PROD", name: "Product" })],
+      total: 340,
+      truncated: true,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/2 of 340 projects/)).toBeTruthy());
+  // AND WHAT THE OTHER NUMBERS COVER, which the count no longer implies: the
+  // sums are over the rows that arrived.
+  expect(screen.getByText("Counts cover the 2 listed of 340.")).toBeTruthy();
+  cleanup();
+
+  // A PAGE HOLDING EVERYTHING SAYS NOTHING EXTRA: "2 of 2" is one number
+  // printed twice, and the note would name a limit nothing reached.
+  serving({
+    work_projects: {
+      projects: [project(), project({ key: "PROD", name: "Product" })],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
+  expect(screen.queryByText(/Counts cover the/)).toBeNull();
+});
+
+// A ROW OPENS THE PROJECT. A project is a place a reader goes into, and its
+// page is its task list; the row used to open the peek, which left the work
+// itself one more press away on every visit.
+test("a plain click on a project row goes into the project, and opens no peek", async () => {
+  location.hash = "#/worklet";
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+
+  // THE ROW IS A REAL LINK TO THE PROJECT'S PAGE, so a plain click navigates
+  // and every way a browser opens a link elsewhere keeps working.
+  const link = container.querySelector<HTMLAnchorElement>("a.crewlet-data-grid__row-link");
+  expect(link?.getAttribute("href")).toBe(href(projectPath("ENG")));
+
+  const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+  link?.dispatchEvent(plain);
+  // NOTHING TAKES THE CLICK FROM THE BROWSER, and nothing opens beside it.
+  expect(plain.defaultPrevented).toBe(false);
+  expect(peeked()).toBeNull();
+});
+
+// AND FROM THE KEYBOARD: `j` puts the cursor on a project and Enter goes into
+// it, as a click does. The row's open key used to need a handler, and with the
+// peek gone the directory had none, so Enter did nothing.
+test("j then Enter goes into the project the cursor is on", async () => {
+  location.hash = "#/worklet";
+  Element.prototype.scrollIntoView = () => {};
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const followed: (string | null)[] = [];
+  const watch = (event: MouseEvent) => {
+    followed.push((event.target as Element).closest("a")?.getAttribute("href") ?? null);
+    event.preventDefault();
+  };
+  document.addEventListener("click", watch);
+  try {
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "Enter" });
+  } finally {
+    document.removeEventListener("click", watch);
+  }
+  expect(followed).toEqual([href(projectPath("ENG"))]);
+  expect(peeked()).toBeNull();
+});
+
+// THE NINTH COLUMN. It was declared `optional`, and on a screen with no Display
+// menu that means reachable only by hand-editing `cols=` — while the sentence
+// directly above the grid quotes the number it holds.
+test("closed work is a column of the grid, not a hidden one", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { todo: 3, active: 0, done: 1, closed: 7 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  // THE HEAD ITSELF, not the legend under the grid, which spells the same word
+  // for the segment beside the fill.
+  await waitFor(() =>
+    expect(
+      [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+        (h) => h.textContent,
+      ),
+    ).toEqual([
+      "Key",
+      "Project",
+      "Lead",
+      "To do",
+      "Active",
+      "Done",
+      "Closed",
+      "Progress",
+      "Last change",
+      "Target",
+    ]),
+  );
+  expect(within(rowFor("ENG")).getByText("7")).toBeTruthy();
+});
+
+// THE NAME TAKES THE SLACK, NOT THE BAR. Progress was a flexible track beside
+// Project, so the two split the free width evenly: at 1280 the bar sat in a
+// mostly empty cell while "Product Management" was cut to "Product Managem…".
+// The bar's column is sized to the bar, and the name's column has a floor.
+test("the project name is the flexible column and the progress bar is sized to itself", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const heads = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th"),
+  ].map((h) => h.textContent);
+  const tracks = (container.querySelector(".crewlet-data-grid") as HTMLElement | null)?.style
+    .gridTemplateColumns;
+  expect(tracks, "the grid declares no track list").toBeTruthy();
+  const track = (head: string) => splitTracks(tracks!)[heads.indexOf(head)];
+  expect(track("Project")).toBe("minmax(10rem, 1fr)");
+  expect(track("Progress")).toMatch(/^fit-content\(/);
+  // AND IT IS THE ONLY FLEXIBLE TRACK, so nothing else splits the slack.
+  expect(splitTracks(tracks!).filter((t) => t.endsWith("1fr)"))).toEqual(["minmax(10rem, 1fr)"]);
+});
+
+/** A track list split at its top-level spaces, a `minmax(a, b)` kept whole. */
+function splitTracks(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of list) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === " " && depth === 0) {
+      if (current) out.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+// AND UNIT IS THE ONE THAT IS OPTIONAL, because on a chart-owned company it is
+// the Project column again.
+//
+// The engine mints a project the moment a unit declares its `project` key and
+// names it after the unit, so every row of such a company read `Core` / `Core`
+// and `Executives` / `Executives` — two of nine columns spending their width
+// on one fact. It is a column rather than a deletion because the two names do
+// differ where a project is a SEAT's, and that company asks for it by address.
+test("the unit column is off until cols asks for it", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(
+    [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
+  ).not.toContain("Unit");
+  // AND THE PROJECT'S OWN UNIT IS NOT ON SCREEN EITHER, which is the point:
+  // the head going without the cell would leave a value under no name.
+  expect(screen.queryByText("Platform")).toBeNull();
+  cleanup();
+
+  // `cols=` CARRIES THE ORDER AS WELL AS THE SELECTION, so an address that
+  // wants Unit names the whole set it wants.
+  location.hash =
+    "#/worklet?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const withUnit = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(
+    [...withUnit.container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
+  ).toEqual([
+    "Key",
+    "Project",
+    "Lead",
+    "Unit",
+    "To do",
+    "Active",
+    "Done",
+    "Closed",
+    "Progress",
+    "Last change",
+    "Target",
+  ]);
+  expect(screen.getByText("Platform")).toBeTruthy();
+});
+
+// AND THE READER CAN TURN IT ON, which is what makes `optional` a choice
+// rather than a deletion.
+//
+// The column shipped `optional` with no chooser anywhere on this screen — no
+// popover, no reset — so it could be turned off in the source and never on by
+// anybody, and `sort=unit`, one of the engine's nine orderings, was an
+// ordering no head here could reach. "Expose or collapse, deliberately": the
+// column earns exposure because a seat-owned project's unit genuinely differs
+// from its name.
+test("the columns control turns Unit on and writes the key", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+
+  fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+  // THE BOXES ARE THE GRID'S OWN COLUMNS, derived rather than listed beside
+  // them — a chooser with its own list is a second declaration of the grid.
+  const boxes = [...document.querySelectorAll<HTMLElement>(".crewlet-column-chooser__choice")];
+  expect(boxes.map((el) => el.textContent)).toEqual([
+    "Key",
+    "Project",
+    "Lead",
+    "Unit",
+    "To do",
+    "Active",
+    "Done",
+    "Closed",
+    "Progress",
+    "Last change",
+    "Target",
+  ]);
+  // AN EMPTY `cols=` IS THE DEFAULT SET, so every box but the optional one is
+  // ticked before anybody touches it.
+  const tick = (label: string) =>
+    boxes.find((el) => el.textContent === label)!.querySelector("input")!;
+  expect(tick("Unit").checked).toBe(false);
+  expect(tick("Key").checked).toBe(true);
+
+  fireEvent.click(tick("Unit"));
+
+  // IT WRITES THE KEY, so the arrangement survives a reload and a link.
+  await waitFor(() => expect(location.hash).toContain("cols="));
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("cols")).toBe(
+    "key,name,lead,unit,todo,active,done,closed,progress,last_change,target",
+  );
+  // AND THE GRID DRAWS IT — the control and the grid read one key.
+  expect(
+    [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
+  ).toContain("Unit");
+  expect(screen.getByText("Platform")).toBeTruthy();
+});
+
+// A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY, which is a
+// finding rather than a blank cell — and a unit the chart no longer has is
+// the same kind of fact one column over.
+test("a project nobody leads says so rather than drawing a blank", async () => {
+  serving({
+    work_projects: { projects: [project({ lead: {} })], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Nobody leads this")).toBeTruthy());
+});
+
+test("a unit the chart no longer has is marked rather than printed plainly", async () => {
+  // WITH THE COLUMN ASKED FOR, since Unit is `optional`: this is a case about
+  // what the CELL claims, and the company that turns the column on is exactly
+  // the one whose units and project names can disagree.
+  location.hash =
+    "#/worklet?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+  serving({
+    work_projects: {
+      projects: [project({ unit: { key: "gone", resolved: false } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  const pill = await screen.findByTitle("The current org chart has no such unit");
+  expect(pill.textContent).toBe("gone");
+});
+
+// THE MAINTAINED FACT, AND ITS ABSENCE. Every commit to a project's work stamps
+// it, so a project with none is one nothing has ever been filed into, and the
+// cell says so.
+test("when work last changed is the engine's own fact, and its absence says nothing was filed", async () => {
+  serving({
+    work_projects: {
+      projects: [
+        project({
+          key: "ENG",
+          last_change: { at: "2031-04-16T09:00:00Z", actor: "ada", actor_kind: "agent" },
+        }),
+        project({
+          key: "NEW",
+          name: "New",
+          task_counts: { todo: 0, active: 0, done: 0, closed: 0 },
+        }),
+      ],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Nothing has been filed here")).toBeTruthy());
+  // THE INSTANT AND WHO MADE IT, on the project that has one — and ON ONE LINE
+  // with it, because stacked they made every row in the directory a line and a
+  // half tall.
+  const when = rowFor("ENG").querySelector(".work-lastchange");
+  expect(when?.textContent).toMatch(/· Ada Okonkwo$/);
+  // ONE LINE: the stacked shape was a `.col`, and the name below the instant.
+  expect(when?.querySelector(".col")).toBeNull();
+  expect(within(rowFor("NEW")).getByText("Nothing has been filed here")).toBeTruthy();
+});
+
+// A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor out: the
+// engine did it. Rendered as a blank that is a project whose last change has no
+// author, which is not a state this product has.
+test("a change the engine made names the engine", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ last_change: { at: "2031-04-16T09:00:00Z" } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/· the engine/)).toBeTruthy());
+});
+
+// AN OPERATOR IS NOT A SEAT. A write made with an API token carries the
+// token's own name and the author kind `operator`, which is the whole point of
+// the audit trail — so the kind travels beside the name.
+test("an operator's write is marked as one", async () => {
+  serving({
+    work_projects: {
+      projects: [
+        project({
+          last_change: { at: "2031-04-16T09:00:00Z", actor: "founder", actor_kind: "operator" },
+        }),
+      ],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/founder \(operator\)/)).toBeTruthy());
+});
+
+// A METER OVER NOTHING IS NOT A CENSUS: an empty bar reads as a chart which
+// failed to load rather than as a project nobody has filed anything in.
+test("a project with nothing filed draws no meter", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { todo: 0, active: 0, done: 0, closed: 0 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Nothing filed yet")).toBeTruthy());
+  expect(screen.queryByRole("img", { name: / of \d+$/ })).toBeNull();
+});
+
+// THE SPLIT SUMS TO THE CENSUS. The bar is the project's work in the three
+// states it is in — done, active, still to do — and the meter's accessible
+// name is exactly those parts over the whole they make: the maintained counts,
+// nothing counted here. Closed work is not in the whole (it left the question
+// rather than answering it), so 3 done, 2 active and 6 to do is "of 11" with
+// one closed beside it in its own column.
+test("the split sums to the census", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { todo: 6, active: 2, done: 3, closed: 1 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByRole("img", { name: "3 done, 2 active, 6 to do of 11" })).toBeTruthy(),
+  );
+});
+
+// NOTHING STARTED IS A BAR OF WORK TO DO, not an empty track and not a full
+// one: the parts that are not drawn are not spoken, and the remainder is the
+// whole.
+test("a project with nothing done or active is all still to do", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ task_counts: { todo: 4, active: 0, done: 0, closed: 0 } })],
+      total: 1,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByRole("img", { name: "4 to do of 4" })).toBeTruthy());
+});
+
+// AND THE LEGEND IS DRAWN ONCE FOR THE COLUMN rather than once per row: an
+// unlabelled stack of colours is colours, and forty legends is not forty facts.
+// It names the three parts the bar is made of.
+test("the progress column carries one legend, naming the three parts", async () => {
+  serving({
+    work_projects: {
+      projects: [project(), project({ key: "PROD", name: "Product" })],
+      total: 2,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getAllByRole("img", { name: / of \d+$/ })).toHaveLength(2));
+  expect(container.querySelectorAll(".crewlet-legend")).toHaveLength(1);
+  expect(
+    [...container.querySelectorAll(".crewlet-legend__label")].map((l) => l.textContent),
+  ).toEqual(["Done", "Active", "To do"]);
+});
+
+// THE SEGMENT IS THE QUESTION, and each one names the engine's own mode.
+//
+// `archived=` SELECTS a set (`worklet.ArchivedMode`), so the segment is a
+// parameter rather than a narrowing of a wider answer. It used to be both: the
+// page asked for the widened set and then filtered what came back, so past the
+// engine's own 200 the page it filtered held no archived row at all and the
+// Archived segment said "No project is archived" about a company that had
+// retired dozens.
+test("each segment asks the engine for its own archival set", async () => {
+  for (const [hash, want] of [
+    ["#/worklet", "false"],
+    ["#/worklet?shown=active", "false"],
+    ["#/worklet?shown=archived", "only"],
+    ["#/worklet?shown=all", "true"],
+  ] as const) {
+    location.hash = hash;
+    const query = serving({
+      work_projects: { projects: [project()], total: 1, complete: true },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+    expect(asked(query).archived).toBe(want);
+    cleanup();
+  }
+});
+
+// AND NOTHING IS NARROWED AFTERWARDS. The rows the engine sent ARE the segment,
+// so every one of them is drawn — a client filter over an answer that already
+// selected would be a second, invisible narrowing, and on the Archived segment
+// it was the one that emptied the screen.
+test("the archived segment draws every row the engine answered with", async () => {
+  location.hash = "#/worklet?shown=archived";
+  serving({
+    work_projects: {
+      projects: [
+        project({ key: "OLD", name: "Retired", archived: true }),
+        // NO `archived` FLAG ON THE WIRE, which is what the engine sends
+        // for a row whose column is false — and `omitempty` means a
+        // client that re-derived the segment from it would drop a row
+        // the engine put in the archived answer.
+        project({ key: "GONE", name: "Wound down" }),
+      ],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Retired")).toBeTruthy());
+  expect(screen.getByText("Wound down")).toBeTruthy();
+  // AND THE TOTAL IS THE ARCHIVED SET'S OWN, which is what makes "N of M"
+  // readable on this segment at all: M used to count the whole company.
+  expect(screen.getByText(/2 projects/)).toBeTruthy();
+});
+
+// THE ORDER IS THE ENGINE'S, because the answer is a PAGE. A sort applied here
+// orders the rows that survived the key order, so `-todo` would mean "the most
+// waiting work among the projects whose keys sort first".
+test("the ordering is sent to the engine and not applied to the page", async () => {
+  location.hash = "#/worklet";
+  const query = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  // WHERE THE PILE IS, which is what this directory opens on.
+  expect(asked(query).sort).toBe("-todo");
+  cleanup();
+
+  location.hash = "#/worklet?sort=last_change";
+  const asc = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(asked(asc).sort).toBe("last_change");
+  cleanup();
+
+  // AND A KEY THE ENGINE DOES NOT TAKE FALLS BACK rather than being sent. A
+  // URL outlives a build and is hand-editable; sent, it would meet a
+  // `bad_params` refusal, which the frame draws as the screen being at fault
+  // and offers no retry for — a whole directory lost to one stale query key.
+  location.hash = "#/worklet?sort=-lead";
+  const stale = serving({
+    work_projects: { projects: [project()], total: 1, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(asked(stale).sort).toBe("-todo");
+});
+
+// THE ROWS ARE NOT RE-SORTED HERE. `serverSorted` is what says so, and without
+// it the grid re-orders the page it was handed the moment `sort=` names a
+// column — which on a truncated answer is the same page-ordering bug one layer
+// down.
+test("the grid draws the engine's order rather than re-sorting it", async () => {
+  location.hash = "#/worklet?sort=-todo";
+  serving({
+    work_projects: {
+      // THE ENGINE'S ORDER, deliberately NOT what `-todo` would produce
+      // on the client: 1 before 9. A grid that re-sorted would put ENG
+      // first and the assertion below would catch it.
+      projects: [
+        project({
+          key: "PROD",
+          name: "Product",
+          task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
+        }),
+        project({ key: "ENG", task_counts: { todo: 9, active: 0, done: 0, closed: 0 } }),
+      ],
+      total: 2,
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Product")).toBeTruthy());
+  expect(
+    [...container.querySelectorAll(".crewlet-data-grid__row .key-mark")].map((c) => c.textContent),
+  ).toEqual(["PROD", "ENG"]);
+});
+
+// EVERY ORDERING THE ENGINE TAKES IS A HEAD SOMEBODY CAN CLICK, and no other
+// head is one.
+//
+// `DataGrid` makes a head a BUTTON exactly where the column carries
+// `sortValue`, so the two lists have to be the same list. A head offering a
+// key the engine refuses turns one click into a `bad_params` refusal over the
+// whole screen; a key the engine grew with no head is an ordering nobody can
+// reach. The engine half of this pair is a Go gate over `PROJECT_SORT_KEYS`
+// (`internal/worklet/client_gate_test.go`).
+test("the sortable heads are exactly the orderings the engine takes", async () => {
+  // THE WHOLE COLUMN SET, because Unit is `optional` and off by default: the
+  // pairing this holds is between the engine's nine keys and the heads the
+  // screen CAN draw, and a head the reader has to ask for is still a head.
+  // Read against the default set alone, the gate would report `sort=unit` as
+  // an ordering nobody can reach — which is the opposite of true, since the
+  // address that turns the column on is the address that sorts by it.
+  location.hash =
+    "#/worklet?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const clickable = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__sort"),
+  ].map((h) => h.textContent);
+  expect(clickable).toEqual([
+    "Key",
+    "Project",
+    "Unit",
+    "To do",
+    "Active",
+    "Done",
+    "Closed",
+    "Last change",
+    "Target",
+  ]);
+  // AND THE TWO THAT ARE NOT: a project's Lead is resolved against the org
+  // chart at read time and the tracker holds no chart, so there is no column
+  // to order by; Progress is a proportion, and one over four tasks and one
+  // over four hundred are the same number and not the same fact.
+  const plain = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th--plain"),
+  ].map((h) => h.textContent);
+  expect(plain).toEqual(["Lead", "Progress"]);
+});
+
+// A REFUSED READ IS NOT A COMPANY THAT HAS FILED NOTHING — the same rule the
+// list screen keeps, and for the same reason: a reader acts on "no work" by
+// filing the duplicate.
+test("a refused listing is said to be a refusal", async () => {
+  serving({}, { work_projects: "unavailable" });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
+  expect(screen.queryByText("No work has been filed yet")).toBeNull();
+});
+
+// A PAGE ABOUT CONTAINERS SAYS SO WHEN IT HAS NONE. This drew the list
+// screen's "No work has been filed yet" — a sentence about ITEMS on the one
+// screen whose rows are projects — so a reader was sent looking for work rather
+// than for the configuration that mints a project.
+//
+// AND ONLY `All` CAN SAY IT. Each segment asks for its own set now, so an
+// empty Active answer is either a company with no projects or a company that
+// has archived every one of them — and telling the second reader "no project
+// has been created yet" is the opposite of what the Archived segment beside it
+// would show them.
+// AND IT IS SAID ON WHICHEVER SEGMENT THE READER IS ON — which is Active,
+// because that is where the directory lands.
+//
+// The census is what makes it sayable from anywhere: `active + archived === 0`
+// is the COMPANY having nothing, where an empty answer is only ever the
+// SEGMENT having nothing. Gated on All, this greeted a brand-new company with
+// a grid's empty state on the one segment it actually opens on.
+test("a company with no projects is told where one comes from", async () => {
+  for (const hash of [
+    "#/worklet",
+    "#/worklet?shown=active",
+    "#/worklet?shown=archived",
+    "#/worklet?shown=all",
+  ]) {
+    location.hash = hash;
+    serving({
+      work_projects: { projects: [], total: 0, census: zero, complete: true },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByText("No projects yet")).toBeTruthy());
+    expect(screen.getByText("Create one with New project.")).toBeTruthy();
+    expect(screen.queryByText("No work has been filed yet")).toBeNull();
+    // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not
+    // a second copy of where a project comes from.
+    expect(screen.getAllByText(/Create one with New project/)).toHaveLength(1);
+    // NEW PROJECT IS ITS FIRST ACTION, as it ends the page's bar.
+    expect(screen.getAllByRole("button", { name: "New project" })).toHaveLength(2);
+    cleanup();
+  }
+});
+
+// AN EMPTY ACTIVE SEGMENT ON A COMPANY THAT HAS ARCHIVED EVERYTHING SAYS SO,
+// WITH THE COUNT AND A WAY THERE. The count is on the Archived option the
+// link goes to, so the sentence does not repeat it.
+//
+// This is what the census bought. The page could not tell "no projects" from
+// "every project archived", so it hedged — one sentence naming both, sending
+// the reader to go and look. A hedge is what a screen writes when it is
+// missing a number; it has the number now.
+test("an empty active segment says how many are archived and links to them", async () => {
+  location.hash = "#/worklet?shown=active&sort=name";
+  serving({
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 4 },
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  // NOT the company-has-nothing page: this company has four.
+  expect(screen.queryByText("No projects yet")).toBeNull();
+  expect(screen.getByRole("radio", { name: /Archived\s*4/ })).toBeTruthy();
+
+  // A REAL LINK, so it is middle-clickable and copyable like every other way
+  // into a segment — and THE REST OF THE QUERY SURVIVES, so a reader who
+  // sorted does not lose it to a sentence that was only ever about the set.
+  const link = screen.getByText("See them under Archived") as HTMLAnchorElement;
+  expect(link.tagName).toBe("A");
+  const query = new URLSearchParams(link.getAttribute("href")!.split("?")[1]);
+  expect(query.get("shown")).toBe("archived");
+  expect(query.get("sort")).toBe("name");
+});
+
+// AND ONE ARCHIVED PROJECT IS NOT "ALL 1". The count is the option's figure
+// rather than prose, so the sentence has no number to get wrong.
+test("a company with one archived project is not told about all 1 of them", async () => {
+  location.hash = "#/worklet?shown=active";
+  serving({
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 1 }, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  expect(screen.getByRole("radio", { name: /Archived\s*1/ })).toBeTruthy();
+  expect(screen.queryByText(/All 1/)).toBeNull();
+});
+
+// AND AN EMPTY ARCHIVED SEGMENT IS ITS OWN SENTENCE, which is only reachable
+// now that the engine answers the archived set rather than the page this
+// client filtered.
+test("an empty archived segment says nothing is archived", async () => {
+  location.hash = "#/worklet?shown=archived";
+  serving({
+    work_projects: { projects: [], total: 0, census: { active: 3, archived: 0 }, complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("No project is archived")).toBeTruthy());
+  // NOT the company-has-nothing page: three are active.
+  expect(screen.queryByText("No projects yet")).toBeNull();
+});
+
+// THE SEGMENTS CARRY THE CENSUS, so the switch says what is behind each option
+// before it is pressed — on a control whose whole job is to change the set.
+test("the segments carry the census counts", async () => {
+  serving({
+    work_projects: {
+      projects: [project()],
+      total: 1,
+      census: { active: 1, archived: 12 },
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const options = within(screen.getByRole("radiogroup", { name: "Which projects" })).getAllByRole(
+    "radio",
+  );
+  expect(options.map((o) => o.textContent)).toEqual(["Active1", "Archived12", "All"]);
+  // THE COUNT IS INSIDE THE RADIO, so the option announces "Archived 12"
+  // rather than leaving the figure as loose text beside a control.
+  expect(options[1]?.querySelector(".crewlet-count")?.textContent).toBe("12");
+  // AND `All` CARRIES NONE: its count is the two beside it added up, which is
+  // arithmetic on screen rather than a fact.
+  expect(options[2]?.querySelector(".crewlet-count")).toBeNull();
+});
+
+// AND NO COUNTS BEFORE THE ENGINE HAS ANSWERED. Three zeroes on a control
+// read as a company with nothing, which is the one claim a screen must not
+// make while it is still asking.
+test("the segments carry no counts until the census arrives", async () => {
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  const { container } = mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(container.querySelectorAll('[role="radiogroup"] .crewlet-count')).toHaveLength(0);
+});
+
+// THE LEAD'S TARGET IS A DAY, drawn as that day — and a project with none says
+// so rather than drawing a blank, since "nobody has set one" is the finding a
+// reader planning against it needs.
+test("a project's target day is a column, and its absence is said", async () => {
+  serving({
+    work_projects: {
+      projects: [project({ target_date: "2026-12-18" }), project({ key: "PROD", name: "Product" })],
+      total: 2,
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  expect(within(rowFor("ENG")).getByText(targetLabel("2026-12-18"))).toBeTruthy();
+  expect(within(rowFor("PROD")).getByText("No target set")).toBeTruthy();
+});

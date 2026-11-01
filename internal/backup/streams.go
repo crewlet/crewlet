@@ -8,12 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
@@ -56,6 +58,17 @@ import (
 //     status header: 204 for a complete snapshot, 408 or 500 for one the
 //     server abandoned. A receiver that stops at the empty message without
 //     reading that header writes a truncated file and reports success.
+//
+// And one that is easy to get wrong the other way, because it looks like a
+// failure of the node: A CONSUMER THAT ENDS WHILE ITS STREAM IS COPIED
+// ABANDONS THE COPY. The server copies a stream's consumers before its
+// messages, from a list it takes as the snapshot starts, and gives the whole
+// snapshot up (500) when one of them has ended by the time it reads that
+// consumer's state. A working engine ends consumers all the time — every
+// listing of a coordination bucket is an ephemeral consumer that lives as long
+// as the listing, and a removed seat's mailbox ends with it — so that is a race
+// the copy loses at a rate set by load, and the stream is snapshotted again
+// (see [snapshotStream]).
 
 // snapshotChunkSize is what the server is asked to send per chunk.
 //
@@ -80,6 +93,35 @@ const snapshotChunkWait = 30 * time.Second
 // on the deliver subject before giving up, so this must comfortably outlast
 // that.
 const snapshotRequestTimeout = 10 * time.Second
+
+// snapshotAttempts is how many snapshots of one stream a backup takes before a
+// consumer ending under each of them is reported rather than taken again.
+//
+// FIVE. One loss needs a consumer to end in the instant between the server
+// listing the stream's consumers and reading each one's state. Measured: one
+// backup in about fifty lost it (3 of 160) on a single node with sixteen
+// engines contending for four CPUs, every loss on the positions bucket, which
+// every create's zero fence and every tick of the trim list — so five losses
+// in a row is a stream on which something creates and ends consumers far
+// faster than any listing of the engine's does, which is worth an operator's
+// attention rather than a sixth attempt. A lost attempt costs almost nothing: the consumers are copied
+// before a single message, so the server gives up before it has sent one.
+const snapshotAttempts = 5
+
+// retakeFirstWait, retakeMaxWait and retakeJitter space the attempts.
+//
+// The engine's listings come in BURSTS — one tick of the trim reads four key
+// classes of the positions bucket back to back, each its own consumer — so an
+// attempt taken the instant one of them ended lands among its neighbours. Ten
+// milliseconds doubling to eighty, four waits and 150 ms in all, steps past a
+// burst on a broker under the load that makes the race likely, and is nothing
+// beside the backup it is part of. The jitter is the fifth the engine's other
+// retry loops spread by.
+const (
+	retakeFirstWait = 10 * time.Millisecond
+	retakeMaxWait   = 80 * time.Millisecond
+	retakeJitter    = 0.2
+)
 
 // StreamArtifact is one snapshotted stream in a backup.
 type StreamArtifact struct {
@@ -154,7 +196,7 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, la
 
 	artifacts := make([]StreamArtifact, 0, len(names))
 	for _, name := range names {
-		artifact, err := snapshotStream(ctx, nc, api, name, root)
+		artifact, err := snapshotStream(ctx, nc, js, api, name, root)
 		if err != nil {
 			return nil, err
 		}
@@ -193,8 +235,96 @@ func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) 
 	return names, nil
 }
 
-// snapshotStream writes one stream's snapshot under root.
-func snapshotStream(ctx context.Context, nc *nats.Conn, api jsapi.API, name, root string) (StreamArtifact, error) {
+// snapshotStream writes one stream's snapshot under root, taking it again
+// while the server abandons it over a consumer that ended under the copy.
+//
+// WHAT THE SERVER LOST IS THE RACE, NOT THE STREAM. It copies the consumers it
+// listed as the snapshot started and gives the whole snapshot up when one of
+// them has ended by the time it reads that consumer's state (see the file
+// doc), and a consumer that has ended holds nothing a restore could want — so
+// another snapshot, taken now, is exactly what the lost one would have been: a
+// copy of the stream at one moment. Answered as a failure, it failed the
+// backup of a node with nothing wrong with it, at a rate set by how busy the
+// node was ([snapshotAttempts] has the measurement).
+//
+// ASKED, NOT ASSUMED: the abandonment is read as that race only when the
+// consumer the server names is one it no longer holds ([endedUnder]). A
+// consumer that is still there and could not be read, and every other way a
+// snapshot fails, fails the backup as it always did.
+func snapshotStream(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, api jsapi.API,
+	name, root string,
+) (StreamArtifact, error) {
+	return retakeOverEnded(ctx, js, name, func() (StreamArtifact, error) {
+		return snapshotOnce(ctx, nc, api, name, root)
+	})
+}
+
+// retakeOverEnded runs take until it returns a snapshot of stream, fails in a
+// way a consumer ending does not explain, or has lost [snapshotAttempts] races
+// in a row — the last reported naming the consumer.
+//
+// take is handed in rather than called by name so the race can be held to the
+// real server: a case drives the snapshot protocol itself to make the server
+// lose it on purpose, and this is the loop it then has to get through.
+func retakeOverEnded(ctx context.Context, js jetstream.JetStream, stream string,
+	take func() (StreamArtifact, error),
+) (StreamArtifact, error) {
+	for attempt := 1; ; attempt++ {
+		artifact, err := take()
+		if err == nil {
+			return artifact, nil
+		}
+		consumer, ended := endedUnder(ctx, js, stream, err)
+		if !ended {
+			return StreamArtifact{}, err
+		}
+		if attempt == snapshotAttempts {
+			return StreamArtifact{}, fmt.Errorf("backup: %s: a consumer ended while "+
+				"the server copied the stream on each of %d attempts, the last %q — "+
+				"something is creating and ending consumers on it far faster than "+
+				"the engine's own listings do: %w", stream, snapshotAttempts, consumer, err)
+		}
+		log.InfoContext(ctx, "backup_stream_retaken",
+			"stream", stream, "consumer", consumer, "attempt", attempt,
+			"detail", "the server abandoned the snapshot because this consumer "+
+				"ended while it was copied, so the stream is snapshotted again")
+		wait := time.NewTimer(backoff.Jitter(
+			backoff.Doubling(attempt, retakeFirstWait, retakeMaxWait), retakeJitter))
+		select {
+		case <-ctx.Done():
+			wait.Stop()
+			return StreamArtifact{}, fmt.Errorf("backup: %s: %w", stream, ctx.Err())
+		case <-wait.C:
+		}
+	}
+}
+
+// endedUnder reports whether err is the server abandoning a snapshot of stream
+// over a consumer it no longer holds, and which consumer.
+//
+// THE CONSUMER IS LOOKED UP, because the server's words say only that it could
+// not read the consumer's state: "it has ended" is the server answering that
+// it holds no such consumer now. The server removes a consumer from its stream
+// before it closes the consumer's store, so a store found closed is a consumer
+// already gone from the listing. A lookup that fails some other way is not
+// that answer, and the abandonment stands.
+func endedUnder(ctx context.Context, js jetstream.JetStream, stream string, err error) (string, bool) {
+	var abandoned *abandonedSnapshot
+	if !errors.As(err, &abandoned) {
+		return "", false
+	}
+	consumer := abandoned.consumer(stream)
+	if consumer == "" {
+		return "", false
+	}
+	askCtx, cancel := context.WithTimeout(ctx, snapshotRequestTimeout)
+	defer cancel()
+	_, lookupErr := js.Consumer(askCtx, stream, consumer)
+	return consumer, errors.Is(lookupErr, jetstream.ErrConsumerNotFound)
+}
+
+// snapshotOnce writes one snapshot of one stream under root.
+func snapshotOnce(ctx context.Context, nc *nats.Conn, api jsapi.API, name, root string) (StreamArtifact, error) {
 	// SUBSCRIBED BEFORE THE REQUEST, and flushed. The server checks for
 	// interest on the deliver subject before it starts and waits only
 	// about two seconds for it to appear — so a subscription created after
@@ -371,11 +501,63 @@ func snapshotVerdict(msg *nats.Msg) error {
 	if status == "" || status == "204" {
 		return nil
 	}
-	description := msg.Header.Get("Description")
+	return &abandonedSnapshot{Status: status, Description: msg.Header.Get("Description")}
+}
+
+// abandonedSnapshot is a snapshot the server gave up on: its terminator's
+// status and the server's own description of why.
+//
+// A TYPE rather than a sentence, because one of the reasons — a consumer that
+// ended while it was copied — is answered by taking the snapshot again, and a
+// caller has to be able to tell that one from the rest without matching the
+// whole message.
+type abandonedSnapshot struct {
+	Status      string
+	Description string
+}
+
+func (a *abandonedSnapshot) Error() string {
+	description := a.Description
 	if description == "" {
 		description = "no reason given"
 	}
-	return fmt.Errorf("the broker abandoned the snapshot: %s %s", status, description)
+	return fmt.Sprintf("the broker abandoned the snapshot: %s %s", a.Status, description)
+}
+
+// The two sentences the server ends a snapshot with when it cannot read a
+// consumer's state (nats-server server/stream_backup.go, streamSnapshotV2):
+// a stream on one server reads each consumer's own store, and a replicated
+// stream asks each consumer's leader. Both reach the terminator as a 500.
+// TestAConsumerEndingUnderASnapshotIsTakenAgain holds the first to the
+// server this build links, by making it lose the race for real.
+const (
+	consumerStatePrefix = "couldn't load consumer '"
+	consumerStateSuffix = "' state: "
+	clusterStatePrefix  = "failed to get consumer state for '"
+)
+
+// consumer is the consumer of stream the server names as the one whose state
+// it could not read, or "" when the abandonment names none.
+//
+// THE SERVER'S OWN SENTENCES, matched whole at both ends rather than searched
+// for a quoted word: a consumer's name may hold a quote, and a description
+// that matches neither form is some other failure, which is never taken again.
+func (a *abandonedSnapshot) consumer(stream string) string {
+	if a.Status != "500" {
+		return ""
+	}
+	if rest, ok := strings.CutPrefix(a.Description, consumerStatePrefix); ok {
+		if end := strings.LastIndex(rest, consumerStateSuffix); end > 0 {
+			return rest[:end]
+		}
+		return ""
+	}
+	if rest, ok := strings.CutPrefix(a.Description, clusterStatePrefix+stream+" > "); ok {
+		if name, ok := strings.CutSuffix(rest, "'"); ok {
+			return name
+		}
+	}
+	return ""
 }
 
 // snapshotSize reports what a set of artifacts occupies.

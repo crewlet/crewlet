@@ -49,7 +49,7 @@
 -- No retention of its own: the spans belong to a task and go when it is
 -- purged, so the purge deletes them with its other child rows and nothing in
 -- `maintenance`'s job list needs to know about them. The table joins
--- `tracker.ReproducibleTables`, which is what puts it inside the domain's
+-- `worklet.ReproducibleTables`, which is what puts it inside the domain's
 -- identity claim and out of every donated snapshot's machinery. The per-task
 -- cap is `MaxMeasureSpans`, applied on the document where the sprint stays'
 -- cap is applied.

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A RESTORED REANCHOR OVER RECORDS WRITTEN AFTER THE RESTORE ASKS THE OPERATOR.
@@ -23,8 +23,8 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	t.Parallel()
 	d := stageDivergedBroker(t)
 	e, _ := bootNode(t, &d.a, d.cfg)
-	stream := tracker.Domain{}.Stream().Name
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	stream := worklet.Domain{}.Stream().Name
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
@@ -47,7 +47,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	if !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), "discard") {
 		t.Fatalf("Reanchor without -discard = %v, want the refusal naming it", err)
 	}
-	if got := readCursorRow(t, e, tracker.Domain{}.Name()); got.at != d.checkpoint.at {
+	if got := readCursorRow(t, e, worklet.Domain{}.Name()); got.at != d.checkpoint.at {
 		t.Fatalf("a refused reanchor moved the checkpoint to %s", got.at)
 	}
 
@@ -77,10 +77,10 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 		return countRows(t, e, "SELECT COUNT(*) FROM tracker_log_generations "+
 			"WHERE generation = ? AND reason LIKE ?", plan.Generation, "%discarded%") == 1
 	})
-	res := mustApply(t, "an edit after the reanchor", func() (tracker.WriteResult, error) {
+	res := mustApply(t, "an edit after the reanchor", func() (worklet.WriteResult, error) {
 		title := "after the reanchor"
 		return e.native.Load().writer.UpdateTask(t.Context(), "op-a-after", "t-1", "ENG",
-			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+			worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil)
 	})
 	if res.Position.Generation != plan.Generation {
 		t.Fatalf("the edit landed at %s, want generation %d", res.Position, plan.Generation)
@@ -93,13 +93,13 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 // sequence it landed at.
 func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	t.Helper()
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
-	in, _, err := e.reanchorInputs(t.Context(), running)
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
+	in, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
 	}
 	gen := max(in.Generation, in.Abandoned) + 1
-	record, keeps, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
+	record, keeps, err := worklet.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: gen, Case: statelog.ReanchorRestored, Inputs: in,
 		By: "ops-1", Writer: e.core.Load().nodeID, At: time.Now().UTC(),
 	})
@@ -108,7 +108,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	}
 	zero := uint64(0)
 	seq, _, err := running.log.Append(t.Context(),
-		tracker.Domain{}.Stream().SubjectPrefix+"."+record.Subject.String(),
+		worklet.Domain{}.Stream().SubjectPrefix+"."+record.Subject.String(),
 		record.OpID, &zero, running.signer.Seal(record.Payload))
 	if err != nil {
 		t.Fatalf("append the first attempt's generation record: %v", err)
@@ -143,8 +143,8 @@ func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T)
 			t.Parallel()
 			d := c.stage(t)
 			e, _ := bootNode(t, &d.a, d.cfg)
-			stream := tracker.Domain{}.Stream().Name
-			running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+			stream := worklet.Domain{}.Stream().Name
+			running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 			opened := appendOwnGeneration(t, e)
 
 			view, err := e.ReanchorStatus(t.Context(), stream)

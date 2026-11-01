@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
@@ -701,8 +702,8 @@ func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*
 	// stays theirs.
 	if server.IsValidSubject(filter) && !l.carries(filter) {
 		return nil, fmt.Errorf("jetstream: a watch on %q under %s would hear "+
-			"nothing — the log carries %v, and no subject there matches it; "+
-			"name subjects inside them", l.name, filter, l.subjects())
+			"nothing — the log carries %s, and no subject there matches it; "+
+			"name subjects inside them", l.name, filter, words.And(l.subjects()))
 	}
 	// DETACHED from the call that begins the watch, as the live feed's
 	// consumer is: ctx bounds the first create, and the watch lives until

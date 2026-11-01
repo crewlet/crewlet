@@ -121,7 +121,7 @@ type Unit struct {
 	// is org-wide.
 	//
 	// VENDOR-NEUTRAL, because the identity is the company's rather than a
-	// product's: the same key names a native project and a Jira one, and a
+	// product's: the same key names a Worklet project and a Jira one, and a
 	// company that switches backends keeps the org chart it wrote. The
 	// fields were `jira_project` and `confluence_space`, which was the
 	// `slack_channel` mistake — a chat channel is a channel whoever hosts

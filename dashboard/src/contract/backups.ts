@@ -1,6 +1,7 @@
 /**
- * `backups`: what this fleet has backed up — each owner's newest point, as the
- * fleet's register holds it and marked by the policy the trim takes — and
+ * `backups`: what this fleet has backed up — each node's newest point and the
+ * operator's newest acknowledgement of each log, as the fleet's register holds
+ * them and marked by the policy the trim takes — and
  * every backup a person asked a node for, from the runtime audit each node
  * keeps, failures included.
  *
@@ -27,7 +28,7 @@ export type BackupOutcome = "applied" | "failed";
 
 /**
  * Whose word the trim takes for what is backed up
- * (`stream.tracker_retention.backup_floor`): every node's verified copy
+ * (`stream.tracker_retention.backup_floor`): every data node's verified copy
  * (`engine`), or the operator's acknowledgement alone (`operator`).
  */
 export type BackupPolicy = "engine" | "operator";
@@ -39,7 +40,10 @@ export interface BackupCover {
   seq: number;
 }
 
-/** One owner's newest backup — its manifest's claims. */
+/**
+ * One node's newest backup — its manifest's claims — or the operator's newest
+ * acknowledgement of one log, which covers that log alone.
+ */
 export interface BackupPointRow {
   owner: string;
   kind: BackupOwnerKind;
@@ -57,7 +61,9 @@ export interface BackupPointRow {
   /** The trim may count it: the policy takes this owner's word and it was
    *  verified. */
   counted: boolean;
-  /** The point the trim's backup term reads — the newest counted one. */
+  /** Some log's backup term reads it: for at least one log it covers, it is
+   *  the newest counted point. Several rows can carry it — under `operator`,
+   *  one per log acknowledged. */
   newest: boolean;
 }
 

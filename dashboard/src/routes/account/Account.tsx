@@ -97,7 +97,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { ADMIN, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -111,7 +111,7 @@ import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
-import { auth, rest, RestError, type SessionAnswer } from "~/protocol/index.ts";
+import { auth, pathSegment, rest, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import type { CredentialRow, DirectoryRow, SessionRow } from "~/routes/settings/Access.tsx";
 import { AuthenticatorDialog, RecoveryCodesDialog } from "~/routes/signin/SecondFactor.tsx";
 import { NewPasswordFields, newPasswordReady } from "~/routes/signin/NewPassword.tsx";
@@ -218,10 +218,10 @@ function PersonAccount({
   /** Read who this browser is again; resolves once that read has settled. */
   onSessionMoved: () => Promise<void>;
 }) {
-  const id = encodeURIComponent(session.person);
   const profile = useRest(
-    `/iam/people/${id}`,
-    async (signal) => (await rest.get(`/iam/people/${id}`, signal)) as DirectoryRow,
+    `/iam/people/${pathSegment(session.person)}`,
+    async (signal) =>
+      (await rest.get(`/iam/people/${pathSegment(session.person)}`, signal)) as DirectoryRow,
     READ,
   );
   const credentials = useRest(
@@ -231,9 +231,12 @@ function PersonAccount({
     READ,
   );
   const sessions = useRest(
-    `/iam/people/${id}/sessions`,
+    `/iam/people/${pathSegment(session.person)}/sessions`,
     async (signal) =>
-      listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
+      listOf<SessionRow>(
+        await rest.get(`/iam/people/${pathSegment(session.person)}/sessions`, signal),
+        "sessions",
+      ),
     READ,
   );
   const { reload: reloadCredentials } = credentials;
@@ -836,12 +839,14 @@ function Sessions({
           columns={[
             {
               key: "started",
+              align: "right",
               header: "Signed in",
               sortValue: (s) => s.created_at ?? "",
               cell: (s) => <TableDateCell value={s.created_at} now={now} />,
             },
             {
               key: "ends",
+              align: "right",
               header: "Ends",
               shrink: true,
               sortValue: (s) => s.expires_at ?? "",
@@ -959,6 +964,7 @@ function Tokens({
             },
             {
               key: "created",
+              align: "right",
               header: "Created",
               shrink: true,
               sortValue: (c) => c.created_at ?? "",
@@ -1035,7 +1041,7 @@ function RevokeToken({
       onConfirm={async () => {
         const answer = await write.run({
           method: "DELETE",
-          path: `/iam/credentials/${encodeURIComponent(token.id)}`,
+          path: `/iam/credentials/${pathSegment(token.id)}`,
         });
         if (!answer) return;
         onDone();

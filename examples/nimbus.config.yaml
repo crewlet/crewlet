@@ -16,10 +16,11 @@
 #                 -company examples/nimbus.company.yaml
 #
 # THERE ARE NO EXTERNAL SERVICES HERE.  The stream is a NATS JetStream
-# server embedded in this process and the store is one local file, so a
-# single binary in an empty directory is a working company — no broker to
-# operate, no database to provision, nothing to point a DSN at.  Both
-# slots take an external address when a deployment outgrows that; see
+# server embedded in this process and the store is two local files (the
+# node's own and the replicated estate beside it), so a single binary in
+# an empty directory is a working company — no broker to operate, no
+# database to provision, nothing to point a DSN at.  The stream takes an
+# external address when a deployment outgrows that; see
 # docs/guides/deployment.md and docs/guides/fleet.md.
 #
 # Restart-only Tier A fields only:
@@ -68,11 +69,10 @@ logging:
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
 # selects an in-memory server, and this company's own records live on that
-# stream.  The people who sign in to it do whatever backends it names —
-# the identity estate is a state-log domain — and its work items and its
-# pages do too, because it runs the engine's own tracker and knowledge
-# base (see tracker.backend and knowledge.backend in the company
-# document).  A restart would recreate those logs empty and this node
+# stream.  The people who sign in to it do whatever backends it names (the
+# identity estate is a state-log domain), and its work items and its pages
+# do too, because it runs Worklet and Doclet (see tracker.backend and
+# knowledge.backend in the company document).  A restart would recreate those logs empty and this node
 # would stop serving for good, so the engine refuses to boot without one
 # rather than losing the records — `crewlet validate` refuses it too,
 # naming stream.store_dir.  That is a rule about a broker MEMBER, which a
@@ -146,14 +146,21 @@ node:
                                        #   stream.leaf.urls — see
                                        #   docs/guides/satellite-nodes.md
   # labels: {zone: eu-west}            # what a role's placement selector matches
-  # max_concurrent: 32                 # agent turns THIS PROCESS runs at once.
+  # max_concurrent: 32                 # turn segments this process runs
+                                       #   at once, whatever starts one: a
+                                       #   new turn up to the park at its
+                                       #   executor's launch, a run's
+                                       #   collection and its review, a
+                                       #   person's answer carrying a run on.
+                                       #   The executor run in its box holds
+                                       #   no slot (each seat runs at most one).
                                        #   Per node, so a fleet's ceiling is
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
                                        #   single-node company.  Not the same
                                        #   knob as a providers.llm entry's own
                                        #   max_concurrent, which caps that
-                                       #   entry's CLI processes.
+                                       #   entry's CLI processes on this host.
 
 api:
   host: "0.0.0.0"
@@ -177,10 +184,14 @@ api:
   # is checked against, and it is the base of every link a person follows:
   # ${crewlet_base_url} in tool-skill prose, a page change's notification,
   # an invitation and a password link.  With no public listener below it
-  # is also where vendors and sandboxes reach the webhook, OTLP and bridge
-  # routes, so every webhook URL and pasted app manifest is built on it.
-  # The engine usually sits behind a TLS-terminating proxy and therefore
-  # cannot read any of that off the request itself.
+  # is also where vendors reach the webhook routes, so every webhook URL and
+  # pasted app manifest is built on it.  The engine usually sits behind a
+  # TLS-terminating proxy and therefore cannot read any of that off the
+  # request itself.  A sandbox box's endpoints are not built on it: its
+  # bridge and telemetry endpoints are built on CREWLET_MCP_BRIDGE_URL and
+  # CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the address a box reaches
+  # (a direct box dials its own node's listener on loopback wherever that node
+  # binds api.port).
   #
   # Behind a proxy this is the PUBLIC address (https://nimbus.example.com),
   # not http://localhost.
@@ -190,10 +201,13 @@ api:
   # — /webhooks/, /otlp/ and /mcp/ — so the dashboard, the REST API and the
   # sign-in routes can stay off the public internet.  With a port set those
   # routes are served there and nowhere else, everything else stays on
-  # api.port, and external_url here is the address every webhook, app
-  # manifest and per-run sandbox endpoint is built on (required once the
-  # port is set on an ingress node).  The walkthrough serves everything on
-  # one port, so it is left out.
+  # api.port, and external_url here is the address every webhook and app
+  # manifest is built on (required once the port is set on an ingress
+  # node).  A box's bridge and telemetry endpoints are built on
+  # CREWLET_MCP_BRIDGE_URL and CREWLET_SANDBOX_OTEL_RECEIVER_URL, which then
+  # name this same public address; a direct box on an ingress node that runs
+  # seats dials the public listener on loopback.  The walkthrough serves
+  # everything on one port, so it is left out.
   # public:
   #   port: 8443
   #   external_url: "https://hooks.nimbus.example.com"
@@ -255,12 +269,12 @@ api:
         # 26 characters at minimum, checked on what the ${VAR} resolves to.
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        # What this credential may do: `admin`, `tracker`, `knowledge`,
-        # `artifacts`.
+        # What this credential may do: `admin`, `worklet`, `doclet`,
+        # `artifacts`, `chatlet`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only
-        # files work would be `[tracker]`.
+        # files work would be `[worklet]`.
         grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────

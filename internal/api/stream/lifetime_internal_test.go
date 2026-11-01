@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,9 @@ type socketCase struct {
 	ends      time.Time
 	decide    answer
 	query     Query
+
+	// chat is the chat hub the socket joins, nil for none.
+	chat *ChatHub
 }
 
 // served is one socket, through the same serveSocket the handler uses.
@@ -76,13 +80,19 @@ type served struct {
 	conn *websocket.Conn
 
 	// decisions counts every time the socket's credential was decided by
-	// the guard (a read of the identity estate), once the decision has
-	// ANSWERED. Counted as it began, a case that waited for its first
-	// decision and then moved the answer could see that decision read the
-	// moved one: it closed the socket, the move's own wake reached a loop
-	// that had already ended, and the second decision the case waited for
-	// never came.
+	// the guard (a read of the identity estate), once the decision has been
+	// APPLIED: its principal set, or the socket closed. Counted as it began,
+	// a case that waited for its first decision and then moved the answer
+	// could see that decision read the moved one. Counted as it answered,
+	// before it was applied, a case that waited for it and then asked a
+	// question could have the question asked as the principal before it.
 	decisions atomic.Int64
+
+	// who is the principal the socket's questions are asked as, and
+	// appliedAs what it was each time a decision was counted.
+	who       *asking
+	mu        sync.Mutex
+	appliedAs []iam.Principal
 }
 
 // newDecidingService builds a service whose watches are decided through chart,
@@ -148,20 +158,24 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 			return nil, nil
 		}
 	}
-	s := &served{}
+	s := &served{who: &asking{principal: c.principal}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
-		serveSocket(r.Context(), conn, svc, c.query, credential{
-			who:    &asking{principal: c.principal},
+		serveSocket(r.Context(), conn, svc, c.query, c.chat, credential{
+			who:    s.who,
 			opened: c.opened,
 			ends:   c.ends,
 			decide: func(ctx context.Context) (*http.Request, *auth.Refusal) {
-				decided, refusal := c.decide(r.Clone(ctx))
+				return c.decide(r.Clone(ctx))
+			},
+			applied: func() {
+				s.mu.Lock()
+				s.appliedAs = append(s.appliedAs, s.who.current())
+				s.mu.Unlock()
 				s.decisions.Add(1)
-				return decided, refusal
 			},
 		})
 	}))
@@ -242,7 +256,7 @@ func (s *served) settled(t *testing.T, n int64) {
 
 func person(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindPerson,
-		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 }
 
 // sessionOf is what a person's session socket was opened with.
@@ -281,6 +295,73 @@ func TestADecisionIsCountedOnceItHasAnswered(t *testing.T) {
 	}
 	close(release)
 	s.settled(t, 1)
+}
+
+// A DECISION IS COUNTED ONCE IT IS APPLIED, not as it answers.
+//
+// The guard answering a decision and the socket acting on it are two steps,
+// and the socket's questions run beside them: a case that waited for a
+// decision counted as it answered, then asked a question, could have it asked
+// as the principal before the decision. That is how
+// TestAQuestionIsAskedAsTheLastDecisionResolved failed in CI with the
+// handshake's zero step-up deadline. The decision is held open here: while it
+// asks nothing is counted, and once it is counted the socket already asks as
+// it, the question included. Counted as it answered, the count moves while
+// the socket still asks as the handshake's principal, every time.
+func TestADecisionIsCountedOnceItIsApplied(t *testing.T) {
+	t.Parallel()
+	ana := person("ana")
+	refreshed := ana
+	refreshed.ReauthAt = time.Now().Add(time.Hour).UTC()
+	began, release := make(chan struct{}, 1), make(chan struct{})
+	seen := make(chan time.Time, 1)
+	s := dial(t, newDecidingService(t, authz.NoChart{}), socketCase{
+		principal: ana, opened: sessionOf(ana),
+		decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
+			signal(began)
+			<-release
+			return resolvedAs(refreshed)(r)
+		},
+		query: func(ctx context.Context, _ string, _ map[string]any) (any, error) {
+			p, how := iam.From(ctx)
+			if how != iam.Resolved {
+				return nil, errors.New("the question was asked as nobody resolved")
+			}
+			seen <- p.ReauthAt
+			return nil, nil
+		},
+	})
+	select {
+	case <-began:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("the socket's first decision never began")
+	}
+	if got := s.decisions.Load(); got != 0 {
+		t.Errorf("a decision still asking was counted (%d)", got)
+	}
+	close(release)
+	s.settled(t, 1)
+	s.mu.Lock()
+	counted := slices.Clone(s.appliedAs)
+	s.mu.Unlock()
+	if len(counted) == 0 || !counted[0].ReauthAt.Equal(refreshed.ReauthAt) {
+		t.Fatalf("the decision was counted while the socket asked as %+v, want the "+
+			"decision's step-up deadline %v", counted, refreshed.ReauthAt)
+	}
+	if got := s.read(t); got.Kind != KindSnapshot {
+		t.Fatalf("first frame is %q, want the snapshot", got.Kind)
+	}
+	s.write(t, map[string]any{"kind": "query", "id": 1, "what": "anything"})
+	select {
+	case got := <-seen:
+		if !got.Equal(refreshed.ReauthAt) {
+			t.Errorf("the question was asked with %v, want the decision's %v",
+				got, refreshed.ReauthAt)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the query never ran")
+	}
 }
 
 // --- what decides a socket ---------------------------------------------- //
@@ -344,7 +425,7 @@ func TestASocketIsOpenedWithWhatItsHandshakeResolved(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token-long-enough",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	b.API.Auth.Admin = iam.AdminServe
 	r := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
 	r.Header.Set("Authorization", "Bearer a-tier-a-token-long-enough")
@@ -825,7 +906,7 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 		after func(p iam.Principal) iam.Principal
 	}{
 		{"the same actor (the control)", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
+			p.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantWorklet}
 			return p
 		}},
 		{"unbound from the seat", func(p iam.Principal) iam.Principal {
@@ -841,7 +922,7 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 			return p
 		}},
 		{"given a permission", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+			p.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
 			return p
 		}},
 		{"its last permission taken", func(p iam.Principal) iam.Principal {

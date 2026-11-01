@@ -232,7 +232,7 @@ func (d *Derived) holds() []FilePattern {
 // apart (packFileName): against the snapshot by the sweep, against the
 // listing by Verify, and there too only a regular file is one.
 //
-// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0056). git reads through a
+// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0079). git reads through a
 // link at a derived file's name, at config or at packed-refs: a symbolic link
 // named commit-graph had git read the graph it pointed at, outside the
 // incarnation, and one named config over a file holding gitproc.RepoConfig

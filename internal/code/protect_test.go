@@ -50,11 +50,11 @@ func gateLoosenings() []aLoosening {
 			"lowers merge_by from maintainers to writers"},
 		{"approvals", code.GateChange{Approvals: ptr(code.ApprovalsNone)}, "lowers approvals from one to none"},
 		{"approvals_unless", code.GateChange{ApprovalsUnless: ptr(both)},
-			"adds whitespace_only to approvals_unless"},
-		{"human_paths", code.GateChange{HumanPaths: ptr([]code.HumanPath{})}, "drops deploy/** from human_paths"},
+			`adds "whitespace_only" to approvals_unless`},
+		{"human_paths", code.GateChange{HumanPaths: ptr([]code.HumanPath{})}, `drops "deploy/**" from human_paths`},
 		{"human_paths' unless", code.GateChange{HumanPaths: ptr([]code.HumanPath{{Glob: "deploy/**",
-			Unless: both}})}, "adds whitespace_only to the unless of deploy/** in human_paths"},
-		{"checks", code.GateChange{Checks: ptr([]string{"lint"})}, "drops unit from checks"},
+			Unless: both}})}, `adds "whitespace_only" to the unless of deploy/** in human_paths`},
+		{"checks", code.GateChange{Checks: ptr([]string{"lint"})}, `drops "unit" from checks`},
 		{"landing.policy", code.GateChange{Landing: &code.LandingChange{Policy: ptr(code.LandingPostLand)}},
 			"moves landing.policy from pre_land to post_land"},
 		{"owners_approve", code.GateChange{OwnersApprove: ptr(false)}, "turns owners_approve off"},
@@ -162,7 +162,7 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	}
 }
 
-// AN AGENT CANNOT LOOSEN A GATE (ADR-0058, field by field): the unit's lead at
+// AN AGENT CANNOT LOOSEN A GATE (ADR-0081, field by field): the unit's lead at
 // full_access, which maintains the repository, asks a protect request that
 // loosens main's merge gate in one field — each in turn: merge_by or approvals
 // lowered, a class added to approvals_unless, a human path dropped or its
@@ -186,7 +186,7 @@ func TestAnAgentCannotLoosenAGate(t *testing.T) {
 	n.lands(lcGate(lcPerson, id, main, persons, gateTo(tight)))
 	end := n.end()
 	rows := append(gateLoosenings(), aLoosening{"checks, beside merge_by raised",
-		code.GateChange{MergeBy: ptr(code.MergeByPersons), Checks: ptr([]string{"unit"})}, "drops lint from checks"})
+		code.GateChange{MergeBy: ptr(code.MergeByPersons), Checks: ptr([]string{"unit"})}, `drops "lint" from checks`})
 	for _, tc := range rows {
 		res := n.life(lcGate(cto, id, main, persons, tc.change))
 		switch {

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Stage is how far through enrolment a principal is.
@@ -171,7 +173,21 @@ type Principal struct {
 	// question asked of a browser: the person is the author, and the lineage
 	// is which sign-in — which of their browsers, which shared machine — the
 	// write came through.
+	//
+	// `assist:<grant>` ([AssistName]) is the Dashboard Assistant acting for
+	// a person signed in through a session: the person is the author, and
+	// the grant is the credential the request came through (ADR-0050).
 	Via string
+
+	// AssistScope is how far the assistant grant named by Via reaches:
+	// [AssistScopeRead] for a turn's reads, [AssistScopeExec] for the one
+	// approved request an exec grant is bound to.
+	//
+	// SET EXACTLY WHEN Via IS AN ASSISTANT GRANT, and the zero otherwise,
+	// which [Principal.Validate] holds in both directions: a scope with no
+	// grant would narrow nothing anybody can name, and a grant with no
+	// scope would reach as far as nobody decided.
+	AssistScope AssistScope
 }
 
 // Can reports whether this principal carries g, counting every app an
@@ -248,10 +264,10 @@ func (p Principal) Validate() error {
 		return fmt.Errorf("%w: id is the nil uuid — a principal no row can key on", ErrInvalidPrincipal)
 	}
 	if !p.Kind.Valid() {
-		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalidPrincipal, p.Kind, Kinds)
+		return fmt.Errorf("%w: kind %q is not one of %s", ErrInvalidPrincipal, p.Kind, words.Or(Kinds))
 	}
 	if !p.Stage.Valid() {
-		return fmt.Errorf("%w: stage %q is not one of %v", ErrInvalidPrincipal, p.Stage, Stages)
+		return fmt.Errorf("%w: stage %q is not one of %s", ErrInvalidPrincipal, p.Stage, words.Or(Stages))
 	}
 	switch p.Kind {
 	case KindSeat:
@@ -287,10 +303,27 @@ func (p Principal) Validate() error {
 	// into every row the principal authors, so a value in no namespace would
 	// be an operator column no reader can resolve back to anything.
 	if p.Via != "" && !ValidCredentialName(p.Via) {
-		return fmt.Errorf("%w: via %q names no credential — a machine token "+
-			"is %s followed by its id, and a browser session %s followed by "+
-			"its lineage", ErrInvalidPrincipal, p.Via, MachineTokenPrefix,
-			SessionPrefix)
+		return fmt.Errorf("%w: via %q names no credential: a machine token "+
+			"is %s followed by its id, a browser session %s followed by "+
+			"its lineage, and an assistant grant %s followed by its id",
+			ErrInvalidPrincipal, p.Via, MachineTokenPrefix, SessionPrefix,
+			AssistPrefix)
+	}
+	// AN ASSISTANT GRANT IS A PERSON'S, AND IT SAYS HOW FAR IT REACHES. The
+	// grant is derived only from a person's own session (ADR-0050), so any
+	// other kind acting through one is a principal nobody composed, and the
+	// scope travels with the grant and nowhere else.
+	_, assisted := p.Assisted()
+	switch {
+	case assisted && p.Kind != KindPerson:
+		return fmt.Errorf("%w: a %s acts through the assistant grant %q, which "+
+			"only a person's own session derives", ErrInvalidPrincipal, p.Kind, p.Via)
+	case assisted && !p.AssistScope.Valid():
+		return fmt.Errorf("%w: the assistant grant %q carries scope %q, which is "+
+			"not one of %s", ErrInvalidPrincipal, p.Via, p.AssistScope, words.Or(AssistScopes))
+	case !assisted && p.AssistScope != "":
+		return fmt.Errorf("%w: assist scope %q set on a principal acting through "+
+			"no assistant grant", ErrInvalidPrincipal, p.AssistScope)
 	}
 	return nil
 }

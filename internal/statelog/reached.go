@@ -23,7 +23,7 @@ import (
 //     build reads. [BarrierVersion] never moves, and a barrier at any other
 //     version is not one this framework appended.
 //   - The trimmed record is the other framework record, and it removes this
-//     log's anchors below its floor in its own transaction (ADR-0050).
+//     log's anchors below its floor in its own transaction (ADR-0073).
 //   - A scope other than the framework's is a claim the record makes some
 //     object stale, and a subject the log arbitrates on advances an anchor.
 //     The framework appends neither on a barrier ([ReadIndex.Read]), so a

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -26,14 +26,12 @@ type headroom struct {
 
 func (h headroom) Remaining(context.Context) (int, error) { return h.left, h.err }
 
-// spawnRunner builds a runner whose executor submits immediately, so the
-// test's subject is the SURFACE rather than the loop.
+// spawnRunner builds a runner whose executor's launch starts nothing, so the
+// test's subject is the SURFACE its run is handed.
 func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 	t.Helper()
 	prov := &scriptedProvider{
-		execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
-			`{"outcome":"no_action","summary":"nothing to fan out"}`)},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
@@ -45,9 +43,10 @@ func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: tools.NewRegistry(),
 		Models:   models,
-		Caps:     runner.Caps{ExecutorRounds: 6},
+		Launcher: &playLauncher{},
 		Task:     "fan this out",
 		Subagent: sub,
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -63,7 +62,8 @@ func shipped() subagent.Limits {
 	}
 }
 
-// executeOffers reports what the executor's surface actually carried.
+// executeOffers reports what the surface the executor's run was launched with
+// actually carried.
 func executeOffers(t *testing.T, r *runner.Runner) []string {
 	t.Helper()
 	_, surface, err := r.Execute(context.Background(), 1, "", nil)
@@ -135,7 +135,7 @@ func TestAnUnreadableBudgetLeavesTheSpawnerOff(t *testing.T) {
 	}
 }
 
-// A SEAT OFFERED DELEGATE IS TOLD WHO ITS WORKERS ARE, on both runtimes.
+// A SEAT OFFERED DELEGATE IS TOLD WHO ITS WORKERS ARE.
 //
 // `## Your workers` is gated on `delegate` being on the surface, and the gate
 // read the registry snapshot the surface was built FROM — which never holds
@@ -157,45 +157,19 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		Remaining: headroom{err: errors.New("the coordination store is unreachable")},
 	}
 
-	native := func(t *testing.T, sub *runner.SubagentConfig) string {
+	system := func(t *testing.T, sub *runner.SubagentConfig) string {
 		t.Helper()
-		prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
-			`{"outcome":"no_action","summary":"nothing to fan out"}`)}}
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-			buildOpts{subagent: sub})
-		if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		return systemOf(t, prov, "execute")
+		_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{subagent: sub}, 1, "", nil)
+		return req.System
 	}
-	agentMode := func(t *testing.T, sub *runner.SubagentConfig) string {
-		t.Helper()
-		launcher := &recordingLauncher{}
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-			buildOpts{agentRun: launcher, subagent: sub})
-		if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		if launcher.runs != 1 {
-			t.Fatalf("launched %d runs", launcher.runs)
-		}
-		return launcher.req.System
+	got := system(t, offered)
+	if !strings.Contains(got, "## Your workers") || !strings.Contains(got, "`researcher`") {
+		t.Errorf("a seat offered %s was not told its workers:\n%s", subagent.ToolName, got)
 	}
-
-	for name, prompt := range map[string]func(*testing.T, *runner.SubagentConfig) string{
-		"native": native, "agent mode": agentMode,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			got := prompt(t, offered)
-			if !strings.Contains(got, "## Your workers") || !strings.Contains(got, "`researcher`") {
-				t.Errorf("a seat offered %s was not told its workers:\n%s", subagent.ToolName, got)
-			}
-			if got := prompt(t, withheld); strings.Contains(got, "## Your workers") {
-				t.Errorf("a seat whose surface holds no %s was told about workers it cannot reach:\n%s",
-					subagent.ToolName, got)
-			}
-		})
+	if got := system(t, withheld); strings.Contains(got, "## Your workers") {
+		t.Errorf("a seat whose surface holds no %s was told about workers it cannot reach:\n%s",
+			subagent.ToolName, got)
 	}
 }
 

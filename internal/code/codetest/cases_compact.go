@@ -33,7 +33,7 @@ import (
 )
 
 // THE COMPACTION CASES (C1–C8): a repository's packs merged by its maintainer
-// and decided by its committer (ADR-0060), the merged packs retired for
+// and decided by its committer (ADR-0083), the merged packs retired for
 // a day and swept, and every git node's cache following by a swap — through
 // the production compactor every git node of a topology is built with
 // (Node.Compactor), never started, so each case drives its passes itself.

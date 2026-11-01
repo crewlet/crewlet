@@ -24,7 +24,7 @@ import {
 } from "./kit.tsx";
 
 const ADMIN = ["admin"];
-const MEMBER = ["tracker", "knowledge"];
+const MEMBER = ["worklet", "doclet"];
 
 describe("every contribution", () => {
   test("passes its check: nothing a section offers is left out", () => {
@@ -60,9 +60,10 @@ describe("the tray's sections", () => {
       "schedules",
       "integrations",
       "budgets",
-      "work",
+      "worklet",
+      "chatlet",
       "live",
-      "knowledge",
+      "doclet",
       "settings",
     ] as const) {
       expect(areas, key).toContain(key);
@@ -84,12 +85,16 @@ describe("who may add what", () => {
 
   // SETTINGS IS ADMIN'S BUT FOR SPEND'S READINGS, which every reader reads:
   // its widgets follow its sections.
-  test("a reader without admin is offered of Settings' widgets only Spend's readings", () => {
+  test("a reader without admin is offered of Settings' widgets only Spend's readings and the models", () => {
     expect(settings.length).toBeGreaterThan(0);
     for (const def of settings) {
-      // Expensive tasks names its tasks by the tracker's keys, which MEMBER holds.
-      const readings = def.from === "settings-spend" || def.from === "settings-spend-tasks";
-      expect(canUse(def, MEMBER), def.key).toBe(readings);
+      // Expensive tasks names its tasks by the tracker's keys, which MEMBER holds;
+      // each model's condition is every member's (`llm_entries`' member reading).
+      const open =
+        def.from === "settings-spend" ||
+        def.from === "settings-spend-tasks" ||
+        def.key === "settings.models";
+      expect(canUse(def, MEMBER), def.key).toBe(open);
     }
   });
 
@@ -108,24 +113,33 @@ describe("who may add what", () => {
     for (const def of WIDGETS.values()) expect(canUse(def, ADMIN), def.key).toBe(true);
   });
 
-  test("a reader without the tracker is offered none of the tracker's widgets", () => {
-    for (const key of ["me", "work"] as const) {
+  test("a reader without Chatlet is offered none of Chatlet's widgets", () => {
+    const chat = AREAS.find((a) => a.key === "chatlet")!.widgets;
+    expect(chat.length).toBeGreaterThan(0);
+    for (const def of chat) {
+      expect(canUse(def, MEMBER), def.key).toBe(false);
+      expect(canUse(def, ["chatlet"]), def.key).toBe(true);
+    }
+  });
+
+  test("a reader without Worklet is offered none of Worklet's widgets", () => {
+    for (const key of ["me", "worklet"] as const) {
       for (const def of AREAS.find((a) => a.key === key)!.widgets) {
-        expect(canUse(def, ["knowledge"]), def.key).toBe(false);
-        expect(canUse(def, ["tracker"]), def.key).toBe(true);
+        expect(canUse(def, ["doclet"]), def.key).toBe(false);
+        expect(canUse(def, ["worklet"]), def.key).toBe(true);
       }
     }
   });
 
   // THE INBOX IS EVERY SIGNED-IN READER'S: its notices are composed from
   // every native domain, each read under its own permission on the engine's
-  // side, so a reader without the tracker still hears about the changes they
-  // are asked to review. Mutation: give its widget the tracker's service
+  // side, so a reader without Worklet still hears about the changes they
+  // are asked to review. Mutation: give its widget Worklet's service
   // back and a reader holding nothing is offered no Updates.
   test("a reader holding no app is offered the inbox's widgets", () => {
     for (const def of AREAS.find((a) => a.key === "inbox")!.widgets) {
       expect(canUse(def, []), def.key).toBe(true);
-      expect(canUse(def, ["knowledge"]), def.key).toBe(true);
+      expect(canUse(def, ["doclet"]), def.key).toBe(true);
     }
   });
 });
@@ -151,7 +165,7 @@ describe("a contribution that fails its check", () => {
       const kept = defineWidgets([
         def({}),
         def({ key: "home.lost", from: "nowhere" }),
-        def({ key: "work.misfiled", from: "home" }),
+        def({ key: "worklet.misfiled", from: "home" }),
         def({ key: "home.tiny", size: { w: 1, minW: 1, minH: 1, vertical: true } }),
         def({
           key: "home.twice",
@@ -164,7 +178,7 @@ describe("a contribution that fails its check", () => {
       expect(kept.map((d) => d.key)).toEqual(["home.example"]);
       const reported = WIDGET_PROBLEMS.slice(before).join("\n");
       expect(reported).toContain('home.lost: "nowhere" is not a page in the navigation.');
-      expect(reported).toContain("work.misfiled: its key starts with its page's workspace");
+      expect(reported).toContain("worklet.misfiled: its key starts with its page's workspace");
       expect(reported).toContain("home.tiny: 2 <= minW <= w <= 12.");
       expect(reported).toContain('home.twice: param "a" is a unique lowercase key.');
       expect(said).toHaveBeenCalledTimes(4);

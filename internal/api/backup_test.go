@@ -186,7 +186,7 @@ func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
 	}{
 		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w: version 2",
 			objstore.ErrRecordUnreadable), http.StatusConflict, "record_unreadable"},
-		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w (this node holds [k1])",
+		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w (this node holds \"k1\")",
 			statelog.ErrRecordUnverified), http.StatusConflict, "record_unverified"},
 		{fmt.Errorf("backup: the copy's checkpoint on CREWLET_TRACKER_LOG: %w",
 			statelog.ErrStreamRecreated), http.StatusConflict, "log_recreated"},

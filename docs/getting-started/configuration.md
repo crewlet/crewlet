@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file), and — on a node that serves git — its repository cache and git processes.
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store's files, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file), and — on a node that serves git — its repository cache and git processes.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -80,12 +80,14 @@ code: {...}                             # optional — the engine's own git host
 inbox:                                  # optional — a person's inbox, every native domain's notices
   retention_days: 365                   #   how long it keeps one (default 365, 30..3650). See
                                         #   "A person's inbox" under "Tracker" below.
+assistant: {...}                        # optional, Ask Crewlet; off unless enabled
+                                        #   (see "Ask Crewlet" below)
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
-  max_tool_rounds: 24                   # max tool-call rounds within one executor run
-                                        #   (the reviewer has no knob: it holds one
-                                        #   submission tool, so its budget is structural)
+                                        #   (an executor run's own rounds are capped by
+                                        #   role.sandbox.max_turns / providers.sandbox.
+                                        #   default_max_turns: the run is its CLI's loop)
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
   delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
     max_parallel: 3                     # workers running at once within one call
@@ -93,13 +95,17 @@ turn_engine:                            # optional — executor/reviewer turn co
     max_turns: 20                       # tool rounds one worker may run (a request above it is clamped)
     max_turns_ceiling: 40               # highest max_turns a worker template may declare
     budget_fraction: 0.2                # ONE slice for the whole call, shared by every task in it
-    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this
+    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this; 0 = no floor
     task_timeout_seconds: 300           # wall-clock cap on one worker
     call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included
-  sandbox_min_budget_tokens: 2000       # refuse a coding run below this remaining budget
+  executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
+                                        #   this remaining budget (0 = no floor). A seat's or
+                                        #   the company's token_budget ceiling below it is
+                                        #   refused: no launch could ever fit
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
-  extension_enabled: true               # round-cap extension judge (executor + onboarding)
-  execute_max_tool_rounds_ceiling: 48   # hard ceiling for executor rounds across extensions (2x base 24)
+  extension_enabled: true               # round-cap extension judge for the onboarding pass
+                                        #   (an executor run is its CLI's loop, which no
+                                        #   judge extends)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
   conversation_session:                 # what this seat already said in ONE thread / issue / PR,
@@ -204,7 +210,7 @@ learning:                               # optional — agent-learning subsystem
     compaction_min_cluster_size: 3      # singletons / pairs left raw
     compaction_jaccard_threshold: 0.6   # tool-sequence similarity to pool a cluster
     compaction_batch_size: 200          # max raw rows pulled per pass
-    exemplar_count: 2                   # raw rows kept per cluster for drill-down
+    exemplar_count: 2                   # raw rows kept per cluster for drill-down (at least 1)
     # Action 4 (optional): evict ancient compacted entries for hard storage caps.
     compacted_max_age_days: 0           # 0 = disabled
 ```
@@ -225,9 +231,11 @@ calls run under a fixed deadline and pay a CLI launch each, which is why they
 want a fast model rather than the seat's own — see
 [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency).
 
-`llm_judge` is invoked when the executor or the onboarding pass exhausts its tool-round cap;
-it decides whether the agent is making progress (extend) or thrashing
-(fall through to rescue).  Falls back to `llm` -> `"default"` if unset.
+`llm_judge` is invoked when the first-turn onboarding pass exhausts its tool-round cap;
+it decides whether the pass is making progress (extend) or thrashing
+(fall through to rescue).  Falls back to `llm` -> `"default"` if unset. An
+executor run is its coding CLI's own loop, bounded by `role.sandbox.max_turns`
+(else `providers.sandbox.default_max_turns`), which no judge extends.
 See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge)
 section for details.
 
@@ -283,7 +291,11 @@ used to mean "unlimited", and it is also what a ceiling of nothing would be, so 
 neither. Stopping a seat on purpose is not a budget's job. A key that is not a window —
 `year` — is refused too, naming the key to remove. A company file and a `/config` write each refuse
 both, and a bare number is refused over JSON as well
-as YAML.
+as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (25000 by
+default) is refused too, on a seat that runs an executor and on the company,
+since no launch could ever fit under it; and a seat whose window leaves less
+than that floor waits [parked](../concepts/agent-runtime.md#the-budget-park)
+until it turns over.
 
 [`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
 can never refuse a turn, because another ceiling is always reached first:
@@ -319,7 +331,7 @@ scheduling:                              # optional — role/unit scheduled work
   enabled: true                          # master switch
   tick_seconds: 10                       # scheduler poll interval
   jitter_seconds: 0                      # max per-schedule spread to smooth a shared cron minute
-  catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window
+  catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window (at least 1)
   catchup_max_seconds: 7200              # upper clamp on the missed-tick catchup window
 ```
 
@@ -328,6 +340,99 @@ A schedule that names no `timezone` of its own fires on the company's
 See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
+
+### Ask Crewlet
+
+Ask Crewlet is a drawer in the dashboard that answers a person's questions
+about the company and prepares changes for them to approve. It has no
+identity of its own: every read is a request made as the signed-in person,
+and nothing is written until that person approves the change it previews. It
+is **off** unless the company turns it on.
+
+```yaml
+providers:
+  llm:
+    assistant:                          # a dedicated entry, recommended
+      agent: claude-code
+      model: sonnet
+      timeout_seconds: 90               # one interactive round
+      max_concurrent: 4                 # its own slots, apart from the seats'
+      overrides: { web_tools: denied }  # required for every Ask Crewlet entry
+
+assistant:
+  enabled: true                         # absent or false: off
+  llm: [assistant]                      # providers.llm keys, a fallback chain
+  max_steps: 30                         # tool steps per turn, 1..40
+  turn_timeout_seconds: 900             # longest turn, 30..1200
+  proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
+  retention_days: 30                    # conversation history, 1..365
+  token_budget: { day: 200000 }         # per person, optional
+  deep_work:                            # optional: absent is quick mode only
+    llm: assistant-deep                 # a Claude Code entry (agent: claude-code)
+    timeout_seconds: 1200               # one run's wall clock, 60..1200
+    max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
+    max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
+| `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
+| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a CLI launch of fifteen to twenty-five seconds. |
+| `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
+| `retention_days` | 30 | How long a person's conversations are kept. |
+| `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`agent: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
+| `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
+| `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
+| `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
+
+A numeric field left out, or `0`, takes its default; a value outside its range
+is refused naming the field.
+
+**What one person may spend.** Every round of a person's turn is charged to the
+company's budget and, where `token_budget` is set, to that person's own, across
+every node of the fleet. A person whose own window is spent, or whose company's
+is, is refused before the next model round with `budget_exhausted` naming which
+(`person` or `org`), and starts again when the window turns over or the ceiling
+is raised (on Company › Budgets, under **Ask Crewlet, per person**). A per-person
+ceiling that can never refuse a question is a warning, as a seat's is: one at or
+above another of its own windows that holds it, or at or above the company's on
+a window that holds it, since a person's Ask Crewlet spend is the company's too
+and the company's ceiling is reached first. Beside the
+tokens, a person may have two turns running on a node and start twenty a minute
+across the whole fleet.
+
+**Every model in the chain must reach nothing the person's requests did not
+return.** Each `llm` key must name a `providers.llm` entry that is:
+
+- on a profile whose run has **no tool of its own, by construction**, so the
+  CLI's one tool source is the engine's `crewlet` server serving the person's
+  own requests: its profile declares `local_tools: denied` and a measured
+  `tools_off`, and the argv every Ask Crewlet call runs carries it, with an `mcp`
+  allow list naming the engine's tools alone. A CLI with its own shell or file
+  reader on the engine host could read whatever the engine user can, the
+  engine's own data and keys included. Today that is `claude-code` and `pi`;
+  `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
+  not been measured to remove its tools, so both are refused.
+- **`web_tools: denied`**, set on the entry with
+  `overrides: { web_tools: denied }`. A page the model fetched itself is text
+  no authority decision saw, and a fetch is a way out for the person's data.
+  Seats keep their web tools; only the entry that sets this loses them. The
+  CLIs that can deny web are `claude-code`, `codex`, `opencode` and `pi`
+  (see [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host));
+  any other is refused.
+
+A document that breaks one of these is refused by `crewlet validate` and by
+every `/config` write, each naming the chain member and the entry field to
+change. A stored revision that somehow carries one still applies, so every
+seat keeps running, and Ask Crewlet stays unavailable with that reason
+until the chain is fixed. Run `crewlet llm doctor assistant` before turning
+it on: on the exact argv Ask Crewlet runs it asks the CLI to run a shell
+command, to read a file the doctor just wrote and to fetch a page, and reports
+any of the three that succeeded as a problem. Nothing records that run, so the
+chain cannot require it: it is the operator's check to make.
 
 ---
 
@@ -358,11 +463,12 @@ providers:
                                         #   credential, which still builds: every call then fails
                                         #   with the CLI's own sign-in error, which names it, where
                                         #   a missing model has no such tell
-      mode: text                        # optional — text (default): a model behind the engine's
-                                        #   tool loop; agent: the CLI runs the executor itself
-                                        #   (claude-code and opencode only)
-      run_in: ""                        # agent mode only — direct | container | e2b; empty takes
-                                        #   providers.sandbox.default_run_in
+      run_in: ""                        # optional — where a seat's executor runs when it launches
+                                        #   on this entry: direct | container | e2b; empty takes
+                                        #   providers.sandbox.default_run_in. Only claude-code and
+                                        #   opencode can run an executor, so the field is REFUSED on
+                                        #   any other CLI's entry, where nothing would read it; any
+                                        #   CLI serves the reviewer, workers and side passes
       state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
                                         #   under <state_dir>/<agent>. Empty:
                                         #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
@@ -374,18 +480,28 @@ providers:
                                         #   live and starts that CLI signed out. Its bundle
                                         #   (auth.credential_bundle) stays the old CLI's and is
                                         #   refused until re-exported from the new one
-      timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
-                                        #   the process launch, the model's whole answer and the
-                                        #   CLI's own retries. A breach is a retryable `timeout`
-      max_concurrent: 4                 # optional — CLI processes at once (default 4). Each is a
-                                        #   200-400 MB runtime, and subscription plans throttle
-                                        #   concurrency hard
+      timeout_seconds: 600              # optional — one stretch of a phase's CLI work on this
+                                        #   host, wall clock (default 600): from its launch, or the
+                                        #   end of the tool call it last waited on, to its next
+                                        #   call or its exit — the seat's tools are never on it. A
+                                        #   breach is a retryable `timeout`. An executor run is
+                                        #   bounded by its round cap instead
+                                        #   (providers.sandbox.default_max_turns)
+      max_concurrent: 4                 # optional — live CLI processes on this host at once
+                                        #   (default 4). Each is a 200-400 MB runtime that holds
+                                        #   its slot for its whole run, and subscription plans
+                                        #   throttle concurrency hard; a model call made inside one
+                                        #   of a run's tool calls on the same entry borrows the
+                                        #   run's slot. Executor runs are not counted: each seat
+                                        #   runs one at a time
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
-                                        #   for opencode, the key of the provider its model names
+                                        #   for opencode, the key of the provider its model names.
+                                        #   An executor run's box gets it too, beneath the seat's
+                                        #   role.sandbox.env
       auth:
-        mode: subscription              # subscription (default) | api-key | inherit-env.
+        mode: subscription              # subscription (default) | api-key | inherit-env | env.
                                         #   subscription: the CLI's own login, or a headless token.
                                         #   api-key: ONE key in the CLI's key variable
                                         #   (ANTHROPIC_API_KEY for claude-code, CODEX_API_KEY for
@@ -393,7 +509,10 @@ providers:
                                         #   opencode, kimi-code). qwen-code keeps no login, so it
                                         #   is api-key only, with api_key named (its OPENAI_API_KEY
                                         #   is shared with other vendors). inherit-env: forward
-                                        #   the engine's own value of either variable
+                                        #   the engine's own value of either variable. env: the
+                                        #   entry's env alone signs the CLI in (a cloud provider's
+                                        #   switch, or a gateway's ANTHROPIC_AUTH_TOKEN); neither
+                                        #   variable reaches the CLI and no login is seeded
         token: ""                       # optional — ${VAR} holding a headless subscription token;
                                         #   empty falls back to the profile's own variable
                                         #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and
@@ -419,7 +538,9 @@ providers:
       auth:
         mode: api-key                   # reads ANTHROPIC_API_KEY
 
-    gpt:                                # OpenAI's models through Codex
+    gpt:                                # OpenAI's models through Codex — for a seat's reviewer,
+                                        #   workers and side passes (llm_review, llm_subagent, …):
+                                        #   Codex runs no executor
       agent: codex
       model: gpt-5
       auth:
@@ -432,6 +553,35 @@ providers:
                                         #   a bare id is refused on a write
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the key of the provider the model names
+
+  sandbox:                              # REQUIRED once the company has an agent seat and an entry
+                                        #   above: every seat's executor runs as its CLI's own run,
+                                        #   in a box from this catalogue (code-sandbox.md)
+    local:
+      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
+                                        #   and deep work's, each removed at teardown
+      # image: ""                       # required only where a run is placed in a container
+      # runtime: auto                   # auto | docker | podman
+      # network: ""                     # the container network; "none" cuts the box off
+      # run_args: []                    # how a container box is sized
+      # runtime_env: {}                 # environment for the docker/podman CLI, never the box
+    # e2b:                              # the remote backend, beside or instead of local:
+    #   api_key: "${E2B_API_KEY}"       #   required whenever e2b: is present
+    #   domain: ""                      #   set for a self-hosted cluster
+    #   template: ""                    #   empty = the prebuilt template; also how a box is sized
+    # fake: true                        # the in-process double, for demonstrations;
+                                        #   never beside e2b: or local:
+    default_run_in: direct              # where a run on an entry with no run_in happens. direct
+                                        #   runs the CLI on this host as the engine's user.
+                                        #   Required unless the catalogue names exactly one
+                                        #   cell, or every entry an executor launches on
+                                        #   names its own run_in
+    # default_max_turns: 96             # agentic-round cap for one executor run on seats
+                                        #   naming no role.sandbox.max_turns; 0 = uncapped
+    # default_timeout_seconds: 900      # box TTL / keepalive: not a run cap
+    # default_pause_ttl_seconds: 1800   # how long a box blocked on a person stays paused;
+                                        #   0 = never pause
+    # setup: []                         # provisioning steps applied to every box
 ```
 
 **One entry is one CLI on one model, signed in one way.** Per-phase models
@@ -461,8 +611,8 @@ The CLI itself must be installed on the engine host — see
 
 ```yaml
 providers:
-  embeddings:                           # optional — the semantic half of a native
-                                        #   knowledge search (the company's pages and
+  embeddings:                           # optional: the semantic half of Doclet's
+                                        #   and Worklet's search (the company's pages and
                                         #   work items, embedded once for the fleet)
                                         #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
@@ -705,17 +855,16 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB, and a fresh node needs
-                                    #   more than the floor: the 7.5 GiB the
-                                    #   eight state logs reserve at their
-                                    #   smallest, and room beside them for
-                                    #   every stream that reserves nothing
-                                    #   (`crewlet validate` says when a limit
-                                    #   is short of it, and the boot refuses
-                                    #   it naming both figures)
-                                    #   that reserves nothing — and it must not
-                                    #   be smaller than the ceilings declared
-                                    #   inside it.
+                                    #   6 GiB..64 TiB, and it must not be
+                                    #   smaller than the ceilings declared
+                                    #   inside it. What a fresh node reserves
+                                    #   (every state log at its floor, and the
+                                    #   object bucket) can exceed the bounds'
+                                    #   own floor, so a value they admit can
+                                    #   be short of what a node boots in: `crewlet
+                                    #   validate` warns below the least a
+                                    #   fresh node of the configuration
+                                    #   reserves (see the deployment guide).
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back
@@ -893,22 +1042,23 @@ stream:
                                     #   BUDGET FOR EVERY STATE LOG: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so this field and
-                                    #   the seven below share five eighths of
-                                    #   what the broker can grant them, less
-                                    #   the ceiling any of them that already
-                                    #   exists holds.
-                                    #   The unset ones are scaled down together
-                                    #   to fit, never below 1 GiB each — and an
-                                    #   unset ask already below it (the
-                                    #   identity log's) is kept as asked. A
-                                    #   value you set is never scaled, and a
-                                    #   boot that cannot reserve it fails
+                                    #   every ceiling below it share five
+                                    #   eighths of what the broker can grant
+                                    #   them, less the ceiling any of them that
+                                    #   already exists holds. The unset ones
+                                    #   are scaled down together to fit, never
+                                    #   below 1 GiB each but Ask Crewlet's,
+                                    #   which gives way down to its own 64 MiB
+                                    #   floor; any other unset ask already below
+                                    #   1 GiB (the identity log's) is kept as
+                                    #   asked. A value you set is never scaled,
+                                    #   and a boot that cannot reserve it fails
                                     #   naming the field, the bytes it needed
                                     #   and the bytes the broker had. Every one
                                     #   of them is the value a stream is
-                                    #   CREATED with: editing it
-                                    #   later changes nothing until
-                                    #   `crewlet retention set-capacity` does.
+                                    #   CREATED with: editing it later changes
+                                    #   nothing until `crewlet retention
+                                    #   set-capacity` does.
                                     #   WHAT THE BROKER CAN GRANT is
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
@@ -938,7 +1088,7 @@ stream:
                                     #   would refuse the one operation it exists
                                     #   to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
-                                    #   stream every native page write goes
+                                    #   stream every Doclet page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a
                                     #   quarter of the mutation log's ceiling,
                                     #   set or derived (so 1..16 GiB from a
@@ -967,19 +1117,22 @@ stream:
                                     #   up for a large one
   # usage_log_max_bytes: 1073741824
                                     #   the usage log's ceiling, the compacted
-                                    #   stream every node publishes its own
+                                    #   stream every data node publishes its own
                                     #   company days to — spend, turns, page
                                     #   reads, schedule fires — so history is
                                     #   answered fleet-wide and outlives the
-                                    #   node that spent it (64 MiB..64 GiB).
+                                    #   node that spent it (64 MiB..64 GiB). A
+                                    #   node without `data` publishes none: its
+                                    #   events are kept by a data node in
+                                    #   custody and counted in that node's day.
                                     #   NOT DERIVED FROM THE DISK either: unset
                                     #   takes a flat 1 GiB. SIZED BY A CENSUS,
                                     #   not a rate: one message per (node, day,
-                                    #   seat or schedule) for 181 days, about
-                                    #   217 MB for three nodes of forty seats
-                                    #   and twenty schedules, and about 12 MB
-                                    #   for one node of ten seats — set it
-                                    #   toward the 64 MiB floor for a small
+                                    #   seat, schedule or person) for 181 days,
+                                    #   about 217 MB for three nodes of forty
+                                    #   seats and twenty schedules, and about
+                                    #   12 MB for one node of ten seats — set
+                                    #   it toward the 64 MiB floor for a small
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names
                                     #   `usage`
@@ -1013,6 +1166,63 @@ stream:
                                     #   refuses the append, and the top of it
                                     #   is kept for gate records as on the
                                     #   tracker's log
+  # assistant_log_max_bytes: 536870912
+                                    #   Ask Crewlet's log, where
+                                    #   every person's conversations, turns
+                                    #   and proposals are recorded (64 MiB..
+                                    #   64 GiB). UNSET TAKES 512 MiB, sized
+                                    #   by how many people use
+                                    #   Ask Crewlet rather than by the disk,
+                                    #   and scaled down as far as 64 MiB
+                                    #   where the broker is short:
+                                    #   about two weeks of a completely
+                                    #   blocked trim at the reference
+                                    #   company's rate. Crossing it refuses
+                                    #   the append, and the top of it is kept
+                                    #   for gate records. How long a
+                                    #   conversation is kept is the company
+                                    #   document's `assistant.retention_days`
+  # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
+                                    #   Chatlet message, reaction and membership
+                                    #   change goes through (1..256 GiB). UNSET
+                                    #   ASKS FOR 8 GiB, capped at a sixteenth of
+                                    #   the volume's free space (a quarter of
+                                    #   what an unset mutation log derives, so
+                                    #   4 GiB on 64 GiB free and the whole 8 GiB
+                                    #   from 128): a larger ask on a small
+                                    #   volume comes out of the vector
+                                    #   changelog's room for a model change.
+                                    #   What is asked is scaled with the others,
+                                    #   so a 64 GiB first boot creates it at
+                                    #   about 1.4 GiB. It does NOT follow the
+                                    #   mutation log's ceiling as the knowledge
+                                    #   base's does: chat grows faster (~32 MB a
+                                    #   day against ~22), so following it would
+                                    #   make chat the largest ask in the one
+                                    #   budget, and a first boot would need
+                                    #   ~136 GiB free rather than ~100 before the
+                                    #   vector changelog holds a fifth-year
+                                    #   model change clear of the headroom
+                                    #   alarm. So if you size
+                                    #   tracker_log_max_bytes for a long blocked
+                                    #   trim, size this for the same horizon, or
+                                    #   chat refuses first. WHY 8 GiB: at the
+                                    #   declared census of 20 000 messages a day
+                                    #   and a mean record near 1.5 KiB, plus its
+                                    #   read barriers, the log grows ~32 MB a
+                                    #   day, so a healthy fleet holds ~225 MB —
+                                    #   one min_age window, not a year. This
+                                    #   ceiling is what a COMPLETELY BLOCKED
+                                    #   trim may spend first: ~8 months at that
+                                    #   census, ~3½ at the supported 50 000/day
+                                    #   (on 64 GiB free, capped and scaled:
+                                    #   ~6 weeks and ~2½). Crossing it refuses
+                                    #   the append, which for a transcript is
+                                    #   the only acceptable direction — old
+                                    #   messages go by a prune RECORD all data
+                                    #   nodes apply
+                                    #   (chat.chatlet.message_retention_days),
+                                    #   never by a stream bound
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -1072,12 +1282,15 @@ stream:
                                     #   the log is the only copy of what no node
                                     #   has applied yet
   #   backup_floor: engine          #   whose word the trim takes for what is
-                                    #   backed up. `engine` follows the newest
-                                    #   backup the engine wrote and verified;
-                                    #   `operator` follows an explicit
-                                    #   acknowledgement, for a company that trims
-                                    #   only what has left the host — and then
-                                    #   trims NOTHING until somebody says so
+                                    #   backed up, PER LOG: each log follows the
+                                    #   newest counted backup covering it.
+                                    #   `engine` counts the backups the engine
+                                    #   wrote and verified; `operator` an
+                                    #   explicit acknowledgement of each log
+                                    #   (`crewlet retention ack -stream`), for a
+                                    #   company that trims only what has left
+                                    #   the host — and then trims NOTHING of a
+                                    #   log until somebody says so for that log
   #   snapshot_interval: 24h        #   how stale a node's newest snapshot may be
                                     #   before it takes another (1h..7d). A
                                     #   snapshot is a full copy of the replicated
@@ -1090,10 +1303,13 @@ stream:
                                     #   nothing to resume from
   #   rejoin_window: 30m            #   the budget for a node to become a
                                     #   complete replica (5m..24h) — what a join
-                                    #   is measured against and reported on. A
-                                    #   setting rather than a constant, because
-                                    #   the answer is a property of the
-                                    #   operator's disks and network
+                                    #   is measured against and reported on, and
+                                    #   what a fleet's data nodes size their
+                                    #   startup probe by, since a join at boot
+                                    #   runs inside the recovery. A setting
+                                    #   rather than a constant, because the
+                                    #   answer is a property of the operator's
+                                    #   disks and network
   # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
@@ -1191,9 +1407,14 @@ store:
                                     #   query timeout. It bounds the wait
                                     #   wherever it happens — in the driver, or
                                     #   in the engine's own FIFO queue for that
-                                    #   lock. Raise it on a node doing bulk
-                                    #   applies, where `store_tx_retry` in the
-                                    #   log names it; see guides/replication.md
+                                    #   lock. Raise it on a node applying a
+                                    #   burst, where `store_tx_retry` in the
+                                    #   log names it — to 7 for chat near the
+                                    #   supported 50 000 messages a day, whose
+                                    #   queue reaches the ten seconds two 5s
+                                    #   waits allow. Keep it under 10, the
+                                    #   dashboard's query timeout; see
+                                    #   guides/replication.md
   # objects:                        # where the company's FILES are kept — see
                                     #   concepts/object-store.md. EVERY node
                                     #   carries the same block, a node without
@@ -1317,10 +1538,15 @@ coordination:
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
                                     #   sheds healthy seats on ordinary jitter.
+                                    #   AT LEAST 15 when set: it is also how
+                                    #   long the heartbeat may go without a
+                                    #   beat before the node's watchdog ends it
+                                    #   (exit 75), and a busy node goes seconds.
+                                    #   A fraction above that is fine.
                                     #   Seats and presence only: a fleet duty
                                     #   sizes its lease from its own tick and
-                                    #   a tracker move, merge or bulk edit
-                                    #   from its own work.
+                                    #   a tracker move or merge from its own
+                                    #   work.
                                     #   IT IS THE BUCKET'S TTL, set by whichever
                                     #   node created the lease bucket first and
                                     #   ADOPTED by every node after it — a peer
@@ -1343,16 +1569,15 @@ coordination:
                                     #   renewal queued behind them still lands
                                     #   in a heartbeat; under 11.25s even one
                                     #   128 KiB message is too many at the
-                                    #   floor, and `crewlet validate` warns
+                                    #   floor, which the 15s minimum rules out
 
 api:
   host: "0.0.0.0"       # what this node BINDS
   port: 8000            # node.roles decides what it carries. With `ingress`:
                         #   the dashboard, the REST API, the sign-in routes,
-                        #   the webhooks and the probes. Without it: /health
-                        #   and /ready only (plus a seats node's agent-mode
-                        #   tool bridge, unless api.public is set). 0 (the
-                        #   default) binds nothing at all
+                        #   the webhooks, the executors' tool bridge and the
+                        #   probes. Without it: /health and /ready only.
+                        #   0 (the default) binds nothing at all
   external_url: "https://crewlet.example.com"
                         # REQUIRED once port is set on an ingress node — where
                         #   a PERSON reaches this deployment, which is rarely
@@ -1377,8 +1602,11 @@ api:
     external_url: "https://hooks.example.com"
                         # REQUIRED once public.port is set on an ingress node —
                         #   where VENDORS and sandboxes reach this listener:
-                        #   every webhook, app manifest and per-run sandbox
-                        #   endpoint is built on it
+                        #   every webhook and app manifest is built on it. A
+                        #   box's bridge and OTLP endpoints are built on
+                        #   CREWLET_MCP_BRIDGE_URL and
+                        #   CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the
+                        #   same address
   artifacts:            # optional: the artifact origin, a THIRD listener that
     port: 8001          #   serves the files of artifact versions, their assets
                         #   and the embedded page runtime, and nothing else: no
@@ -1432,11 +1660,11 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [admin]  # admin, tracker, knowledge, artifacts: what it may do, and
-                        #   the most an invitation or a create it makes may
-                        #   confer — the first person's included. admin
-                        #   includes every app; on a node whose admin is
-                        #   refuse, listing it is refused
+        grants: [admin]  # admin, worklet, doclet, artifacts, chatlet: what it
+                        #   may do, and the most an invitation or a create it
+                        #   makes may confer — the first person's included.
+                        #   admin includes every app; on a node whose admin
+                        #   is refuse, listing it is refused
 
 logging:
   level: info       # debug, info (default), warn, error
@@ -1539,18 +1767,21 @@ other route exactly as it answers a path nothing serves, with no hint, so the
 published socket says nothing about an admin port behind it, and it does so
 whatever credential is sent, since it requires none. Its own outside address is
 **`api.public.external_url`**, required once the port is set on an ingress
-node: every webhook URL, vendor app manifest and per-run sandbox endpoint is
-built on it, while every link a person follows stays on `api.external_url`.
-Publish `api.public.port`, keep `api.port` private, and point
-`CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
-sandboxes at the public address — see
+node: every webhook URL and vendor app manifest is built on it, while every
+link a person follows stays on `api.external_url`. The per-run sandbox
+endpoints are not: a box is handed its bridge at `CREWLET_MCP_BRIDGE_URL` and
+its telemetry receiver at `CREWLET_SANDBOX_OTEL_RECEIVER_URL`. Publish
+`api.public.port`, keep `api.port` private, and point both variables at the
+public address (a `direct` box dials its own node on loopback with nothing to
+set: an ingress node's public listener, or `api.port` on a node without the
+role) — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
-On a node without the `ingress` role, whose only route is its seats' tool
-bridge, the bridge moves to `api.public` too, so one file still serves every
-role. `crewlet validate` refuses a public listener beside `api.port: 0` on a node
-with the `ingress` role (that is no HTTP surface at all, and no probe would
-answer); on a node without it `api.port: 0` stays the hard off switch and binds
-nothing, the bridge included. It also refuses any two listeners the
+A node without the `ingress` role binds no public listener at all, so one file
+still serves every role: its seats' executor runs reach their tools through an
+ingress node's bridge, which relays each call to them. `crewlet validate`
+refuses a public listener beside `api.port: 0` on a node with the `ingress`
+role (that is no HTTP surface at all, and no probe would answer); on a node
+without it `api.port: 0` stays the hard off switch and binds nothing. It also refuses any two listeners the
 file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
 and `stream.leaf.port` — when they bind the same address or either binds every
 interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
@@ -1593,10 +1824,10 @@ the artifact note in `SECURITY.md`).
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's
 [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `tracker`, `knowledge`, `artifacts`) live in the replicated store and are
-written by an administrator; this is each node's statement, in the tier that
-holds the keyring and never read from Tier B, of whether `admin` counts here at
-all. A `refuse` node clamps admin away from every principal composed on it and
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`) live in the replicated
+store and are written by an administrator; this is each node's statement, in
+the tier that holds the keyring and never read from Tier B, of whether `admin`
+counts here at all. A `refuse` node clamps admin away from every principal composed on it and
 keeps every app — admin includes the apps, and they are expanded before admin
 is taken away — which is how a node published to the people who use the company
 is kept from being one anybody administers it through, however their row reads.
@@ -1619,10 +1850,12 @@ holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
-where it is pinned, naming only `admin`, `tracker`, `knowledge` and `artifacts`
-(an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
-too) — and its value must be at least 26 characters, checked on what the
-`${VAR}` resolves to.
+where it is pinned, naming only `admin`, `worklet`, `doclet`, `artifacts`
+and `chatlet` (an unknown name is refused naming the set, and `admin` on a
+`refuse` node is refused too) — and its value must be at least 26 characters,
+checked on what the `${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
+engine reserves for Ask Crewlet's in-process grants: the request
+guard reads that shape as a grant, so such a token could never authenticate.
 
 **`secrets.keys` is required on every node**, whether or not a port is set.
 Every record on every state log is signed and verified under the keyring, the
@@ -1739,10 +1972,21 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
+                                        #   by children that name none. It is an
+                                        #   ADDRESS: lowercase letters, digits, `-`
+                                        #   and `_`, starting with a letter or a
+                                        #   digit, up to 64 characters, and a name
+                                        #   rather than a rendering or an id —
+                                        #   `backend`, not `#backend` and not
+                                        #   `C_BACKEND`. On Chatlet the engine
+                                        #   opens this room and hands the name to
+                                        #   agents to type into their own tools; on
+                                        #   Slack and Mattermost the same grammar is
+                                        #   what both accept as a channel name
         project: "BACK"                 # optional — the unit's tracker "home": routing +
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
-                                        #   native project/space or a Jira/Confluence one
+                                        #   Worklet/Doclet project/space or a Jira/Confluence one
         mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_USERNAME: "${BACK_JIRA_USER}"    #   identity is per-agent; mcp-atlassian takes a
@@ -1790,10 +2034,10 @@ units:
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
-| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `sandbox` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it |
-| `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
+| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it, and no `sandbox` key, because the executor's run is the seat's code work. Only `claude-code` and `opencode` entries can run the executor: a seat whose chain holds neither is refused at its `llm` (a seat naming no `llm` at the fallback entry's `agent`), naming both remedies, and a chain mixing one with another CLI validates with an advisory warning, since a launch skips the other CLI, which still serves the reviewer, workers and side passes |
+| `llm_review` / `llm_subagent` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model used by the turn-start prefetch, the condensing of large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a CLI launch under a fixed deadline, so name a fast model — see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
-| `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
+| `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge) of the onboarding pass; falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
 | `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat alone. Unset inherits it; `false` skips reflection for this seat's turns while still writing its episodes, which are cheap and useful to a person regardless |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
@@ -1803,15 +2047,15 @@ units:
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here. **Every key must name a declared [`mcp_servers`](#mcp-servers) entry**, because the engine looks credentials up per *server*: a block keyed on a name nothing declares is never read by anything, so it sits in the document looking configured while the server it was meant for starts with none. Six names are the exception and need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence` |
-| `code.access` | string | no | **Agent seats only.** How much of a repository this seat may do, on every code host the engine drives: `read_only` (the default when unset), `review` or `full_access`, each spelled exactly so — no hyphen, capital or space. On the engine's own [code host](../concepts/code-host.md) it caps what the chart grants the seat ([who may read and push](../concepts/code-host.md#who-may-read-and-push)); on GitHub it is the permission set the seat's [own app](../integrations/github.md#the-three-access-tiers) is created with and every token it mints carries. A human seat carrying it is refused, by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to): a person acts as their own identity on every host, so a tier would cap nothing. Set on an agent seat of a company that hosts no code of its own (`code.native` unset), it caps nothing either unless the seat has a GitHub App of its own (`integrations.github`) **and** the company's GitHub integration is enabled (`integrations.github.enabled`) — the engine drives a seat's app, and mints the tokens its tier scopes, only while that integration is on — and anywhere else `crewlet validate` **warns** — never fails — at the seat's `code.access` that it grants nothing, naming which of the two is missing |
+| `code.access` | string | no | **Agent seats only.** How much of a repository this seat may do on the engine's own [code host](../concepts/code-host.md): `read_only` (the default when unset), `review` or `full_access`, each spelled exactly so — no hyphen, capital or space. It caps what the chart grants the seat ([who may read and push](../concepts/code-host.md#who-may-read-and-push)). A human seat carrying it is refused, by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to): a person acts as their own identity on the code host, so a tier would cap nothing. Set on an agent seat of a company that hosts no code of its own (`code.native` unset), it caps nothing, and `crewlet validate` **warns** — never fails — at the seat's `code.access` that it grants nothing. What a seat may do on GitHub is its own app's `permissions`, below, never this |
 | `health_tools` | bool | no | **Agent seats only.** Offer this seat the two [health tools](../guides/fleet.md#the-health-tools), `fleet_health` and `code_status` — the administrator's reads of the deployment's health, which no seat holds otherwise — and wake it each time an alarm fires or clears on a node ([alarm wakes](../concepts/event-system.md#alarm-wakes)). `false` (the default) offers neither and wakes it for none: the authority table refuses the seat both tools, and the same decision leaves them off its surfaces. Setting or clearing it **takes `admin`**, even on a seat inside a team the writer leads, because a lead who could set it would read the fleet's health through that seat's trail. It never widens what the seat may read of a repository: `code_status` holds it to its own repository grant. A human seat carrying it is refused, by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to): a person reads the deployment's health through their own permissions |
-| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes one field, `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers); how much the app may do is the seat's `code.access`, above. `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
-| `integrations.slack` | dict | no | This seat's own Slack app: `bot_token` and `signing_secret`, and nothing else: the seat speaks in its unit's `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
-| `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
+| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent), one per agent, because an app has exactly one bot identity. A person writes three fields: `enabled` (required; off by default for a new seat), `permissions` (GitHub's own permissions, `contents`, `issues`, `pull_requests`, `checks`, `actions`, `deployments` and `workflows`, each `read` or `write`; a permission left out is No access, see [Access in GitHub's own terms](../integrations/github.md#access-in-githubs-own-terms)) and `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers). `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) (see [What lands where](../integrations/github.md#what-lands-where)) |
+| `integrations.slack` | dict | no | This seat's own Slack app: `enabled`, and, for an app created by hand, its `bot_token` and `signing_secret` as whole `${VAR}`s. With an app configuration token on the company block the engine creates the app and seals both under names it derives from the handle, so a block that is only `enabled: true` is the ordinary one; the seat speaks in its unit's `channel` |
+| `integrations.mattermost` | dict | no | This agent's Mattermost bot: `enabled` (required), `roles` (the Mattermost roles its bot holds: `system_user`, plus `system_post_all_public` or `system_post_all`, or `system_admin`; required while on where the engine provisions the bot) and `channels` (within `integrations.mattermost.provisioning.channels`; empty means no channels). Where the engine provisions Mattermost it creates the bot and seals its token under a name derived from the handle, so the seat names no credential. Where it does not (a bot made by hand), `bot_token` names the bot's token as one whole `${VAR}` no other seat or company block names, and the engine binds it to the transport and the Mattermost tool without ever writing it. `username` names the bot, defaulting to the handle. See [Each agent's access](../integrations/mattermost.md) |
+| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on Worklet it is what an item filed with no `unit` belongs to, whoever filed it (see [Worklet](../guides/worklet.md#which-team-an-item-belongs-to)). **Vendor-neutral**: it names a Worklet project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
+| `sandbox` | dict | no | What this seat's [executor box](../concepts/code-sandbox.md#a-seats-own-box-settings--rolesandbox) reads beyond `providers.sandbox`. Every agent seat's executor is its coding CLI's own run in a box, placed by the `run_in` of the `providers.llm` entry the launch picks (empty takes `providers.sandbox.default_run_in`), so the block places nothing and gates nothing: **absent means the engine-wide settings alone**. Six keys: `setup`, per-seat provisioning applied after `providers.sandbox.setup`; `env`, the environment injected into the run and where external-service tokens are declared — a `${VAR}` in it that resolves to nothing is left out and the run still starts, its start logging `sandbox_env_unresolved` naming the key ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)); `optional_keys`, the keys of `env` whose absence is expected and so left out without that line — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers`, which of the seat's MCP servers the coding agent gets beside its tool bridge; `pause_ttl_seconds`, how long a box blocked on a person's answer stays paused (unset inherits `providers.sandbox.default_pause_ttl_seconds`, `0` never holds a paused box, negative refused); and `max_turns`, the agentic-round cap on one of the seat's runs (unset inherits `providers.sandbox.default_max_turns`, 96 when that is unset too; `0` uncapped; negative refused). Any other key is refused as unknown. A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -1885,7 +2129,7 @@ units:
 | `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
 | `target` | string | no | **Unit schedules only**: `each` (default — every direct member) or `lead` (the effective unit lead). Ignored for role schedules; for a per-person task, use a role schedule |
 | `enabled` | bool | no | `false` keeps the schedule in config without firing (default `true`) |
-| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn (default `180`) |
+| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn, its executor's run included (default `1800`, half an hour: [why](../concepts/scheduling.md#hard-wall-clock-timeout)) |
 | `catchup` | bool | no | Fire one recent missed tick on restart (default `true`) |
 
 > Scheduling requires a database (for the at-most-once `scheduled_runs`
@@ -1928,15 +2172,16 @@ integrations:
     url: "${MATTERMOST_URL}"             # instance base URL (required when enabled)
     team: nimbus                         # team slug (required when enabled)
     typing_status: always                # working indicator: always (default) | addressed
-    provisioning:                        # read only by `crewlet mattermost provision`
-      channels: [town-square, engineering]   # channels every agent bot joins
+    provisioning:                        # how the engine provisions each agent's bot
+      admin_token: "${MATTERMOST_ADMIN_TOKEN}"  # a system admin's token
+      channels: [town-square, engineering]   # the channels agents may be given
 
   github:
     enabled: true
     # url:  "https://github.example.com"       # Enterprise Server; omit for github.com
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"   # HMAC-SHA256 secret (required when enabled)
     token: "${GITHUB_ENGINE_TOKEN}"              # read credential for participant fan-out
-    provisioning:                                # read only by `crewlet github provision`
+    provisioning:                                # read by the reconcile loop AND `crewlet github provision`
       org: nimbus                                #   (organization holding the repositories)
       repos: [nimbus/api, nimbus/web]            #   (extra owner/repo entries to hook)
       org_webhook: auto                          #   auto | true | false
@@ -1946,7 +2191,7 @@ integrations:
     url: "https://gitlab.com"                    # instance base URL (required when enabled)
     signing_secret: "${GITLAB_SIGNING_SECRET}"   # 19.1+ whsec_ HMAC — the only verification mode, required
     token: "${GITLAB_ROUTING_TOKEN}"              # optional read PAT → participants-based routing
-    provisioning:                                # read only by `crewlet gitlab provision`
+    provisioning:                                # read by the reconcile loop AND `crewlet gitlab provision`
       group: nimbus-hq                           # top-level group agent service accounts join
       access_level: developer                    # developer | maintainer
 
@@ -1958,11 +2203,11 @@ integrations:
 - **`atlassian`** — the Atlassian organization one service account per agent seat is created in, plus which Atlassian the company runs. `deployment` is `cloud` or `data_center`; the dashboard's form opens on `cloud`, and a value written here also decides the deployment of a `jira` or `confluence` `url` whose host is not one of Atlassian's own — which is how an Atlassian Isolated Cloud site, at a base domain of its own, is configured. `org_id` and `api_key` (an **unscoped** organization API key) are Cloud only. See [Jira](../integrations/jira.md#configuration).
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id, and the Cloud whose gateway that id is read through (Government Cloud's for a `…atlassian-us-gov-mod.net` site). Which deployment `url` names is derived from its host — and, for a host that is not Atlassian's own, from `atlassian.deployment`. `webhook_secret` is **required for Data Center**; on Cloud it signs the admin webhook the engine registers, and is not required because a company on the Forge relay has no HMAC in its path. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
-- **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `always` / `addressed` and defaults to `always`, and Slack is where that default costs least: its indicator renders TEXT, so a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. There is no `off`. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
-- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `always` / `addressed` and defaults to `always`, which on this backend is the expensive one: the indicator has to be re-asserted every few seconds rather than every 45, so a multi-minute turn costs one to two orders of magnitude more requests than Slack's for strictly less information. Most Mattermost deployments want `addressed`. There is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
-- **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own credential lives in `mcp_env.github` and is what the engine resolves its login from; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read only by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision): `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
+- **`slack`**: the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `always` / `addressed` and defaults to `always`, and Slack is where that default costs least: its indicator renders TEXT, so a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. There is no `off`. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. With `app_config_token` (a whole `${VAR}`, entered on the connect form), the engine creates and keeps every agent's app itself. See [Slack Integration](../integrations/slack.md).
+- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `always` / `addressed` and defaults to `always`, which on this backend is the expensive one: the indicator has to be re-asserted every few seconds rather than every 45, so a multi-minute turn costs one to two orders of magnitude more requests than Slack's for strictly less information. Most Mattermost deployments want `addressed`. There is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is how the engine provisions each agent's bot: its administrator token, and the channels an agent may be given on the integration's [Agents tab](../integrations/mattermost.md#each-agents-access-roles-and-channels). A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
+- **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own app token is issued by the engine at use, under a name only that seat resolves ([One GitHub App per agent](../integrations/github.md#one-github-app-per-agent)), and is what the engine resolves its login with; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision) **and** by the engine's own reconcile loop, which registers and heals the hooks it names: `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
 - **`check_interval_seconds`** — how often a **converged** integration is read back, and therefore how long access somebody revoked by hand at a vendor goes unnoticed. Unset takes **600** (ten minutes); the floor is **60**, and a shorter value is refused naming the field rather than clamped. It is the only thing that ever finds a revoked credential, weighed against what a converged pass costs at the vendor — one read per seat and per project, per surface, per interval — so a small company can afford `60` and a large one should lengthen it. Zero means unset, never "off". See [Integration Reconcile](../concepts/integration-reconcile.md#the-cadence-follows-who-has-to-act).
-- **`gitlab`** — webhook config + boot-time identity resolution. `url` and `signing_secret` are both **required** when enabled — inbound webhooks are verified by the GitLab 19.1+ signing-token HMAC only (the plain `X-Gitlab-Token` scheme is unsupported; self-managed < 19.1 is not supported). The optional `token` (a PAT with the `read_api` scope, which you supply: nothing provisions it) enables **participants-based routing** — comments and state changes reach everyone participating in the issue/MR, not just assignees and mentioned users. `webhook_name` (default `crewlet`) names the hooks this deployment owns, so a change of public base re-points them instead of leaving a live orphan at every level; give two deployments watching one instance two names. The GitLab MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry — by default the official `glab mcp serve` (stdio, spawned per-role by the engine, no separate server), whose own `env` sets `GLAB_CHECK_UPDATE`, `GLAB_SHOW_WHATS_NEW` and `GLAB_SEND_TELEMETRY` to `"false"` so that what glab prints on its own never lands in a tool result and no call sends the instance a usage event (a variable set only in the engine host's environment does not reach it: a stdio server is handed an allowlist of that environment plus what its configuration declares; see [MCP tool server](../integrations/gitlab.md#mcp-tool-server)) — and each agent's service-account PAT goes in `role.mcp_env.gitlab.GITLAB_TOKEN`. The `provisioning:` sub-block is read by `crewlet gitlab provision` **and** by the engine's own reconcile loop; `mode` (`group` by default, or `instance` on a self-managed instance) says where a service account is owned and therefore which route creates it, mints its tokens and deletes it — the CLI's `-mode` overrides it for one run. See [GitLab Integration](../integrations/gitlab.md).
+- **`gitlab`** — webhook config + boot-time identity resolution. `url` and `signing_secret` are both **required** when enabled — inbound webhooks are verified by the GitLab 19.1+ signing-token HMAC only (the plain `X-Gitlab-Token` scheme is unsupported; self-managed < 19.1 is not supported). The optional `token` (a PAT with the `read_api` scope, which you supply: nothing provisions it) enables **participants-based routing** — comments and state changes reach everyone participating in the issue/MR, not just assignees and mentioned users. `webhook_name` (default `crewlet`) names the hooks this deployment owns, so a change of public base re-points them instead of leaving a live orphan at every level; give two deployments watching one instance two names. The GitLab MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry — by default the official `glab mcp serve` (stdio, spawned per-role by the engine, no separate server), whose own `env` sets `GLAB_CHECK_UPDATE`, `GLAB_SHOW_WHATS_NEW` and `GLAB_SEND_TELEMETRY` to `"false"` so that what glab prints on its own never lands in a tool result and no call sends the instance a usage event (a variable set only in the engine host's environment does not reach it: a stdio server is handed an allowlist of that environment plus what its configuration declares; see [MCP tool server](../integrations/gitlab.md#mcp-tool-server)) — and each agent's service-account token is the engine's to mint and seal where it provisions GitLab, bound to the tool by the server's `seat_credentials`; where it does not, the seat's `mcp_env.gitlab` names the token as an exclusive `${VAR}`. The `provisioning:` sub-block is read by `crewlet gitlab provision` **and** by the engine's own reconcile loop; `mode` (`group` by default, or `instance` on a self-managed instance) says where a service account is owned and therefore which route creates it, mints its tokens and deletes it — the CLI's `-mode` overrides it for one run. See [GitLab Integration](../integrations/gitlab.md).
 - **`datadog`** — monitor alerts as inbound events, so a firing monitor wakes a seat the way a comment on a merge request does. `webhook_token` is **required** when enabled and is compared constant-time against `X-Crewlet-Token`: Datadog attaches headers with fixed values only, so nothing varies with the payload to sign and this token is the whole authentication — which is why it must be at least **26 characters**, the length the dashboard's Generate button and `crewlet` itself mint. A route with nothing to compare against answers **503** rather than accepting a delivery. `route_to` is **required** and names an **agent** seat this company declares, or the literal `none` to dismiss alerts nobody owns on purpose; a handle no seat has, or one naming a human seat, is refused, and no seat may itself be handled `none`. `provisioning` is **required** too — `site` (the region the keys were issued in, checked against Datadog's own list), `api_key` and `app_key` — because the engine registers the webhook that makes an alert arrive at all, and an enabled block without it reports itself connected and receives nothing. `webhook_name` (default `crewlet`) is the name of that definition and therefore the handle a monitor writes, `@webhook-crewlet`; give two deployments watching one organization two names. `handle_tag` (default `crewlet`) is the monitor tag key that names a seat, so a monitor tagged `crewlet:sre-lead` reaches that seat. See [Datadog Integration](../integrations/datadog.md).
 - **`transports`** — outbound delivery transports (e.g. `email`). The Mattermost and GitLab transports are auto-derived from the sections above; this list adds any others. Jira is inbound-only by design and has no transport: an agent's writes to an issue go through its own MCP tools under its own credential, never through the engine. Confluence is inbound-only for the same reason — a page an agent writes is written by its own MCP tools. Slack is the exception among the chat backends: its transport is per seat, derived from each role's own app credentials rather than from an org-level block, so it is not listed here either.
 
@@ -1970,16 +2215,16 @@ integrations:
 
 ```yaml
 knowledge:
-  backend: confluence                    # native (default) | confluence | none
+  backend: confluence                    # doclet (default) | confluence | none
   scope: ["ENG", "HANDBOOK"]             # org-wide containers every agent can search (optional)
   skills_container: TS                   # tool-skill pages; excluded from routing and search
   root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page
   vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
 ```
 
-`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
+`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives**: `confluence` when an `integrations.confluence` block is declared, `doclet` otherwise, so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note still searches Confluence. Naming `doclet` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture: the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
 
-`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
+`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** on Doclet it is the whole company, because the engine is the boundary: every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
 
 `knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved** — refused as a unit's own `space`, and held back from agents' writes — but not for the same reason, so not in the same way ([who may write where](../concepts/knowledge-system.md#who-may-write-where)). The skills container is machinery: excluded from knowledge search and from routing, closed to every agent write, and written by a person only with `admin`. The root is the company's own canon: searched and routed like any other container, and closed only to an agent adding a new page. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
 
@@ -1991,16 +2236,16 @@ knowledge:
 
 ```yaml
 tracker:
-  backend: native                        # native (default) | jira | none
+  backend: worklet                       # worklet (default) | jira | none
 ```
 
-Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else — chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `worklet` otherwise; `worklet` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else: chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
 
-The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
+The two axes are **separate** on purpose. A company running Worklet against a Confluence wiki, or Jira against Doclet, is an ordinary arrangement rather than a mixture to refuse: they are two products with separate routing and separate lead maps.
 
-**Moving either one to or from `native` takes effect when each node restarts.** A node builds the engine's own tracker and knowledge base once, from the company it started with, so a revision that switches one activates normally and the node keeps serving what it was built with, saying so with a `native_backend_needs_restart` warning at every activation until it restarts (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Moving between two vendors, or the first native backend on a node that ran none, needs no restart.
+**Moving either one to or from the engine's own backend (`worklet`, `doclet`) takes effect when each node restarts**, as moving [`chat.backend`](#chat) to or from `chatlet` does. A node builds Worklet and Doclet once, from the company it started with, so a revision that switches one activates normally and the node keeps serving what it was built with, saying so with a `native_backend_needs_restart` warning at every activation until it restarts (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Moving between two vendors, or the first native backend on a node that ran none, needs no restart.
 
-The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
+The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run Worklet has no Worklet or My work there, and one that does not run Doclet has no Doclet.
 
 ### A person's inbox
 
@@ -2014,13 +2259,63 @@ inbox:
                                          #   answered by the history either way
 ```
 
-How long a person's inbox keeps a notice is a setting of the **whole company**, at the top of its document, and not of the tracker: a person's inbox is every native domain's notices — the native tracker's — kept by each under one set of rules, so the horizon that ages them is one horizon for all of them, as the company's one [`timezone`](#the-companys-clock) is one clock. The tracker block carries none of it. Below a month an inbox stops being one — somebody away for four weeks would come back to nothing — and past ten years it is a second copy of the history it points at, so both are refused at `inbox.retention_days`.
+How long a person's inbox keeps a notice is a setting of the **whole company**, at the top of its document, and not of the tracker: a person's inbox is every native domain's notices — Worklet's and the code host's — kept by each under one set of rules, so the horizon that ages them is one horizon for all of them, as the company's one [`timezone`](#the-companys-clock) is one clock. The tracker block carries none of it. Below a month an inbox stops being one — somebody away for four weeks would come back to nothing — and past ten years it is a second copy of the history it points at, so both are refused at `inbox.retention_days`.
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a), a fact about the whole **company** — the clock its dates mean, and how long a person's inbox keeps what it was told — or a decision the engine makes once for everybody.
 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
-It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+It applies whatever backends a company names, and whether the node has a company at all. Worklet, Doclet or Chatlet puts its items, its pages or its messages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+
+---
+
+## Chat
+
+```yaml
+chat:
+  backend: chatlet                       # chatlet (default) | vendor | none
+```
+
+Which **chat surface** this company talks on, the third axis and the same shape as the two above. Unset derives `vendor` when the company declares a vendor chat surface and `chatlet` otherwise — and for chat "declares" means `integrations.mattermost`, `integrations.slack`, **or any seat's own `integrations.slack` app**, because Slack's credentials are per seat and a company with seven working Slack apps may never have written the org-level block at all. Naming `chatlet` beside any of them is refused: conversations would live in two places, a person would reply in one of them, and nothing anywhere could say which thread was the real one. Naming `vendor` with none of them declared is refused too, since there is no surface to talk on. `none` is a company whose seats are woken by the tracker, the code host and schedules only.
+
+The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
+
+The backend this axis resolves to is published to every signed-in reader beside the other two, as `chat` in [`services` on the org answer](../reference/api-endpoints.md#get-org): a company that does not run Chatlet has no Chatlet in the dashboard. Which vendors it talks on is told only to a reader holding Chatlet.
+
+See [Chatlet](../concepts/chatlet.md) for what Chatlet is, who a message wakes, and what it deliberately does not do.
+
+### Chatlet's own policy
+
+```yaml
+chat:
+  backend: chatlet
+  chatlet:                               # ONLY on a Chatlet company — a retention
+                                         #   horizon on a company whose messages
+                                         #   live in Slack describes nothing, and
+                                         #   is refused
+    message_retention_days: 365          # how long a message lives (default 365,
+                                         #   30..3650). 0 KEEPS MESSAGES FOR EVER,
+                                         #   which is a different setting from
+                                         #   leaving the field out — chat is the
+                                         #   highest-volume thing the engine
+                                         #   stores, and every message sits in
+                                         #   every snapshot and every node join
+    default_channel_private: false       # create a channel private when the caller
+                                         #   names no visibility. Default false:
+                                         #   a company's rooms are readable by its
+                                         #   own seats
+    typing_status: always                # always (default) | addressed — the same
+                                         #   closed set, and the same meaning, as
+                                         #   integrations.slack.typing_status
+```
+
+`message_retention_days` is **three-valued**, and the difference matters: leaving it out takes a year, `0` keeps messages for ever, and a number between 30 and 3650 is that horizon. Note that `inbox.retention_days` reads `0` the other way — as "take the default" — because an inbox row is derived from history that answers for ever, while a message is the only copy of what somebody said.
+
+Everything else Chatlet could be told is either the operator's — how big the log may grow (Tier A's `stream.chat_log_max_bytes`) and how long its replay window is kept — or a decision the engine makes once for everybody. How much of a thread a woken seat is shown is one of those: the engine reads the thread at turn start for every chat surface alike and bounds it at one byte budget, keeping whole messages and condensing the middle of a long thread (see [the thread a turn was woken in](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
+
+**A channel two units both declare is refused on Chatlet.** A unit's room belongs to the one unit that names it — its members are that unit's subtree, and its lead answers what nobody else did — so a second unit naming the same channel would be left out of a room its seats are told is theirs. `crewlet validate` reports it beside each of the units: give each its own channel, or leave a child unit's empty so it inherits its parent's room. It is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a stored revision that carries the shape still runs, with the refusal reported as a warning instead. Moving a channel from one unit to another, by contrast, is an ordinary edit: the room follows the channel at the next apply, with the new unit's people in it and what was said in it kept (see [unit rooms](../concepts/chatlet.md#what-a-company-gets)). On Mattermost or Slack the same shape is only a warning, because there it is one a real company writes on purpose: everything scoped to one unit lands in the other's room, and every seat in both is told that channel is its team's own.
+
+**A Chatlet company where no unit declares a `channel` at all** is warned about at the first unit: a unit's room is the one kind whose members the org chart keeps, so without one no team has a room of its own until somebody opens one by hand and adds its seats. A child unit that names none and inherits its parent's is neither a warning nor a refusal — that is the field working as intended.
 
 ---
 
@@ -2087,7 +2382,7 @@ code:
 `code.limits` is what one push and one repository may hold, and how many pushes one seat may land in a day, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three sizes nest: a file inside a push, a push inside a repository. A revision that turns `code.native` off must drop `code.limits` with it (below), and a node that keeps serving the code host until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
 
 - **`max_push_bytes`** — the largest pack one push may send. Unset is 1 GiB, which is also the most it may be: a person's first push of an existing project is its whole history, and a larger one is imported in parts.
-- **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [tracker files](../concepts/object-store.md) rather than in a repository.
+- **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [Worklet's project files](../concepts/object-store.md) rather than in a repository.
 - **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it. It counts the packs as the pushes stored them, so a history [imported](../reference/cli.md#crewlet-code-import) in steps counts for more than one pack of it — about twice as much in eleven steps, measured ([Limits](../concepts/code-host.md#limits)). A seat outside a repository's owning unit is held to half of it, and to half of the refs a repository may hold, so the owners always keep the other half ([A seat's push](../concepts/code-host.md#a-seats-push)).
 - **`pushes_per_seat_day`** — how many pushes one **seat** may land in one day on the company's [calendar](#the-companys-clock), every repository together: 1 to 100 000, and unset is 1 000, some thirty-three times what a seat of the reference company pushes. It bounds what a seat pushing in a loop costs the code log rather than budgeting a seat's work, so a push past it is refused `push_quota` whole and recorded nowhere, and its sentence says when the company's next day begins and the count with it. A person's pushes are never counted. A seat pushing to several repositories at one instant may land past it by its pushes in flight then, less one — each repository's committer counts what its own node has applied — and never again that day, on a data node whose clock has not reached the company's midnight yet included, while no two data nodes' clocks stand a day apart ([A seat's push](../concepts/code-host.md#a-seats-push)).
 
@@ -2108,7 +2403,7 @@ The order is checked on what a push is actually held to, the defaults included: 
 
 `code.scratch` is the policy for the repositories **seats make for themselves**. Beside the projects `code.repos` declares, a person, a unit's lead and a seat can create, rename, archive, delete and restore repositories through their tools ([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools)), and a seat at `full_access` can make a **scratch** repository of its own, named `<handle>.<slug>` after it — an experiment, a spike, a place to try something — which nobody else's tool creates and which takes no protection. Both fields are read off the **current** revision where they are used, so a change holds from its activation:
 
-- **`idle_days`** — how many days a scratch repository may go with no push, rename, settings change or restore before the `code-retention` duty deletes it, restorable for `deleted_retention_days` like any deleted repository: 1 to 365, and unset is 7. Reading a repository is no activity. A scratch repository a **live turn** has named — through any of its tools, its delegated workers or an agent-mode run's bridge, a turn still running or one parked on a coding run — is never deleted while that turn lasts, and keeping it moves no clock: once the turn ends, the repository is deleted at the duty's next pass if it is still idle. A day at least, because a turn records its hold on a repository that has been idle for 22 hours on the repository itself, and two nodes' clocks may disagree by two hours.
+- **`idle_days`** — how many days a scratch repository may go with no push, rename, settings change or restore before the `code-retention` duty deletes it, restorable for `deleted_retention_days` like any deleted repository: 1 to 365, and unset is 7. Reading a repository is no activity. A scratch repository a **live turn** has named — through any of its tools, its delegated workers or its executor run's bridge, a turn still running or one parked on a coding run — is never deleted while that turn lasts, and keeping it moves no clock: once the turn ends, the repository is deleted at the duty's next pass if it is still idle. A day at least, because a turn records its hold on a repository that has been idle for 22 hours on the repository itself, and two nodes' clocks may disagree by two hours.
 - **`max_per_seat`** — how many scratch repositories one seat may hold: 0 to 1 000, and unset is 50. **Every** scratch repository the seat owns counts until it is purged, a deleted one included, so deleting and creating in a loop holds no more than this; 0 lets no seat create one. A seat at the limit is refused `scratch_limit` naming it.
 
 The 10 000 repositories `code.repos` may list is also what a tool's create of a **project** repository is held to: the project repositories the code host holds, declared and tool-made alike and every one short of purged, so a create at it is refused `repo_limit`. A seat's scratch repositories never count there, so seats' experiments cannot refuse a person's project. Like the rest of the block, `code.scratch` is refused on a company that does not set `code.native`.
@@ -2157,7 +2452,7 @@ mcp_servers:
   # per-role http server — remote GitHub MCP
   - name: github
     transport: http                     # stdio | http (default: stdio)
-    shared: false                       # per-role: Authorization header from role.mcp_env.github
+    shared: false                       # per-role: each seat's own app token, bound by the engine
     url: "https://api.githubcopilot.com/mcp/"
     tool_prefix: ""                     # optional — prefix tool names
     tool_annotations: {}                # optional — behavioural-hint overrides (see Tool Capabilities)
@@ -2165,7 +2460,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every coding CLI sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
 
 ### Timeouts
 
@@ -2201,6 +2496,8 @@ String values support `${ENV_VAR}` syntax, keeping secrets out of config files. 
 
 - **Tier B (the company)** keeps every reference verbatim — in the store, in a backup, on `GET /config` — and resolves it where the provider, transport or integration that uses it is constructed: from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then the environment. It validates what is **written**, not what a reference resolves to, so a field with a closed set of values or a pattern — an enum, a seat handle, a unit id — takes a reference only where that field's own entry says so. Three fields are resolved only when the **whole** value is one reference — a seat's Slack `bot_token`, its Mattermost `bot_token` and its Mattermost `username` — because their transports take anything else as the literal it looks like: write one `${VAR}`, or the value itself, and never a reference inside other text (`bot-${SUFFIX}`), which validation refuses rather than letting it reach the server braces and all. A Mattermost `username` written as a whole reference is the one patterned field that takes one.
 - **Tier A (`crewlet.yaml`)** resolves from the **environment only** — it holds the keys to the secret store, so it can never read a value out of it — and does so at startup, **before** the file is decoded. What a reference becomes depends on the field it lands in. In a **text** field it is substituted whole or embedded (`edge-${ZONE}`) and the result is that text, character for character — so it works in any text field, one with a pattern or a closed set included (`node.id: "${HOSTNAME}"`, `logging.level: "${LOG_LEVEL}"`), which is then judged on the value it resolved to. One nothing answers leaves the text empty, which a text field reads exactly as unset — its default where it has one (`stream.type` and `coordination.type` fall back to `embedded` and `local`), and a refusal where a value is required — with one exception: `logging.file.path`, where empty is the setting "write no file", so a path whose variable nothing answered stops the boot rather than silently running with no durable log. In a **number** or **boolean** field — a port, a replica count, anything `*_seconds`, `*_bytes` or `*_hours`, a count, a switch — a reference must be the **whole** value, and what it resolves to is read exactly as the same characters written there would be, trimmed of the space around it as every Tier A string is: `api.port: "${API_PORT}"` with `API_PORT=8080` is `api.port: 8080`, with `API_PORT` read from a file ending in a newline too, and `stream.debug: "${DEBUG}"` with `DEBUG=true` is `stream.debug: true` (a switch also takes `yes`, `no`, `on` and `off`, as it does written out). Two shapes are refused there by name rather than guessed at: a reference with other text around it (`"80${N}"`), and one that resolves to nothing, since a number that quietly fell back to its default because a variable was missing would run with a value nobody chose. `crewlet schema bootstrap` encodes exactly that.
+
+**A number is the number it spells, in both tiers, however it arrives.** A fraction in a field that counts whole units — a port, a replica count, a round cap — is refused naming the field rather than truncated (`api.port: 8080.9` used to run as 8080), and so is a number that is not finite — YAML's `.nan` and `.inf`, written out or what a Tier A reference resolves to — which no setting has a meaning for and which used to pass every bound a value is checked against.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) pass through untouched. A sandbox setup step's commands and file bodies are not substituted at all: the engine resolves only a file whose whole body is one `${VAR}`, and the step's `env`, and hands everything else to the box as written, where its own shell expands what it expands from the run environment ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)).
 

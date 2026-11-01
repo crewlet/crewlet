@@ -12,7 +12,7 @@
 //
 // Git is a PREREQUISITE of the suite, not a property of the machine, and it
 // is held to the floor of the git it stands for (gitproc's two floors,
-// ADR-0057): [Require] is a CLIENT's git and fails a test without git 2.40 or
+// ADR-0080): [Require] is a CLIENT's git and fails a test without git 2.40 or
 // newer on PATH, [RequireNode] is the git every POOL a test builds runs and
 // fails one without 2.55 — never skipping either, because a skip there would
 // be a pass the suite never earned. Every make target puts the node pin first

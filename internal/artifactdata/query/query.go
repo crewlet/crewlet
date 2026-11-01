@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Op is one filter's comparison.
@@ -274,7 +275,7 @@ const recheckBound = TextIndexBytes - utf8.UTFMax
 // must be checked again.
 func compileFilter(f Filter, scope Scope, idx Index) (string, []any, bool, error) {
 	if !f.Op.Valid() {
-		return "", nil, false, fmt.Errorf("%w: op %q is not one of %v", ErrInvalid, f.Op, Ops)
+		return "", nil, false, fmt.Errorf("%w: op %q is not one of %s", ErrInvalid, f.Op, words.Or(Ops))
 	}
 	if err := indexedPath(f.Path, idx); err != nil {
 		return "", nil, false, err

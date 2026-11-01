@@ -3,7 +3,9 @@ package structured_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/structured"
@@ -135,6 +137,57 @@ func TestTheLastSubmissionWins(t *testing.T) {
 	}
 }
 
+// SUBMISSIONS MADE AT ONCE LAND WHOLE. An executor run's bridge hands a
+// response's calls to the surface side by side, with nothing that runs a
+// submission alone, so two submissions — and the read of one — meet on the
+// tool. Whichever lands last is the answer, and it is one submission: never
+// one call's decision beside another's note.
+//
+// Mutation: drop the lock, and the race detector reports the writes (this
+// package's tests run under -race), or a read returns a torn pair.
+func TestSubmissionsMadeAtOnceLandWhole(t *testing.T) {
+	t.Parallel()
+	tl := tool()
+	ctx := context.Background()
+	const calls = 32
+	submissions := make([]map[string]any, calls)
+	for i := range submissions {
+		decision := "yes"
+		if i%2 == 1 {
+			decision = "no"
+		}
+		submissions[i] = args(t, fmt.Sprintf(`{"decision":%q,"note":"%s-%d"}`, decision, decision, i))
+	}
+	whole := func(a answer) bool { return strings.HasPrefix(a.Note, a.Decision+"-") }
+
+	var wg sync.WaitGroup
+	torn := make(chan answer, calls)
+	for i := range calls {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if res, err := tl.Call(ctx, submissions[i]); err != nil || res.Failed {
+				t.Errorf("submission %d: %v %+v", i, err, res)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if got, called := tl.Value(); called && !whole(got) {
+				torn <- got
+			}
+		}()
+	}
+	wg.Wait()
+	close(torn)
+	for got := range torn {
+		t.Errorf("a read mid-submission returned %+v: one call's decision beside another's note", got)
+	}
+	got, called := tl.Value()
+	if !called || !whole(got) {
+		t.Errorf("captured %+v (called=%v), want one whole submission", got, called)
+	}
+}
+
 // An invalid submission that arrives AFTER a valid one leaves the valid one
 // standing: the model corrected itself badly, and the engine still has the
 // answer it was given rather than nothing at all.
@@ -213,7 +266,8 @@ func TestAFieldThePayloadDoesNotHaveIsRefusedByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
 	}
-	if !res.Failed || !strings.Contains(res.Output, `"not"`) {
+	if !res.Failed || !strings.Contains(res.Output, "not is not a key") ||
+		!strings.Contains(res.Output, "takes decision, note, id") {
 		t.Fatalf("output = %q, want the misspelt field refused by name", res.Output)
 	}
 	if _, ok := tl.Value(); ok {
@@ -231,7 +285,7 @@ func TestAFieldThePayloadDoesNotHaveIsRefusedByName(t *testing.T) {
 	err = structured.Remarshal(map[string]any{"tasks": []any{
 		map[string]any{"id": "b", "afer": []any{"a"}},
 	}}, &plan)
-	if err == nil || !strings.Contains(err.Error(), `"afer"`) {
+	if err == nil || !strings.Contains(err.Error(), "tasks[0].afer is not a key") {
 		t.Errorf("a nested misspelt field answered %v, want it refused by name", err)
 	}
 }
@@ -248,5 +302,35 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmission(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "could not be re-encoded") {
 		t.Errorf("output = %s", res.Output)
+	}
+}
+
+// EVERY FAULT OF A SUBMISSION IN ONE REFUSAL (ADR-0059): a misspelt field and
+// a value of the wrong type come back together, each by its path, where
+// encoding/json named only the first, so a model learned one per attempt.
+//
+// Mutation: answer encoding/json's own error and only the first is named.
+func TestEveryFaultOfASubmissionIsNamedAtOnce(t *testing.T) {
+	t.Parallel()
+	var plan struct {
+		ID    string   `json:"id"`
+		After []string `json:"after"`
+		Count int      `json:"count"`
+	}
+	err := structured.Remarshal(map[string]any{"id": 7.0, "afer": []any{"a"}, "count": "x"}, &plan)
+	if err == nil {
+		t.Fatal("a submission with three faults was accepted")
+	}
+	for _, want := range []string{"id is a number, and the format reads a string there",
+		"afer is not a key", "count is a string, and the format reads a whole number there"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	// AND ACCEPTANCE IS UNCHANGED: a key in another case is what encoding/json
+	// read, and still is.
+	if err := structured.Remarshal(map[string]any{"ID": "x", "after": []any{"a"}}, &plan); err != nil ||
+		plan.ID != "x" {
+		t.Errorf("a key in another case is refused now: %v", err)
 	}
 }

@@ -77,7 +77,7 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a line inside the read's range")
 		}
 	default:
-		return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, widestCursor('l', 1)+" or "+
+		return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, widestCursor('l', 1),
 			widestCursor('b', 2))
 	}
 	p, pB64 := code.WirePath(path)

@@ -13,7 +13,7 @@
 // journal_mode=WAL is the database engine's own local transaction journal:
 // per file, invisible to any peer, and a thing the store manages without
 // anybody here knowing. This is an APPLICATION log — a fleet-wide, ordered
-// record of committed mutations from which every node derives its own SQL
+// record of committed mutations from which every data node derives its own SQL
 // state. The two are different layers and the only thing they share is a
 // word.
 //
@@ -171,7 +171,7 @@
 //
 // This is ADR-0031. The broker's admission vouches for a connection, never a
 // record — an embedded fleet's route credential crosses its network in clear
-// (ADR-0064), and an external cluster admits whom its operator chooses — and a
+// (ADR-0087), and an external cluster admits whom its operator chooses — and a
 // record is what the next node APPLIES, so the framework frames and signs on
 // the way to the appender and verifies before any domain decodes. The key is
 // Tier A's keyring (ADR-0011), and a node with no keyring refuses to start.
@@ -193,7 +193,7 @@
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
 // halts, health goes false immediately, and the node takes its copy of THAT
-// DOMAIN out of service (ADR-0049) — that domain's operations go to another
+// DOMAIN out of service (ADR-0072) — that domain's operations go to another
 // data node that can decode it, and its seats stay. A deferred gate does not
 // postpone one record's effect on one node; it silently licenses every record
 // above it.
@@ -209,7 +209,7 @@
 // level, and a node whose copy of one of them is out of service routes its
 // seats through its peers. Whether a copy is judged is never declared, because
 // a domain allowed to opt out is a domain whose wrong copy is served for ever.
-// This is ADR-0049; the engine computes the verdict per domain and the
+// This is ADR-0072; the engine computes the verdict per domain and the
 // estate's router asks it of each operation's own domain.
 //
 // The consequence every reader of an ABSENCE inherits: the checkpoint moves
@@ -225,13 +225,13 @@
 // A build retains what it can file: the envelope must decode. A kind whose
 // envelope an older build REFUSES — one that validated a field a newer build
 // widened — is a stop on that build, not a deferral, and no version number on
-// the record changes that. So every node's position heartbeat names, per log,
-// the highest record version its build reads ([NodePosition].RecordVersion),
-// and [Readers] reads it across the trim's own counted set: a writer about to
-// publish such a kind waits until every node that applies the log reads it —
-// a node that has not reported yet reading as one that reads nothing newer.
-// No record this build writes is such a kind: the advertisement is what a
-// successor's writer of one reads.
+// the record changes that. So every data node's position heartbeat names, per
+// log, the highest record version its build reads
+// ([NodePosition].RecordVersion), and [Readers] reads it across the trim's own
+// counted set: a writer about to publish such a kind waits until every node
+// that applies the log reads it — a node that has not reported yet reading as
+// one that reads nothing newer. No record this build writes is such a kind: the
+// advertisement is what a successor's writer of one reads.
 //
 // # A record is stamped with the lowest version that reads it
 //
@@ -343,17 +343,18 @@
 //
 // A purge that lands between the check and the append is licensed by a tick
 // that published its floor first, from an applied term over a counted set
-// that holds every node from its presence lease at boot until its eviction
+// that holds every data node from its first positions row until its eviction
 // ([CountedSet]) — so it removes nothing this node had not applied when that
 // tick read its position, and the only writer it can pass is an evicted one,
-// which is (iii)'s. That bounds a purge by what this node had APPLIED, which
-// may be past C, so the term alone does not exclude a record on this subject
-// that this node applied after its snapshot. The ORDER OF THE WRITE'S OWN
-// READS does: a write learns the subject is empty from LastSeq — answered by
-// the stream's leader, because a log allows no direct gets — and only AFTER
-// that does the fence read either bound, on both roads to an expectation of
-// zero. A record R on this subject that the decision did not read, so R > C,
-// is one of three kinds:
+// which is (iii)'s, or one still booting before its first row, which is the
+// interval stated under "Who may write a log" below. That bounds a purge by
+// what this node had APPLIED, which may be past C, so the term alone does not
+// exclude a record on this subject that this node applied after its snapshot.
+// The ORDER OF THE WRITE'S OWN READS does: a write learns the subject is empty
+// from LastSeq — answered by the stream's leader, because a log allows no
+// direct gets — and only AFTER that does the fence read either bound, on both
+// roads to an expectation of zero. A record R on this subject that the
+// decision did not read, so R > C, is one of three kinds:
 //
 //   - Still on the log when LastSeq answers: the subject is not empty, so the
 //     write waits for the subject's last record and decides again rather than
@@ -382,7 +383,7 @@
 // Below the floor an anchor names a record the log no longer holds, so all it
 // can do is send its subject's next write to be refused before the
 // discriminator takes the zero path — and kept, the table grows by every
-// subject the log ever carried. The trim removes them (ADR-0050): after each
+// subject the log ever carried. The trim removes them (ADR-0073): after each
 // tick's purge it appends a framework [TrimmedKind] record naming the log's
 // first surviving sequence ([PlanSweep], [SweepPlan.Sweep]), and every node's
 // applier removes that log's anchors below it in the transaction that applies
@@ -429,7 +430,7 @@
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
 // domain's log would key it to a stream it never read. WHICH instant
-// identifies a stream is ADR-0053: the one its creator stamped into its
+// identifies a stream is ADR-0076: the one its creator stamped into its
 // configuration ([CreatedAtKey]), which a snapshot restore keeps and the
 // broker's own does not, read by every consumer through [StreamCreatedAt] and
 // by nothing else.
@@ -583,24 +584,45 @@
 // committer, can do before it batches; the drain is the node's ceiling across
 // every domain at once.
 //
-// # Who may write a log: every writer is counted by construction
+// # Who may write a log: every writer is counted, but for its own boot
 //
 // The floor theorem above rests on a premise none of its three clauses states:
 // EVERY WRITER IS COUNTED — the trim never removes a record that a node which
-// may still decide a write has not applied. It holds by construction, not by a
-// gate a write passes:
+// may still decide a write has not applied. It is what keeps a writer whose
+// fence read a stale floor safe: a purge cannot pass a node the trim counts,
+// whatever that node's read of the register said. It holds by construction,
+// not by a gate a write passes — with one interval stated below:
 //
 //   - A publisher exists only on a node with the `data` role. Such a node holds
 //     the replicated estate and runs every log into it, the identity estate's
 //     included, from boot, company or none; a node without `data`
 //     holds no estate and builds no publisher, so it has no write to decide —
 //     its tools reach the estate through a data node that does.
-//   - Every live data node is in every log's counted set ([CountedSet]): by
-//     its presence lease from boot, at position zero until its first heartbeat
-//     reports one, and by its positions row after that, which never expires —
-//     until an eviction's tombstone on that log is older than the fence
-//     window. So a node that can decide a write is a node the trim is already
-//     waiting for, from before its first decision.
+//   - Every data node is in every log's counted set ([CountedSet]) by its
+//     positions row, which never expires, from the first one its heartbeat
+//     writes — published as its state log starts, after any join and before
+//     the node claims a presence lease — until an eviction's tombstone on that
+//     log is older than the fence window. A RUNNING node whose row has not
+//     landed (its heartbeat's write refused) is counted all the same, by its
+//     presence lease, at position zero.
+//
+// THE INTERVAL THE SET DOES NOT COVER is a node's own boot, from its state log
+// starting until its first row lands: a few milliseconds, or a heartbeat
+// interval and more if that write is refused, during which the node holds no
+// presence lease yet. A node that ran before is counted there by the row its
+// last run left, at a position its rows still hold unless they went
+// backwards; a node adopting a snapshot is kept by its own pin, renewed until
+// its first row counts the tail it replays ([AdoptDeps.Hold]); and a node
+// that never ran, or whose rows went back below its old row without falling
+// below the floor, is counted by nothing. A write such a node decides in that
+// interval is still fenced by clause (ii) and by its own read order above, so
+// a purge that passes it is ordinarily refused (`behind`, `below_floor`)
+// rather than overwritten; what the interval removes is the premise's cover
+// for a fence read that answered stale. For that to cost an update, a fleet
+// whose trim the node did not hold back must purge, past a record older than
+// the trim's minimum age, on the subject a write of this node is deciding,
+// inside that interval — and that write must have read a stale floor and a
+// stream bound that had not caught up.
 //
 // The one way out of the set while still running is an eviction, and an
 // evicted node's records are what clause (iii) drops on every node, whatever it
@@ -641,17 +663,23 @@
 // hold — and ONE evaluation feeds every surface, so a gauge, a log line and a
 // screen cannot disagree about whether something is wrong. A condition that
 // is a property of ONE LOG — its headroom, its ceiling against its window, a
-// blocked trim, a record held past the deferral grace, a floor this node
-// cannot read, a read rate past its census — is evaluated once per log
-// ([Report]), because its consequence and its remedy are that log's: the
-// grace takes a node's copy out of service for one log and nothing for
-// another, and a node behind two re-anchors needs two. The kind is still ONE
-// ALARM, listing every log it stands on with that log's own measurement
-// ([Alarm.Domains]), because the count, the gauge and the screen read one
-// cause on four logs as one problem; and each log's onset and clearing is
+// blocked trim, the age of the backup its trim counts, a record held past the
+// deferral grace, a floor this node cannot read, a read rate past its census
+// — is evaluated once per log ([Report]), because its consequence and its
+// remedy are that log's: the grace takes a node's copy out of service for one
+// log and nothing for another, a node behind two re-anchors needs two, and an
+// operator acknowledgement covers the one log it names. The kind is still ONE
+// ALARM, listing every log it stands on with that log's own measurement — a
+// measurement taken in the same words on several logs carried once, naming
+// them ([Alarm.Domains]) — because the count, the gauge and the screen read one
+// cause on several logs as one problem; and each log's onset and clearing is
 // still its own pair of log lines ([Tracker]), since a log joining a kind that
 // is already up, and one leaving it, are things an operator has to be told
-// started and ended.
+// started and ended. The model kinds are the same move over MODEL ENTRIES
+// ([PerEntryKinds], [Alarm.Entries]): a credential coming due, a refused
+// sign-in or a limit is one entry's, evaluated from fleet-wide inputs every
+// data node gathers alike, at thresholds the owner fixed rather than ones
+// borrowed from another decision.
 //
 // # A node's alarm transition is the record its wake derives from
 //
@@ -660,7 +688,7 @@
 // node, the alarm, the log, the change and the instant the instance was raised
 // ([TransitionID]). The engine publishes it as an inbound delivery, retried
 // until the broker takes it, and the seats whose role carries the health grant
-// are woken by it (internal/alarmwake). That is ADR-0065: the publish IS the
+// are woken by it (internal/alarmwake). That is ADR-0088: the publish IS the
 // write, so no publish trails a commit, and a republish collapses on the ids
 // derived from the transition's. A transition is one node's fact about
 // itself, never a record on a log — the alarms most worth a wake are about the

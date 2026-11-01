@@ -81,6 +81,7 @@ const REST_PATH_FIRST = new Set([
   "putText",
   "putBytes",
   "blob",
+  "stream",
 ]);
 /** Constructors whose first argument is the URL they dial. */
 const DIALS = new Set(["WebSocket", "EventSource"]);
@@ -525,8 +526,8 @@ describe("the dev server proxy", () => {
     ["a local list called rest", "const [first, ...rest] = parts;\nrest.slice(1);"],
     ["a method called fetch", 'loader.fetch("/x");'],
     ["refetch", "refetch();"],
-    ["a route link", '<a href={href(["work"])}>Work</a>;'],
-    ["a hash link", '<a href="#/work">Work</a>;'],
+    ["a route link", '<a href={href(["worklet"])}>Work</a>;'],
+    ["a hash link", '<a href="#/worklet">Work</a>;'],
     ["another site", '<a href="https://example.com/docs">Docs</a>;'],
     ["an attribute nothing fetches", '<div title="/not/a/url" />;'],
   ])("the scan leaves %s alone", (_name, source) => {

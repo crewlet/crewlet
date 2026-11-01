@@ -18,18 +18,21 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // This node's STATE-LOG RUNTIME: which domains it runs, and the four objects
@@ -63,7 +66,7 @@ import (
 // admission says so itself ([statelog.Domain.GatesSeatAdmission]), which is
 // how the vector domain's coverage number stays a number rather than an
 // outage. Whether a domain's copy is WRONG is a different question, asked of
-// every domain ([stateLog.judgeCopy], ADR-0049).
+// every domain ([stateLog.judgeCopy], ADR-0072).
 
 // domainHost is the broker as this node's state log needs it.
 //
@@ -349,11 +352,11 @@ type stateLog struct {
 
 	// skills is this build's tool-skill parser, threaded down because the
 	// PAGES APPLIER is what notices a skill page arriving or leaving:
-	// natively there is no page webhook and the change feed deliberately
+	// on Doclet there is no page webhook and the change feed deliberately
 	// drops those changes, so the apply is the only thing that sees both
 	// halves. Nil answers "not a skill", which is a build with no skill
 	// parser wired.
-	skills pages.SkillDetector
+	skills doclet.SkillDetector
 
 	// applyHooks is what each domain's applier calls after a committed
 	// batch — see [applyHooks].
@@ -396,6 +399,22 @@ type stateLog struct {
 	// loop has not concluded anything yet.
 	snapshot atomic.Pointer[snapshotHeld]
 
+	// usageSeen is the usage log's generation on every data node as
+	// the heartbeat last read the positions register, this node's own taken
+	// from its runner — what the usage publisher holds a peer's reanchor
+	// against ([usage.PublisherDeps.Generations]). Nil before any reading.
+	// An atomic pointer because the heartbeat writes it while the
+	// publisher's tick reads it.
+	usageSeen atomic.Pointer[usage.Generations]
+
+	// usagePublisher is this node's usage publisher while it runs, nil
+	// otherwise — what the usage applier's first drain wakes
+	// ([stateLog.onDrained], [usage.Publisher.Nudge]), which after a
+	// reanchor of the usage log is the transition's last step. An atomic
+	// pointer because the publisher is armed and stopped by the engine
+	// while an applier runs.
+	usagePublisher atomic.Pointer[usage.Publisher]
+
 	// donor is this node's own donor once [Engine.startSnapshots] has built
 	// it, and nil before — which is every boot's join, since that runs
 	// first. A join asks it whether it is serving before naming this node
@@ -428,6 +447,11 @@ type stateLog struct {
 	// donor the fleet could have counted and did not. Buffered by one, as
 	// snapshotNudge is.
 	heartbeatNudge chan struct{}
+
+	// admit tells the engine's seat-claim gate that a log whose health
+	// gates admission has come level ([stateLog.levelHook]); nil tells
+	// nobody.
+	admit func()
 
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
@@ -483,6 +507,21 @@ type stateLog struct {
 	rejoining   bool
 	rejoinAfter time.Time
 	rejoinPause time.Duration
+
+	// tailHoldEvery is how often the join's pin on the replay tail is
+	// renewed: [statelog.TrimHoldHeartbeat], set once at start. A field so
+	// a case can renew on a cadence it can wait out ([statelog.HoldTail]).
+	tailHoldEvery time.Duration
+
+	// tailMu guards tailHeld: the release of the pin an INSTALLED artefact
+	// still needs, held until this node's own published position counts the
+	// tail it pins ([stateLog.holdUntilCounted]). Nil when no adoption is
+	// waiting to be counted. A lock of its own rather than publishing's,
+	// because the join hands the pin over while a publish may be mid-flight,
+	// and a publish decides by what it CAPTURED at its start — see
+	// [stateLog.publishPositions].
+	tailMu   sync.Mutex
+	tailHeld *heldTail
 }
 
 // applyHooks are what each domain's applier calls after a committed batch,
@@ -534,7 +573,7 @@ type applyHooks struct {
 	// node holding a socket tells its own, and the apply is the only thing
 	// that sees it on each. A node whose own copy of a domain is out of
 	// service relays a sound peer's announcements of it instead
-	// (inboxrelay.go), which this same hook feeds on that peer. It must
+	// (liverelay.go), which this same hook feeds on that peer. It must
 	// not block.
 	inboxMoved func([]inbox.Movement)
 
@@ -552,17 +591,35 @@ type applyHooks struct {
 	// for artifactsMoved's reason: the socket hub serves only this node's
 	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
 	artifactDataMoved func([]artifactdata.Moved)
+
+	// chatApplied is what the CHAT APPLIER calls after a committed batch,
+	// with what it wrote ([chatlet.Applied]) — see [Engine.SetChatLive].
+	// Threaded down for inboxMoved's reason, and relayed by the same relay
+	// while this node's copy is out of service: a room open on a node whose
+	// chat applier halted would otherwise go quiet until its socket moved
+	// elsewhere. It must not block.
+	chatApplied func([]chatlet.Applied)
+
+	// replaced is what the state log calls once its replicated estate was
+	// REPLACED under a running node — an adoption, or a reopen of the file
+	// a failed join installed ([stateLog.estateReplaced]) — for whatever
+	// this node keeps derived from those rows by a walk that only moves
+	// forward: the chat index ([search.ChatIndexer.RequestRebuild]). Not a
+	// post-commit hook, since no batch says it; beside them because it is
+	// the same kind of signal, handed down the same way. It must not block.
+	replaced func()
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:    e.nudgeSkills,
-		identityMoved:  e.identityMoved,
-		inboxMoved:     e.inboxMoved,
-		artifactsMoved: e.artifactsMoved,
-
+		nudgeSkills:       e.nudgeSkills,
+		identityMoved:     e.identityMoved,
+		inboxMoved:        e.inboxMoved,
+		artifactsMoved:    e.artifactsMoved,
 		artifactDataMoved: e.artifactDataMoved,
+		chatApplied:       e.chatApplied,
+		replaced:          e.estateReplaced,
 	}
 }
 
@@ -629,6 +686,14 @@ const RejoinRetryCeiling = 5 * time.Minute
 // state to retry from rather than a failure: the node stays as it is, below
 // the floor and refusing, until a peer can donate.
 var errNoDonor = errors.New("engine: no peer could donate a usable snapshot")
+
+// errJoinUnable reports a runtime join that ended on a fault of this node's own
+// before anything was installed ([statelog.ErrJoinerFault]). Retried from like
+// [errNoDonor], and for the same reason: the node is as it was, below the floor
+// on its own intact rows. A separate value so the retry's line says whose fault
+// it was — the join has already logged what to fix.
+var errJoinUnable = errors.New("engine: this node could not adopt a peer's " +
+	"snapshot, for a fault of its own")
 
 // estate is the replicated estate's file AS THE RUNTIME HANDS IT to the
 // framework and the domains: resolved through this node's handle on every
@@ -750,7 +815,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	host, ok := e.backends.Queue.(domainHost)
 	if !ok {
 		return nil, fmt.Errorf("engine: this node's broker cannot host a state "+
-			"log (%T) — the native tracker needs a conditional append and a "+
+			"log (%T): Worklet and Doclet need a conditional append and a "+
 			"per-node durable consumer, and neither is in the event-queue "+
 			"contract because nothing else needs them", e.backends.Queue)
 	}
@@ -801,6 +866,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		run:       runCtx, stop: cancel,
 		snapshotNudge:  make(chan struct{}, 1),
 		heartbeatNudge: make(chan struct{}, 1),
+		tailHoldEvery:  statelog.TrimHoldHeartbeat,
+		admit:          e.nudgeAdmission,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -943,6 +1010,12 @@ func (s *stateLog) Stop() {
 	}
 	s.stop()
 	s.done.Wait()
+	// A PIN NO ROW WILL NOW COUNT is released here, once the heartbeat that
+	// would have counted it has stopped: left, its own renewal would go on
+	// pinning the trim for as long as this process ran, and for a stale
+	// window after it exited — on a boot that failed after its join, for a
+	// node that is not coming up.
+	s.releaseTail()
 	s.haltAppliers()
 	// THE CONSUMERS ARE GIVEN UP LAST, once no loop can fetch through them:
 	// the process and its connection may outlive this state log — an engine
@@ -1282,8 +1355,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 			return evicted[node], readErr
 		},
 		// THE FIRST DRAIN WAKES THE SNAPSHOT LOOP, whose commonest boot
-		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]).
-		OnDrained: s.nudgeSnapshot,
+		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]),
+		// and the usage publisher for the usage log ([stateLog.onDrained]).
+		OnDrained: s.onDrained(domain),
+		// AND EVERY TIME THE LOOP COMES LEVEL, the seat-claim gate's watch,
+		// for a log whose health gates admission ([stateLog.levelHook]).
+		OnLevel: s.levelHook(domain),
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -1505,7 +1582,7 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 	return entry.Barrier
 }
 
-// trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0050) on
+// trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0073) on
 // its own log, or nil for a domain whose log writes no anchor and so has none
 // to remove — the compacted vectors and usage.
 //
@@ -1533,7 +1610,7 @@ func trimmedEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 // Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
 // constructed only by their own tests. Every domain reader read its rows
 // straight out of the replicated estate and ECHOED the level back in the
-// answer — `tracker.Reader.Tasks` assigning `answer.Level = q.Level`, and
+// answer: `worklet.Reader.Tasks` assigning `answer.Level = q.Level`, and
 // `Task` taking a level argument whose only use in the file was
 // `out.Level = level`. So a seat tool asking for `session` got whatever this
 // node happened to hold, a dashboard's `max_lag_seconds` bounded nothing, and
@@ -1680,7 +1757,7 @@ func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint
 // no row at all, or why its row could not be read.
 //
 // ONE READ PER PASS, NEVER ONE PER JUDGEMENT. A pass that judges every
-// domain's copy ([stateLog.judgeCopy], ADR-0049) reads each domain's floor
+// domain's copy ([stateLog.judgeCopy], ADR-0072) reads each domain's floor
 // once, for all of them, rather than once for each judgement it makes.
 //
 // EACH DOMAIN BY ITS KEY ([readFloorsOf]), never by listing the register:
@@ -1994,7 +2071,17 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 		}
 		bounds = append(bounds, bound)
 	}
-	return statelog.PermitReadmission(nodeID, register, bounds)
+	permitted := statelog.PermitReadmission(nodeID, register, bounds)
+	// A LOG THE FLEET RE-ANCHORED AND THIS NODE HASN'T caught up on is one it
+	// cannot judge the readmission on, which is this refusal's condition: told
+	// to the operator, with the node to ask instead, rather than answered as
+	// a fault with the remedy in this node's log alone.
+	var behind *statelog.ReanchorNotApplied
+	if errors.As(permitted, &behind) {
+		return &ReadmissionUnjudged{Node: nodeID, Log: behind.Domain, Behind: true,
+			Err: permitted}
+	}
+	return permitted
 }
 
 // readmissionBound is running's bound as this node's write fence reads it
@@ -2117,7 +2204,7 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 // one would be the outage the number exists to avoid — and stating it on the
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip. This is ADMISSION only; whether a copy is
-// WRONG is asked of every domain ([stateLog.judgeCopy], ADR-0049).
+// WRONG is asked of every domain ([stateLog.judgeCopy], ADR-0072).
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
 	if s == nil {
 		return true, ""
@@ -2162,7 +2249,7 @@ func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []health
 // context: a vectors stream with no leader left the knowledge base's health
 // UNREAD, which keeps whatever verdict it last had, so a pages fault starting
 // meanwhile went unseen for as long as the vectors group stayed down —
-// ADR-0049's isolation broken by the order of a loop. Read at once, a log that
+// ADR-0072's isolation broken by the order of a loop. Read at once, a log that
 // does not answer is unread on its own, and a reading takes the slowest one
 // round trip rather than the sum of them.
 //
@@ -2208,7 +2295,7 @@ func readHealthsWith(ctx context.Context, runs []*runningLog,
 //
 // # Every domain, each on its own
 //
-// EVERY REGISTERED DOMAIN IS JUDGED, whatever it declares — ADR-0049. A
+// EVERY REGISTERED DOMAIN IS JUDGED, whatever it declares — ADR-0072. A
 // domain's copy that is wrong is one this node takes OUT OF SERVICE for that
 // domain's operations alone ([localEstate.For]): they go to the other data
 // nodes, while every other domain's copy keeps answering here and the node
@@ -2595,9 +2682,10 @@ func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 //
 // A node's checkpoint is a sequence on each domain's log. It can replay from
 // there as long as the log still HOLDS the record after it — and it may not:
-// the trim deletes records every node has applied, and a node that was down
-// long enough, or that has never run at all, wakes up below the floor. There
-// is nothing on the log for it to read, and no amount of waiting produces one.
+// the trim deletes records every data node it counts has applied, and a node
+// that was down long enough, or that has never run at all, wakes up below the
+// floor. There is nothing on the log for it to read, and no amount of waiting
+// produces one.
 //
 // So the check is per domain: is the record after this node's checkpoint at or
 // above the first sequence the stream still holds? That is
@@ -2638,6 +2726,33 @@ func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 // naming both failures, rather than coming up with nothing to come up on; a
 // running node reopens it on its next heartbeat ([stateLog.restoreEstate]) and
 // asks the fleet again only when its retry interval allows.
+//
+// # And why a fault of this node's own is not one either
+//
+// A join can end before anything was installed on a fault of THIS NODE'S OWN
+// — its trim hold refused, its disk refusing the copy, its own store refusing
+// a write ([statelog.ErrJoinerFault]). The adopter ends the join there rather
+// than meeting the same fault on every offer, and blames no donor; and the
+// live database was never closed, or was reopened by the rollback, so the node
+// is exactly where it was before it asked: behind, on its own intact rows. That
+// is the no-donor state, and it is answered the same way — a boot comes up on
+// what it has and a running node asks again on its widening interval — with
+// the line saying whose fault it was, [joinUnable]. Stopping the boot on it
+// would turn a coordination store that refused one write into a process exit,
+// and a volume with no room for the copy into a crash loop paying the broker's
+// recovery on every attempt, for a node whose own estate was open and
+// untouched throughout.
+//
+// # And why an install whose record failed is an adoption
+//
+// The rename is the join's point of no return. An artefact installed and
+// opened whose history row could not then be advanced
+// ([statelog.ErrAdoptionUnrecorded]) is the live database, open, and every
+// applier resumes from its checkpoint — so it is reported ADOPTED, and a
+// running node does everything an adoption owes: it moves every consumer to
+// the file's checkpoint and tells every listener its rows were replaced
+// ([Engine.rejoin]). Reported as no donor, it skipped both for a file that had
+// been replaced, and the node, now current, never asked again.
 //
 // # And why it is the same join a running node makes
 //
@@ -2721,7 +2836,14 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 	if err != nil {
 		return "", statelog.OfferRequest{}, err
 	}
-	_, err = adopter.Join(ctx)
+	adoption, err := adopter.Join(ctx)
+	// AN INSTALLED ARTEFACT'S PIN OUTLIVES THE JOIN, whatever came beside
+	// it: the tail it pins is the one this node is about to replay, and
+	// nothing in the fleet counts that until a row of this node's own does
+	// — see [stateLog.holdUntilCounted].
+	if adoption.Release != nil {
+		s.holdUntilCounted(adoption.Release)
+	}
 	switch {
 	case errors.Is(err, statelog.ErrNoOffer):
 		// NOT A FAILURE — see the doc comment. The node comes up on what
@@ -2742,10 +2864,29 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 				"admission keep it from claiming work it cannot answer for, "+
 				"and it asks again on a widening interval")
 		return joinNoDonor, want, nil
+	case errors.Is(err, statelog.ErrAdoptionUnrecorded):
+		// ADOPTED — see the doc comment. The adopter has written both
+		// lines this needs: `statelog_adopted`, and the error naming the
+		// history row it could not advance.
+		return joinAdopted, want, nil
+	case errors.Is(err, statelog.ErrJoinerFault):
+		// BEHIND, AND THIS NODE'S OWN FAULT — see the doc comment. At
+		// error rather than warn, unlike nobody donating: an operator
+		// may have something to fix (a full volume, an unwritable
+		// directory), and the line names it.
+		log.ErrorContext(ctx, "statelog_join_unable",
+			"node", s.nodeID, "domains", slices.Concat(behind, passed),
+			"error", err.Error(),
+			"detail", "this node is behind and could not adopt a peer's snapshot "+
+				"for a fault of its own, before anything was installed — no donor "+
+				"refused it; it comes up on the history it has, as when nobody "+
+				"could donate, and asks again on a widening interval, meeting the "+
+				"same fault until what the error names is fixed")
+		return joinUnable, want, nil
 	case err != nil:
 		return "", statelog.OfferRequest{}, fmt.Errorf("engine: this node cannot "+
-			"replay its way to the fleet on %v and the join failed: %w",
-			slices.Concat(behind, passed), err)
+			"replay its way to the fleet on %s and the join failed: %w",
+			words.And(slices.Concat(behind, passed)), err)
 	}
 	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
 	// donor, the artefact's checksum and when it was taken, and a second
@@ -2756,15 +2897,23 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 // joinOutcome is what a join concluded, for the caller that acts on the
 // difference.
 //
-// THREE ANSWERS, because "adopted nothing" is two different facts to a running
+// FOUR ANSWERS, because "adopted nothing" is three different facts to a running
 // node. Every domain could replay from the checkpoint its rows keep — nothing
 // was asked, and the consumers still belong at that checkpoint — or the node
-// is behind and nobody could donate, which is retried on a widening interval.
-// A bool reads the first as the second, and [Engine.rejoin] meets the first
-// when the estate under it holds an artefact an earlier rejoin installed and
-// could not open, which [stateLog.restoreEstate] has opened since: it would
-// report "no donor", widen its pause and leave every consumer where the
-// replaced file had it.
+// is behind and nobody could donate, or it is behind and met a fault of its
+// own before it installed anything. A bool reads the first as the second, and
+// [Engine.rejoin] meets the first when the estate under it holds an artefact
+// an earlier rejoin installed and could not open, which
+// [stateLog.restoreEstate] has opened since: it would report "no donor", widen
+// its pause and leave every consumer where the replaced file had it.
+//
+// THE LAST TWO ARE ACTED ON ALIKE — the node's rows are untouched, so a boot
+// comes up on them and a running node asks again on its widening interval —
+// and are two values only because what each reports names whose fault it
+// was. Nobody donating is the fleet's state, which an operator reads off the
+// donors' refusals; a pin the coordination store refused, or a volume with no
+// room for the copy, is something to fix on THIS node, and filed as no donor
+// it read as every donor refusing an artefact that was fine.
 //
 // Never read off the wire, so it carries no Valid: every value is one this
 // package's own join returned.
@@ -2775,12 +2924,20 @@ const (
 	// is, so the fleet was not asked.
 	joinCurrent joinOutcome = "current"
 
-	// joinAdopted — a peer's snapshot is installed and complete.
+	// joinAdopted — a peer's snapshot is installed and open: complete, or
+	// complete in everything but this node's history row of it
+	// ([statelog.ErrAdoptionUnrecorded]).
 	joinAdopted joinOutcome = "adopted"
 
 	// joinNoDonor — this node is behind and no peer could donate, or it
 	// has no broker connection to ask one over.
 	joinNoDonor joinOutcome = "no_donor"
+
+	// joinUnable — this node is behind and could not adopt a snapshot, for
+	// a fault of its own before anything was installed
+	// ([statelog.ErrJoinerFault]). Its rows are untouched, so it stands
+	// exactly where [joinNoDonor] leaves a node.
+	joinUnable joinOutcome = "unable"
 )
 
 // joinExpectation is who a join on this node waits to hear from
@@ -2922,8 +3079,9 @@ func namesArtefact(row coord.NodePositions) bool {
 //     [stateLog.resetConsumers], which [stateLog.restoreEstate] shares.
 //
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
-//     donor leaves the node as it was, below the floor and refusing, and a
-//     node with no appliers at all would be worse than that.
+//     donor, or met a fault of this node's own before it installed anything,
+//     leaves the node as it was, below the floor and refusing, and a node
+//     with no appliers at all would be worse than that.
 
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
@@ -2957,14 +3115,35 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	outcome, want, err := e.join(ctx, s, s.openLogs())
 	switch {
 	case err != nil:
-		// A JOIN THAT FAILED may have installed the artefact before it
-		// did, so the rows are told about as replaced: closing every open
+		// ONLY A JOIN THAT MAY HAVE PUT ANOTHER FILE IN PLACE, OR LEFT
+		// NONE OPEN, tells the rows' listeners they were replaced — and
+		// that is exactly [statelog.ErrEstateNotRestored]: the one error
+		// [Engine.join] returns beside an installed artefact (one whose
+		// own record failed comes back as [joinAdopted], with no error),
+		// and the one a rollback that could not reopen the live file
+		// returns. Every other failure left the live file as it was, open
+		// — a read that failed before anything was asked, a cancellation
+		// the rollback unwound — and announcing it replaced would close
+		// every dashboard socket on the node and reset every artifact room
+		// for rows that had not moved, again on every retry for as long as
+		// the failure lasted. Where the file did change, closing every
 		// socket for its handshake to decide costs one reconnect per tab,
 		// and not closing one a peer's record ended leaves it serving.
-		replaced = true
+		//
+		// SAID HERE, NOT LEFT TO [stateLog.restoreEstate], which says it
+		// again once it opens the file: that is the next heartbeat at the
+		// soonest and never while its cause lasts, and until then no batch
+		// commits to name a socket the donor's rows ended, so it would go
+		// on streaming the company.
+		replaced = errors.Is(err, statelog.ErrEstateNotRestored)
 		return err
 	case outcome == joinNoDonor:
 		return errNoDonor
+	case outcome == joinUnable:
+		// NOTHING WAS INSTALLED and the live file was never replaced, so
+		// nothing is announced: as [joinNoDonor], the node is where it
+		// was, and the retry widens.
+		return errJoinUnable
 	}
 	// AGAINST THE INSTANT THE JOIN JUDGED THE ARTEFACT BY — the live one it
 	// read before asking, which the adopter checked the offer against and
@@ -3194,7 +3373,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 				"node", s.nodeID, "path", s.db.ReplicatedFile(), "error", err.Error(),
 				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
 				"detail", "this node has no replicated database open, so it "+
-					"answers no tracker, page, usage or search read from its own copy "+
+					"answers no Worklet, Doclet, usage or search read from its own copy "+
 					"and applies no record — its seats read the estate from the "+
 					"other data nodes meanwhile; it reopens the file on its next "+
 					"heartbeat, and if that keeps failing the error names the "+
@@ -3472,15 +3651,26 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 }
 
 // holdTail pins the replay tail for the whole transfer and returns the
-// release.
+// release ([statelog.AdoptDeps.Hold]).
 //
-// ONE HOLD FOR THE WHOLE JOIN, keyed on this node and this purpose, so a
-// second attempt replaces the first rather than accumulating pins nobody
-// releases. The release is called on every path out of the join — including
-// the failures — because a hold nobody released stops the trim for its whole
-// stale window, which is the one way a repair makes the fleet worse.
-func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), error) {
-	owner := s.nodeID + ":join"
+// ONE HOLD FOR THE WHOLE JOIN, keyed on this node and this purpose
+// ([coord.HoldOwner]), so a second attempt replaces the first rather than
+// accumulating pins nobody releases. The adopter releases it on every path
+// that installed nothing — including the failures — because a pin nobody
+// released goes on renewing itself and holds the trim for as long as this node
+// runs, which is the one way a repair makes the fleet worse; an installed
+// artefact's pin is handed back instead, and kept until this node is counted
+// ([stateLog.holdUntilCounted]).
+//
+// RENEWED, by [statelog.HoldTail], for as long as it is held: put once, the
+// pin was ignored by the trim a minute into any transfer, and a boot's join —
+// which nothing else counts — could lose the very tail it was fetching.
+func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPosition) (func(), error) {
+	// AN EARLIER ADOPTION STILL WAITING TO BE COUNTED gives its pin up
+	// first: the register holds one key per owner, so its renewals would
+	// otherwise put the old positions back over this one's on every beat.
+	// This join's own pin is what protects the tail from here.
+	s.releaseTail()
 	// KEYED BY STREAM, which is what [coord.TrimHold.Streams] holds: a
 	// hold is a pin on a LOG, and the backup's own hold — taken from
 	// `statelog_cursor`, which is keyed on the stream — has to land in the
@@ -3488,40 +3678,183 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 	streams := make(map[string]coord.Position, len(at))
 	for _, domain := range registeredDomains() {
 		name, stream := domain.Name(), domain.Stream().Name
-		seq, held := at[name]
+		pos, held := at[name]
 		if !held {
 			continue
 		}
-		// THE GENERATION COMES FROM THIS NODE'S OWN CURSOR, because a
-		// bare sequence names a number space: a hold stated in the
-		// wrong generation pins a position on a log that no longer
-		// exists, which the trim reads as no hold at all.
-		cursor, _, _, err := statelog.CursorFor(ctx, s.estate().Reader(), stream)
-		if err != nil {
-			return nil, err
-		}
+		// THE ARTEFACT'S GENERATION, never this node's own cursor's. A
+		// bare sequence names a number space, and the artefact's is the
+		// live log's — the join refused any other ([statelog.Offer.Usable])
+		// — while this node's checkpoint is the one thing a join knows to
+		// be wrong: absent on a node that never ran, which read as
+		// generation 0, and one a reanchor left behind on a node it
+		// passed. Stated in either, the pin sat below the log's generation,
+		// and the trim reads such a hold as an unknown term: it blocked the
+		// whole log for a minute and then, gone stale, pinned nothing.
 		streams[stream] = coord.Position{
-			Stream: stream, Generation: cursor.Generation, Seq: seq,
+			Stream: stream, Generation: pos.Generation, Seq: pos.Seq,
 		}
 	}
-	if err := s.fleet.PutHold(ctx, coord.TrimHold{
-		Owner: owner, At: time.Now().UTC(), Streams: streams,
-		Reason: "this node is below the log's floor and is fetching a peer's snapshot",
-	}); err != nil {
-		return nil, fmt.Errorf("engine: pin the replay tail for the join: %w", err)
+	pin, err := statelog.HoldTail(ctx, statelog.TailHold{
+		Register: s.fleet,
+		Owner:    coord.HoldOwner(s.nodeID, joinHoldPurpose),
+		Streams:  streams,
+		Reason:   "this node is below the log's floor and is fetching a peer's snapshot",
+		Every:    s.tailHoldEvery,
+		Logger:   log,
+	})
+	if err != nil {
+		// UNWRAPPED: the error names the hold by its owner, `<node>/join`,
+		// and the adopter's own says what it was pinning for.
+		return nil, err
 	}
-	return func() {
-		// WithoutCancel: the release is undoing the hold, and the
-		// failure it is most often undoing is the cancellation itself —
-		// a release that inherited a dead context would leave the pin
-		// standing for its whole stale window.
-		if err := s.fleet.ReleaseHold(context.WithoutCancel(ctx), owner); err != nil {
-			log.ErrorContext(ctx, "statelog_join_hold_not_released",
-				"owner", owner, "error", err.Error(),
-				"detail", "the trim is pinned at this node's join position until "+
-					"the hold goes stale")
+	return pin.Release, nil
+}
+
+// joinHoldPurpose names a join in the trim-hold register ([coord.HoldOwner]),
+// beside the backup's: an operator reading a stalled trim sees which node pins
+// it and what it is doing.
+const joinHoldPurpose = "join"
+
+// heldTail is an installed artefact's pin, waiting for this node to be counted
+// ([stateLog.holdUntilCounted]). A pointer, because WHICH pin a publish
+// captured is a question of identity: a join may hand over a newer one while
+// a publish is in flight.
+type heldTail struct {
+	release func()
+}
+
+// holdUntilCounted keeps the pin an installed artefact still needs until this
+// node's own published position counts the tail it pins.
+//
+// # Why the pin outlives the join
+//
+// The trim may remove a record once every node it COUNTS has applied past it,
+// and a node adopting a snapshot is about to replay the tail above the
+// artefact. A boot's join runs before the node holds a presence lease and
+// before its heartbeat has published a row, so nothing in the fleet counts it
+// at all; a running node's row still names the checkpoint the artefact
+// replaced until a publish reads the runners again. Released at the end of
+// the join, the pin left that window unpinned — a trim tick landing in it
+// could remove the tail the node had just installed itself in front of, and
+// the node would then find itself below the floor and fetch the whole estate
+// again.
+//
+// So it is held, and renewed, until a publish counts the tail
+// ([stateLog.releaseCountedTail]); a later join's own pin replaces it
+// ([stateLog.holdTail]), and the state log's stop releases it.
+func (s *stateLog) holdUntilCounted(release func()) {
+	s.tailMu.Lock()
+	previous := s.tailHeld
+	s.tailHeld = &heldTail{release: release}
+	s.tailMu.Unlock()
+	if previous != nil {
+		previous.release()
+	}
+}
+
+// waitingTail is the pin waiting to be counted, or nil.
+func (s *stateLog) waitingTail() *heldTail {
+	s.tailMu.Lock()
+	defer s.tailMu.Unlock()
+	return s.tailHeld
+}
+
+// releaseTail releases the pin waiting to be counted, if there is one.
+func (s *stateLog) releaseTail() {
+	s.tailMu.Lock()
+	held := s.tailHeld
+	s.tailHeld = nil
+	s.tailMu.Unlock()
+	if held != nil {
+		held.release()
+	}
+}
+
+// releaseCountedTail releases pin — the one a publish captured at its start —
+// once row, which that publish has just written, counts the tail it pins.
+//
+// A ROW COUNTS THE TAIL when, on every log, it names a position no further
+// along than the rows this node now holds: the trim then keeps everything
+// above it, which includes everything this node has still to apply. Read
+// against the FILE'S checkpoint, in its own reading after the row was written,
+// rather than trusted from the row, because a row can name a position the
+// node does not hold: a running node's runner still keyed to the checkpoint
+// the artefact replaced reports that position until it is re-keyed, and it
+// may be ahead of the artefact on a log the node was current on. A row at a
+// LOWER generation counts too, since the trim reads it as unknown and keeps
+// everything. Anything this cannot establish — a log the row does not name,
+// an estate it cannot read — keeps the pin for the next publish.
+//
+// THE PIN IS THE ONE CAPTURED, not whatever is held now: a join that handed
+// over a newer pin after this publish began is one whose installed file this
+// row's runners may not have read.
+func (s *stateLog) releaseCountedTail(ctx context.Context, pin *heldTail, row coord.NodePositions) {
+	if pin == nil {
+		return
+	}
+	counts, err := s.rowCountsTail(ctx, row)
+	if err != nil {
+		// AN ESTATE NOT OPEN IS SAID ALREADY, at error on every beat
+		// (`statelog_estate_lost`), and the pin is kept for the same
+		// reason the line is written: nothing is counted until it opens.
+		if ctx.Err() == nil && !errors.Is(err, store.ErrNoEstate) {
+			log.WarnContext(ctx, "statelog_join_hold_kept",
+				"node", s.nodeID, "error", err.Error(),
+				"detail", "whether this node's published position counts the "+
+					"tail its adoption needs could not be read, so the join's "+
+					"pin on the trim is kept, renewed, until a later heartbeat can")
 		}
-	}, nil
+		return
+	}
+	if !counts {
+		return
+	}
+	s.tailMu.Lock()
+	current := s.tailHeld == pin
+	if current {
+		s.tailHeld = nil
+	}
+	s.tailMu.Unlock()
+	if !current {
+		// RELEASED ALREADY, or replaced by a later join's — whose own
+		// pin is what that join's installed file is protected by.
+		return
+	}
+	pin.release()
+	log.InfoContext(ctx, "statelog_join_hold_released", "node", s.nodeID,
+		"detail", "this node's own published position now counts the tail its "+
+			"adoption replays, so the join's pin on the trim is released")
+}
+
+// rowCountsTail is whether row names, on every registered log, a position no
+// further along than this node's own rows hold — see
+// [stateLog.releaseCountedTail].
+func (s *stateLog) rowCountsTail(ctx context.Context, row coord.NodePositions) (bool, error) {
+	for _, domain := range registeredDomains() {
+		name, stream := domain.Name(), domain.Stream().Name
+		published, named := row.Domains[name]
+		if !named {
+			return false, nil
+		}
+		held, _, found, err := statelog.CursorFor(ctx, s.estate().Reader(), stream)
+		if err != nil {
+			return false, fmt.Errorf("read %s's checkpoint: %w", name, err)
+		}
+		if !found {
+			// NO CHECKPOINT ROW IS THE ZERO POSITION: a log nobody has
+			// written to has applied nothing.
+			held = statelog.Position{}
+		}
+		switch {
+		case published.Generation < held.Generation:
+		case published.Generation > held.Generation:
+			return false, nil
+		case published.Seq > held.Seq:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // registered is every registered domain's log, as the framework's own
@@ -3591,7 +3924,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	floors := s.readFloors(ctx)
 	for _, running := range held {
 		name := running.domain.Name()
-		row := ReplicationStatus{Name: name, Kind: "domain"}
+		row := ReplicationStatus{Name: name}
 		health, err := s.health(ctx, running, floors)
 		switch {
 		case err != nil:
@@ -3984,6 +4317,17 @@ func clearsAtBoot(reason statelog.SkipReason) bool {
 // implementation.
 type snapshotTaker interface {
 	Take(ctx context.Context) (statelog.Manifest, error)
+}
+
+// levelHook is what a domain's apply loop tells each time it comes level with
+// its log ([statelog.RunnerDeps.OnLevel]): the seat-claim gate's watch for a
+// domain whose health gates admission, and nobody for one whose health does
+// not, whose level the gate never asks about — see admission.go.
+func (s *stateLog) levelHook(domain statelog.Domain) func() {
+	if s.admit == nil || !domain.GatesSeatAdmission() {
+		return nil
+	}
+	return s.admit
 }
 
 // nudgeSnapshot wakes the snapshot loop, without waiting for it — see
@@ -4435,7 +4779,7 @@ func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 // publishPositions writes one row describing every domain this node runs.
 //
 // EVERY DOMAIN IN ONE ROW, which is the register's own shape: the trim asks
-// "what has every node applied" about all of them at once, and a row per
+// "what has every data node applied" about all of them at once, and a row per
 // domain would be N writes saying one thing.
 //
 // AND THE SNAPSHOT THIS NODE HOLDS, stamped from what its own snapshot loop
@@ -4466,6 +4810,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// change before it.
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
+	// THE PIN AN ADOPTION IS WAITING TO HAVE COUNTED, captured BEFORE the
+	// runners are read: one handed over after this point belongs to an
+	// install this reading may predate, and is the next publish's to judge
+	// ([stateLog.releaseCountedTail]).
+	tail := s.waitingTail()
 	held := s.running()
 	row := coord.NodePositions{
 		NodeID:        s.nodeID,
@@ -4509,6 +4858,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	generations, unreadGen := map[string]uint32(nil), map[string]error{}
 	var clocks *skewMeasure
 	if rowsErr == nil {
+		s.observeUsageGenerations(rows)
 		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
 		// AND HOW FAR THIS NODE'S CLOCK, AND THE BROKER MEMBER'S, STAND FROM
 		// THE FLEET'S, off every row just read — each node's stamp against
@@ -4724,7 +5074,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			"detail", "the trim cannot see this node until it publishes again, "+
 				"so it may delete records this node still needs; the next "+
 				"heartbeat retries")
+		return
 	}
+	// AND A ROW THE TRIM NOW COUNTS releases the pin an adoption held for
+	// exactly this moment — only once it has been written.
+	s.releaseCountedTail(ctx, tail, row)
 }
 
 // positionGauges publishes each domain's progress on the same beat the
@@ -4856,7 +5210,7 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 //
 // NOT ITS ARBITRATION ANCHORS, which are the replicated estate's: the trim
 // removes them with a trimmed record every node applies at one position
-// (ADR-0050, [retention.sweepAnchors]), because a node deleting below a floor
+// (ADR-0073, [retention.sweepAnchors]), because a node deleting below a floor
 // it read for itself would be a second writer of rows every copy must hold
 // alike (ADR-0002).
 type domainLedger struct {

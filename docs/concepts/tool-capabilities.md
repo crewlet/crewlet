@@ -130,8 +130,8 @@ flowchart TD
 ```
 
 **The outbound half is not optional.** Both MCP surfaces this engine serves —
-`/operator/mcp`, which hands a company's tracker and knowledge base to an
-operator's own assistant, and the sandbox bridge, which hands a seat's tools to
+`/operator/mcp`, which hands a company's tracker, knowledge base and chat to
+an operator's own assistant, and the sandbox bridge, which hands a seat's tools to
 a coding agent — advertise each tool's hints alongside its schema. A surface
 that published only names and schemas would give those clients no way to tell
 `search_work_items` from `remove_work_item`: a client that asks a person before
@@ -168,15 +168,10 @@ denies such tools.
   block what it cannot classify; the task's (or its template's) explicit
   allowlist already curates the worker surface.
 
-First-party control tools (`delegate`, `run_sandbox`, `a2a_ask` and the
-parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
+First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools,
+and the parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
 separately by name, because they are Crewlet's *own* tools and naming them
-is not a third-party coupling. `run_sandbox` is on that list because a
-detached coding run is keyed to the **parent** turn: the pending row
-carries the parent's `turn_id` and a completion resumes the parent's
-suspended executor, while a worker's loop cannot suspend. The parent turn
-would finish without persisting a suspended conversation, and the run
-would come back with nothing to resume into.
+is not a third-party coupling.
 
 ### The delivery check: did this answer reach anybody?
 
@@ -186,7 +181,7 @@ membership test against the map `tools.Registry.Deliveries` computes, and
 two kinds of tool are in it: an MCP-served tool whose own annotations do
 **not positively** call it a read, and a first-party tool the engine
 registered as one that reaches somebody. So an unannotated server tool
-counts, and so does commenting on a native work item, while a diary write
+counts, and so does commenting on a Worklet item, while a diary write
 does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
 beside `mcp.WritesToSharedSurface` precisely because the two questions fail
 in opposite directions: reusing the worker guard's answer here would read

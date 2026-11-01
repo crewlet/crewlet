@@ -9,17 +9,17 @@
 //
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
-// copy of the tracker's, the knowledge base's or the identity directory's rows.
-// Its seats still read and write the first two, constantly — every board, every
-// task, every page a tool touches — and ask the third whose record a login names
-// and who holds each human seat, and a node that serves requests asks it what a
-// presented machine token is checked against, so something has to answer them.
-// EVERY DATA NODE HOLDS THE WHOLE ESTATE
-// and SERVES it over the broker ([Serve]), and every node's tools are handed
-// facades of one [Router], which answers in-process where this node's copy
+// copy of the tracker's, the knowledge base's, chat's or the identity
+// directory's rows. Its seats still read and write the first three, constantly
+// — every board, every task, every page and every room a tool touches — and ask
+// the fourth whose record a login names and who holds each human seat, and a
+// node that serves requests asks it what a presented machine token is checked
+// against, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE
+// ESTATE and SERVES it over the broker ([Serve]), and every node's tools are
+// handed facades of one [Router], which answers in-process where this node's copy
 // serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker, knowledge-base and usage reads and the operator's own
-// MCP — for the reason a data node's own seats are: read straight off the
+// — the API's tracker, knowledge-base, chat and usage reads and the operator's
+// own MCP — for the reason a data node's own seats are: read straight off the
 // node's copy, a node whose copy of a domain was out of service answered its
 // operator from the very copy it had stopped serving its seats from.
 //
@@ -49,16 +49,20 @@
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
 // may. A PAGE write is the same operation on a repeat only where the CALLER
-// brought a key — its actor's operation key ([pages.Actor.OpKey]), or for a
-// remark made from a turn the turn's own ([pages.NewComment.TurnKey]) — from
-// which the store derives the operation id, bound to what the write says. With
-// none the store mints an id per call, so a repeat is a second write (a second
-// comment) or a refusal of its own first copy (a create whose title is now
-// taken): an unanswered unkeyed page write is NEVER repeated, and is reported
-// as [ErrOutcomeUnknown] — the honest answer, and the one a tool turns into
-// "read the page before writing again". A PUSH carries its push id, a UUIDv7
-// the receiving node minted once, which the committer's decide collapses onto
-// the push's row — so it moves on as a tracker write does.
+// brought a key (its actor's operation key, [doclet.Actor.OpKey], which a
+// seat's turn derives for each call and a person's request derives from its
+// Idempotency-Key), from which the store derives the operation id, bound to
+// what the write says. With none the store mints an id per call, so a repeat
+// is a second write (a second comment) or a refusal of its own first copy (a
+// create whose title is now taken): an unanswered unkeyed page write is NEVER
+// repeated, and is reported as [ErrOutcomeUnknown] — the honest answer, and
+// the one a tool turns into "read the page before writing again". A CHAT write
+// is the page write's case exactly, keyed by its actor's operation key
+// ([chatlet.Actor.OpKey]); the erase and the prune take their caller's whole
+// operation id instead, and are repeated under it as a tracker purge is. A
+// PUSH carries its push id, a UUIDv7 the receiving node minted once, which the
+// committer's decide collapses onto the push's row — so it moves on as a
+// tracker write does.
 //
 // # A push is asked of its repository's committer
 //
@@ -97,7 +101,7 @@
 // merge gate, or a dequeue — under its asker's operation id, from which an
 // enqueue's entry id is derived, so no retry queues a change twice; and so is
 // a change's MERGE (`code.merge`) — one record its merge gate decides from one
-// snapshot, which merges the change and moves its target (ADR-0066) — under
+// snapshot, which merges the change and moves its target (ADR-0089) — under
 // its builder's operation id, from which the merge's push id is derived, so
 // no retry lands a branch twice. A WRITE
 // OF A CHANGE'S CONVERSATION (`code.conversation`) — an ask for review, a
@@ -170,7 +174,10 @@
 //
 // When no data node runs the operation, it is refused as [ErrUnserved],
 // naming who was asked and what each said — never an empty answer, which would
-// say the company has none of what was asked for.
+// say the company has none of what was asked for. A WRITE that some node never
+// answered is the exception: that node may have run it, so the walk ends in
+// [ErrOutcomeUnknown] and the same operation id is the retry, since "nobody ran
+// it" is the claim a caller acts on by writing again.
 //
 // # A domain's copy that is WRONG is out of service; one that LAGS is a worse node
 //
@@ -188,7 +195,7 @@
 // from the copy of its own domain, and a participant whose VECTORS copy is
 // out of service asks that verdict itself, in the scanner, and answers
 // without the half, saying so ([search.Copies]). And the seats were never the
-// problem, the copy was, so the node keeps them. This is ADR-0049, which
+// problem, the copy was, so the node keeps them. This is ADR-0072, which
 // refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
 // served by — what admission asks of — is every domain that gates seat
 // admission at once ([SeatCopy]).
@@ -274,9 +281,9 @@
 // An operation on a repository's git OBJECTS — a read by object id of a tree,
 // a file, a diff, a MERGE PREVIEW of two commits ([opCodeMergePreview], a read
 // too), and an ENGINE WRITE, a seat's or a person's commit built beside a copy
-// of them and landed as a push (ADR-0062) — is answered by a node with the
+// of them and landed as a push (ADR-0085) — is answered by a node with the
 // `git` role from its own cache, never by a data node's copy.
-// That is ADR-0059, amending ADR-0025: the router's walk has a second
+// That is ADR-0082, amending ADR-0025: the router's walk has a second
 // placement beside the data nodes, every live git node ([RouterOptions.Git]),
 // keyed by repository ([op.keyedOnGit]), and such an operation names the git
 // half rather than a domain's copy ([GitCopy]), so no copy verdict, no
@@ -366,7 +373,7 @@
 // layers, whose passes over their listings read the presence view again for
 // every repository they asked about one at a time. Both ask by one charge,
 // the largest of their steps', so both writers of a repository's packs run
-// on one node (ADR-0061), and a maintainer two nodes both believe in is one the
+// on one node (ADR-0084), and a maintainer two nodes both believe in is one the
 // committer takes once, as a home's work is.
 //
 // # Which data nodes to ask is answered from memory
@@ -409,34 +416,41 @@
 // a page's backlinks, are of indexes no log position describes — so that
 // applier's lag is not one the operation should wait out ([ready]).
 //
-// The searches carry no floor at all: they read an index each node's own walk
-// maintains behind its applier, which no log position describes. They still
-// name the domain whose rows that index is over, so a node whose copy of it is
-// out of service runs none of them.
+// The tracker's and the knowledge base's searches carry no floor at all: they
+// read an index each node's own walk maintains behind its applier, which no log
+// position describes; they still name the domain whose rows that index is over,
+// so a node whose copy of it is out of service runs none of them. CHAT'S SEARCH
+// DOES, on the chat log, because the rooms it may search are read from
+// membership rows a seat's own join may just have written — through whichever
+// data node took it — and a search that missed them would answer "nobody said that" about a room the seat is in. Its index
+// carries none, as the others' do not, and says on its answer when it has not
+// caught up ([ChatSearchAnswer.Building]).
 //
 // # Every envelope is signed, and bound to its question
 //
 // A data node runs a tracker write AS THE ACTOR ITS REQUEST NAMES, so an
 // unsigned request was ADR-0031's unsigned record one hop earlier: anyone who
 // could reach the broker could write as any seat, and the log would carry it
-// signed by the data node that obeyed. So every request and every reply is
-// framed and signed under the fleet keyring, by the state log's own
-// [statelog.Signer] under domains of the estate's own, and read with its
-// verdicts ([Envelopes]) — the rule internal/signedask keeps for every channel
-// a node carries a request out on, this one, the fleet broker's membership and
-// a note to a running turn alike: a request that does not verify is never
-// dispatched, the actor a write runs as is the one inside the signed body, and
-// a key a node does not hold is "did not run" — the router moves on to a node
-// that holds it. A request carries an id and a deadline under the signature, so a
-// data node refuses a replay of one; a reply names the request it answers, so
-// an asker believes no answer to somebody else's question. A reply it cannot
-// believe is no answer — never "did not run" — so a once-write met with one is
-// [ErrOutcomeUnknown].
+// signed by the data node that obeyed. And it answers a chat read FOR THE
+// VIEWER IT NAMES, whose private rooms and direct conversations are what that
+// seat may see — so an unsigned read was any private room read as anybody. So
+// every request and every reply is framed and signed under the fleet keyring,
+// by the state log's own [statelog.Signer] under domains of the estate's own,
+// and read with its verdicts ([Envelopes]) — the rule internal/signedask keeps
+// for every channel a node carries a request out on, this one among them: a
+// request that does not verify is never dispatched, the actor a write runs as
+// and the viewer a read answers for are the ones inside the signed body, and a
+// key a node does not hold is "did not run" — the router moves on to a node
+// that holds it. A request carries an id and a deadline under the signature,
+// so a data node refuses a replay of one; a reply names the request it
+// answers, so an asker believes no answer to somebody else's question. A reply
+// it cannot believe is no answer — never "did not run" — so a once-write met
+// with one is [ErrOutcomeUnknown].
 //
 // # What does not cross the wire, and who supplies it
 //
 // Everything that is in-process by nature — the chart seams a query carries
-// ([tracker.Units]), the lead map a dependency consults ([tracker.Leads]), the
+// ([worklet.Units]), the lead map a dependency consults ([worklet.Leads]), the
 // org a knowledge search is scoped by — is supplied by the SERVING node from
 // its own current epoch ([ServerSeams]). Every node reads the same activation,
 // so the two differ only for the instant an apply is landing, which is the same
@@ -469,6 +483,18 @@
 // a data node, over a row neither the broker nor anybody on it can test a
 // guess against — and an answer MAC'd for one question verifies under no
 // other's nonce.
+// CHAT'S VIEWER IS THE MIDDLE CASE. The asking node decides who the viewer is —
+// the seat its caller acts as — and whether that caller may use chat at all;
+// the SERVING node decides which rooms that viewer may read, because membership
+// is a replicated row judged inside the read's own snapshot there. A visible
+// set resolved on one node and handed to another node's index would be an
+// authorization fact crossing the wire, which is why [ChatQuery] has no field
+// for it. What a caller was admitted to do BEYOND membership — take down a
+// message somebody else wrote, archive a room — crosses as the DECISION
+// ([chatlet.MessageAuthority], [chatlet.ChannelAuthority]), the rule a remark's
+// take-down follows ([removeCommentArgs]): decided where the grants and the
+// chart are, and judged against the stored author and the room's unit in the
+// serving node's own snapshot.
 //
 // # Errors keep their identity
 //
@@ -478,8 +504,17 @@
 // registered sentinel it matches and every registered type it carries (see
 // errors.go), and the far side rebuilds an error that answers the same
 // questions. A sentinel or an error type added to the packages whose errors
-// cross — this one's, the tracker's, the knowledge base's, the state log's and
-// the identity estate's with the vocabulary its answers are judged in — is a
-// build failure until it is registered. An operation answered in-process returns its own error,
-// which answers every question without the wire's help.
+// cross — this one's, the tracker's, the knowledge base's, chat's, the state
+// log's and the identity estate's with the vocabulary its answers are judged in
+// — is a build failure until it is registered. An operation answered in-process
+// returns its own error, which answers every question without the wire's help.
+//
+// AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
+// rebuilds a type from its exported fields and so cannot rebuild one of those
+// at all: it arrives as its message alone. That is not only a lost errors.As.
+// Each package's Sentence (a refusal's words without the Go prefix, which a
+// tool tells a model) finds them by unwrapping the package's refusal type,
+// and Worklet's and Doclet's were both unexported, so every refusal decided on
+// another data node reached its reader with "worklet:" or "doclet: invalid:"
+// in front of it.
 package estate

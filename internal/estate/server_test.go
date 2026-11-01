@@ -11,7 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // askerSlack is what each request these cases send leaves the serving node
@@ -118,7 +118,7 @@ func laggingLinearizableRead(t *testing.T) func(context.Context) error {
 // a case can count them across the nodes of a fleet.
 func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) error {
 	t.Helper()
-	domain := tracker.Domain{}
+	domain := worklet.Domain{}
 	spec := domain.Stream()
 	reserve, err := statelog.NewReserve(spec,
 		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })

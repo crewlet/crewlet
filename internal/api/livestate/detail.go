@@ -43,13 +43,16 @@ import "reflect"
 // which replaces every copy it holds.
 //
 // NEVER TWICE, rather than counted per call, because a call is cleared and
-// built again under the SAME key: a suspended Execute phase publishes a
-// completion checkpoint, which clears its call, and streams its resumed rounds
-// under the same turn, phase and iteration. Counted per call, the rebuilt call
-// numbered its fields from one again, and a tab still holding the copy from
-// before the suspension — one that missed the push clearing it and the first
-// push after — took every lower version for a push overtaken by what it held:
-// it kept the old response, narration and tool calls, and asked for nothing,
+// built again under the SAME key. A parked turn's resume can run more than
+// once — held until its seat's budget has room for the relaunch its reviewer
+// sent back, or handed back for a retry after an attempt that broke — and each
+// attempt collects the same run into the same turn and round, so its review
+// opens again under the turn, phase and iteration of the attempt before it,
+// whose completion cleared the call. Counted per call, the rebuilt call
+// numbered its fields from one again, and a tab still holding the earlier
+// attempt's copy — one that missed the push clearing it and the first push
+// after — took every lower version for a push overtaken by what it held: it
+// kept the old response, narration and tool calls, and asked for nothing,
 // until the new count passed the old one, which it might never do.
 type CallVersions struct {
 	// Prompt numbers `prompt` and `prompt_messages`, which move together:
@@ -64,17 +67,23 @@ type CallVersions struct {
 	Executions int `json:"executions"`
 	// Rounds numbers `rounds`, each round's timing — once a round.
 	Rounds int `json:"rounds"`
+	// Invocations numbers `invocations`, the CLI runs that have ended —
+	// once a run. Versioned for rounds' reason, one level up: a phase that
+	// is steered or delegates ends a run each time, and a list re-sent at
+	// five pushes a second while one round streams is what versions remove.
+	Invocations int `json:"invocations"`
 }
 
 // CallDetail is which of a live call's fields each version numbers, by the
 // keys of both: the dashboard's merge (`LIVE_CALL_DETAIL`) reads a push by
 // exactly this table, and [LiveCall.Without] leaves out exactly these.
 var CallDetail = map[string][]string{
-	"prompt":     {"prompt", "prompt_messages"},
-	"response":   {"response"},
-	"narration":  {"round_narration"},
-	"executions": {"tool_executions"},
-	"rounds":     {"rounds"},
+	"prompt":      {"prompt", "prompt_messages"},
+	"response":    {"response"},
+	"narration":   {"round_narration"},
+	"executions":  {"tool_executions"},
+	"rounds":      {"rounds"},
+	"invocations": {"invocations"},
 }
 
 // restamp is the versions next holds, given the call it replaces: the same
@@ -89,7 +98,7 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 	version := s.versions
 	if prev == nil {
 		return CallVersions{Prompt: version, Response: version, Narration: version,
-			Executions: version, Rounds: version}
+			Executions: version, Rounds: version, Invocations: version}
 	}
 	was := prev.Versions
 	moved := func(held int, same bool) int {
@@ -105,6 +114,8 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 		Narration:  moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
 		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions)),
 		Rounds:     moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
+		Invocations: moved(was.Invocations,
+			sameList(prev.Invocations, next.Invocations)),
 	}
 }
 
@@ -151,6 +162,9 @@ func (c *LiveCall) Without(held CallVersions) any {
 	if c.Versions.Rounds != held.Rounds {
 		out.Rounds = &c.Rounds
 	}
+	if c.Versions.Invocations != held.Invocations {
+		out.Invocations = &c.Invocations
+	}
 	return out
 }
 
@@ -168,4 +182,5 @@ type leanCall struct {
 	ToolExecutions *[]any  `json:"tool_executions,omitempty"`
 	RoundNarration *[]any  `json:"round_narration,omitempty"`
 	Rounds         *[]any  `json:"rounds,omitempty"`
+	Invocations    *[]any  `json:"invocations,omitempty"`
 }

@@ -60,7 +60,7 @@ func TestImportAsksForTheSourcesCredentialOnTheTerminal(t *testing.T) {
 	t.Cleanup(source.Close)
 
 	master, tty := openPTY(t)
-	cmd := exec.Command(os.Args[0], "code", "import", source.URL+"/acme/web.git", "web", "-url", h.base,
+	cmd := exec.Command(os.Args[0], "code", "import", source.URL+"/acme/web.git", "web", "-api", h.base,
 		"-git", hermeticGit(t))
 	cmd.Env = append(promptingEnv(), apiTokenEnv+"="+h.token, mainProbeEnv+"=1",
 		procgrouptest.GORACE+"="+procgrouptest.StandInRaceOptions())

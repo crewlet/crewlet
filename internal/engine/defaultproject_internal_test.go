@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // A PERSON'S CREATE LANDS WHERE THEIR SEAT'S WORK DOES, on the chart CURRENT
@@ -44,15 +44,15 @@ func TestAPersonsDefaultProjectIsReadFromTheCurrentChart(t *testing.T) {
 // THE CONTAINERS A SEAT'S WRITE IS HELD BACK FROM ARE THE CURRENT COMPANY'S.
 // Both are Tier B and the knowledge base's store is built once per node, so it
 // reads them at each write through exactly this expression (the store's
-// [pages.Options.Reserved]): before any epoch nothing is reserved, and an
+// [doclet.Options.Reserved]): before any epoch nothing is reserved, and an
 // apply that moves the skills container moves what is held back with it. The
 // API used to evaluate its own copy of this rule once, when it built its
 // catalogue.
 func TestTheReservedContainersAreTheCurrentCompanys(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	reserved := func() pages.Reserved { return reservedContainers(e.Company()) }
-	if got := reserved(); !reflect.DeepEqual(got, pages.Reserved{}) {
+	reserved := func() doclet.Reserved { return reservedContainers(e.Company()) }
+	if got := reserved(); !reflect.DeepEqual(got, doclet.Reserved{}) {
 		t.Errorf("before any epoch: %+v, want nothing reserved", got)
 	}
 

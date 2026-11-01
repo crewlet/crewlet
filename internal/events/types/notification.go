@@ -20,7 +20,7 @@ func init() {
 }
 
 // NotificationWriter is who wrote the record a FIRST-PARTY notification
-// announces — a change on the engine's own tracker or knowledge base — as that
+// announces — a change on Worklet or Doclet — as that
 // record names them.
 //
 // STATED BY THE PRODUCER, because nothing downstream can resolve it. A vendor
@@ -98,6 +98,15 @@ type ExternalNotification struct {
 	// its own scaffolding (for chat, the triage guidance and the seat's
 	// identity) before the actual message.
 	Body string `json:"body"`
+	// FenceBoundary is the token Body's foreign text was fenced under when the
+	// delivery built it (internal/provenance): minted for this wake alone,
+	// because a prompt is built where a delivery is routed, before the turn
+	// that will read it exists. The turn re-keys every such fence onto its own
+	// token and neutralises everything around them, so a message that spells
+	// a closer reads as what somebody said. Empty on a wake no delivery built,
+	// whose Body holds no fence a reader can vouch for — it is neutralised
+	// whole.
+	FenceBoundary string `json:"fence_boundary,omitempty"`
 	// SalientBody is the raw inbound message, stripped of that scaffolding.
 	//
 	// A pointer because nil and "" are different facts and the learning workers
@@ -134,9 +143,9 @@ type ExternalNotification struct {
 	Addressed bool `json:"addressed,omitempty"`
 
 	// Owes is the CHAT SURFACE this turn must post on before it is done,
-	// when that is not the notification's own source — `mattermost` or
-	// `slack`, from the answer to a decision whose asker said it would
-	// report the outcome there. The turn engine raises the delivery
+	// when that is not the notification's own source — `mattermost`,
+	// `slack` or `chat`, from the answer to a decision whose asker said it
+	// would report the outcome there. The turn engine raises the delivery
 	// obligation on it rather than on NotificationSource, so a turn woken
 	// by the tracker is held open until a chat tool has run rather than
 	// being closed out by a comment on the item.

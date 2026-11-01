@@ -987,7 +987,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	item := &code.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
 		SourceRef: "refs/heads/fix", TargetRef: "refs/heads/main", Head: "6666666666666666666666666666666666666666",
 		Title: title, Body: body, Draft: true, Owner: seat,
-		WorkItem: &types.WorkItem{Backend: types.WorkNative, ID: "task-9", Key: "ENG-412", Project: "ENG"},
+		WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"},
 		TurnID:   "019a0c2e-0000-7000-8000-0000000000d2", RunID: "019a0c2e-0000-7000-8000-0000000000d3"}
 	for name, p := range map[string]code.ChangeProposal{
 		"an open": {Open: item},

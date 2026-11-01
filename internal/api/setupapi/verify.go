@@ -9,7 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // verify serves POST /setup/integrations/{kind}/verify: a typed credential
@@ -38,18 +40,16 @@ import (
 // against the address already in force.
 func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, roster, kind)
+	company := fc.company
+	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
-			"hint":   "one of " + kindList(),
+			"hint":   "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -68,7 +68,7 @@ func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 		})
 		return
 	}
