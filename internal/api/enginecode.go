@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -81,6 +83,29 @@ func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
 	}
 	return builtin.ReadersDeps{}, why
 }
+
+// CheckLogs is the fleet's object store, which a failed check's log is kept
+// in and read from, on CodeReads' terms ([engine.OperatorCode]): where this
+// node's running runtime serves no code host, why, asked again after the
+// reason for GitRoutes' reason. A node serving the code host with no object
+// store is a fault of the engine's own — the code host keeps its packs there
+// — never a reason a wait clears.
+func (c engineCode) CheckLogs() (queries.CheckLogs, error) {
+	if _, ok := engine.OperatorCode(c.e); !ok {
+		why := c.e.CodeUnserved()
+		if _, ok := engine.OperatorCode(c.e); !ok {
+			return nil, why
+		}
+	}
+	if objects := c.e.Objects(); objects != nil {
+		return objects, nil
+	}
+	return nil, errNoObjectStore
+}
+
+// errNoObjectStore is a node serving the code host on no object store.
+var errNoObjectStore = errors.New("api: this node serves the code host with no object store to read a " +
+	"check's log from")
 
 // GitReads is the code domain's reads by object id through this node's estate
 // router — the repository's home git node first — on CodeReads' terms

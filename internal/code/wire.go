@@ -1909,15 +1909,46 @@ type CheckQuery struct {
 	OID string `json:"oid,omitempty"`
 	// Target, Name and Attempt are the one attempt a `check` read is of —
 	// the branch it was checked for, the check and the attempt — REQUIRED
-	// there and refused on a `checks` read.
+	// there. A `checks` read refuses a Target and an Attempt, and takes a
+	// Name as a NARROWING: the attempts of the check of that name alone.
 	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
+	// State narrows a `checks` read to the attempts in one state; refused on
+	// a `check` read, which names its one attempt whatever its state.
+	//
+	// A NARROWING TESTED ON THE ROWS A PAGE READ, as Name's is, and never a
+	// seek: every shape of the listing walks the one index its own order
+	// leads (code_checks' key, code_checks_finished_idx,
+	// code_checks_recent_idx), and an index per state or per name would be
+	// one more write on every check's every transition for a filter a person
+	// applies to a page. So a narrowed page is the rows it READ, never the
+	// rows it kept, and may be short — or empty with a cursor — as a window
+	// a reader reads little of is.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row — and neither does Name's use as a narrowing. AS A
+	// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code
+	// domain has run without them — none of the domain is on main, so no
+	// image and no release serves a code read. A build that predated them
+	// would refuse a listing naming a Name and decode and ignore a State,
+	// answering the wider listing; so were such a build ever to run first,
+	// a narrowed listing would move to a kind of its own, which such a build
+	// refuses as a kind it does not know, rather than ride a field it
+	// ignores.
+	State CheckState `json:"state,omitempty"`
 	// Since bounds a `checks` read of EVERY repository — the window, which
 	// names no repository — to the attempts that ended at or after it; zero
 	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
 	// repository, whose listing is its own attempts newest ended first.
 	Since time.Time `json:"since,omitzero"`
+}
+
+// keeps reports whether row is one a `checks` listing narrowed by c keeps:
+// of the check c names, where it names one, and in the state it names, where
+// it names one.
+func (c CheckQuery) keeps(row CheckRow) bool {
+	return (c.Name == "" || row.Name == c.Name) && (c.State == "" || row.State == c.State)
 }
 
 // ChecksDueQuery is a `checks_due` read's question, REQUIRED as a

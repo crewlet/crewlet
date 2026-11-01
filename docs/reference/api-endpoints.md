@@ -4391,6 +4391,10 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_diff` | `{name, base, head, paths, file, file_b64, renames, cursor, read_level, …}` | `GET /code/repos/{name}/diff`. What changed between two revisions: the stat, or one file's patch |
 | `code_compare` | `{name, base, head, read_level, …}` | `GET /code/repos/{name}/compare`. How two revisions relate, and what merging head into base would do |
 | `code_commit` | `{name, sha, read_level, …}` | `GET /code/repos/{name}/commits/{sha}`. One commit, the push that introduced it and the changes it belongs to |
+| `code_queue` | `{repo, target, limit, cursor, read_level, …}` | `GET /code/queue`. The live entries of merge queues and the trains testing them — see [Merge queues and checks](#merge-queues-and-checks), which say what the four queue and check questions answer |
+| `code_checks` | `{repo, change, oid, since, name, state, limit, cursor, read_level, …}` | `GET /code/checks`. Attempts of checks: a repository's, a change's, a commit's, or every repository's in a window |
+| `code_check` | `{name, oid, check, attempt, target, read_level, …}` | `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}`. One attempt whole |
+| `code_check_log` | `{name, oid, check, attempt, target, object, offset, limit, read_level, …}` | `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log`. A page of the log a failed run kept |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7417,6 +7421,58 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/repos/web/tree?ref=main&path=upload"
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/repos/web/compare?base=main&head=feature/retry"
+```
+
+### Merge queues and checks
+
+What a repository's merge queues hold and what its checks measured are four
+more questions, decided per repository as the rows above are and refused in
+the same vocabulary: a listing across repositories keeps the rows of those the
+caller reads, and a read naming one repository the caller's grant shuts out is
+`403 not_permitted`, however narrowly it asks. Each reads at the caller's
+freshness, so a screen reads its own merge, enqueue or re-run back at the code
+log's floor (`read_level=session&min_position=…`):
+
+| Route | Question | What it answers |
+|---|---|---|
+| `GET /code/queue` | `code_queue` | The live entries of merge queues — waiting or testing — in queue order: `?repo=`'s, one of its branches' with `?target=` (a whole ref, `refs/heads/main`), or every repository's the caller reads where it names none; beside them `trains`, the candidates of the trains testing the targets the page reaches. A page at a time (`?limit=` 1–200, unset or `0` is 50, and `?cursor=`) |
+| `GET /code/checks` | `code_checks` | Attempts of checks: `?repo=`'s, newest ended first and every attempt not yet ended after them; a change's of it (`?change=` its number — its head's attempts, checked for its target) or a commit's (`?oid=`, a whole id — checked for every branch, or for the change's target beside `?change=`); or, naming no repository, the **window**: every repository's the caller reads whose attempts ended at or after `?since=` (RFC 3339; unset, the thirty days an attempt's rows are kept), newest ended first. Every shape narrows by `?name=`, a check's name, and `?state=` (`queued`, `running`, `passed`, `failed`, `errored`, `cancelled`, `skipped`). A page at a time (`?limit=` 1–200, unset or `0` is 50, and `?cursor=`) |
+| `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}` | `code_check` | One attempt whole: its row, the definition it ran under, its tail, the failures its ending named (`path`, `line`, `test_id`, `message`) and `log`, the object a failed run's log is kept as with its `size`. `?target=`, the branch it was checked for, is **required**: one commit is checked for every branch a change heading it merges into, and a ref's slashes are no path segment's |
+| `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log` | `code_check_log` | A page of that log: `?offset=` (bytes from its start, `0` unset) and `?limit=` (1–262144 bytes, unset the most), answering `object`, `size`, `offset`, `text` and `next`, where the next page starts — absent on the page that reaches the end. A page never ends inside a character: it ends before it, and `next` starts on it. Its tail, where a failure is printed, is one read from `size` back. `?target=` is required, as above |
+
+**A narrowing is tested on the rows a page read**, beside the caller's grant,
+never as a seek of an index of its own: a state or a name that few attempts
+are in is a filter a person applies to a page, and an index per state would be
+one more write on every attempt's every transition. So a narrowed page — and a
+window the grant keeps little of — may be short, or empty with a `next`:
+follow it until it is absent.
+
+**A log page is immutable by its object, never by its attempt.** Asked with
+`?object=` — the key `code_check` answers as `log.object` — the page is
+answered with a strong `ETag` and cached for good, as a
+[read by whole object ids](#a-repositorys-content) is: an object's key is
+minted for one upload and never reused. Asked without it, the page is answered
+bare: an attempt's ending can be replaced by a later one (a runner declared
+lost that was only slow), and the ending it keeps keeps its own log.
+
+The check questions add these refusals to the code reads':
+
+- `404 not_found` with `"reason": "no_check"` for an attempt the repository
+  holds no row of — never queued, or past the thirty days an ended attempt's
+  rows are kept — and `"reason": "no_log"` for an attempt that kept no log
+  (only a failed run keeps one), or no longer the `?object=` asked for, the
+  sentence naming the one it keeps;
+- `400 bad_params` for an attempt that names no `target`, an `attempt` that is
+  not a whole number from 1, a `state` that is no check's, a `since` that is no
+  instant, a log `limit` past one page or an `offset` past the log's end, an
+  `object` that is no object's key, and a narrowing the shape does not take
+  — a `since` beside a repository, a `change` or an `oid` with none.
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/checks?since=2026-10-01T00:00:00Z&state=failed"
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/repos/web/checks/4b825dc642cb6eb9a060e54bf8d69288fbee4904/unit/1/log?target=refs/heads/main"
 ```
 
 ### `GET /code/repos/{name}/readers`

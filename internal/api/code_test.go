@@ -33,21 +33,24 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fixedCode is a code surface answering what it holds for good: a git host,
-// the code domain's reads, its reads by object id and who read a unit's
-// repository — each absent where it holds nil, for the reason why (the company
-// hosts no code where why is nil) — and the tokens a coding box's run token
+// the code domain's reads, its reads by object id, who read a unit's
+// repository and the object store a check's log is read from — each absent
+// where it holds nil, for the reason why (the company hosts no code where why
+// is nil) — and the tokens a coding box's run token
 // and a check's box's token verify by, none where it holds nil.
 type fixedCode struct {
 	git      api.GitRoutes
 	reads    queries.CodeReads
 	gitReads api.GitReader
 	readers  builtin.ReadersDeps
+	logs     queries.CheckLogs
 	why      error
 	boxes    *host.BoxTokens
 	checks   *host.CheckTokens
@@ -90,6 +93,13 @@ func (f fixedCode) CodeReads() (queries.CodeReads, error) {
 	return f.reads, nil
 }
 
+func (f fixedCode) CheckLogs() (queries.CheckLogs, error) {
+	if f.logs == nil {
+		return nil, f.unserved()
+	}
+	return f.logs, nil
+}
+
 func (f fixedCode) RepoReaders() (builtin.ReadersDeps, error) {
 	if f.readers.Readers == nil {
 		return builtin.ReadersDeps{}, f.unserved()
@@ -123,6 +133,13 @@ func (s *switchedCode) RepoReaders() (builtin.ReadersDeps, error) {
 		return builtin.ReadersDeps{}, engine.ErrCodeNotHosted
 	}
 	return s.fixedCode.RepoReaders()
+}
+
+func (s *switchedCode) CheckLogs() (queries.CheckLogs, error) {
+	if !s.present.Load() {
+		return nil, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.CheckLogs()
 }
 
 func (s *switchedCode) GitReads() (api.GitReader, error) {
@@ -455,13 +472,20 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				a := code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
 					RepoRef: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main",
 						Visibility: code.VisibilityCompany}}}}
-				if q.Kind == code.ReadCommit {
+				switch q.Kind {
+				case code.ReadCommit:
 					a.Commit = &code.CommitChanges{Commit: q.Commit}
+				case code.ReadCheck:
+					// A FAILED ATTEMPT, so its log has a page to answer.
+					a.Check = &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{
+						RepoID: fakeRepoID, OID: fakeCommit, Target: "refs/heads/main", Name: "unit",
+						Attempt: 1}, State: code.CheckStateFailed},
+						Log: &code.CheckLog{Object: fakeLogKey, Size: int64(len(fakeLog))}}
 				}
 				return a, nil
 			}}
 			a := codeApp(t, tc.roles, fixedCode{git: fakeGitRoutes{}, reads: reads,
-				readers: readersOn(t, &fakeRepoReaders{})})
+				readers: readersOn(t, &fakeRepoReaders{}), logs: fakeLogs{}})
 			for _, what := range a.Queries().Names() {
 				if strings.HasPrefix(what, "code_") && !held(what) {
 					t.Errorf("this node answers the code question %q, which no path here holds", what)
@@ -489,10 +513,13 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			for _, q := range codeQuestions {
 				path := strings.Replace(strings.TrimPrefix(q.route, "GET "), "{name}", "web", 1)
 				path = strings.Replace(strings.Replace(path, "{n}", "1", 1), "{sha}", fakeCommit, 1)
-				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, which every other
-				// question reads past as no parameter of its own.
-				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod",
-					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod"} {
+				path = strings.NewReplacer("{oid}", fakeCommit, "{check}", "unit", "{attempt}", "1").Replace(path)
+				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, and the branch an
+				// attempt was checked for, which every other question reads
+				// past as no parameter of its own.
+				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main",
+					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod" +
+						"&oid=" + fakeCommit + "&check=unit&attempt=1&target=refs/heads/main"} {
 					before := len(reads.queries())
 					if rec := ask(t, a, http.MethodGet, at, true); rec.Code != http.StatusOK {
 						t.Errorf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
@@ -523,10 +550,11 @@ type codeQuestion struct {
 	repo        string
 }
 
-// codeQuestions are the eight: the three rows, who read a unit's repository,
-// which reads the repository's row by name before its readers, and a change's
-// four — the changes, one change (its revisions with its detail, asked of no
-// part), whom its records reached and one reviewer's reviews.
+// codeQuestions are every code question: the three rows, who read a unit's
+// repository, which reads the repository's row by name before its readers,
+// a change's four — the changes, one change (its revisions with its detail,
+// asked of no part), whom its records reached and one reviewer's reviews — a
+// repository's content, and its merge queues and its checks.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /code/repos", code.ReadRepos, ""},
 	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web"},
@@ -547,6 +575,28 @@ var codeQuestions = []codeQuestion{
 	{"code_diff", "GET /code/repos/{name}/diff", code.ReadRepo, "web"},
 	{"code_compare", "GET /code/repos/{name}/compare", code.ReadRepo, "web"},
 	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web"},
+	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
+	// across repositories where the route names none, one attempt whole, and
+	// a page of its log, read after the attempt that names it.
+	{"code_queue", "GET /code/queue", code.ReadQueue, ""},
+	{"code_checks", "GET /code/checks", code.ReadChecks, ""},
+	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web"},
+	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web"},
+}
+
+// fakeLog is the one log fakeLogs holds, under fakeLogKey.
+const fakeLog = "--- FAIL: TestUpload\n"
+
+// fakeLogKey is the object fakeLog is kept as.
+var fakeLogKey = objstore.KeyAt(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+
+// fakeLogs is an object store holding fakeLog under every key: a page of it
+// is what a log question answers.
+type fakeLogs struct{}
+
+func (fakeLogs) ReadAt(_ context.Context, _ objstore.Object, off, n int64) ([]byte, error) {
+	end := min(off+n, int64(len(fakeLog)))
+	return []byte(fakeLog[off:end]), nil
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the

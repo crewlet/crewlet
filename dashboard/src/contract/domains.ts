@@ -63,6 +63,10 @@ export const SESSION_QUERIES = {
     "code_diff",
     "code_compare",
     "code_commit",
+    "code_queue",
+    "code_checks",
+    "code_check",
+    "code_check_log",
     "inbox",
   ],
 } as const;

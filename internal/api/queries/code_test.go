@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -44,9 +46,55 @@ type stubCode struct {
 	resolved  []code.RefQuery
 	preview   func(code.MergePreviewQuery) (code.MergePreviewAnswer, error)
 	previewed []code.MergePreviewQuery
-	// sourced counts the asks of the source itself: CodeReads and
-	// RepoReaders.
+	// logs is the object store a check's log is read from: its bytes stand
+	// for every object, each page asked recorded in paged; stubLog where it
+	// is nil.
+	logs  []byte
+	paged []logPageAsk
+	// sourced counts the asks of the source itself: CodeReads, RepoReaders
+	// and CheckLogs.
 	sourced int
+}
+
+// logPageAsk is one page of a log the stub's object store was asked for.
+type logPageAsk struct {
+	object    objstore.Object
+	off, size int64
+}
+
+// stubLog is the log the stub keeps where a case names none.
+const stubLog = "--- FAIL: TestUpload (0.01s)\n    upload_test.go:12: no\n"
+
+// stubLogKey is the object every attempt the stub answers keeps its log as.
+var stubLogKey = objstore.KeyAt(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+
+// CheckLogs is the stub's object store, on CodeReads' terms.
+func (s *stubCode) CheckLogs() (queries.CheckLogs, error) {
+	s.sourced++
+	if s.unserved != nil {
+		return nil, s.unserved
+	}
+	return s, nil
+}
+
+// ReadAt is a page of the stub's log, whatever object is named.
+func (s *stubCode) ReadAt(_ context.Context, o objstore.Object, off, n int64) ([]byte, error) {
+	s.paged = append(s.paged, logPageAsk{object: o, off: off, size: n})
+	log := s.logs
+	if log == nil {
+		log = []byte(stubLog)
+	}
+	end := min(off+n, int64(len(log)))
+	return append([]byte(nil), log[off:end]...), nil
+}
+
+// stubCheck is the attempt the stub answers a check read with: a failed run
+// of the attempt q names, keeping a log of size bytes as stubLogKey.
+func stubCheck(q code.ReadQuery, size int64) *code.CheckDetail {
+	c := q.Checks
+	return &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: stubRepoID, OID: c.OID,
+		Target: c.Target, Name: c.Name, Attempt: c.Attempt}, State: code.CheckStateFailed},
+		Log: &code.CheckLog{Object: stubLogKey, Hash: objstore.Hash("sha256:stub"), Size: size}}
 }
 
 // stubReaders is the usage domain's readers of a repository: an empty page,
@@ -105,6 +153,12 @@ func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 		a.Repo, a.Commit = stubRepo(q.Repo), &code.CommitChanges{Commit: q.Commit}
 	case code.ReadInbox:
 		a.Inbox = &code.InboxPage{Handle: q.Inbox.Handle}
+	case code.ReadCheck:
+		size := int64(len(stubLog))
+		if s.logs != nil {
+			size = int64(len(s.logs))
+		}
+		a.Check = stubCheck(q, size)
 	}
 	return a, nil
 }
@@ -179,6 +233,12 @@ var codeQuestions = []struct {
 	{"code_change_routing", code.ReadChangeRouting, map[string]any{"name": "web", "change": "1"}},
 	{"code_reviews", code.ReadReviews, map[string]any{"reviewer": "dev"}},
 	{"code_refs", code.ReadRefs, map[string]any{"name": "web"}},
+	{"code_queue", code.ReadQueue, map[string]any{"repo": "web", "target": "refs/heads/main"}},
+	{"code_checks", code.ReadChecks, map[string]any{"name": "unit", "state": "failed"}},
+	{"code_check", code.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"}},
+	{"code_check_log", code.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"}},
 }
 
 // A CODE QUESTION HANDS THE READER THE CALLER'S WHOLE FRESHNESS: the level,
@@ -323,6 +383,19 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 			if !errors.As(err, &missing) || missing.Reason != queries.ReasonNotDeclared ||
 				missing.Detail != queries.RepoNotDeclared(repo) || !errors.Is(err, queries.ErrNotFound) {
 				t.Errorf("answered %v, want not_found (not_declared) naming the repository", err)
+			}
+		}},
+		// AN ATTEMPT THE REPOSITORY HOLDS NO ROW OF is not_found
+		// `no_check`, carrying the reader's sentence: the reason a screen
+		// tells "never queued, or past its thirty days" from a repository
+		// that is not declared.
+		{"no such attempt", fmt.Errorf("%w: unit's attempt 3 of %s for refs/heads/main", code.ErrCheckNotFound,
+			stubOID), func(t *testing.T, _ string, err error) {
+			t.Helper()
+			var missing *queries.NotFound
+			if !errors.As(err, &missing) || missing.Reason != queries.ReasonNoCheck ||
+				!strings.Contains(missing.Detail, "unit's attempt 3") || !errors.Is(err, queries.ErrNotFound) {
+				t.Errorf("answered %v, want not_found (no_check) carrying the reader's sentence", err)
 			}
 		}},
 		{"not permitted here", fmt.Errorf("%w: %s", code.ErrNotPermitted, shutOut), notPermitted},

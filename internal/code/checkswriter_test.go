@@ -965,6 +965,103 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	}
 }
 
+// THE CHECKS LISTING IS HELD TO THE GRANT, NARROWED OR NOT. Of three
+// repositories — sales-private and plat-private at `visibility: unit`,
+// platform at `company` — each holding a failed `unit` and a passed `lint`,
+// a seat's window lists exactly the attempts of the repositories its grant
+// reads, newest ended first, and a narrowing by state or by a check's name
+// keeps fewer of those, never one of another repository; a person's lists
+// every repository's. A page is the rows it READ: one the grant and the
+// narrowing kept nothing of still names where the next starts, so a listing a
+// row at a time reaches every kept row. A repository's own listing narrowed
+// by state keeps that state's, and one of a repository the grant shuts out is
+// refused not_permitted, however narrow — and a state that is no check's is
+// refused before anything is read.
+//
+// Mutations: keep a window's row by the narrowing alone (checksWindow
+// dropping `listed`) → vp-sales lists plat-private's unit, red; ignore the
+// narrowing on a repository's listing (pageChecks kept everything there) →
+// sales-private's passed listing holds its failed unit, red; name the next
+// page after the last KEPT row → the one-row listing stops at its first empty
+// page, before sales-private's unit, red.
+func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
+	t.Parallel()
+	n, ids := grantedChanges(t)
+	w, _, _, _ := checksWriterOn(t, n)
+	ctx := t.Context()
+	repoOf := map[string]string{}
+	minute := 0
+	for _, repo := range []string{"sales-private", "plat-private", "platform"} {
+		repoOf[ids[repo]] = repo
+		for _, c := range []struct {
+			name  string
+			state code.CheckState
+		}{{"unit", code.CheckStateFailed}, {"lint", code.CheckStatePassed}} {
+			key := code.CheckKey{RepoID: ids[repo], OID: oidOf("B"), Target: mainRef, Name: c.name, Attempt: 1}
+			minute++
+			end := ending(key, c.state, code.CheckReasonExit)
+			end.Finished.FinishedAt = harnessAt.Add(time.Duration(minute) * time.Minute)
+			for _, r := range []code.ChecksRequest{queueing(key, code.QueueDispatch), claiming(key, "git-a", ""),
+				end} {
+				res, err := w.Publish(ctx, r)
+				requireChecked(t, repo+"'s "+c.name, res, err)
+			}
+		}
+	}
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	list := func(q code.ReadQuery) ([]string, error) {
+		t.Helper()
+		q.Kind, q.Fresh = code.ReadChecks, stale
+		var all []string
+		for {
+			got, err := n.reader.Read(ctx, q)
+			if err != nil {
+				return all, err
+			}
+			for _, row := range got.Checks {
+				all = append(all, repoOf[row.RepoID]+"/"+row.Name)
+			}
+			if got.Next == "" {
+				return all, nil
+			}
+			q.Cursor = got.Next
+		}
+	}
+	window := func(c code.CheckQuery) *code.CheckQuery { c.Since = harnessAt; return &c }
+	for _, tc := range []struct {
+		name string
+		q    code.ReadQuery
+		want []string
+	}{
+		{"vp-sales's failed window", code.ReadQuery{Asker: agent("vp-sales"),
+			Checks: window(code.CheckQuery{State: code.CheckStateFailed})},
+			[]string{"platform/unit", "sales-private/unit"}},
+		{"vp-sales's unit window, a row a page", code.ReadQuery{Asker: agent("vp-sales"), Limit: 1,
+			Checks: window(code.CheckQuery{Name: "unit"})}, []string{"platform/unit", "sales-private/unit"}},
+		{"dev's lint window", code.ReadQuery{Asker: agent("dev"), Checks: window(code.CheckQuery{Name: "lint"})},
+			[]string{"platform/lint", "plat-private/lint"}},
+		{"vp-sales's whole window", code.ReadQuery{Asker: agent("vp-sales"), Checks: window(code.CheckQuery{})},
+			[]string{"platform/lint", "platform/unit", "sales-private/lint", "sales-private/unit"}},
+		{"a person's failed window", code.ReadQuery{Asker: ada,
+			Checks: window(code.CheckQuery{State: code.CheckStateFailed})},
+			[]string{"platform/unit", "plat-private/unit", "sales-private/unit"}},
+		{"vp-sales's passed in sales-private", code.ReadQuery{Asker: agent("vp-sales"), Repo: "sales-private",
+			Checks: &code.CheckQuery{State: code.CheckStatePassed}}, []string{"sales-private/lint"}},
+	} {
+		if got, err := list(tc.q); err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s listed (%v, %v), want %v", tc.name, got, err, tc.want)
+		}
+	}
+	if got, err := list(code.ReadQuery{Asker: agent("vp-sales"), Repo: "plat-private",
+		Checks: &code.CheckQuery{State: code.CheckStateFailed}}); !errors.Is(err, code.ErrNotPermitted) {
+		t.Errorf("vp-sales's failed listing of plat-private = (%v, %v), want code.ErrNotPermitted", got, err)
+	}
+	if _, err := list(code.ReadQuery{Asker: ada, Checks: window(code.CheckQuery{State: "green"})}); !errors.Is(err,
+		code.ErrInvalid) {
+		t.Errorf("a window narrowed by a state that is no check's = %v, want code.ErrInvalid", err)
+	}
+}
+
 // THE BACKLOG COUNTS EACH QUEUED CHECK AT ITS OWN TIMEOUT: of three attempts
 // queued at one instant — a check given a minute to run, one given ten, and
 // one given a minute that a runner has claimed since — the reading two

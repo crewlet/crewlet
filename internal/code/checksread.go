@@ -31,7 +31,9 @@ import (
 //     ended at or after a moment, newest ended first (code_checks_recent_idx),
 //     each kept only where its repository is one the asker reads, so a page
 //     is the rows it READ and may be short, as a listing of changes across
-//     repositories is.
+//     repositories is. Every shape takes a check's name and a state as
+//     NARROWINGS, tested on the rows a page read beside the grant
+//     ([CheckQuery.State]): the dashboard's Checks section's facets.
 //   - `check` ([ReadCheck]) is one attempt whole: the row, the definition it
 //     ran under, its tail, the failures its ending named, and the log a
 //     failed run kept.
@@ -196,6 +198,9 @@ func (q ReadQuery) validateChecks() error {
 			return refused("checks.change", "a check read names its attempt by its commit, never a change")
 		case !c.Since.IsZero():
 			return refused("checks.since", "only a window of checks is bounded by a moment")
+		case c.State != "":
+			return refused("checks.state", "a check read names one attempt, whatever its state; a listing of "+
+				"checks is narrowed by one")
 		case q.Cursor != "" || q.Limit != 0:
 			return refused("limit", "one attempt is read whole, never paged")
 		case !gitref.ValidOID(c.OID) || c.OID == ZeroOID:
@@ -218,8 +223,12 @@ func (q ReadQuery) validateChecks() error {
 	case c.Target != "":
 		return refused("checks.target", "a listing of checks names no branch: a change's are those checked "+
 			"for its own target, and a commit's those checked for every branch it was; a check read names one")
-	case c.Name != "" || c.Attempt != 0:
-		return refused("checks.name", "a listing of checks names no attempt; a check read reads one")
+	case c.Attempt != 0:
+		return refused("checks.attempt", "a listing of checks names no attempt; a check read reads one")
+	case c.Name != "" && !config.ValidCodeCheckName(c.Name):
+		return refused("checks.name", fmt.Sprintf("%q is not a check name", c.Name))
+	case c.State != "" && !c.State.Valid():
+		return refused("checks.state", fmt.Sprintf("%q is not one of %v", c.State, CheckStates()))
 	case c.Change < 0:
 		return refused("checks.change", fmt.Sprintf("%d is no change's number", c.Change))
 	case c.OID != "" && (!gitref.ValidOID(c.OID) || c.OID == ZeroOID):
@@ -612,7 +621,7 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
 	}
-	r.pageChecks(scanned, nil, limit, cursor, out)
+	r.pageChecks(scanned, c.keeps, limit, cursor, out)
 	return nil
 }
 
@@ -655,8 +664,8 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	if err != nil {
 		return err
 	}
-	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok }, limit,
-		windowCursor, out)
+	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok && c.keeps(row) },
+		limit, windowCursor, out)
 	return nil
 }
 
@@ -673,8 +682,9 @@ func scanChecks(rows *sql.Rows) ([]CheckRow, error) {
 	return out, rows.Err()
 }
 
-// pageChecks files the rows a listing READ into out — those keep keeps, every
-// one where it is nil — until the page's byte budget, and names where the
+// pageChecks files the rows a listing READ into out — those keep keeps: the
+// listing's narrowing ([CheckQuery.keeps]) and, on the window, the asker's
+// grant — until the page's byte budget, and names where the
 // next page resumes: after the last row it served where the budget ended it,
 // and after the last row it READ where it read a whole page, so a page the
 // grant kept little of still advances.
@@ -683,7 +693,7 @@ func (r *Reader) pageChecks(scanned []CheckRow, keep func(CheckRow) bool, limit 
 
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range scanned {
-		if keep != nil && !keep(row) {
+		if !keep(row) {
 			continue
 		}
 		out.Checks = append(out.Checks, row)

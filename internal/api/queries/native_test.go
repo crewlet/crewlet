@@ -1606,6 +1606,24 @@ var sessionQuestions = []sessionQuestion{
 	{"code_commit", []string{"code"}, map[string]any{"name": "web", "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
 		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	// AND ITS MERGE QUEUES AND ITS CHECKS (codechecks.go): a screen's merge,
+	// enqueue or re-run is read back at the code log's floor — the attempt
+	// whose log a page reads included, so a re-run's new attempt is never
+	// answered "no such attempt" from before it applied.
+	{"code_queue", []string{"code"}, map[string]any{"repo": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_checks", []string{"code"}, map[string]any{"repo": "web", "state": "failed"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_check", []string{"code"}, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_check_log", []string{"code"}, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
+		"attempt": "1", "target": "refs/heads/main"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
 	// THE COMPOSED INBOX: the tracker's notices and the code host's, each
 	// half at the floor of its own log, so a "mark all read" that wrote a
 	// record on each is read back past both (inbox.go).

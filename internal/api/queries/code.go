@@ -27,7 +27,9 @@ import (
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
 // `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
 // `code_compare` and `code_commit`, decided per repository alike — the git
-// node that answers judges the grant again.
+// node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
+// (codechecks.go): `code_queue`, `code_checks`, `code_check` and
+// `code_check_log`, decided per repository alike.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -123,6 +125,12 @@ type CodeSource interface {
 	// is cut on — or why this node serves none, on CodeReads' terms and in
 	// the same vocabulary: the readers stand with the code reads.
 	RepoReaders() (builtin.ReadersDeps, error)
+
+	// CheckLogs is the object store a failed check's log is read from
+	// (codechecks.go), or why this node serves none, on CodeReads' terms
+	// and in the same vocabulary: a check's log stands with the rows that
+	// name it.
+	CheckLogs() (CheckLogs, error)
 }
 
 // codeRead is the answer to one kind of code question.
@@ -200,6 +208,29 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), code.Need(p.String("needs"))
 	case code.ReadReviews:
 		q.Reviewer = p.String("reviewer")
+	case code.ReadQueue:
+		// A QUEUE NAMES ITS REPOSITORY AS A FILTER, as a listing of changes
+		// does — every repository the asker reads where it names none — and
+		// one of its branches' queues beside it, in full (refs/heads/main),
+		// the reader's to refuse where it is no branch a change may name.
+		q.Repo, q.Target = p.String("repo"), strings.TrimSpace(p.String("target"))
+	case code.ReadChecks:
+		q.Repo = p.String("repo")
+		checks, err := checksListing(p)
+		if err != nil {
+			return code.ReadQuery{}, err
+		}
+		q.Checks = checks
+	case code.ReadCheck:
+		// ONE ATTEMPT IS THE PATH'S — its repository, its commit, its check
+		// and its attempt — beside the branch it was checked for, which a
+		// path cannot carry (codechecks.go).
+		q.Repo = p.String("name")
+		attempt, err := checkAttempt(p)
+		if err != nil {
+			return code.ReadQuery{}, err
+		}
+		q.Checks = attempt
 	default:
 		q.Repo = p.String("name")
 	}
@@ -264,7 +295,8 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 
 // codeRefusal is a code read's failure in this surface's ONE vocabulary: a
 // repository that is not declared is [NotFound] (`not_declared`), naming it,
-// and so is a change it holds no such number of (`no_change`), a ref no live
+// and so is a change it holds no such number of (`no_change`), an attempt of
+// a check it holds no row of (`no_check`), a ref no live
 // ref holds (`no_ref`) and an object or a path a revision does not hold
 // (`no_object`); no git node able to answer now is [ErrUnavailable];
 // a repository the asker's grant does not cover is [NotPermitted] with the
@@ -283,6 +315,8 @@ func codeRefusal(repo string, err error) error {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		return &NotFound{Reason: ReasonNotDeclared, Detail: RepoNotDeclared(repo)}
+	case errors.Is(err, code.ErrCheckNotFound):
+		return &NotFound{Reason: ReasonNoCheck, Detail: refusalSentence(err, code.ErrCheckNotFound)}
 	case errors.Is(err, code.ErrChangeNotFound):
 		return &NotFound{Reason: ReasonNoChange, Detail: fmt.Sprintf("repository %q holds no change %s", repo,
 			refusalSentence(err, code.ErrChangeNotFound))}
@@ -385,8 +419,9 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 }
 
 // registerCode registers the code questions over s.Code — see the file's
-// doc, codechange.go's for a change's and codegit.go's for a repository's
-// content, for what each answers and why each is decided by the verb it is.
+// doc, codechange.go's for a change's, codegit.go's for a repository's
+// content and codechecks.go's for its merge queues and its checks, for what
+// each answers and why each is decided by the verb it is.
 func registerCode(r *Registry, s Sources) {
 	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
 	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
@@ -405,4 +440,8 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_diff", DecidedBy(authz.ActionCodeRead), s.codeDiff)
 	r.Register("code_compare", DecidedBy(authz.ActionCodeRead), s.codeCompare)
 	r.Register("code_commit", DecidedBy(authz.ActionCodeRead), s.codeCommit)
+	r.Register("code_queue", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadQueue, "code_queue"))
+	r.Register("code_checks", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadChecks, "code_checks"))
+	r.Register("code_check", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadCheck, "code_check"))
+	r.Register("code_check_log", DecidedBy(authz.ActionCodeRead), s.codeCheckLog)
 }
