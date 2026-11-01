@@ -51,9 +51,13 @@ func TestTheStandingInstructionsReachClaudeCodeOnItsAppendChannel(t *testing.T) 
 	if i := strings.Index(system, p.Findings()); i < len(seatSystem) {
 		t.Errorf("the report instruction is missing or precedes the seat's text:\n%s", system)
 	}
-	// As the path survives the wrapper's own quoting of the whole command.
-	if want := `--append-system-prompt-file '\''` + p.System() + `'\''`; !strings.Contains(script, want) {
-		t.Errorf("the harness is not pointed at the system text (%s):\n%s", want, script)
+	// The flag, then the path, through however many quotings the command
+	// arrives under: the wrapper's of the whole command, and the run script's
+	// of its own.
+	const flag = "--append-system-prompt-file "
+	at := strings.Index(script, flag)
+	if at < 0 || !strings.HasPrefix(strings.TrimLeft(script[at+len(flag):], `'\`), p.System()) {
+		t.Errorf("the harness is not pointed at the system text (%s%s):\n%s", flag, p.System(), script)
 	}
 	if strings.Contains(script, "SEAT-IDENTITY-MARKER") || strings.Contains(script, "Before you finish") {
 		t.Errorf("standing instructions ride the prompt the harness runs:\n%s", script)

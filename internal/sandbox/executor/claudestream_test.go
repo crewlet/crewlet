@@ -322,7 +322,9 @@ func TestTheWrapperCopiesTheResultLineAfterTheHarnessExits(t *testing.T) {
 	// The script reaches the box single-quoted inside `sh -lc`, so its own
 	// quotes arrive escaped; the order is what is asserted.
 	script := lastBackground(t, b)
-	exited := strings.Index(script, "code=$?")
+	// THE WRAPPER'S OWN status read, the last: the run's script reads its own
+	// first, to pack the harness's session before it exits with that status.
+	exited := strings.LastIndex(script, "code=$?")
 	copied := strings.Index(script, "tail -n 1 ")
 	recorded := strings.Index(script, "echo $code > ")
 	if exited < 0 || copied < exited || recorded < copied {
