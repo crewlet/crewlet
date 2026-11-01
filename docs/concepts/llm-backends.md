@@ -749,7 +749,16 @@ own, outside any delivery: **one probe for every seat parked on the same
 entries**, never one per seat. A limit that still holds arms the probe again for
 the next instant and touches nothing on any inbox, however long the limit
 lasts, and an answer lifts every park on the chain (`seat_provider_released`),
-after which each seat's messages are delivered once, in order. A probe is a full
+after which each seat's messages are delivered once, in order. A probe whose
+entries refuse while naming a next try that has already passed waits a minute
+(the shortest window an entry sits out) rather than asking again at once, and
+logs `seat_provider_probe_retry_past`. Each park, renewal and release is
+published once per change: a renewal that names what the last one named is not
+published again. While the broker refuses, the engine keeps each seat's newest
+notice and retries on a backoff from one second to thirty, logging
+`seat_provider_park_notices_held` when the outage starts and
+`seat_provider_park_notices_published` when the notices land. The parks
+themselves hold whether or not the broker is up. A probe is a full
 run of the entry's CLI, so it costs what the CLI's smallest request costs (its
 own fixed overhead, which the one-word prompt does not shrink), not what the
 prompt costs; it is charged to the parked seat it runs as (the one that sorts

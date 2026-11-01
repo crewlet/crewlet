@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -554,6 +555,24 @@ func (e *Engine) probeLimit(ctx context.Context, key probeKey, probe *limitProbe
 		return
 	}
 	if limit, limited := chain.Limited(err); limited {
+		// THE NEXT CALL IS STILL TO COME. A chain that refused while naming
+		// an instant already past cannot say when its members are tried
+		// again, and a probe armed for that instant is due at once: it
+		// asked, was refused and asked again as fast as the call returned,
+		// each pass renewing every seat's park. That is what a host that
+		// slept inside a window did, its entries refusing on the monotonic
+		// clock while naming an end already past on the wall clock
+		// (harness's onTheWall). So such a probe waits the shortest window
+		// any entry sits out, and says so once per renewal.
+		if now := e.now(); !limit.RetryAt.After(now) {
+			log.WarnContext(settle, "seat_provider_probe_retry_past",
+				"providers", strings.Join(limit.Keys, ","), "retry_at", rfc3339(limit.RetryAt),
+				"retry_in", harness.ShortestSitOut.String(),
+				"detail", "the probe met the limit again and its models named an instant "+
+					"already past for their next try; it asks again after the shortest "+
+					"window an entry sits out, rather than at once")
+			limit.RetryAt = now.Add(harness.ShortestSitOut)
+		}
 		p := &e.limitProbes
 		p.mu.Lock()
 		current := !p.stopped && p.probes[key] == probe
@@ -903,10 +922,15 @@ func (e *Engine) stopProviderParks() {
 	}
 	p.mu.Unlock()
 	p.asking.Wait()
+	// AFTER THE PROBES, whose settling posts notices: what they held is
+	// dropped with the node's seats.
+	e.parkNotices.stop()
 }
 
 // publishProviderPark announces a provider park or its release for handle's
-// seat, best effort: the park holds whether or not a screen hears of it.
+// seat through [parkNotices]: once per change, and held and retried on a
+// backoff while the broker refuses. The park holds whether or not a screen
+// hears of it.
 func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload events.Payload) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
@@ -931,10 +955,12 @@ func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload
 		return
 	}
 	ev.Source = role.Name
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.WarnContext(ctx, "seat_provider_park_not_published", "type", ev.Type,
-			"seat", handle, "error", err)
-	}
+	e.parkNotices.post(ctx, e.publishParkNotice, handle, ev)
+}
+
+// publishParkNotice hands one park notice to the broker.
+func (e *Engine) publishParkNotice(ctx context.Context, ev *events.Event) error {
+	return e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev)
 }
 
 // parkedByEntry is every seat this node holds parked on a limited chain, under
