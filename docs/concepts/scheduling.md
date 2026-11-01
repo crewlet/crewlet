@@ -255,7 +255,9 @@ record** of what it dispatched, which is what the dashboard reads and what
 the retention sweep purges. It is the same split the token counter made
 when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
-`outcome` is `fired`, `skipped_catchup` or `skipped_paused`; the downstream turn result
+`outcome` is `fired`, `skipped_catchup` or `skipped_paused`, and the schedule's
+history reports a fired run its seat did not run as `skipped_superseded`
+(see *Fires that wait in a seat's inbox* below); the downstream turn result
 (done, failed or timed out) lives in the normal turn telemetry
 (`agent_turn_completed`, and `turn.guard_breach` when a guard fired) under
 the same trace, because every fire starts a trace of its own and the turn
@@ -275,6 +277,25 @@ period, clamped to `[catchup_min_seconds, catchup_max_seconds]`* (default
 120s–7200s). Older misses are never backfilled; a missed fire outside the
 window is recorded as `skipped_catchup` for audit. Set `catchup: false` on
 a schedule to opt out entirely.
+
+### Fires that wait in a seat's inbox
+
+A fire is sent to its runner's inbox as soon as it comes due, and a seat that
+cannot work right then (parked on a provider's usage limit, on its budget, or
+held by one of its executors) keeps its inbox held, so the fire waits there.
+A schedule that keeps firing meanwhile queues one fire per tick behind the
+same hold.
+
+Every fire of one schedule shares one inbox partition, so the fires that
+waited reach the seat together, and the seat runs **only the latest** of
+them. That run's brief says how many earlier fires it stands for and when
+they were due, so the seat does the duty once, as of now. Each earlier fire is
+recorded as `scheduled_fire_superseded` under its own trace, and the
+schedule's history shows it as `skipped_superseded` beside the run that took
+its place.
+
+A person's pause is different: a paused seat's fires are not sent at all
+(below), so nothing waits for the resume.
 
 ### A paused seat's fires are skipped
 

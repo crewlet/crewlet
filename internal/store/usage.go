@@ -236,7 +236,7 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the six records a day is derived from, taken from their
+// usageEventTypes are the seven records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions, the
 // collected launches and the auxiliary records the spend is summed from, the
 // completions a turn's figures are read off, the turn's SUMMARY record
@@ -251,6 +251,11 @@ type UsageMark struct {
 // is read off its records ([DB.usageLegacyTurns]), whether it failed off the
 // summary, and a summary row that lands in a later custody batch than its
 // turn's end must move the fingerprint — and the settle's mark — when it does.
+// The superseded fire's record is the seventh, for the auxiliary record's
+// reason: it is what turns a fire's outcome from fired into skipped
+// ([DB.usageSchedules]), it lands when the seat's node merges the fires (long
+// after the scheduler wrote its row), and a day whose only change was that
+// record would otherwise never be derived again.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
@@ -259,6 +264,7 @@ func usageEventTypes() []any {
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
+		types.ScheduledFireSuperseded{}.EventType(),
 	}
 }
 
@@ -1093,6 +1099,11 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
+// scheduleOutcomeFired is the dispatch ledger's word for a fire it sent
+// (schedule.OutcomeFired). Spelled here because the scheduler's package
+// depends on this one; the ledger's contract suite holds the word.
+const scheduleOutcomeFired = "fired"
+
 // usageSchedules reads the fires this node's scheduler recorded in the window.
 //
 // THE TURN IS FOUND BY THE TRACE, and only where this node ran it: a fire is
@@ -1111,10 +1122,22 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 // day following — a record published in between may carry a label a later one
 // drops. A kept settle never moves it: the rows were already read while in
 // flight.
+//
+// AND A FIRE THE SEAT DID NOT RUN IS FOUND THE SAME WAY, as a label off its
+// own trace: a fire the seat's node superseded with a later one of the same
+// schedule carries a [types.ScheduledFireSuperseded] record under its trace,
+// and reads as [types.ScheduleOutcomeSuperseded] rather than as a dispatch
+// with no turn behind it. Only a FIRED row can be superseded; a skip was
+// never sent.
 func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT r.scope_type, r.scope_id, r.schedule_name, r.target_handle,
-		       r.fired_at, r.outcome, r.trace_id,
+		       r.fired_at,
+		       CASE WHEN r.outcome = ? AND r.trace_id != '' AND EXISTS (
+		                SELECT 1 FROM crewlet_events s
+		                 WHERE s.trace_id = r.trace_id AND s.event_type = ?)
+		            THEN ? ELSE r.outcome END,
+		       r.trace_id,
 		       COALESCE((SELECT e.turn_id FROM crewlet_events e
 		                  WHERE r.trace_id != '' AND e.trace_id = r.trace_id
 		                    AND e.turn_id != ''
@@ -1122,7 +1145,8 @@ func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule
 		  FROM scheduled_runs r
 		 WHERE r.fired_at >= ? AND r.fired_at < ?
 		 ORDER BY r.scope_type, r.scope_id, r.schedule_name, r.fired_at, r.target_handle`,
-		EncodeTime(w.Start), EncodeTime(w.End))
+		scheduleOutcomeFired, types.ScheduledFireSuperseded{}.EventType(),
+		types.ScheduleOutcomeSuperseded, EncodeTime(w.Start), EncodeTime(w.End))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the usage day's schedule fires: %w", err)
 	}
