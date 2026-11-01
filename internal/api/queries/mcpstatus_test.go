@@ -40,6 +40,7 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-github"]
   - name: linear
     transport: http
+    description: Reads and files Linear issues
     url: https://mcp.example.com
     headers:
       Authorization: Bearer literal-linear-secret
@@ -334,6 +335,57 @@ func TestAServerOnlyANodeReportsIsListedAsUnconfigured(t *testing.T) {
 	row := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "retired")
 	if row.Configured || row.State != queries.MCPRunning || !row.Shared {
 		t.Errorf("retired = %+v, want a running server the configuration does not carry", row)
+	}
+}
+
+// A SERVER TURNED OFF IS DISABLED, decided before anything a node reports: a
+// node still on the revision before it, running the server, shows that in its
+// own cell, and the row reads as the configuration's decision rather than as a
+// server that runs. One that runs says so, and each row carries the
+// description its prompt line does.
+func TestAServerTurnedOffIsDisabledWhateverANodeStillRuns(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: docs
+    enabled: false
+    description: Searches the engineering handbook
+    command: docs-mcp
+  - name: search
+    command: search-mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Started: 1, Tools: 4},
+			{Server: "search", Shared: true, Started: 1, Tools: 2},
+		},
+	})
+	got := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+
+	docs := serverRow(t, got, "docs")
+	if docs.State != queries.MCPDisabled || docs.Enabled {
+		t.Errorf("docs = %s, enabled %v; want disabled, whatever node-a still runs", docs.State, docs.Enabled)
+	}
+	if docs.Description != "Searches the engineering handbook" {
+		t.Errorf("docs carries the description %q", docs.Description)
+	}
+	if cell := docs.Nodes[0]; cell.Started != 1 {
+		t.Errorf("node-a's cell = %+v: the node still running it is not shown", cell)
+	}
+	if search := serverRow(t, got, "search"); search.State != queries.MCPRunning || !search.Enabled {
+		t.Errorf("search = %s, enabled %v; want running and enabled", search.State, search.Enabled)
+	}
+
+	// ON A FLEET THAT HAS NOT SAID, the configuration still has: a server
+	// turned off is disabled rather than unreported.
+	silent := askMCPStatus(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg)})
+	if docs := serverRow(t, silent, "docs"); docs.State != queries.MCPDisabled {
+		t.Errorf("with no node reporting, docs = %s, want disabled", docs.State)
 	}
 }
 

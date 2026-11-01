@@ -1846,7 +1846,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // Only the servers role.sandbox.mcp.servers names — never the seat's whole MCP
 // surface by default. A coding agent inside a box reaches whatever it is given
 // with no per-tool control left, so what it is given is the decision, and it
-// is made here rather than inherited.
+// is made here rather than inherited. And never one the company has turned off
+// ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
+// day it is turned back on, and gives the box nothing until then.
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1897,6 +1899,17 @@ func sandboxMCP(
 			// LEFT IN THE SCOPE, so the renderer says what it says of a
 			// name the company declares no server under.
 			scoped = append(scoped, name)
+			continue
+		}
+		if !server.IsEnabled() {
+			// OUT OF THE SCOPE TOO, unlike an unknown name: the renderer
+			// would report one the company declares no server under, and
+			// this one is declared and turned off. Not resolved either,
+			// since a value it would need is nobody's concern while off.
+			log.Info("sandbox_mcp_server_off", "seat", seat.Handle(), "server", name,
+				"detail", "the coding agent is not given this server: the company has "+
+					"turned it off, and a coding run launched once it is turned back on "+
+					"is given it")
 			continue
 		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)

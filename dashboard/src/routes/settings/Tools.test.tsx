@@ -91,6 +91,8 @@ const status: McpServersStatusAnswer = {
       name: "docs",
       configured: true,
       shared: true,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "docs-mcp",
       args: ["--read-only"],
@@ -144,6 +146,8 @@ const status: McpServersStatusAnswer = {
       name: "github",
       configured: true,
       shared: false,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
@@ -199,6 +203,8 @@ const status: McpServersStatusAnswer = {
       name: "notes",
       configured: true,
       shared: true,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "notes-mcp",
       args: [],
@@ -460,6 +466,8 @@ test("a server waiting for a provisioned credential names what it waits for, not
         name: "github",
         configured: true,
         shared: false,
+        enabled: true,
+        description: "",
         transport: "stdio",
         command: "npx",
         args: [],
@@ -562,6 +570,24 @@ test("the MCP tile counts the servers the engine reports, as the table does", as
   await settle();
   expect(screen.getByText("2 of 3 servers running")).toBeDefined();
   expect(screen.queryByText(/server\(s\)/)).toBeNull();
+});
+
+// A SERVER TURNED OFF READS AS OFF, in the engine's word, and is in neither
+// number on the tile: nobody expects it to run, and counted it read as a
+// server that should and does not.
+test("a server turned off reads Disabled and is left out of the tile's count", async () => {
+  const off: McpServersStatusAnswer = {
+    ...status,
+    servers: status.servers.map((s) =>
+      s.name === "docs" ? { ...s, enabled: false, state: "disabled", started: 0 } : s,
+    ),
+  };
+  mount(<Tools />, { answer: off });
+  await settle();
+  const docs = screen.getByText("Disabled").closest(".crewlet-data-grid__row") as HTMLElement;
+  expect(within(docs).getByText("docs")).toBeDefined();
+  expect(screen.getByText("1 of 2 servers running")).toBeDefined();
+  cleanup();
 });
 
 // A SERVER'S PAGE IS NOT AN EMPTY SEARCH. A row opens `servers/{name}`; for a

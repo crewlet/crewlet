@@ -41,13 +41,20 @@ test("a reach counts the agent seats the engine grants the server", () => {
   expect(reachOf({ name: "linear" }, granted)).toBe("No seat");
 });
 
+const up = (started: number, enabled = true) => ({ started, enabled });
+
 // UP MEANS AN INSTANCE STARTED, which `running` and `partial` both are.
 test("the servers line counts a server with any instance started", () => {
   expect(serversUpLine([])).toBe("0 of 0 servers running");
-  expect(serversUpLine([{ started: 0 }])).toBe("0 of 1 server running");
-  expect(serversUpLine([{ started: 2 }, { started: 1 }, { started: 0 }, { started: 0 }])).toBe(
-    "2 of 4 servers running",
-  );
+  expect(serversUpLine([up(0)])).toBe("0 of 1 server running");
+  expect(serversUpLine([up(2), up(1), up(0), up(0)])).toBe("2 of 4 servers running");
+});
+
+// A SERVER TURNED OFF IS NOT EXPECTED TO RUN, so it is left out of both counts
+// rather than read as one that is down.
+test("the servers line leaves out a server that is turned off", () => {
+  expect(serversUpLine([up(1), up(0, false)])).toBe("1 of 1 server running");
+  expect(serversUpLine([up(0, false)])).toBe("0 of 0 servers running");
 });
 
 const row = (key: string, value: string, optional = false): Pair => ({
