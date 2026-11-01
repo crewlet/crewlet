@@ -20,7 +20,7 @@ import (
 
 // servePollInterval is the wait between one answer of a serve lifecycle's poll
 // and the next poll ([harnessprofile.ServePoll]). Half a second because a poll is a
-// whole CLI launch — about 1.3s each for OpenCode 2.1's `api` — and the crewlet
+// whole harness launch — about 1.3s each for OpenCode 2.1's `api` — and the crewlet
 // server connected 1.3 to 3s after the server was listening (measured): a
 // shorter wait adds launches and no earlier start, a longer one adds up to its
 // own length to every run's start.
@@ -29,17 +29,17 @@ const servePollInterval = 500 * time.Millisecond
 // Why a serve lifecycle's start ended without the server up, as the cause of
 // the context it is waited for under.
 var (
-	errServerExited = errors.New("the CLI's server exited")
-	errServerSlow   = errors.New("the CLI's server was not up within timeout_seconds")
+	errServerExited = errors.New("the harness's server exited")
+	errServerSlow   = errors.New("the harness's server was not up within timeout_seconds")
 )
 
-// harnessServer is a serve-lifecycle CLI's own server for one run — see
+// harnessServer is a serve-lifecycle harness's own server for one run — see
 // [harnessprofile.Serve]: started in its own process group, read on stdout for the
 // values it prints once it is up, and stopped with its whole group.
 //
 // ITS STDOUT IS READ FOR THE READY VALUES AND KEPT NOWHERE: a server prints the
 // password it minted there, and its log lines name what it runs. Its stderr is
-// kept, capped, for a failure's detail, as a CLI's is.
+// kept, capped, for a failure's detail, as a harness's is.
 type harnessServer struct {
 	pgid  int
 	grace time.Duration
@@ -237,7 +237,7 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 	t.server = srv
 
 	// ONE STRETCH FOR THE START, of timeout_seconds: a server's start is
-	// the CLI's start, which the first stretch of a run lifecycle's CLI
+	// the harness's start, which the first stretch of a run lifecycle's harness
 	// covers too.
 	waitCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -344,17 +344,17 @@ func (t *toolRun) notUp(
 		return nil, false, p.confinementFailed(marker.line, t.server.stderr.String())
 	case errors.Is(cause, errServerExited):
 		return nil, false, p.fail(llm.KindServer, fmt.Errorf(
-			"the %s CLI's server exited %d before it was up%s", p.harness, t.server.exitCode, detail))
+			"the %s harness's server exited %d before it was up%s", p.harness, t.server.exitCode, detail))
 	case errors.Is(cause, errServerSlow):
 		why := "it did not print every value the profile's mcp.serve.ready waits for"
 		if last != "" {
 			why = "its poll last said: " + last
 		}
 		return nil, false, p.fail(llm.KindTimeout, fmt.Errorf(
-			"the %s CLI's server was not up within %s — %s%s", p.harness, p.timeout, why, detail))
+			"the %s harness's server was not up within %s — %s%s", p.harness, p.timeout, why, detail))
 	default:
 		return nil, false, p.fail(llm.KindTimeout, fmt.Errorf(
-			"the call ended while the %s CLI's server was starting: %w", p.harness, context.Cause(ctx)))
+			"the call ended while the %s harness's server was starting: %w", p.harness, context.Cause(ctx)))
 	}
 }
 

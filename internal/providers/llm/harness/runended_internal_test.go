@@ -9,8 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// shipped is an entry on the CLI's shipped profile — its own limit markers,
-// measured against the CLI — whose binary does not exist: nothing here runs it.
+// shipped is an entry on the harness's shipped profile — its own limit markers,
+// measured against the harness — whose binary does not exist: nothing here runs it.
 func shipped(t *testing.T, agent, model string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -33,10 +33,10 @@ const spentLine = `{"type":"result","subtype":"success","is_error":true,"api_err
 	`"result":"You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)"}`
 
 // AN EXECUTOR RUN THAT SPENT THE PLAN SITS ITS ENTRY OUT, ON THE VENDOR'S WORD
-// AND NOTHING ELSE. The run is the CLI's own, so nothing a call on this host reads ever
+// AND NOTHING ELSE. The run is the harness's own, so nothing a call on this host reads ever
 // saw its limit: the next launch on the entry — a reviewer's send-back an hour
 // into the same window — walked into the same spent plan. Read through the
-// same classification every call takes, by the profile each CLI ships with:
+// same classification every call takes, by the profile each harness ships with:
 // Claude Code's result line by its status first, then its report where its
 // answer should be, or in the error of a run it said failed; OpenCode's typed
 // failure event, whose payload the runner collects as the run's error. A

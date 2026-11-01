@@ -34,7 +34,7 @@ import (
 
 // The knob has three states and the manager's input carries a pointer for
 // exactly that reason. Getting this wrong is not visible as a config error: a
-// seat silently loses its checkout the moment a coding agent asks a question,
+// seat silently loses its checkout the moment a harness asks a question,
 // which is the case a paused box exists for.
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 	t.Parallel()
@@ -104,7 +104,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
 //
-// Under auth.mode api-key an entry signs its CLI in with one metered key, and
+// Under auth.mode api-key an entry signs its harness in with one metered key, and
 // a launch on that entry has to carry it: Claude Code in a box reads only
 // its environment, so a run that left the key behind started signed in to
 // nothing. Model and key are the epoch's resolution, the one its seats' own
@@ -193,12 +193,12 @@ roles:
 	}
 }
 
-// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
+// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN HARNESS.
 //
 // The run used to be handed a FAMILY instead — the profile's vendor — from
 // which OpenCode rebuilt `anthropic/<model>`. So an OpenCode executor ran its
 // box on a model its text calls never named, and no value of `model`
-// worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
+// worked for both. The model is resolved (a `${VAR}` reaches the harness as its
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
@@ -329,7 +329,7 @@ roles:
 
 // A BOX IS OFFERED EVERY FILE OF THE LOGIN, signed in or not: the map names
 // where the login is kept, and the box is seeded with whatever the login holds
-// when it is seeded — nothing at all for an entry nobody signed in, so the CLI
+// when it is seeded — nothing at all for an entry nobody signed in, so the harness
 // inside says its own plain "not authenticated" rather than failing on a file
 // that is not there. A map of only the files present when the run was
 // resolved named a login the shared directory may have moved past by the

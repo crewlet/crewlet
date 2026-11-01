@@ -122,9 +122,9 @@ func (g *geminiRecorder) end(script fakeScript, total fakeUsage, last string) in
 	return 0
 }
 
-// GEMINI CLI'S RUN IS READ FROM ITS OWN CHAT. Its output is one document at the
+// GEMINI HARNESS'S RUN IS READ FROM ITS OWN CHAT. Its output is one document at the
 // end, so each request is read from the chat it keeps under the home's tmp
-// directory, by the entry the CLI writes as each response arrives — and,
+// directory, by the entry the harness writes as each response arrives — and,
 // written again whole once the response's calls have run, read for its calls
 // without its prose twice. The chat is named after eight characters of the
 // session id, so it is told from a concurrent run's in another project's
@@ -186,11 +186,11 @@ func TestAGeminiRequestIsToldOnceItsCallsHaveRun(t *testing.T) {
 }
 
 // A GEMINI RUN WHOSE POLICY FILE DID NOT LOAD IS STOPPED THERE, AND FAILS. The
-// CLI reports a policy file it cannot read and carries on without its rules —
+// harness reports a policy file it cannot read and carries on without its rules —
 // the deny-all of its own tools, or the seat's allow — so the shipped profile
 // stops it at that line.
 //
-// Mutation: drop failure_markers from the profile, and the CLI below is left
+// Mutation: drop failure_markers from the profile, and the harness below is left
 // to run (it holds until the test's own deadline).
 func TestAGeminiRunWhosePolicyDidNotLoadIsStopped(t *testing.T) {
 	t.Parallel()
@@ -202,12 +202,12 @@ func TestAGeminiRunWhosePolicyDidNotLoadIsStopped(t *testing.T) {
 	defer cancel()
 	_, err := p.Complete(ctx, phase(newTestHost(t, "search")))
 	if llm.KindOf(err) != llm.KindServer || !strings.Contains(err.Error(), "Policy file error") {
-		t.Fatalf("err = %v, want a server failure naming the CLI's own line", err)
+		t.Fatalf("err = %v, want a server failure naming the harness's own line", err)
 	}
 }
 
 // A GEMINI RUN ITS OWN TURN LIMIT ENDED IS AN ANSWER STOPPED AT THE CAP: exit
-// 53, the CLI's code for its FatalTurnLimitedError and nothing else, its report
+// 53, the harness's code for its FatalTurnLimitedError and nothing else, its report
 // on stderr.
 //
 // Mutation: drop the profile's cap, and this is a server failure.
@@ -228,7 +228,7 @@ func TestAGeminiRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
 // THE SEAT'S TOOLS ARE ALLOWED IN A POLICY FILE OF THEIR OWN, IN THE HOME, and
 // no run names a policy on argv: --policy replaces the home's policies rather
 // than adding to it, and a run handed the seat's allow that way lost the
-// deny-all of the CLI's own tools (measured on 0.65.0: its file, plan,
+// deny-all of the harness's own tools (measured on 0.65.0: its file, plan,
 // sub-agent and topic tools offered beside the seat's).
 //
 // Mutation: hand the allow with --policy, or fold it into the deny-all's file

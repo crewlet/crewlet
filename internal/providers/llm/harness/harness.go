@@ -1,44 +1,44 @@
-// Package harness drives a coding CLI the operator already pays a
+// Package harness drives a harness the operator already pays a
 // subscription for, headless, behind [llm.Provider]: a seat's phase as the
-// CLI's own loop over the seat's tools, and a text function as one answer.
+// harness's own loop over the seat's tools, and a text function as one answer.
 //
 // It is the backend of every phase but one: the reviewer, delegated workers,
 // onboarding and the side passes call [Provider.Complete] on this host, with
-// the CLI's own shell and file tools denied by its profile. A seat's EXECUTOR
-// is not a call through it — it is the same CLI's own agentic run in a box
+// the harness's own shell and file tools denied by its profile. A seat's EXECUTOR
+// is not a call through it — it is the same harness's own agentic run in a box
 // (internal/sandbox/executor), which reads this entry's identity from here
 // ([Provider.Harness], [Provider.ModelArgument], the Sandbox* environment and
 // credentials) and, at launch, whether the entry sits out
 // ([Provider.SittingOut]).
 //
-// WHICH CLIs is the profile table's answer, not this comment's —
+// WHICH HARNESSES is the profile table's answer, not this comment's —
 // [harnessprofile.BuiltinNames] reads the shipped table and config's tests hold it
 // to the agent names a document may write. A
 // prose list here would be a second copy of that answer with nothing checking
 // it, and it already went stale by three.
 //
-// The CLI holds the operator's OAuth login, so Crewlet never sees a password
+// The harness holds the operator's OAuth login, so Crewlet never sees a password
 // and never re-implements a vendor's auth. What makes this more than "shell
-// out to a CLI" is three problems it has to solve first, and each is a file
+// out to a harness" is three problems it has to solve first, and each is a file
 // here:
 //
-//   - SHARED MEMORY. A CLI keeps sessions, history, todos and project notes
+//   - SHARED MEMORY. A harness keeps sessions, history, todos and project notes
 //     under one home, so seven seats on one subscription would read each
 //     other's transcripts. Every call runs in its own seat home with HOME,
 //     the XDG variables and the vendor's own relocation variable pointed
 //     inside it, in an empty per-call working directory, with an ALLOWLISTED
 //     environment rather than the engine's — see workspace.go and env.go.
 //
-//   - A LOOP OF ITS OWN. A seat's phase hands the CLI its tools as one MCP
+//   - A LOOP OF ITS OWN. A seat's phase hands the harness its tools as one MCP
 //     server ([llm.ToolHost]), served for the run alone on a socket the
-//     relay reaches, and the CLI calls them natively, asking its model again
+//     relay reaches, and the harness calls them natively, asking its model again
 //     and again until it answers or the engine ends the run. So the engine
-//     sees the calls and nothing between them: the CLI's own record — its
+//     sees the calls and nothing between them: the harness's own record — its
 //     stream, or a file it writes — is read as it goes for each model request,
 //     its prose and its cost, and handed to the host; a refreshed login is
 //     carried back at each call; and a model call made inside one of the
 //     run's calls runs on the run's slot — see toolrun.go, record.go and
-//     slots.go. A CLI whose loop runs in a server of its own (OpenCode 2.1)
+//     slots.go. A harness whose loop runs in a server of its own (OpenCode 2.1)
 //     has that server started first and waited for until it has the tools,
 //     and the run is its client — see serve.go. A text function — no tools —
 //     is one prompt in and one answer out, as it always was.
@@ -59,7 +59,7 @@
 // SUBSCRIPTION, which arrives as prose on a SUCCESSFUL exit and is recognised
 // by a vendor's verbatim sentinel plus the reset instant it carries — never
 // by keyword, which is how the same recognition was got wrong twice before,
-// and on such an exit only where the sentinel OPENS what the CLI said, which
+// and on such an exit only where the sentinel OPENS what the harness said, which
 // is otherwise the model's own words (see [classifyMarkers]).
 package harness
 
@@ -94,14 +94,14 @@ const providerName = "cli-agent"
 type Config struct {
 	// Key is the providers.llm key, for log lines and error messages.
 	Key string
-	// Model is passed to the CLI's model flag. Empty means the CLI's own
+	// Model is passed to the harness's model flag. Empty means the harness's own
 	// default, and a profile with no model flag requires it to be empty.
 	Model string
 	// Harness names the built-in profile.
 	Harness string
-	// StateDir is the resolved state directory. The CLI keeps its login and
+	// StateDir is the resolved state directory. The harness keeps its login and
 	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
-	// one directory share a login only when they drive one CLI.
+	// one directory share a login only when they drive one harness.
 	StateDir string
 	// Overrides are the operator's profile edits.
 	Overrides map[string]any
@@ -139,7 +139,7 @@ type Config struct {
 	CredentialBundleConfigured bool
 }
 
-// Provider is a coding CLI behind the language-model contract.
+// Provider is a harness behind the language-model contract.
 type Provider struct {
 	key     string
 	model   string
@@ -178,7 +178,7 @@ type Provider struct {
 	planOf SignInID
 
 	// zone is the time zone every child this provider starts is handed as
-	// TZ ([childZone]), and so the zone a reset the CLI names with no zone
+	// TZ ([childZone]), and so the zone a reset the harness names with no zone
 	// of its own is read in.
 	zone *time.Location
 
@@ -193,7 +193,7 @@ var _ llm.Provider = (*Provider)(nil)
 // New builds a cli-agent provider.
 //
 // Like every other backend, it builds even when no login is present: the call
-// then fails with the vendor's own "not authenticated", which names the CLI
+// then fails with the vendor's own "not authenticated", which names the harness
 // and is exactly what `crewlet llm doctor` explains. A constructor that
 // refused to exist would take the whole company down at boot over one
 // provider's credentials.
@@ -207,7 +207,7 @@ func New(cfg Config) (*Provider, error) {
 	// building the provider from code.
 	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
+			"cli-agent %q: no model_args element of the %q harness carries {model}, so model %q "+
 				"would be ignored — remove it, or declare overrides.model_args with {model}",
 			cfg.Key, cfg.Harness, cfg.Model)
 	}
@@ -246,7 +246,7 @@ func New(cfg Config) (*Provider, error) {
 		now:              time.Now,
 	}
 	if p.timeout <= 0 {
-		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
+		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a harness call with no "+
 			"wall-clock cap holds a seat forever", cfg.Key)
 	}
 	// THE BUNDLE IS NOT RESTORED HERE. Building a provider is what
@@ -266,27 +266,27 @@ func (p *Provider) Model() string { return p.model }
 func (p *Provider) Key() string { return p.key }
 
 // ModelArgument is the model exactly as this entry's runs on this host hand it
-// to the CLI ([harnessprofile.Profile.ModelArgument]) — what the executor's run of
-// the same CLI in a box is handed too, so the two name one model.
+// to the harness ([harnessprofile.Profile.ModelArgument]) — what the executor's run of
+// the same harness in a box is handed too, so the two name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() harnessprofile.Profile { return p.profile }
 
-// Workspace is this provider's CLI's share of its state directory, which every
-// entry on the same directory and CLI shares.
+// Workspace is this provider's harness's share of its state directory, which every
+// entry on the same directory and harness shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
 
-// Harness is which CLI this provider drives — its profile name, which is also
+// Harness is which harness this provider drives — its profile name, which is also
 // the key the in-box runner registry is keyed on ([sandbox.Manager.RunnerFor]):
 // an executor run reuses the runner for the same binary rather than a second
-// way to invoke it, so this one name answers both "which CLI" and "which
+// way to invoke it, so this one name answers both "which harness" and "which
 // runner".
 func (p *Provider) Harness() string { return p.harness }
 
-// AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
+// AuthMode is how this entry signs its harness in ([Auth.Mode]), for a caller that
 // has to tell an operator which credential to supply: of the variables the
-// engine hands the CLI, api-key reads only the key and inherit-env only the
+// engine hands the harness, api-key reads only the key and inherit-env only the
 // engine's own environment, so a remedy written for a subscription — mint a
 // token into the secret store — is one the entry would never read
 // ([Provider.ModeSignIn]). The credential files are seeded under every mode.
@@ -305,7 +305,7 @@ func (p *Provider) String() string {
 // routeFor picks the channel one call's system prompt takes
 // ([harnessprofile.Profile.RouteFor]), and a call that carries NO system prompt
 // takes a seat's route whatever its kind: the appending channel wherever the
-// profile declares one, so the CLI's own prompt stays in force.
+// profile declares one, so the harness's own prompt stays in force.
 //
 // A side pass takes the replacing channel because its system prompt is the
 // whole instruction. With none, there is nothing to put in the vendor's place,
@@ -313,7 +313,7 @@ func (p *Provider) String() string {
 // is passed only with text to carry, but a channel whose file carries policy is
 // passed on every call ([harnessprofile.SystemPromptFile]), and its replacing form
 // then renders an EMPTY system prompt. On Kimi Code that is an agent file with
-// no body, which the CLI refuses outright ("Missing prompt body", exit 1,
+// no body, which the harness refuses outright ("Missing prompt body", exit 1,
 // measured on 0.42.0 and 2.3.1). The appending form with nothing to add is the
 // vendor's own prompt under the same policy, which is what a call with no
 // system prompt asks for. Every caller in the engine sends one today; this is
@@ -325,9 +325,9 @@ func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 	return p.profile.RouteFor(req.Agent)
 }
 
-// Complete runs one CLI invocation and reads its answer.
+// Complete runs one harness invocation and reads its answer.
 //
-// An entry its CLI last reported spent is NOT called while it sits out
+// An entry its harness last reported spent is NOT called while it sits out
 // ([Provider.SittingOut]): the call fails at once as a rate limit, naming the
 // instant, so the seat's chain moves to its next model without a process
 // launched to learn again what the last one said. Checked as the call arrives
@@ -337,7 +337,7 @@ func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 // What the call met is remembered for [Provider.Unready].
 //
 // A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced:
-// a CLI signalled with the call that exited 143 or held its pipes, a slot or
+// a harness signalled with the call that exited 143 or held its pipes, a slot or
 // a home the call stopped waiting for. Decided here, once, from the caller's
 // context rather than from the process, which a cancellation and a crash
 // end identically, so no path below can report a person's Stop as the
@@ -346,7 +346,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	comp, err := p.complete(ctx, req)
 	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
 		comp, err = nil, p.fail(llm.KindCancelled, fmt.Errorf("the call was cancelled before "+
-			"the %s CLI answered: %w", p.harness, context.Cause(ctx)))
+			"the %s harness answered: %w", p.harness, context.Cause(ctx)))
 	}
 	p.remember(err)
 	if err == nil {
@@ -362,17 +362,17 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	if req.Tools != nil && p.profile.MCP == nil {
 		// The operator's to fix, and the same on every attempt: the
-		// profile says nothing about how this CLI is handed an MCP server,
+		// profile says nothing about how this harness is handed an MCP server,
 		// so a seat's phase on it would run with none of its tools.
 		return nil, p.fail(llm.KindFatal, fmt.Errorf("the %q profile has no mcp block, so its "+
-			"CLI cannot be handed a seat's tools — declare providers.llm.%s.overrides.mcp, or "+
+			"harness cannot be handed a seat's tools — declare providers.llm.%s.overrides.mcp, or "+
 			"run seats on another entry and keep this one for text functions", p.harness, p.key))
 	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
 	// THE SYSTEM PROMPT ON THE CHANNEL THIS KIND OF CALL TAKES: beside the
-	// CLI's own for a seat at work, in place of it for a text function —
+	// harness's own for a seat at work, in place of it for a text function —
 	// see [Provider.routeFor]. Lifted before the transcript is rendered, so
 	// it is never both.
 	route := p.routeFor(req)
@@ -396,7 +396,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
 	// entry passed the check above before the sit-out existed, so when the
 	// calls ahead of it report the spent plan it would otherwise take its
-	// slot, check out a home and start a whole CLI only to hear the same
+	// slot, check out a home and start a whole harness only to hear the same
 	// sentence — and every call behind it would wait for that too. Refused
 	// here, the queue drains at once, each call handing its slot to the next
 	// through the release deferred above. The check at the top stays: it
@@ -412,7 +412,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		checkout, err = p.ws.Acquire(ctx, seat, callID, p)
 	}
 	if err != nil {
-		// CLASSIFIED, not fatal outright: a seat's generation runs the CLI
+		// CLASSIFIED, not fatal outright: a seat's generation runs the harness
 		// itself now, so what failed may be a slow host or an unusable
 		// login rather than this host's filesystem — see
 		// [acquireFailureKind].
@@ -421,7 +421,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	defer func() {
 		// WITHOUT THE CALL'S CANCELLATION: a release is a teardown, and a
 		// call that ended because its context was cancelled still has a
-		// login the CLI may have refreshed to write back. Bounded by the
+		// login the harness may have refreshed to write back. Bounded by the
 		// export's own timeout rather than by nothing.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := checkout.Release(context.WithoutCancel(ctx)); err != nil {
@@ -475,7 +475,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// THE CALL'S OWN SESSION, named so the usage command below can ask
 	// about it afterwards — see [harnessprofile.Profile.SessionArgs]. After the
 	// model arguments for the same reason they precede everything else: a
-	// CLI taking its prompt on argv reads the first non-flag argument.
+	// harness taking its prompt on argv reads the first non-flag argument.
 	var session string
 	if len(p.profile.SessionArgs) > 0 {
 		session = newSessionID()
@@ -483,10 +483,10 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			in.args = append(in.args, strings.ReplaceAll(arg, "{session}", session))
 		}
 	}
-	// A USAGE REPORT THE CLI WRITES ITSELF, for a vendor whose one-shot
+	// A USAGE REPORT THE HARNESS WRITES ITSELF, for a vendor whose one-shot
 	// surface prints the answer and nothing else. Appended before the
 	// system and prompt arguments for the same reason the model flag is:
-	// a CLI taking its prompt on argv reads the first non-flag argument,
+	// a harness taking its prompt on argv reads the first non-flag argument,
 	// so nothing may come after it.
 	var usagePath string
 	if len(p.profile.UsageFileArgs) > 0 {
@@ -495,7 +495,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			in.args = append(in.args, strings.ReplaceAll(arg, "{usage_file}", usagePath))
 		}
 	}
-	// THE SEAT'S TOOLS, served for this run alone, and the CLI told how to
+	// THE SEAT'S TOOLS, served for this run alone, and the harness told how to
 	// reach them — before the system prompt and the prompt, as the model is.
 	// Closed on every way out, BEFORE the checkout is released (deferred
 	// earlier, so run later): the release waits for the calls still running,
@@ -510,12 +510,12 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
 	// have something to put in it — see [harnessprofile.SystemPromptFile]. A
-	// channel that is a vendor agent file declares that CLI's tool denial in
+	// channel that is a vendor agent file declares that harness's tool denial in
 	// the same file, so skipping it on a request with no system prompt
 	// would hand the vendor's default agent, and every tool it has, to
 	// exactly the calls that would never notice. A file that would hold the
 	// system prompt and nothing else is written only when there is one
-	// ([harnessprofile.SystemPromptFile.CarriesPolicy]): a CLI that reads it on
+	// ([harnessprofile.SystemPromptFile.CarriesPolicy]): a harness that reads it on
 	// every run still reads an empty one, and passing no channel is what an
 	// empty system prompt means everywhere else ([SplitSystem]).
 	if ch := route.Channel; system != "" || ch.File.CarriesPolicy() {
@@ -542,12 +542,12 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	// THE PROMPT LAST, and after the system args for the same reason the
-	// profile puts the model flag before it: a CLI taking its prompt on
+	// profile puts the model flag before it: a harness taking its prompt on
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
 	switch p.profile.EffectivePromptMode() {
 	case harnessprofile.PromptArgv:
-		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
+		// PromptArgs and then the prompt, ADJACENT and last: a harness that
 		// takes its prompt as a flag's value needs the two together, and
 		// anything appended between them becomes the prompt instead.
 		in.args = append(in.args, p.profile.PromptArgs...)
@@ -575,7 +575,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			return nil, err
 		}
 		if !up {
-			// The host ended the run before the CLI's server was up:
+			// The host ended the run before the harness's server was up:
 			// nothing ran, and nothing was spent.
 			return &llm.Completion{Model: p.model}, nil
 		}
@@ -583,10 +583,10 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	started := time.Now()
 	res, err := run(runCtx, in)
 	if err != nil {
-		// NO CLI RAN, which is all run's error ever says: the binary is
+		// NO HARNESS RAN, which is all run's error ever says: the binary is
 		// missing or not executable here, or the host would not give it a
 		// pipe or a process. That is this host's fault, the one exec failure
-		// the next member is no answer to, so it is fatal. A CLI that DID run
+		// the next member is no answer to, so it is fatal. A harness that DID run
 		// comes back as a result whatever happened to it, and [completion]
 		// classifies it by what that was.
 		return nil, p.fail(llm.KindFatal, fmt.Errorf("%w: %w", llm.ErrNotRunnable, err))
@@ -608,7 +608,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// "even when the run fails", so its absence says the run did not get
 	// that far — and failing a completion that the model answered, over a
 	// count, would throw away work the operator paid for. The counts then
-	// fall back to whatever stdout said, which for such a CLI is an
+	// fall back to whatever stdout said, which for such a harness is an
 	// estimate.
 	var usageDoc string
 	if usagePath != "" {
@@ -643,7 +643,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// loop, and its report is the one count of what the run spent before it
 	// was cut.
 	//
-	// A RUN WITH TOOLS MAY ASK THROUGH ITS CLI'S SERVER ([harnessprofile.MCP.UsageArgs]),
+	// A RUN WITH TOOLS MAY ASK THROUGH ITS HARNESS'S SERVER ([harnessprofile.MCP.UsageArgs]),
 	// which is then asked while it is still up — and not at all once a run cut
 	// short took it down.
 	if len(p.profile.UsageArgs) > 0 && (!res.timedOut || tools != nil) {
@@ -729,8 +729,8 @@ func (p *Provider) argv(tools bool) []string {
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
 //
-// sent is everything the engine handed the CLI — the system prompt on its
-// channel and the rendered prompt — and is read only for the estimate a CLI
+// sent is everything the engine handed the harness — the system prompt on its
+// channel and the rendered prompt — and is read only for the estimate a harness
 // that reports no usage is charged. The system prompt is in it because a
 // budget charged for the transcript alone undercounts every call by the
 // largest stable thing in it; what is NOT in it is a vendor's own system
@@ -740,7 +740,7 @@ func (p *Provider) completion(
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
-			"the CLI did not answer within %s — raise timeout_seconds if this model "+
+			"the harness did not answer within %s — raise timeout_seconds if this model "+
 				"legitimately reasons for longer:\n%s", p.timeout, tail(res.stderr)))
 	}
 
@@ -754,27 +754,27 @@ func (p *Provider) completion(
 	// rejected.
 	if res.droppedStdout > 0 {
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the CLI wrote more than %d bytes to stdout and %d were dropped, so "+
+			"the harness wrote more than %d bytes to stdout and %d were dropped, so "+
 				"the answer is incomplete. No completion comes near that size, so "+
-				"the CLI printed something besides one: run `crewlet llm doctor %s` "+
+				"the harness printed something besides one: run `crewlet llm doctor %s` "+
 				"to see what, or point this provider at a model that streams less",
 			maxOutput, res.droppedStdout, p.key))
 	}
 
 	out := extract(p.profile, res.stdout)
-	// Whether the CLI said the run FAILED — a non-zero exit, or its own flag
+	// Whether the harness said the run FAILED — a non-zero exit, or its own flag
 	// at the profile's error_paths. It decides where a marker may stand, and
 	// that the call is refused below rather than answered.
 	failed := res.exitCode != 0 || out.failed
-	// The CLI's own report wins over anything stdout happened to carry:
+	// The harness's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
 	// else, so a hit here is the only real figure there is. A report that
 	// ARRIVED and could not be read is said out loud, because the counts
-	// then fall back to stdout's — an estimate, for a CLI that reports
+	// then fall back to stdout's — an estimate, for a harness that reports
 	// none there — on every call until somebody notices the budget
 	// figures are made up.
 	//
-	// NOT FOR A RUN THE CLI SAID FAILED, which is refused below and charged
+	// NOT FOR A RUN THE HARNESS SAID FAILED, which is refused below and charged
 	// nothing, so no count falls back to anything. A vendor's report of a
 	// failed run may hold no counts by design — Hermes writes them as null
 	// for a refused key or a spent plan (measured on 0.21.5) — and warning
@@ -801,7 +801,7 @@ func (p *Provider) completion(
 	// profile's text paths no longer resolve would classify a spent plan
 	// as a server fault and burn the chain's next member on it — and a
 	// spent plan is exactly when a drifted-looking run is most likely,
-	// since the CLI answers with prose where the envelope should be.
+	// since the harness answers with prose where the envelope should be.
 	//
 	// Not stdout unconditionally, though, which was the first shape of
 	// this: some shipped markers are short generic phrases rather than
@@ -810,9 +810,9 @@ func (p *Provider) completion(
 	// located it is the only thing the vendor said that matters.
 	//
 	// The events scope reads neither as text: it decodes the whole of
-	// stdout and looks only at the CLI's own failure events — see
+	// stdout and looks only at the harness's own failure events — see
 	// [harnessprofile.MarkerScope] — which is why stdout itself is handed over
-	// beside what was said. And whether the CLI said the run FAILED is
+	// beside what was said. And whether the harness said the run FAILED is
 	// handed over too, because it decides where in what was said a
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
@@ -822,8 +822,8 @@ func (p *Provider) completion(
 		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(said, res.stderr)))
 	}
 
-	// A RUN THE CLI SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
-	// SERVER FAILURE — the CLI or its vendor did not answer: an overload or
+	// A RUN THE HARNESS SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
+	// SERVER FAILURE — the harness or its vendor did not answer: an overload or
 	// a 5xx it relayed once its own retries ran out, a crash, a reason in
 	// words no marker knows. It used to be FATAL, on the reasoning that every
 	// member of the seat's chain would refuse the call identically, and that
@@ -840,28 +840,28 @@ func (p *Provider) completion(
 	// because only a spent plan is known to last. A failure the next call
 	// may not meet must not hold every seat on the node off a working entry.
 	if failed {
-		what := fmt.Sprintf("the %s CLI exited %d", p.harness, res.exitCode)
+		what := fmt.Sprintf("the %s harness exited %d", p.harness, res.exitCode)
 		if res.exitCode == 0 {
-			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.harness)
+			what = fmt.Sprintf("the %s harness exited 0 and reported that the run failed", p.harness)
 		}
 		return nil, p.fail(llm.KindServer, fmt.Errorf("%s:\n%s", what,
 			tail(nonEmpty(res.stderr, out.text, res.stdout))))
 	}
 	// A RUN NOT SEEN TO ITS END IS A SERVER FAILURE TOO, whatever it
-	// printed. A stdout that something the CLI left running still held a
-	// grace after the CLI was done was cut there, so no reading of it can be
+	// printed. A stdout that something the harness left running still held a
+	// grace after the harness was done was cut there, so no reading of it can be
 	// shown to be the whole answer: the refusal a clipped stdout gets above,
-	// for the same reason. And a wait that failed is a CLI that started and
+	// for the same reason. And a wait that failed is a harness that started and
 	// did not finish as one. Neither is a call the engine could not make, so
 	// the chain may carry it to the next member, and nothing says it lasts,
 	// so nothing is sat out. Both used to come back from [run] as an error,
 	// read as fatal: the walk stopped at the head with a whole answer on
-	// stdout, the CLI having exited 0.
+	// stdout, the harness having exited 0.
 	//
 	// After the markers, which classify on what the vendor SAID: a spent plan
 	// reported on a stdout a helper then held is still a spent plan.
 	if why := res.unfinished(); why != "" {
-		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI exited 0, but %s:\n%s",
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness exited 0, but %s:\n%s",
 			p.harness, why, tail(nonEmpty(res.stderr, res.stdout))))
 	}
 	if strings.TrimSpace(res.stdout) == "" {
@@ -873,14 +873,14 @@ func (p *Provider) completion(
 		// prompt was refused — so the chain is free to try another
 		// member, and the entry is not benched.
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the %s CLI exited 0 but printed nothing at all%s",
+			"the %s harness exited 0 but printed nothing at all%s",
 			p.harness, stderrDetail(res.stderr)))
 	}
 	if !out.located {
-		// THE PROFILE HAS DRIFTED FROM THE CLI. Its output parsed, and
+		// THE PROFILE HAS DRIFTED FROM THE HARNESS. Its output parsed, and
 		// none of the paths that say where the answer lives resolved to
 		// a string — so this build cannot tell which part of what the
-		// CLI printed is the model's reply, and the honest answer is
+		// harness printed is the model's reply, and the honest answer is
 		// that it has none.
 		//
 		// It used to hand the whole of stdout back as the reply instead,
@@ -896,14 +896,14 @@ func (p *Provider) completion(
 		// credential is not benched: nothing about the prompt was
 		// refused.
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the %s CLI's output parsed, but none of the text_paths this profile "+
+			"the %s harness's output parsed, but none of the text_paths this profile "+
 				"looks in resolved (%s) — the profile no longer matches the "+
-				"installed CLI, so nothing it printed can be read as the model's "+
+				"installed harness, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.overrides.text_paths. It printed:\n%s",
 			p.harness, harnessprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
-	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
+	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The harness
 	// exited 0, reported no error, and the path this profile looks in
 	// resolved to an empty string — which is what a model that spent its
 	// whole output budget on hidden reasoning does. That is a MODEL
@@ -916,7 +916,7 @@ func (p *Provider) completion(
 	// reply for the tool loop to correct. That was true only because the
 	// loop tested tool calls and never read Content; closing that gap is
 	// what makes this fall-through safe, and what stops one empty round
-	// from being reported as an outage of a CLI that demonstrably answered.
+	// from being reported as an outage of a harness that demonstrably answered.
 	//
 	// Falls through rather than returning early so the round is charged:
 	// Content becomes "" with the vendor's real usage attached below — an
@@ -934,10 +934,10 @@ func (p *Provider) completion(
 		// total down for cost reporting; adding them again double-counts,
 		// which is why a vendor whose input count already holds them says
 		// so ([harnessprofile.UsagePaths.InputIncludesCache]). A model-side
-		// tool's prompt a CLI reports apart from its input is billed as
+		// tool's prompt a harness reports apart from its input is billed as
 		// input, so it is charged as input — see [harnessprofile.UsagePaths].
 		comp.InputTokens = p.profile.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite) + out.toolPrompt
-		// Reasoning a CLI reports apart from its output is billed as
+		// Reasoning a harness reports apart from its output is billed as
 		// output, so it is charged as output — see [harnessprofile.UsagePaths].
 		comp.OutputTokens = out.output + out.reasoning
 		comp.CacheRead = out.cacheRead
@@ -962,7 +962,7 @@ func (p *Provider) completion(
 }
 
 // classifyMarkers recognises a spent subscription or an expired login in a
-// CLI's own words.
+// harness's own words.
 //
 // Structure, not keywords. A marker is a sentinel the vendor emits VERBATIM,
 // and where the vendor carries the reset instant alongside it, the
@@ -973,12 +973,12 @@ func (p *Provider) completion(
 //
 // A FUNCTION OF THE PROFILE, not a method on the provider: what a vendor's
 // spent plan looks like is a property of the profile table, and the only way
-// to check a shipped profile's sentinels against the output its CLI actually
+// to check a shipped profile's sentinels against the output its harness actually
 // produces is to be able to ask without a running provider.
 //
 // # What the model said is not the vendor's report
 //
-// Verbatim is not enough on its own, because what the CLI said on stdout is,
+// Verbatim is not enough on its own, because what the harness said on stdout is,
 // on every healthy run, the MODEL's words — its prose, and the arguments of
 // every tool call it makes — and a seat asked to add backoff for the GitHub
 // API writes "rate limit" as readily as a vendor reports one. Matched anywhere
@@ -987,8 +987,8 @@ func (p *Provider) completion(
 // wrote it again a minute later. So in the default scope a sentinel in what
 // was said counts in two places only:
 //
-//   - ANYWHERE, in a run the CLI itself reported failed — a non-zero exit,
-//     or its own failure flag ([harnessprofile.Profile.ErrorPaths]). The CLI has
+//   - ANYWHERE, in a run the harness itself reported failed — a non-zero exit,
+//     or its own failure flag ([harnessprofile.Profile.ErrorPaths]). The harness has
 //     said this was no answer; what it printed is its account of why.
 //   - AT THE START, in a run it did not: the sentinel begins the first
 //     non-empty line, so that what was said IS the vendor's report rather
@@ -1001,23 +1001,23 @@ func (p *Provider) completion(
 //     arguments, is not classified at all, and comes back as the answer it
 //     is.
 //
-// Stderr is matched anywhere: it is the CLI's own channel, and the answer
+// Stderr is matched anywhere: it is the harness's own channel, and the answer
 // does not reach it. So are the fields of a FAILED run with tools' own failure
 // events ([harnessprofile.MCP.FailureEvents]): that run's answer is its record's
-// last prose, which a failed run never wrote, and a CLI whose stderr says only
+// last prose, which a failed run never wrote, and a harness whose stderr says only
 // that it failed (Muse Code: "run ended with Failed") says why there alone.
-// The events scope reads the CLI's own failure events and nothing else, and
+// The events scope reads the harness's own failure events and nothing else, and
 // the stderr scope stderr alone — see [harnessprofile.MarkerScope].
 //
 // # Structured reports first, then the words, then dated
 //
-// The CLI's own structured reports of a limit and of a refused sign-in are
+// The harness's own structured reports of a limit and of a refused sign-in are
 // read before any sentinel ([classifyEvents]), and THE RUN'S LAST WORD
 // DECIDES among them: a refused token retried and then met by a spent plan
 // ended on the plan, and reads as a limit. A refused sign-in is never read
 // from a run that answered, by event or by sentinel. A limit, once
 // recognised, is dated and named ([dateLimit]): the reset and the window from
-// the CLI's own structured event where it wrote one, else from the vendor's
+// the harness's own structured event where it wrote one, else from the vendor's
 // sentence.
 func classifyMarkers(p harnessprofile.Profile, out harnessOutput) (markerHit, bool) {
 	hit, ok := classifyEvents(p, out)
@@ -1031,7 +1031,7 @@ func classifyMarkers(p harnessprofile.Profile, out harnessOutput) (markerHit, bo
 }
 
 // classifyReport is [classifyMarkers]' recognition of a limit or a login in
-// the CLI's structured limit report and its words.
+// the harness's structured limit report and its words.
 func classifyReport(p harnessprofile.Profile, out harnessOutput) (markerHit, bool) {
 	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
@@ -1067,7 +1067,7 @@ func classifyReport(p harnessprofile.Profile, out harnessOutput) (markerHit, boo
 		for _, hay := range haystacks {
 			if hay.anchored {
 				// NOT FROM A RUN THAT ANSWERED. A refused sign-in is a
-				// failure the CLI reports as one, and a clean answer that
+				// failure the harness reports as one, and a clean answer that
 				// opens with "Failed to authenticate" is the model's
 				// account of somebody else's error; read as the vendor's,
 				// it took the answer and set a verdict on every entry on
@@ -1084,24 +1084,24 @@ func classifyReport(p harnessprofile.Profile, out harnessOutput) (markerHit, boo
 
 // harnessOutput is what one finished run gives [classifyMarkers] to read.
 type harnessOutput struct {
-	// said is what the CLI said: the located answer, or the whole of stdout
+	// said is what the harness said: the located answer, or the whole of stdout
 	// when none was located.
 	said string
 	// stdout is the whole of it, which only the events scope reads, and only
 	// as decoded events.
 	stdout string
-	// stderr is the CLI's own diagnostic channel.
+	// stderr is the harness's own diagnostic channel.
 	stderr string
 	// events is a run with tools' own failure events, by the profile's
 	// fields, one a line ([harnessprofile.MCP.FailureEvents]).
 	events string
-	// failed is the CLI's own word that the run failed: a non-zero exit, or
+	// failed is the harness's own word that the run failed: a non-zero exit, or
 	// the flag at the profile's error_paths.
 	failed bool
 	// at is when the run ended: what a reset the vendor names as a time of
 	// day, or as a delay, is read against.
 	at time.Time
-	// zone is the zone the CLI ran in, which a reset it names with no zone
+	// zone is the zone the harness ran in, which a reset it names with no zone
 	// of its own is read in ([childZone]); nil reads UTC.
 	zone *time.Location
 }
@@ -1138,12 +1138,12 @@ const (
 	// sourceReport is what a run that did not fail said on stdout, which is
 	// the vendor's report: the sentinel begins its first non-empty line.
 	sourceReport markerSource = "report"
-	// sourceFailedRun is what a run the CLI reported failed said on stdout,
+	// sourceFailedRun is what a run the harness reported failed said on stdout,
 	// where a sentinel counts anywhere.
 	sourceFailedRun markerSource = "failed-run"
-	// sourceStderr is the CLI's stderr.
+	// sourceStderr is the harness's stderr.
 	sourceStderr markerSource = "stderr"
-	// sourceEvent is one of the CLI's own failure events, under
+	// sourceEvent is one of the harness's own failure events, under
 	// [harnessprofile.MarkerScopeEvents] or, for a failed run with tools, by the
 	// profile's [harnessprofile.MCP.FailureEvents].
 	sourceEvent markerSource = "event"
@@ -1153,8 +1153,8 @@ const (
 //
 // Said is the load-bearing field and the reason this is a struct. The
 // classification used to be reported with [firstLine] over the whole
-// haystack, which is the vendor's own sentence for a CLI that prints prose —
-// and the FIRST EVENT of a stream for a CLI that prints JSONL. A muse-code
+// haystack, which is the vendor's own sentence for a harness that prints prose —
+// and the FIRST EVENT of a stream for a harness that prints JSONL. A muse-code
 // rate limit read `run.lifecycle.started`: correctly classified, and useless
 // to the operator who has to act on it.
 type markerHit struct {
@@ -1204,12 +1204,12 @@ func firstLine(texts ...string) string {
 	return "no output"
 }
 
-// stderrDetail appends a CLI's stderr to a message, or nothing when it wrote
+// stderrDetail appends a harness's stderr to a message, or nothing when it wrote
 // none.
 //
 // A trailing empty ":" after a sentence that already said what went wrong is
 // how a message stops reading like one — and stderr is genuinely absent on the
-// paths that use this, because a CLI that exits 0 usually says nothing there.
+// paths that use this, because a harness that exits 0 usually says nothing there.
 func stderrDetail(stderr string) string {
 	if strings.TrimSpace(stderr) == "" {
 		return ""

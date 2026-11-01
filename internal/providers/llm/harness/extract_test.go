@@ -157,7 +157,7 @@ func TestAStreamConcatenatesTextAndTakesTheFinalUsage(t *testing.T) {
 	}
 }
 
-// A CLI that printed a banner before its JSON is common, and an operator
+// A harness that printed a banner before its JSON is common, and an operator
 // should not need an override for it.
 func TestAJSONAnswerIsFoundBehindABanner(t *testing.T) {
 	t.Parallel()
@@ -216,13 +216,13 @@ func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 		stdout: `{"is_error":true,"result":"the model refused","type":"result"}`,
 	}, "")
 	if err == nil {
-		t.Fatal("a CLI-reported failure was returned as a completion")
+		t.Fatal("a harness-reported failure was returned as a completion")
 	}
 	if got := llm.KindOf(err); got != llm.KindServer {
 		t.Errorf("kind = %v, want server", got)
 	}
 	if !strings.Contains(err.Error(), "the model refused") {
-		t.Errorf("err = %v, want what the CLI said", err)
+		t.Errorf("err = %v, want what the harness said", err)
 	}
 	if err := prov.SittingOut(); err != nil {
 		t.Errorf("a failed run sat the entry out: %v", err)
@@ -240,7 +240,7 @@ func TestPathsIndexIntoArrays(t *testing.T) {
 	}
 }
 
-// A COUNT UNDER EVERY MEMBER IS THEIR SUM, for a CLI that keys its counts by
+// A COUNT UNDER EVERY MEMBER IS THEIR SUM, for a harness that keys its counts by
 // something no profile can name in advance — the model that served each
 // request. A member without the count adds nothing, an array's elements are
 // members too, and a path no member resolves is unread usage, estimated,
@@ -303,7 +303,7 @@ func TestAToolsPromptIsChargedAsInput(t *testing.T) {
 	}
 
 	// Read wherever usage is: the last event of a stream, and a usage
-	// report the CLI is asked for after the call.
+	// report the harness is asked for after the call.
 	stream := p
 	stream.Output = harnessprofile.OutputJSONL
 	if got := extract(stream, `{"usage":{"tool":1}}`+"\n"+stdout); got.toolPrompt != 5000 {
@@ -317,7 +317,7 @@ func TestAToolsPromptIsChargedAsInput(t *testing.T) {
 	}
 }
 
-// The cap exists so one runaway CLI cannot put the engine under memory
+// The cap exists so one runaway harness cannot put the engine under memory
 // pressure; dropping past it must not lose what came before.
 func TestOutputIsCappedWithoutLosingTheStart(t *testing.T) {
 	t.Parallel()
@@ -441,7 +441,7 @@ func TestAnEmptyResultIsAChargedCompletionAndNotTheHarnessOwnTelemetry(t *testin
 	}
 	got := extract(p, claudeCodeEmptyAnswer)
 	if got.text != "" {
-		t.Errorf("text = %q, want the empty answer the CLI actually gave", got.text)
+		t.Errorf("text = %q, want the empty answer the harness actually gave", got.text)
 	}
 	if !got.located {
 		t.Error("`result` is present in the output, so the profile DID locate the answer")
@@ -468,8 +468,8 @@ func TestAnEmptyResultIsAChargedCompletionAndNotTheHarnessOwnTelemetry(t *testin
 	}
 }
 
-// A profile that no longer matches its CLI fails NAMING THE FIELD TO CHANGE,
-// rather than passing the CLI's output off as the model's words.
+// A profile that no longer matches its harness fails NAMING THE FIELD TO CHANGE,
+// rather than passing the harness's output off as the model's words.
 func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 	t.Parallel()
 	p := harnessprofile.Profile{Output: harnessprofile.OutputJSON, TextPaths: []harnessprofile.Path{{"result"}}}
@@ -494,7 +494,7 @@ func TestADriftedProfileFailsAndNamesTheOverride(t *testing.T) {
 		// The shape belongs IN the message: it is the only place the
 		// person who can write the override will read it.
 		if !strings.Contains(err.Error(), "the answer nobody found") {
-			t.Errorf("the message does not show what the CLI printed:\n%v", err)
+			t.Errorf("the message does not show what the harness printed:\n%v", err)
 		}
 		if got := llm.KindOf(err); got != llm.KindServer {
 			t.Errorf("kind = %v, want server", got)
@@ -537,7 +537,7 @@ func TestAStreamIsLocatedByAnyEventCarryingThePath(t *testing.T) {
 }
 
 // A stream this profile does not recognise is a FAILURE, not a completion
-// whose content is the CLI's own event log.
+// whose content is the harness's own event log.
 func TestAnUnrecognisedStreamIsAFailureRatherThanItsOwnLog(t *testing.T) {
 	t.Parallel()
 	p := harnessprofile.Profile{Output: harnessprofile.OutputJSONL, TextPaths: []harnessprofile.Path{{"item", "text"}}}
@@ -566,7 +566,7 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 	prov := &Provider{profile: p, model: "haiku", harness: "claude-code", key: "default", now: time.Now}
 	_, err = prov.completion(t.Context(), "prompt", &rawResult{stdout: "  \n ", stderr: "node: bad flag"}, "")
 	if err == nil {
-		t.Fatal("a silent CLI produced a completion")
+		t.Fatal("a silent harness produced a completion")
 	}
 	if !strings.Contains(err.Error(), "printed nothing at all") {
 		t.Errorf("message = %v", err)
@@ -583,12 +583,12 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 // can find the answer field says nothing about whether the vendor said it.
 // Classified off the whole of stdout when no answer was located, so a drifted
 // profile still yields a real rate limit — on the terms an answer is read on:
-// the vendor's report opens what the CLI printed, or the CLI said the run
+// the vendor's report opens what the harness printed, or the harness said the run
 // failed.
 //
 // And only on those terms. A drifted profile cannot tell the model's words from
 // the vendor's either — the model's answer is somewhere in that stdout — so a
-// sentinel in a field this build does not read, on a run the CLI did not report
+// sentinel in a field this build does not read, on a run the harness did not report
 // failed, is the profile drift it looks like: a server failure, which still
 // moves the chain on, and not a spent plan that sits the entry out.
 func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
@@ -608,7 +608,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 				`{"type":"result","subtype":"error"}`,
 			want: llm.KindRateLimit,
 		},
-		"the sentinel in a run the CLI reported failed": {
+		"the sentinel in a run the harness reported failed": {
 			stdout: `{"is_error":true,"note":"Usage limit reached \u00b7 continuing automatically"}`,
 			want:   llm.KindRateLimit,
 		},
@@ -638,7 +638,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 // classification yields a real Retry-After rather than falling back to the
 // pool's configured cooldown.
 //
-// Declared here rather than taken from a shipped profile: no built-in CLI
+// Declared here rather than taken from a shipped profile: no built-in harness
 // still emits a machine-readable reset — Claude Code's pipe-and-epoch wording
 // went with its 1.x prose — so pinning this to one would be pinning it to a
 // string no vendor prints, which is how the sentinel it replaced went stale

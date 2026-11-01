@@ -342,7 +342,7 @@ func TestAPendingLoginIsOrderedUnderTheSharedLock(t *testing.T) {
 			if err := writeGeneration(record, gen); err != nil {
 				t.Fatal(err)
 			}
-			// The sign-in's CLI renews the token; its carry then fails.
+			// The sign-in's harness renews the token; its carry then fails.
 			writeFile(t, filepath.Join(home, ".fake", "auth.json"), token)
 
 			// `-from-host`'s hold: the epoch moved, its login not yet
@@ -409,7 +409,7 @@ func TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock(t *testing.T) {
 	}, nil)
 	signedIn := make(chan error, 1)
 	go func() { signedIn <- p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}) }()
-	// The CLI is running, so its seed has let the shared lock go.
+	// The harness is running, so its seed has let the shared lock go.
 	awaitFile(t, started)
 
 	// `-from-host`'s hold: the epoch moved, its login not yet written.
@@ -461,7 +461,7 @@ func TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock(t *testing.T) {
 	}
 }
 
-// awaitFile waits for path to exist, as a case's sign that a fake CLI has
+// awaitFile waits for path to exist, as a case's sign that a fake harness has
 // reached a point it writes it at.
 func awaitFile(t *testing.T, path string) {
 	t.Helper()

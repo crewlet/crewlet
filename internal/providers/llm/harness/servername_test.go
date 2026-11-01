@@ -9,12 +9,12 @@ import (
 )
 
 // EVERY PROFILE SPELLS THE SEAT'S TOOL SERVER AS CONFIG RESERVES IT. A profile
-// writes the server's name into its CLI's own grammar — a JSON key in a seeded
+// writes the server's name into its harness's own grammar — a JSON key in a seeded
 // file, a `-c mcp_servers.<name>…` override, an allowlist pattern — and reads
-// the CLI's record by the prefix it gives that server's tools, while the box
+// the harness's record by the prefix it gives that server's tools, while the box
 // bridge and the session are named from [config.ToolServerName]. Nothing ties
 // the hand-written spellings to the constant but this: a profile naming another
-// server would hand its CLI tools the record reader never claims, and a seat
+// server would hand its harness tools the record reader never claims, and a seat
 // moved into a box would see its tools renamed.
 func TestEveryProfileSpellsTheToolServerAsConfigReservesIt(t *testing.T) {
 	t.Parallel()

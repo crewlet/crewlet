@@ -10,7 +10,7 @@ import (
 
 // A NOTE IS MEASURED AS CLAUDE CODE MEASURES IT: JavaScript's length, in UTF-16
 // code units, where a character outside the Basic Multilingual Plane is two. A
-// budget counted in characters lets through an answer the CLI moves into a file
+// budget counted in characters lets through an answer the harness moves into a file
 // and previews, which reaches the model as a pointer to the note.
 func TestANoteIsMeasuredInUTF16Units(t *testing.T) {
 	t.Parallel()

@@ -14,11 +14,11 @@ import (
 )
 
 // creditedCompany is a one-seat company whose executor is the named
-// subscription CLI.
+// subscription harness.
 //
 // A REAL harness provider rather than a stand-in, because the whole question
 // is which credentials that provider's profile can actually put inside a box —
-// a fake would answer whatever the test wanted and prove nothing about the CLI.
+// a fake would answer whatever the test wanted and prove nothing about the harness.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
 	return creditedCompanyAuth(t, agent, harness.Auth{})
@@ -67,7 +67,7 @@ func guardOn(t *testing.T, c *Company, seat *org.Role, placement sandbox.Placeme
 // A SUBSCRIPTION LOGIN CANNOT FOLLOW A RUN INTO A REMOTE BOX.
 //
 // The credential files stay on the engine host — they carry a refresh token
-// whose rotation is fleet state — so a CLI that mints no headless token
+// whose rotation is fleet state — so a harness that mints no headless token
 // (OpenCode, whose login is a database it keeps) has nothing inside a remote
 // box to authenticate with unless its provider's key travels. Left unchecked the run
 // provisions a box, installs the agent, applies every setup step and starts
@@ -117,7 +117,7 @@ func TestTheRemedyNamesTheTokenWhereTheHarnessMintsOne(t *testing.T) {
 	}
 }
 
-// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its CLI. Claude Code
+// THE REMEDY FOLLOWS THE ENTRY'S AUTH MODE, not only its harness. Claude Code
 // mints a headless token, but an api-key entry never reads one — the mode
 // gives the token no fallback and removes its variable from the child — and an
 // inherit-env entry reads only the engine's own environment, never the secret
@@ -220,12 +220,12 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	}
 }
 
-// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE CLI NOTHING —
+// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE HARNESS NOTHING —
 // api-key on OpenCode, which reads each provider's key from that provider's own
 // variable and so names no api_key_env. Every write of the configuration
 // refuses the pairing, but an apply only warns, so a node can run it. Its
 // refusal names the mode as the remedy, and the local cell the login it then
-// signs in with needs; never a variable to set, since none would reach the CLI.
+// signs in with needs; never a variable to set, since none would reach the harness.
 func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompanyAuth(t, "opencode", harness.Auth{Mode: harness.AuthAPIKey})
@@ -284,11 +284,11 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 			name: "subscription", mode: harness.AuthSubscription,
 			overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{`providers.llm.sub.overrides.token_env is "MY-TOKEN"`,
-				"Name the variable your build of the CLI reads", string(sandbox.Direct)},
+				"Name the variable your build of the harness reads", string(sandbox.Direct)},
 			notWant: []string{"crewlet llm login sub -capture-token"},
 		},
 		{
-			name: "subscription on a CLI that reads its provider's key", agent: "opencode",
+			name: "subscription on a harness that reads its provider's key", agent: "opencode",
 			mode: harness.AuthSubscription, overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{"Set the key of", "providers.llm.sub.env",
 				`providers.llm.sub.overrides.token_env is "MY-TOKEN"`, string(sandbox.Direct)},
@@ -298,7 +298,7 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 			name: "api-key", mode: harness.AuthAPIKey,
 			overrides: map[string]any{"api_key_env": "MY=KEY"},
 			want: []string{"providers.llm.sub.overrides.api_key_env",
-				"name the variable your build of the CLI reads"},
+				"name the variable your build of the harness reads"},
 			notWant: []string{"role.sandbox.env", "crewlet secrets set", "capture-token", "local cell"},
 		},
 		{
@@ -405,12 +405,12 @@ func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 	}
 }
 
-// A CLI THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX.
+// A HARNESS THAT SIGNS IN THROUGH env TAKES THAT SIGN-IN INTO ITS BOX.
 //
 // OpenCode reads its provider's key from its own environment, so an entry's
 // whole sign-in can be one variable in env — which the doctor counts. The
 // run environment carried only the token and the api-key variable, so an
-// executor run on such an entry started its CLI signed in to nothing, and a
+// executor run on such an entry started its harness signed in to nothing, and a
 // remote one was refused as having no credential at all.
 func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
@@ -455,7 +455,7 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	}
 
 	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
-	// CLI reads depends on the provider its model names, so the guard
+	// harness reads depends on the provider its model names, so the guard
 	// cannot ask the profile, and an operator legitimately declares their
 	// own key in role.sandbox.env.
 	c, seat = company(nil)
@@ -475,7 +475,7 @@ func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	}
 	for _, route := range []string{"providers.llm.sub.env", "role.sandbox.env"} {
 		if !strings.Contains(err.Error(), route) {
-			t.Errorf("the refusal does not name the %s route this CLI takes: %v", route, err)
+			t.Errorf("the refusal does not name the %s route this harness takes: %v", route, err)
 		}
 	}
 	// And WHOSE key: the provider segment of the model the box is handed is

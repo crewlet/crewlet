@@ -41,7 +41,7 @@ import (
 // ([Engine.clearRemovedModelRetries]).
 
 // ModelRetryProbeBudget bounds the one call "retry now" makes before it writes
-// the record: SIXTY SECONDS, past a coding CLI's cold start and a one-word
+// the record: SIXTY SECONDS, past a harness's cold start and a one-word
 // answer (3 to 10 s measured), and short enough that a person waiting on the
 // button is told within a minute. A vendor that has not answered by then has
 // not shown the limit is over. EXPORTED because the Models screen waits on a
@@ -182,7 +182,7 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 			"tried again now")
 }
 
-// harnessEntry is the active revision's coding-CLI entry under key.
+// harnessEntry is the active revision's harness entry under key.
 func (e *Engine) harnessEntry(key string) (*harness.Provider, bool) {
 	c := e.Company()
 	if c == nil || c.Models == nil {

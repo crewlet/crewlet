@@ -91,7 +91,7 @@ const (
 var thisLaunch int
 
 func TestMain(m *testing.M) {
-	// FIRST: a phase serves its tools to its CLI through `<this binary>
+	// FIRST: a phase serves its tools to its harness through `<this binary>
 	// mcp-relay <socket>`, and under `go test` this binary is the engine.
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(toolServerModeEnv) != "" {

@@ -63,7 +63,7 @@ func gone(t *testing.T, path string) bool {
 	return syscall.Kill(pid, 0) != nil
 }
 
-// A SERVE-LIFECYCLE RUN IS A CLIENT OF ITS CLI'S OWN SERVER, STARTED ONLY ONCE
+// A SERVE-LIFECYCLE RUN IS A CLIENT OF ITS HARNESS'S OWN SERVER, STARTED ONLY ONCE
 // THAT SERVER HAS ITS TOOLS. The server is started first and read for the
 // address and password it prints, the run is not started until the poll lists
 // the crewlet server as connected — a run asked of a server that has not
@@ -114,7 +114,7 @@ func TestAServedRunRunsAgainstItsOwnServerOnceItHasItsTools(t *testing.T) {
 		t.Errorf("the usage command ran as %q (%v), want it asked through the server", asked, err)
 	}
 	if !gone(t, pidFile) {
-		t.Error("the CLI's server outlived its run")
+		t.Error("the harness's server outlived its run")
 	}
 
 	// A TEXT FUNCTION ON THE SAME ENTRY is still one process with the
@@ -177,7 +177,7 @@ func TestAServedRunsServerGoesWithARunCutShort(t *testing.T) {
 				t.Errorf("the run took %v to end", took)
 			}
 			if !gone(t, pidFile) {
-				t.Error("the CLI's server outlived the run")
+				t.Error("the harness's server outlived the run")
 			}
 			if asked, err := os.ReadFile(reportFile); err == nil { //nolint:gosec // the test's own file
 				t.Errorf("the usage command was asked (%q) of a server the run took down", asked)
@@ -268,7 +268,7 @@ func TestAServedRunsServerFailingIsAFailureThatSaysSo(t *testing.T) {
 				t.Errorf("err = %v quotes what the server printed on stdout", err)
 			}
 			if !gone(t, pidFile) {
-				t.Error("the CLI's server outlived the run")
+				t.Error("the harness's server outlived the run")
 			}
 			if _, _, spent, _ := host.snapshot(); spent.Input != tc.input {
 				t.Errorf("charged %+v, want %d in", spent, tc.input)
@@ -317,6 +317,6 @@ func TestARunEndedBeforeItsServerWasUpRanNothing(t *testing.T) {
 		t.Errorf("charged %+v for a run that never started", spends)
 	}
 	if !gone(t, pidFile) {
-		t.Error("the CLI's server outlived the run")
+		t.Error("the harness's server outlived the run")
 	}
 }

@@ -17,47 +17,47 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// THE FAKE PLAYS EVERY CLI WITH A TOOL ROUTE, not Claude Code alone: a script
-// whose CLI names another is played as that CLI is — the crewlet server found
-// where the shipped profile tells that CLI it is, the calls made with the
-// `_meta` that CLI sends, and the record written in the shape that CLI writes
+// THE FAKE PLAYS EVERY HARNESS WITH A TOOL ROUTE, not Claude Code alone: a script
+// whose harness names another is played as that harness is — the crewlet server found
+// where the shipped profile tells that harness it is, the calls made with the
+// `_meta` that harness sends, and the record written in the shape that harness writes
 // it, on stdout or in the file it keeps, as the real one does (measured; see
 // each profile). So the suite drives each shipped profile with only the binary
-// replaced, and a profile that stops reading its CLI's record fails here.
+// replaced, and a profile that stops reading its harness's record fails here.
 
-// fakeRecorder writes one CLI's record of a run as the run goes.
+// fakeRecorder writes one harness's record of a run as the run goes.
 type fakeRecorder interface {
-	// begin starts the record, once the CLI has its tools.
+	// begin starts the record, once the harness has its tools.
 	begin(model string, tools []string)
-	// asked records a response the way the CLI records it before it makes
+	// asked records a response the way the harness records it before it makes
 	// the response's calls.
 	asked(i int, r fakeResponse, ids []string)
-	// answered records what the CLI records once the calls have run.
+	// answered records what the harness records once the calls have run.
 	answered(i int, r fakeResponse, ids []string, results []string)
 	// end finishes the record and returns the run's exit status.
 	end(script fakeScript, total fakeUsage, last string) int
 }
 
-// fakeHarness is how one CLI is played: where its configuration names the
+// fakeHarness is how one harness is played: where its configuration names the
 // crewlet server, the `_meta` it sends with a call, and its recorder.
 type fakeHarness struct {
 	server   func() (command string, args []string, err error)
 	meta     func(id string) sdk.Meta
 	recorder func(script fakeScript, prompt []byte) (fakeRecorder, error)
-	// run, where set, plays the CLI whole instead — one whose run is more
+	// run, where set, plays the harness whole instead — one whose run is more
 	// than one process, as OpenCode's serve lifecycle is. It never returns.
 	run func(script fakeScript)
 }
 
-// fakeHarnesses are the CLIs the fake plays besides Claude Code, by profile name.
-// Each profile's own test file adds its CLI.
+// fakeHarnesses are the harnesses the fake plays besides Claude Code, by profile name.
+// Each profile's own test file adds its harness.
 var fakeHarnesses = map[string]fakeHarness{}
 
-// runFakeOtherHarness plays script.CLI. It never returns.
+// runFakeOtherHarness plays script.harness. It never returns.
 func runFakeOtherHarness(script fakeScript) {
 	fake, ok := fakeHarnesses[script.Harness]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "fake: no CLI %q\n", script.Harness)
+		fmt.Fprintf(os.Stderr, "fake: no harness %q\n", script.Harness)
 		os.Exit(70)
 	}
 	if fake.run != nil {
@@ -132,7 +132,7 @@ func playAs(script fakeScript, rec fakeRecorder, cs *sdk.ClientSession, meta fun
 		results := make([]string, len(r.Calls))
 		for j, c := range r.Calls {
 			if c.Own || cs == nil {
-				results[j] = "the CLI's own"
+				results[j] = "the harness's own"
 				continue
 			}
 			raw, _ := json.Marshal(orEmpty(c.Args))
@@ -188,7 +188,7 @@ func serverIn(raw []byte) (string, []string, error) {
 }
 
 // recordFile creates a record file and the encoder its lines are written
-// with, one write a line, as a CLI appends to its own.
+// with, one write a line, as a harness appends to its own.
 func recordFile(path string) (*json.Encoder, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func recordFile(path string) (*json.Encoder, error) {
 	return json.NewEncoder(f), nil
 }
 
-// fakeAs is an entry on the shipped profile agent names whose CLI is this
+// fakeAs is an entry on the shipped profile agent names whose harness is this
 // test binary playing script — the profile's tool route and request record,
 // with only the binary replaced. Signed in with a fake key: the fake reaches
 // no vendor.
@@ -258,7 +258,7 @@ func holdsTheRoute(t *testing.T, p *Provider, wantOpts llm.ServeOptions, wantSpe
 		t.Errorf("second request = %+v", turns[1])
 	}
 	if spent != wantSpent {
-		t.Errorf("the run was charged %+v in all (%+v), want the CLI's own total %+v", spent, spends, wantSpent)
+		t.Errorf("the run was charged %+v in all (%+v), want the harness's own total %+v", spent, spends, wantSpent)
 	}
 	if len(spends) < 2 || spends[0].Estimated {
 		t.Errorf("charged %+v, want each request as the record read it", spends)

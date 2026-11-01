@@ -61,7 +61,7 @@ const (
 	// its per-phase model keys (`llm_*`, a `cli-agent` provider among them)
 	// choose what the seat's children run and which credentials they are
 	// handed, a model entry's `run_in: direct` runs the seat's executor, a
-	// fully permissioned coding agent, on the engine host, and a seat's
+	// fully permissioned harness, on the engine host, and a seat's
 	// worker grants decide which tools a worker runs with. So a holder can
 	// run anything on every engine host and read
 	// whatever a process there can — the keyring included — and every

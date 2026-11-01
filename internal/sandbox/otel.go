@@ -18,7 +18,7 @@ import (
 //
 // # The problem this exists for
 //
-// A coding agent inside a sandbox emits OpenTelemetry, and the obvious wiring
+// A harness inside a sandbox emits OpenTelemetry, and the obvious wiring
 // — point OTEL_EXPORTER_OTLP_ENDPOINT at the real backend and set
 // OTEL_EXPORTER_OTLP_HEADERS to its ingest credential — puts that credential
 // inside a box running generated code. It is the company's telemetry backend,

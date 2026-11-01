@@ -644,13 +644,13 @@ type ModelCondition struct {
 	Key, Variable string
 
 	// ExpiresAt is when its credential expires, zero when that is unknown:
-	// a key, an environment value, a login, or a CLI that declares no
+	// a key, an environment value, a login, or a harness that declares no
 	// lifetime.
 	ExpiresAt time.Time
 
 	// RefusedAt is the latest auth failure on any live node when it is
 	// newer than the latest answer on any node, zero otherwise; RefusedSaid
-	// is what the CLI said then.
+	// is what the harness said then.
 	RefusedAt   time.Time
 	RefusedSaid string
 
@@ -1397,7 +1397,7 @@ var table = []rule{
 			return "", time.Time{}, false
 		},
 		remedy: modelRemedy("Give the model a credential that signs in: Settings › Models › " +
-			"the entry › Rotate for a token or a key, or sign the CLI in on the node " +
+			"the entry › Rotate for a token or a key, or sign the harness in on the node " +
 			"(`crewlet llm login <key>`) for a host login. Every call on it is refused " +
 			"until then, and its seats fall back to the next entry in their chain if " +
 			"they have one."),

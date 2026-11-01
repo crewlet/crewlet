@@ -29,22 +29,22 @@ import (
 
 // A golden company: two seats, one scripted model, one embedded broker.
 //
-// Its model entry is a REAL cli-agent entry whose CLI is this test binary
+// Its model entry is a REAL cli-agent entry whose harness is this test binary
 // ([scriptedEntry]), rather than a `mock` provider type, deliberately. A mock
 // type would be test-only machinery in shipped config — a thing an operator
 // could set and a thing this suite could get right while the real backend was
-// wrong. Driving the REAL backend against a scripted CLI tests what sits
+// wrong. Driving the REAL backend against a scripted harness tests what sits
 // between the model and everything asserted here: the transcript a run is
 // handed, the system prompt's own channel, the process launched in a seat's
-// own home on an allowlisted environment, the seat's tools served to the CLI's
+// own home on an allowlisted environment, the seat's tools served to the harness's
 // own loop over MCP and every call it makes through them, each model request
-// and its usage read off the CLI's record, and the fallback chain.
+// and its usage read off the harness's record, and the fallback chain.
 //
 // The model entry is one of TWO, because the executor is not a run on this
 // host. Every
-// agent seat's executor is its coding CLI's own run in a box, and only a CLI
+// agent seat's executor is its harness's own run in a box, and only a harness
 // with an in-box runner can take one — which `custom` has not. So every seat
-// here names the chain `[scripted, coder]`: the scripted CLI at the head, which
+// here names the chain `[scripted, coder]`: the scripted harness at the head, which
 // every phase on this host takes (onboarding, the reviewer, workers, side passes), and
 // `coder`, a Claude Code entry, which the executor's launch takes, skipping the
 // head. Its run happens in a real `direct` box whose `claude` is this binary
@@ -96,7 +96,7 @@ turn_engine:
 `
 
 // goldenCompany is the golden company document with its model entries driving
-// model's scripted CLI and its executor runs asking model too.
+// model's scripted harness and its executor runs asking model too.
 func goldenCompany(model *scriptedModel) string {
 	return fmt.Sprintf(companyDoc, model.sandbox(), model.entry("scripted"), model.coder("coder"))
 }
@@ -278,7 +278,7 @@ type node struct {
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
 // wired the way cmd/crewlet wires it. The one stub is the model, behind the
-// CLI the node's real backend launches ([scriptedEntry]).
+// harness the node's real backend launches ([scriptedEntry]).
 func start(t *testing.T) *node { return startNode(t, nodeSpec{}) }
 
 // startWith stands a node up over a company document the caller may amend, for
@@ -312,7 +312,7 @@ type nodeSpec struct {
 // no other reason — and a case asserting that a reference resolves to NOTHING
 // held only on a runner that happened not to export the variable.
 //
-// The harness itself resolves nothing through it: the scripted CLI signs in to
+// The harness itself resolves nothing through it: the scripted harness signs in to
 // nothing, and what its child needs is written into its entry's own `env`
 // ([scriptedEntry]).
 func nodeEnvironment(vars map[string]string) config.MapSource {
@@ -439,8 +439,8 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 	}
 }
 
-// scriptedModel is the model behind the scripted CLI ([scriptedEntry]): every
-// model request a CLI run makes reaches it as the one request the CLI posts
+// scriptedModel is the model behind the scripted harness ([scriptedEntry]): every
+// model request a harness run makes reaches it as the one request the harness posts
 // for it ([modelRequest]), and it answers by PHASE.
 //
 // Keyed on the tools the request offers rather than on request ORDER: a phase
@@ -449,18 +449,18 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 // the second executor request with the reviewer's reply. What distinguishes the
 // phases is what they can invoke — submit_work, submit_review, or neither —
 // which is exactly the fact the runner varies, and the tools are the ones the
-// CLI listed from the seat's server, never a list the prompt mentions.
+// harness listed from the seat's server, never a list the prompt mentions.
 type scriptedModel struct {
 	url string
 
-	// stateDir is where the entry driving this model's CLI keeps its seats'
+	// stateDir is where the entry driving this model's harness keeps its seats'
 	// homes ([scriptedEntry]) — this model's own, so no two nodes' entries
 	// share one unless they share the model. The coder entry keeps its own
-	// beside them ([codingEntry]; each CLI under <state_dir>/<harness>), and
+	// beside them ([codingEntry]; each harness under <state_dir>/<harness>), and
 	// the boxes its runs happen in and the shim they run live under it too.
 	stateDir string
 
-	// shim is the stand-in coding CLI a box's setup installs as its
+	// shim is the stand-in harness a box's setup installs as its
 	// `claude`, answering from this model ([codingShim]).
 	shim string
 
@@ -473,7 +473,7 @@ type scriptedModel struct {
 	mu      sync.Mutex
 	calls   []string
 	offered []string
-	// prompts is the transcript of every request's run, as the CLI read it
+	// prompts is the transcript of every request's run, as the harness read it
 	// on stdin.
 	prompts []string
 	// results is every tool result each request handed the model back —
@@ -482,7 +482,7 @@ type scriptedModel struct {
 	// tool result rides the conversation, not the system prompt.
 	results [][]string
 
-	// systems is the SYSTEM prompt of every request, as the CLI read it off
+	// systems is the SYSTEM prompt of every request, as the harness read it off
 	// its own channel, which is where the turn-start prefetch's blocks
 	// land. Captured because "the block was rendered" and "the model was
 	// shown it" are different claims and only the second one matters.
@@ -589,14 +589,14 @@ func (m *scriptedModel) shouldEngage() bool {
 	return true
 }
 
-// newScriptedModel is a scripted model whose CLI keeps its state in a
+// newScriptedModel is a scripted model whose harness keeps its state in a
 // directory of the test's own.
 func newScriptedModel(t *testing.T) *scriptedModel {
 	t.Helper()
 	return newScriptedModelIn(t, t.TempDir())
 }
 
-// newScriptedModelIn is a scripted model whose CLI keeps its state under
+// newScriptedModelIn is a scripted model whose harness keeps its state under
 // stateDir — for a caller off the test's goroutine, where t.TempDir may not
 // fail the test, and which names a directory it already holds instead.
 func newScriptedModelIn(t *testing.T, stateDir string) *scriptedModel {
@@ -607,7 +607,7 @@ func newScriptedModelIn(t *testing.T, stateDir string) *scriptedModel {
 	return m
 }
 
-// installShim writes the stand-in coding CLI answering from this model
+// installShim writes the stand-in harness answering from this model
 // ([codingShim]), for its company's boxes to install.
 //
 // ERRORF, NOT FATALF: a cluster member's model is built off the test's
@@ -617,7 +617,7 @@ func (m *scriptedModel) installShim(t *testing.T) {
 	t.Helper()
 	shim, err := writeCodingShim(filepath.Join(m.stateDir, "coding-cli"), m.url)
 	if err != nil {
-		t.Errorf("installing the stand-in coding CLI: %v", err)
+		t.Errorf("installing the stand-in harness: %v", err)
 	}
 	m.shim = shim
 }
@@ -649,7 +649,7 @@ func (m *scriptedModel) listen(t *testing.T, handler http.HandlerFunc) {
 	m.close = srv.Close
 }
 
-// entry is the providers.llm entry, under key, whose CLI answers from this
+// entry is the providers.llm entry, under key, whose harness answers from this
 // model ([scriptedEntry]).
 func (m *scriptedModel) entry(key string) string {
 	return scriptedEntry(key, m.url, m.stateDir)
@@ -764,7 +764,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 // auxiliaryPass names which prefetch pass a request is, or "" for a phase.
 //
 // Keyed on each pass's own system prompt, which is the only thing that
-// distinguishes them: they share a CLI, a model and an empty tool list.
+// distinguishes them: they share a harness, a model and an empty tool list.
 // Matching on a phrase each prompt OPENS with, so a later edit to the
 // guidance below it cannot silently turn every pass back into "execute".
 func auxiliaryPass(system string) string {
@@ -853,7 +853,7 @@ func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
 
 // misrouted names every request whose system prompt came on the wrong channel:
 // a seat's phase — one offering a tool only the tool loop offers — anywhere but
-// the append channel, which keeps the CLI's own prompt, and an auxiliary pass
+// the append channel, which keeps the harness's own prompt, and an auxiliary pass
 // anywhere but the replace channel, which has no use for it.
 func (m *scriptedModel) misrouted() []string {
 	m.mu.Lock()
@@ -886,7 +886,7 @@ func (m *scriptedModel) seen() []string {
 	return append([]string(nil), m.calls...)
 }
 
-// promptsOf is the transcript every request of phase ran on, as the CLI read
+// promptsOf is the transcript every request of phase ran on, as the harness read
 // it on stdin — where a note the turn read before the phase opens it.
 func (m *scriptedModel) promptsOf(phase string) []string {
 	m.mu.Lock()
@@ -910,7 +910,7 @@ func (m *scriptedModel) systemPrompts() []string {
 // toolResults is every tool result the model was handed back, flattened.
 //
 // What a tool ANSWERED is only visible here: it rides the conversation — the
-// CLI's own run, or the transcript a later run is started with
+// harness's own run, or the transcript a later run is started with
 // ([modelRequest.toolResults]) — never the system prompt, so a test asserting
 // that a tool's output reached the model has nowhere else to read it.
 func (m *scriptedModel) toolResults() []string {

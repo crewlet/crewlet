@@ -157,7 +157,7 @@ func evalModel(ctx context.Context, environ config.Source, companyPath string, s
 	return provider, companySecrets.Close, nil
 }
 
-// assistantProvider is the CLI agent entry key names, refused when the
+// assistantProvider is the harness agent entry key names, refused when the
 // company may not run the assistant on it.
 func assistantProvider(company *config.Company, keys []string, resolver *config.Resolver,
 	key string) (*harness.Provider, error) {

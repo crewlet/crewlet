@@ -531,8 +531,8 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	}
 
 	body := stub.body("/sandboxes")
-	// THE TEMPLATE IS THE CODING AGENT'S. A bare box has no coding-agent
-	// CLI in it, so the run would fail at its first command with "command
+	// THE TEMPLATE IS THE HARNESS'S. A bare box has no harness
+	// harness in it, so the run would fail at its first command with "command
 	// not found" — a template problem that reads as a broken runner.
 	if body["templateID"] != "claude" {
 		t.Errorf("templateID = %v, want the claude-code template", body["templateID"])
@@ -615,7 +615,7 @@ func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
 	}
 }
 
-// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the coding agent's
+// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the harness's
 // own.
 //
 // There is no per-run template, and that is the point of the pair: sizing is a
@@ -742,7 +742,7 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 // A COMMAND IS FRAMED AS CONNECT AND RUN THROUGH A SHELL.
 //
 // Every caller hands over a shell line — pipes, redirects, `&&` — because
-// that is what a setup step and a coding-agent invocation are. envd's API
+// that is what a setup step and a harness invocation are. envd's API
 // takes an argv, so the shell has to be named.
 func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 	t.Parallel()

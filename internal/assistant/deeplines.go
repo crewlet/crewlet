@@ -7,13 +7,13 @@ import (
 
 // WHAT A PERSON IS SHOWN OF A DEEP RUN AT WORK.
 //
-// A run's live reading is its coding CLI's own transcript
+// A run's live reading is its harness's own transcript
 // (internal/sandbox/executor): every tool call as "[tool] <name>:
 // <subject>", where the subject is a command or a file path on the engine's
 // host ("Write: /private/tmp/.../assistant-boxes/.../outbox/report.md"), and
 // every paragraph the model writes. Drawn as it is, the deep-work card showed a
 // person the engine's box paths, its MCP tool names ("mcp__crewlet__api_request")
-// and its CLI's internals ("ToolSearch: select:..."). So each line is put in
+// and its harness's internals ("ToolSearch: select:..."). So each line is put in
 // the person's words here, once, before it is kept:
 //
 //   - a call to Crewlet is left out, because the run's step already lists it,
@@ -26,11 +26,11 @@ import (
 // The run's report is cut the same way before the model reads it, so an
 // answer cannot repeat a host path either.
 
-// crewletToolPrefix opens the name the CLI gives a tool of the engine's own
+// crewletToolPrefix opens the name the harness gives a tool of the engine's own
 // MCP server.
 const crewletToolPrefix = "mcp__crewlet__"
 
-// toolVerbs are the plain words for the coding CLIs' own tools, by the tool's
+// toolVerbs are the plain words for the harnesses' own tools, by the tool's
 // name in lower case. A tool that works on one file names it.
 var toolVerbs = map[string]struct {
 	verb     string

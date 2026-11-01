@@ -124,7 +124,7 @@ func TestEntriesOnOneSignInSitOutTogether(t *testing.T) {
 
 // A MODEL-SCOPED LIMIT HOLDS ONLY THAT MODEL. "Opus limit" (seven_day_opus)
 // leaves Sonnet on the same plan answering, so a window whose report names one
-// model holds the entries that hand the CLI that model argument and no other.
+// model holds the entries that hand the harness that model argument and no other.
 //
 // Mutation: keep a model's window on the plan-wide record, and the Sonnet entry
 // sits out an Opus limit.
@@ -156,7 +156,7 @@ func TestAModelScopedLimitHoldsOnlyThatModel(t *testing.T) {
 }
 
 // A REFRESH WRITE-BACK KEEPS THE SIGN-IN. A login kept in files is refreshed by
-// the CLI and carried back by the engine many times a day, and that is the same
+// the harness and carried back by the engine many times a day, and that is the same
 // account: an id read off the files' bytes lifted a sit-out at every refresh.
 // The login's install record moves only on a new login, so a fresh `crewlet
 // llm login` is a clean plan and a refresh is not.
@@ -345,7 +345,7 @@ func setUnnamed(p *Provider, step int) {
 }
 
 // AN ENV SIGN-IN IS AS MANY SIGN-INS AS THE PLACES IT REACHES. A Bedrock entry
-// on ambient AWS credentials hands its CLI one switch whatever its region, so
+// on ambient AWS credentials hands its harness one switch whatever its region, so
 // keyed by its credentials alone, a throttle on the primary region benched its
 // regional fallback; Vertex projects and gateway addresses collided the same
 // way. The profile's identity_env names what says where a call goes.

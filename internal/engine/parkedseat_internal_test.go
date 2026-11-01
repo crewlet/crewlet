@@ -18,7 +18,7 @@ import (
 // each of them once the park releases.
 //
 // Two answers the seat owes are both refused at the turn gate while every
-// member their relaunch could take is at its limit: a coding CLI's entry that
+// member their relaunch could take is at its limit: a harness's entry that
 // sits out a spent plan, in the catalogue this node launches on. A refusal
 // there comes after the node admitted
 // the turn, so the admission is released at once, and a release that woke the
@@ -79,7 +79,7 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 }
 
 // heldProbe is a model whose call is out until the case lets it go, as a probe's
-// call is for the whole run of the entry's CLI: entered says a call is out.
+// call is for the whole run of the entry's harness: entered says a call is out.
 type heldProbe struct {
 	entered chan struct{}
 	release chan struct{}
@@ -137,7 +137,7 @@ func gatedSpyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy,
 //
 // The seat is parked on its models' limit and owes a person's answer, which the
 // turn gate refuses while the park stands. From the instant the chain's probe
-// is due until its call comes back, a full run of the entry's CLI, that
+// is due until its call comes back, a full run of the entry's harness, that
 // instant is past and the park still stands. The refusal named it, and the
 // answer's retry re-checked at once, over and over: thousands of times a
 // second for as long as the call was out, each re-reading the run, opening the

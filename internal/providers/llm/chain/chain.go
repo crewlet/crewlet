@@ -6,13 +6,13 @@
 // NEXT model: [llm.ErrorKind.Retryable] says whether another member is worth
 // trying at all. A fatal is where the walk stops — a call the engine or its
 // host cannot make, which is the operator's to fix rather than an outage for
-// the next member to carry the seat through. A CLI that ran and failed is not
+// the next member to carry the seat through. A harness that ran and failed is not
 // one: its vendor's outage or its own crash is not the next member's, so the
 // walk moves on.
 //
 // # The next member continues from the session's record
 //
-// Fallback is per CALL: one CLI run, which for a seat at work is a whole loop
+// Fallback is per CALL: one harness run, which for a seat at work is a whole loop
 // of model requests and tool calls. A member that fails partway through has
 // already had calls run — the phase's tool host ran them, recorded them and
 // charged what the run spent — and its failure undoes none of it. Starting the
@@ -20,7 +20,7 @@
 // second issue, written by a model that never saw the first.
 //
 // So the next member is handed the SAME request — the same conversation and
-// the same host — and its backend shows its CLI what the host holds since the
+// the same host — and its backend shows its harness what the host holds since the
 // conversation was last folded ([llm.ToolHost.Pending]) as work already done,
 // which the model reads rather than does again. What is dropped is only the
 // failed member's unfinished prose: a streaming consumer is told the attempt
@@ -31,7 +31,7 @@
 //
 // A member whose run the host ENDED — the phase submitted, parked, ran out of
 // rounds or was stopped, or the run was cut short for something the next run
-// of the loop answers — fails the way any CLI that is stopped mid-run does. No
+// of the loop answers — fails the way any harness that is stopped mid-run does. No
 // other member continues that run: what happens next is the tool loop's, which
 // holds the host and reads the outcome off its own record, and a second member
 // would only redo or overrun a phase that is over. [llm.ToolHost.Halted]
@@ -39,7 +39,7 @@
 //
 // # A seat's executor falls back per launch
 //
-// A seat's EXECUTOR is not a call this walks ([Pick]): its run is the CLI's
+// A seat's EXECUTOR is not a call this walks ([Pick]): its run is the harness's
 // own, in a box, and hours long, so there is no call to continue on the next
 // member once it started — a run that meets a limit midway is not relaunched
 // elsewhere. What can still move is where the next run starts, so the launch
@@ -238,7 +238,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			return nil, err
 		}
 		if req.Tools != nil && req.Tools.Halted() {
-			// THE HOST ENDED THIS RUN, and a CLI stopped mid-run fails
+			// THE HOST ENDED THIS RUN, and a harness stopped mid-run fails
 			// like one that broke: no member continues a phase that is
 			// decided — see the package doc. Not a hand-off, so nothing
 			// is announced as one.
@@ -280,7 +280,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 // launches, so the seat's mail was taken back into the limit until the broker
 // dead-lettered it.
 //
-// The caller filters members that can never take a launch (a CLI with no
+// The caller filters members that can never take a launch (a harness with no
 // in-box runner) BEFORE calling: that is a fact of the configuration, not a
 // refusal of the moment, and announcing it as a hand-off on every launch
 // would publish a fallback nothing fell from.
@@ -361,7 +361,7 @@ type Limit struct {
 	ResetsAt time.Time
 	// Said is the head member's own sentence, for whoever is shown why.
 	Said string
-	// Agent and Subscription are the head member's CLI and whether it signs
+	// Agent and Subscription are the head member's harness and whether it signs
 	// in on a plan ([llm.Error.Agent]): what the limit is called.
 	Agent        string
 	Subscription bool
@@ -441,7 +441,7 @@ type unready interface {
 // THE CHAIN FAILS ONLY WHEN EVERY MEMBER WOULD, and its failure is the one
 // that clears first: a spent plan, which ends at a known reset (the earliest
 // of them, an unnamed reset after every named one), over a login somebody has
-// to mend, over a CLI that cannot start.
+// to mend, over a harness that cannot start.
 func Unready(ctx context.Context, members []llm.Provider) error {
 	if len(members) == 0 {
 		return nil

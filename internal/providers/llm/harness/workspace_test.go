@@ -63,7 +63,7 @@ func TestSeatsDoNotShareAHome(t *testing.T) {
 }
 
 // Volatile state is deleted before and after every call. A second, invisible
-// memory inside the CLI would make turns non-reproducible and carry one
+// memory inside the harness would make turns non-reproducible and carry one
 // task's context into the next.
 func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 	t.Parallel()
@@ -104,10 +104,10 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 }
 
 // WHAT A CALL LEAVES IN TMPDIR GOES WITH THE SEAT'S OTHER LEFTOVERS, for every
-// CLI, whatever its profile lists. The engine points TMPDIR inside the seat's
-// home and every CLI writes there, so a profile that forgot the directory let
+// harness, whatever its profile lists. The engine points TMPDIR inside the seat's
+// home and every harness writes there, so a profile that forgot the directory let
 // its home grow by what each call left. And the directory is there, private
-// and empty, when the next call starts: a CLI handed a TMPDIR that does not
+// and empty, when the next call starts: a harness handed a TMPDIR that does not
 // exist fails its first temporary file.
 func TestTheSeatsTemporaryDirectoryIsPrunedAndRemade(t *testing.T) {
 	t.Parallel()
@@ -204,7 +204,7 @@ func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 }
 
 // The login is seeded in and a REFRESHED one is synced back out. Discarding
-// the file the CLI rewrote logs the whole fleet out at the next expiry,
+// the file the harness rewrote logs the whole fleet out at the next expiry,
 // because most vendors rotate the refresh token with the access token.
 func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 	t.Parallel()
@@ -230,7 +230,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 		t.Fatalf("seeded %q", got)
 	}
 
-	// The CLI refreshes in place.
+	// The harness refreshes in place.
 	if err := os.WriteFile(seeded, []byte(`{"token":"new"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 }
 
 // A missing login is NOT a failure to acquire. The call then fails with the
-// vendor's own "not authenticated", which names the CLI; refusing here would
+// vendor's own "not authenticated", which names the harness; refusing here would
 // take a company down at boot over one provider's credentials.
 func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 	t.Parallel()
@@ -280,16 +280,16 @@ func TestAVolatilePathCannotEscapeTheSeatHome(t *testing.T) {
 	}
 }
 
-// TWO CLIs ON ONE STATE DIRECTORY NEVER MEET EACH OTHER'S FILES. Each keeps
+// TWO HARNESSES ON ONE STATE DIRECTORY NEVER MEET EACH OTHER'S FILES. Each keeps
 // its share under <state dir>/<harness>: its own login, its own seat homes. Keyed
-// by the directory alone, the second CLI was refused for the life of the
+// by the directory alone, the second harness was refused for the life of the
 // process, so moving a providers.llm key from claude-code to codex produced a
 // revision every running node refused while a restarted one applied it — and
 // had it been let through, codex would have seeded its seats from, and pruned,
 // a login it cannot read.
 //
 // Mutation: key the registry by the directory alone and root every workspace
-// at it, and the two CLIs share one login here.
+// at it, and the two harnesses share one login here.
 func TestTwoHarnessesOnOneStateDirectoryKeepSeparateWorkspaces(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -300,10 +300,10 @@ func TestTwoHarnessesOnOneStateDirectoryKeepSeparateWorkspaces(t *testing.T) {
 	}
 	codex, err := Shared(dir, "codex", testProfile(t))
 	if err != nil {
-		t.Fatalf("a second CLI on one state directory was refused: %v", err)
+		t.Fatalf("a second harness on one state directory was refused: %v", err)
 	}
 	if claude == codex {
-		t.Fatal("two CLIs on one state directory got one workspace")
+		t.Fatal("two harnesses on one state directory got one workspace")
 	}
 	for ws, agent := range map[*Workspace]string{claude: "claude-code", codex: "codex"} {
 		if want := filepath.Join(dir, agent); ws.Root() != want {
@@ -314,7 +314,7 @@ func TestTwoHarnessesOnOneStateDirectoryKeepSeparateWorkspaces(t *testing.T) {
 		}
 	}
 	if claude.CredentialsDir() == codex.CredentialsDir() {
-		t.Fatalf("two CLIs share the login directory %q", claude.CredentialsDir())
+		t.Fatalf("two harnesses share the login directory %q", claude.CredentialsDir())
 	}
 
 	writeCreds(t, &Provider{ws: claude}, `{"token":"claude-login"}`)
@@ -388,7 +388,7 @@ func TestSwitchingBackToAHarnessFindsItsLoginIntact(t *testing.T) {
 }
 
 // AN AGENT NAMES ONE DIRECTORY, and a name that could climb out of the state
-// directory, or that two CLIs could both resolve to, is refused rather than
+// directory, or that two harnesses could both resolve to, is refused rather than
 // written under.
 func TestAnAgentThatIsNotOnePathElementIsRefused(t *testing.T) {
 	t.Parallel()
@@ -401,12 +401,12 @@ func TestAnAgentThatIsNotOnePathElementIsRefused(t *testing.T) {
 	}
 }
 
-// The same CLI over one directory is the SUPPORTED case — it is how per-phase
+// The same harness over one directory is the SUPPORTED case — it is how per-phase
 // models work off a single login — and both entries must get the one
 // workspace, or each would prune the other's live seat homes.
 //
 // Mutation: key the registry by anything more than the resolved directory and
-// the CLI, and the two entries get two workspaces.
+// the harness, and the two entries get two workspaces.
 func TestTwoEntriesOnOneDirectoryShareOneWorkspace(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -568,7 +568,7 @@ func TestAFailedAcquireLeavesNoWorkingDirectory(t *testing.T) {
 	}
 }
 
-// AND INJECTIVE. This directory is a seat's HOME — its coding-CLI session,
+// AND INJECTIVE. This directory is a seat's HOME — its harness session,
 // its history, its credentials — so two seats that land on one slug get one
 // home, which is the cross-seat read this package exists to prevent. The
 // rendering used to collide two ways: every unsafe character folded to '-',

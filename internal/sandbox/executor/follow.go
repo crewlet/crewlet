@@ -15,8 +15,8 @@ import (
 //
 // # The same two accounts Collect reads, settled as they grow
 //
-// The transcript the CLI's decoder builds out of its event stream, and the
-// error stream for a job whose stream has said nothing yet (a CLI that failed
+// The transcript the harness's decoder builds out of its event stream, and the
+// error stream for a job whose stream has said nothing yet (a harness that failed
 // to start). Each read takes only what was written since the last one — a
 // ranged read of each stream's end, sized to what has grown — feeds the new
 // complete lines through the same decoder for as long as the reading lasts,
@@ -41,7 +41,7 @@ import (
 //
 // One transcript line stands for one event whose raw size is dominated by what
 // the event echoes — a tool's whole output on a stream that carries it (Claude
-// Code's carries it twice: the result block, and the CLI's own copy beside it),
+// Code's carries it twice: the result block, and the harness's own copy beside it),
 // tens of KiB for a file read or a long command. A mebibyte of stream is the
 // last dozen or more such events whole, which is a screen of activity at once,
 // in one ranged read — and a reading that began further back would show a
@@ -50,7 +50,7 @@ const liveWindow = 1 << 20
 
 // liveReadFloor is the least one read asks for beyond what the reading has not
 // taken yet: the growth of a stream between two reads a couple of seconds
-// apart, at the rate a coding agent writes when it is not echoing a file.
+// apart, at the rate a harness writes when it is not echoing a file.
 const liveReadFloor = 64 << 10
 
 // liveBacklog is the most one read catches up. A stream that grew by more than
@@ -92,7 +92,7 @@ func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveR
 	if err != nil {
 		return sandbox.LiveRead{}, err
 	}
-	// DONE MEANS WHOLE. The wrapper writes its marker after the CLI has
+	// DONE MEANS WHOLE. The wrapper writes its marker after the harness has
 	// exited, so nothing more is written to either stream: what is held
 	// back is settled, and an unfinished last line is a line.
 	done := len(marker) > 0

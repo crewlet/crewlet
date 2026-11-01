@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// termGrace is how long a terminated CLI has to exit before it is killed.
+// termGrace is how long a terminated harness has to exit before it is killed.
 //
 // The timeout has already fired, so the call is lost either way; this decides
 // only whether the tree gets to flush. Five seconds is enough for a Node
@@ -39,7 +39,7 @@ const termGrace = 5 * time.Second
 
 // stderrTail is how many lines of a failed child's stderr are reported.
 //
-// A CLI that crashes on startup prints a stack trace; the first line names
+// A harness that crashes on startup prints a stack trace; the first line names
 // the failure and the rest names the vendor's own internals. Fifty lines
 // carries a real Node or Rust trace intact while keeping one bad provider out
 // of the log budget for every other seat. Same figure the MCP supervisor uses.
@@ -47,13 +47,13 @@ const stderrTail = 50
 
 // maxOutput bounds what is read from a child's stdout and stderr.
 //
-// A CLI told to stream JSONL can emit tens of megabytes for a long run, and
+// A harness told to stream JSONL can emit tens of megabytes for a long run, and
 // all of it is held in memory to be parsed. 32 MiB is far above any real
 // completion — the largest observed is under 2 MiB — and far below what would
 // put the engine under memory pressure with max_concurrent processes running.
 const maxOutput = 32 << 20
 
-// invocation is one CLI call, fully resolved.
+// invocation is one harness call, fully resolved.
 //
 // Its env is the child's WHOLE environment, from [buildEnv], and it is
 // required: [run] refuses a nil one, because os/exec reads a nil Cmd.Env as
@@ -96,7 +96,7 @@ type invocation struct {
 	// ([rawResult.stopped]). Nil never closes.
 	stop <-chan struct{}
 
-	// failOn are sentinels which, written on stderr, mean the CLI is
+	// failOn are sentinels which, written on stderr, mean the harness is
 	// running without the confinement its profile gave it: the first line
 	// carrying one stops the run at once — see
 	// [harnessprofile.Profile.FailureMarkers].
@@ -106,7 +106,7 @@ type invocation struct {
 // lineTee forwards complete lines to a callback while passing every byte
 // through to the real sink.
 //
-// A CLI's stdout arrives in whatever chunks the pipe hands over, which split
+// A harness's stdout arrives in whatever chunks the pipe hands over, which split
 // mid-line, so a consumer that wants JSONL events has to reassemble them. The
 // tail after the last newline is deliberately NOT delivered: a partial JSON
 // object is not parseable, and the buffered copy is what the extractor reads
@@ -166,11 +166,11 @@ func (t *lineTee) Write(b []byte) (int, error) {
 var errHostStopped = errors.New("the run was stopped by the engine")
 
 // failureMarkerError is the cause a run's context is cancelled with when the
-// CLI wrote one of [invocation.failOn] on stderr.
+// harness wrote one of [invocation.failOn] on stderr.
 type failureMarkerError struct{ line string }
 
 func (e *failureMarkerError) Error() string {
-	return "the CLI reported its confinement failed to load: " + e.line
+	return "the harness reported its confinement failed to load: " + e.line
 }
 
 // stderrWatch forwards stderr to its sink and calls stop with the first line
@@ -211,8 +211,8 @@ type rawResult struct {
 	// produced a warning that could not say which had happened.
 	droppedStdout, droppedStderr int
 
-	// heldStdout and heldStderr report a stream that something the CLI
-	// started still held open [invocation.grace] after the CLI was done —
+	// heldStdout and heldStderr report a stream that something the harness
+	// started still held open [invocation.grace] after the harness was done —
 	// exited, or its call ended, whichever came first — so its read was cut
 	// there. Separate for the reason the dropped counts are: a held stdout
 	// is an answer nobody can show is whole, and a held stderr costs only
@@ -221,7 +221,7 @@ type rawResult struct {
 
 	// waitErr is what waiting for a child that RAN reported besides its exit
 	// status: the call's context ending under a child that then exited 0, a
-	// prompt something the CLI started held unread on stdin past the grace
+	// prompt something the harness started held unread on stdin past the grace
 	// ([exec.ErrWaitDelay]), a signal that could not be sent. A child that
 	// never ran is [run]'s error instead, and leaves no result at all.
 	waitErr error
@@ -241,7 +241,7 @@ func (r *rawResult) unfinished() string {
 	switch {
 	case r.heldStdout:
 		return fmt.Sprintf("something it started still held its stdout open %s after "+
-			"the CLI was done, so what it printed cannot be shown to be whole", r.grace)
+			"the harness was done, so what it printed cannot be shown to be whole", r.grace)
 	case r.waitErr != nil:
 		return fmt.Sprintf("waiting for it to finish failed: %v", r.waitErr)
 	default:
@@ -250,10 +250,10 @@ func (r *rawResult) unfinished() string {
 }
 
 // run executes one invocation, terminating the whole process TREE when its
-// call ends first, and when something the CLI left behind holds the call's
+// call ends first, and when something the harness left behind holds the call's
 // pipes past the grace.
 //
-// The tree, not the process: a coding CLI is a launcher over a Node or Bun
+// The tree, not the process: a harness is a launcher over a Node or Bun
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
 //
@@ -262,13 +262,13 @@ func (r *rawResult) unfinished() string {
 // happened to a child that did start — its exit, the deadline, a stream
 // something it left behind still held, a wait that failed — is in the result,
 // because only the caller can say what each means, and a caller that read
-// every error as "could not start" stopped a seat's fallback chain on a CLI
+// every error as "could not start" stopped a seat's fallback chain on a harness
 // that had printed a whole answer and exited 0 ([Provider.Complete]).
 func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
 	// Env is nil the ENGINE's own environment — its keyring, its Tier A
 	// tokens, the org's chat token and every provider key — which is the
-	// one thing the allowlist exists to keep out of a vendor's CLI. The
+	// one thing the allowlist exists to keep out of a vendor's harness. The
 	// version probe reached here with none once and ran `--version` with
 	// more access than any completion ever got; refused here, the next
 	// caller that forgets cannot do the same silently.
@@ -316,8 +316,8 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 
 	// THE OUTPUT ON PIPES OF OUR OWN, handed to the child as files. Given
 	// any other io.Writer, os/exec makes the pipe itself and copies it on a
-	// goroutine its Wait waits for, and when something the CLI started still
-	// holds a pipe after the CLI has exited, it closes both once WaitDelay is
+	// goroutine its Wait waits for, and when something the harness started still
+	// holds a pipe after the harness has exited, it closes both once WaitDelay is
 	// out and reports one [exec.ErrWaitDelay] for the pair. Which stream was
 	// held is the whole question: a held stderr costs only diagnosis and the
 	// answer stands, while a held stdout is an answer nobody can show is
@@ -363,10 +363,10 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		}
 	}()
 
-	// THE GRACE RUNS FROM WHICHEVER COMES FIRST, the CLI exiting or its call
+	// THE GRACE RUNS FROM WHICHEVER COMES FIRST, the harness exiting or its call
 	// ending, which is os/exec's own rule for WaitDelay: a call stopped under
 	// a stubborn tree is then let go one grace after it ended rather than
-	// two, the first spent waiting for the CLI to exit and the second for
+	// two, the first spent waiting for the harness to exit and the second for
 	// its pipes.
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
@@ -380,7 +380,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	letGoBy := time.Now().Add(in.grace)
 	if !waited {
 		// Bounded: Cancel has signalled the group, and os/exec kills the
-		// CLI once WaitDelay is out.
+		// harness once WaitDelay is out.
 		waitErr = <-exited
 	}
 
@@ -426,8 +426,8 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// one that was cut.
 	res.heldStdout = !outPipe.endedBy(letGoBy)
 	res.heldStderr = !errPipe.endedBy(letGoBy)
-	// A HOLDER IS A SURVIVOR, and it goes with the group. Something the CLI
-	// started that still held one of the call's pipes a grace after the CLI
+	// A HOLDER IS A SURVIVOR, and it goes with the group. Something the harness
+	// started that still held one of the call's pipes a grace after the harness
 	// was done — its stdout or stderr, or its stdin with the prompt unread,
 	// which os/exec reports as ErrWaitDelay — is attached to a call that is
 	// over, and closing the pipe under it ends none of it: a Node runtime
@@ -549,7 +549,7 @@ func (p *outputPipe) release() {
 
 // cappedBuffer accumulates output up to a limit and then drops the rest.
 //
-// Dropping rather than failing the call: a CLI whose output overran the cap
+// Dropping rather than failing the call: a harness whose output overran the cap
 // has almost certainly already emitted its answer, and turning that into an
 // error would lose a completion the operator paid for. The overrun is
 // reported by [cappedBuffer.Truncated] so the caller can say so.
@@ -583,7 +583,7 @@ func (c *cappedBuffer) Truncated() int { return c.dropped }
 // were dropped.
 //
 // The depth is a constant rather than a parameter because there is one honest
-// answer to "how much of a crashing CLI's stderr does an operator need", and
+// answer to "how much of a crashing harness's stderr does an operator need", and
 // every caller here is reporting exactly that; a per-call number would be a
 // knob nobody has a reason to set differently.
 func tail(s string) string {
@@ -596,14 +596,14 @@ func tail(s string) string {
 		len(lines)-stderrTail, strings.Join(kept, "\n"))
 }
 
-// extract reads a CLI's stdout into the answer and its token counts.
+// extract reads a harness's stdout into the answer and its token counts.
 type extracted struct {
 	text       string
 	input      int
 	output     int
 	cacheRead  int
 	cacheWrite int
-	// reasoning is reasoning tokens a CLI reports APART from output, which
+	// reasoning is reasoning tokens a harness reports APART from output, which
 	// the completion adds to the output count — see [harnessprofile.UsagePaths].
 	reasoning int
 	// toolPrompt is the prompt a model-side tool put in front of the model,
@@ -614,16 +614,16 @@ type extracted struct {
 	// estimates. `crewlet llm doctor` prints which of the two a provider
 	// gets, because a budget built on estimates is a different promise.
 	reported bool
-	// failed is the CLI's own is_error flag, for a vendor that reports a
+	// failed is the harness's own is_error flag, for a vendor that reports a
 	// failure inside a successful exit.
 	failed bool
 
-	// located reports that the profile FOUND where this CLI puts its
+	// located reports that the profile FOUND where this harness puts its
 	// answer: a declared text path resolved to a string — empty or not —
 	// or the output mode makes the whole of stdout the answer.
 	//
 	// THREE-VALUED EXTRACTION, and it has to be. "The model answered with
-	// nothing" and "this profile does not describe this CLI's output" are
+	// nothing" and "this profile does not describe this harness's output" are
 	// different facts about a run, and collapsing them into an empty
 	// string is what made a Claude Code telemetry envelope — session id,
 	// millisecond timings, a token breakdown, `"result":""` — render on a
@@ -636,7 +636,7 @@ type extracted struct {
 	located bool
 }
 
-// extract pulls the answer and the usage out of one CLI's stdout.
+// extract pulls the answer and the usage out of one harness's stdout.
 func extract(p harnessprofile.Profile, stdout string) extracted {
 	switch p.EffectiveOutput() {
 	case harnessprofile.OutputText:
@@ -652,7 +652,7 @@ func extract(p harnessprofile.Profile, stdout string) extracted {
 
 // extractObject reads one JSON document.
 //
-// A CLI that printed a banner before its JSON is common enough to handle
+// A harness that printed a banner before its JSON is common enough to handle
 // here: the outermost braces are tried when the whole of stdout does not
 // parse, which costs nothing and saves an operator an override.
 func extractObject(p harnessprofile.Profile, stdout string) extracted {
@@ -663,7 +663,7 @@ func extractObject(p harnessprofile.Profile, stdout string) extracted {
 		}
 	}
 	if !ok {
-		// Not JSON at all: the CLI printed prose, which is still an
+		// Not JSON at all: the harness printed prose, which is still an
 		// answer. Reporting an unparseable-output error here would fail
 		// a turn over a vendor's banner.
 		//
@@ -781,7 +781,7 @@ func (e *streamExtractor) result() extracted {
 // THREE WAYS TO TAKE NOTHING, and only one of them is silent. No report to read
 // is a profile that reads none, or a report the place that obtains it already
 // failed to get and said so. A report that arrived and could not be read is
-// different: the CLI did its part and this profile no longer describes what it
+// different: the harness did its part and this profile no longer describes what it
 // printed — a release that renamed `data.tokens` — so every call is charged an
 // estimate, and nothing would say why if this did not.
 type usageOutcome int
@@ -818,7 +818,7 @@ func (o usageOutcome) String() string {
 }
 
 // applyUsageReport overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose CLI writes one or prints one to a usage command —
+// said, for a profile whose harness writes one or prints one to a usage command —
 // see [harnessprofile.Profile.UsageFileArgs] and [harnessprofile.Profile.UsageArgs] —
 // and says what it made of it.
 //
@@ -829,7 +829,7 @@ func (o usageOutcome) String() string {
 // answer there.
 //
 // Taking nothing leaves the counts to whatever stdout reported, which for a
-// CLI that reports none there is the estimate.
+// harness that reports none there is the estimate.
 func (e *extracted) applyUsageReport(p harnessprofile.Profile, raw string) usageOutcome {
 	if !p.ReadsUsageReport() || strings.TrimSpace(raw) == "" {
 		return usageNoReport
@@ -889,16 +889,16 @@ func textOf(p harnessprofile.Profile, doc map[string]any) (string, bool) {
 }
 
 // classifyFailureEvents is the [harnessprofile.MarkerScopeEvents] scope: every
-// stdout line decoded, only those whose discriminator names one of the CLI's
+// stdout line decoded, only those whose discriminator names one of the harness's
 // own failure events kept, and each sentinel compared by EQUALITY with the
 // string at the profile's marker path in such an event.
 //
 // NEVER A SUBSTRING SEARCH, which is what this scope was first: OpenCode 2
 // prints a tool call's arguments as the model's own raw JSON object, so a
-// model can put any sentinel on stdout spelled exactly as the CLI spells it,
+// model can put any sentinel on stdout spelled exactly as the harness spells it,
 // on a healthy call. What it cannot do is change the type of the event its
 // words arrive in, or move them to where the path points in an event of the
-// failure type — the CLI writes those. A line that does not decode, has no
+// failure type — the harness writes those. A line that does not decode, has no
 // discriminator, or whose class is not a string is no failure report.
 //
 // Limit markers before auth markers, the precedence the text scopes keep.
@@ -939,7 +939,7 @@ func classifyFailureEvents(p harnessprofile.Profile, stdout string) (markerHit, 
 	return markerHit{}, false
 }
 
-// limitEventHit is one decoded stdout event read as the CLI's own structured
+// limitEventHit is one decoded stdout event read as the harness's own structured
 // limit report ([harnessprofile.LimitEvent]), when it meets every condition of
 // one: the vendor's sentence is the string at the event's said path, or the
 // whole line where it names none, and the reset is read from that sentence as
@@ -1022,8 +1022,8 @@ func members(node any) []any {
 // any declared path RESOLVED at all.
 //
 // The bool is the whole point, and it is not the same as a non-empty return:
-// a path that resolved to "" says the CLI answered with nothing, a path that
-// resolved to nothing says this profile no longer describes this CLI. Callers
+// a path that resolved to "" says the harness answered with nothing, a path that
+// resolved to nothing says this profile no longer describes this harness. Callers
 // that collapse the two hand a vendor's telemetry back as the model's words —
 // see [extracted.located].
 //
@@ -1078,7 +1078,7 @@ func firstInt(doc map[string]any, paths []harnessprofile.Path) (int, bool) {
 // is the SUM of the count the rest of the path names under every member, and it
 // resolves when at least one member's does: a member without the count (a model
 // a call never billed) adds nothing, and a path no member resolves is a profile
-// that no longer describes its CLI, which the caller turns into an estimate
+// that no longer describes its harness, which the caller turns into an estimate
 // rather than a zero.
 func countAt(node any, path harnessprofile.Path) (int, bool) {
 	for i, step := range path {
@@ -1101,7 +1101,7 @@ func countAt(node any, path harnessprofile.Path) (int, bool) {
 }
 
 // asCount reads one count, accepting the float64 every JSON number decodes to
-// as well as a string, which some CLIs emit for large counts.
+// as well as a string, which some harnesses emit for large counts.
 func asCount(v any) (int, bool) {
 	switch n := v.(type) {
 	case float64:

@@ -23,9 +23,9 @@ import (
 //
 // Two questions need it, and the files themselves answer neither:
 //
-//   - WHICH SIGN-IN. A sit-out belongs to the account the CLI is signed in as
+//   - WHICH SIGN-IN. A sit-out belongs to the account the harness is signed in as
 //     ([SignInID]), and for a login kept in files that account changes only
-//     when a person signs in again. The files change far more often: the CLI
+//     when a person signs in again. The files change far more often: the harness
 //     refreshes its token and the engine carries the refresh back
 //     (workspace.go). Keyed by the files' bytes, every refresh would read as a
 //     new account and lift a sit-out the vendor still holds.
@@ -52,7 +52,7 @@ import (
 //
 // It lives beside the login in credentials/ and is not one of the profile's
 // credential paths: a seat's seed, a box's seed and a bundle's files are each
-// read by those names alone, so no CLI is ever handed it. A bundle carries it
+// read by those names alone, so no harness is ever handed it. A bundle carries it
 // in its manifest instead ([bundleManifest]).
 
 // loginInstallFile is the install record's file in the credentials directory.

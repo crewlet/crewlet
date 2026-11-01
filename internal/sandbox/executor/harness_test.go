@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// harnessOf reaches the CLI under a runner, for the pure command and parse tests.
+// harnessOf reaches the harness under a runner, for the pure command and parse tests.
 func claude() executor.Harness   { return executor.ClaudeCode{} }
 func opencode() executor.Harness { return executor.OpenCode{} }
 
@@ -55,7 +55,7 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	for _, want := range []string{
 		"--max-turns 30", "--max-budget-usd 2.5", "--model 'claude-opus-5'",
 		"--mcp-config '/box/.crewlet/mcp.json'",
-		// Without strict mode the CLI ALSO loads whatever config the box's
+		// Without strict mode the harness ALSO loads whatever config the box's
 		// home carries, which on a reused box is the previous run's.
 		"--strict-mcp-config",
 	} {
@@ -90,7 +90,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	// THE RUN'S OWN TURNS: the provider calls its loop made, which the
 	// engine never saw and every spend figure counts the run's record by.
 	if res.Turns != 23 {
-		t.Fatalf("turns = %d, want the 23 the CLI reported", res.Turns)
+		t.Fatalf("turns = %d, want the 23 the harness reported", res.Turns)
 	}
 	if res.InputTokens != 1200 || res.OutputTokens != 300 {
 		t.Fatalf("usage lost: %+v", res)
@@ -149,7 +149,7 @@ func TestARunThatReportsAnErrorIsNotASuccess(t *testing.T) {
 	}
 }
 
-// A coding agent that crashed should surface as "did not deliver" and let the
+// A harness that crashed should surface as "did not deliver" and let the
 // turn continue, not blow the turn up.
 func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
 	t.Parallel()
@@ -345,13 +345,13 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	if cfg.MCP == nil {
 		t.Fatalf("no mcp.servers block:\n%s", body)
 	}
-	// ONE ARGV: this CLI takes the whole invocation as a single array, so
+	// ONE ARGV: this harness takes the whole invocation as a single array, so
 	// the binary and its arguments are joined rather than kept apart.
 	got := cfg.MCP.Servers["files"]
 	if got.Type != "local" || !slices.Equal(got.Command, []string{"mcp-files", "--root", "/src"}) {
 		t.Fatalf("stdio server = %+v", got)
 	}
-	// The CREDENTIAL reaches the box under this CLI's own key. It is
+	// The CREDENTIAL reaches the box under this harness's own key. It is
 	// `environment` here and `env` in Claude Code's file, which is the
 	// whole reason each runner renders its own — here by a reference to the
 	// file holding it, which OpenCode reads in its place.
@@ -377,7 +377,7 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 }
 
 // The other runner's vocabulary, from the same typed input — which is the
-// point of RenderMCP answering in server shape rather than in one CLI's keys.
+// point of RenderMCP answering in server shape rather than in one harness's keys.
 func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -457,13 +457,13 @@ func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) 
 		t.Errorf("permissions = %v, want %v — a gate nobody can answer is a lost tool call:\n%s",
 			got, want, body)
 	}
-	// A CLI that updates itself mid-run swaps the tool under the brief while
+	// A harness that updates itself mid-run swaps the tool under the brief while
 	// the seat's turn is suspended waiting on it.
 	if cfg.Update != "disable" {
 		t.Errorf("update = %q, want disable:\n%s", cfg.Update, body)
 	}
 	// A pointer, so an ABSENT key is told apart from one written false: the
-	// CLI's own default is on.
+	// harness's own default is on.
 	if cfg.Snapshots == nil || *cfg.Snapshots {
 		t.Errorf("snapshots = %v, want a written false:\n%s", derefOr(cfg.Snapshots, "(absent)"), body)
 	}
@@ -487,7 +487,7 @@ func derefOr[T any](p *T, absent string) any {
 
 // THE RUN'S TURN CAP REACHES OPENCODE, on the agent the run runs as. It is the
 // one bound on an executor's work — Claude Code carries it as --max-turns — so
-// a run on this CLI that dropped it ran uncapped while the setting read as
+// a run on this harness that dropped it ran uncapped while the setting read as
 // wired. Zero is uncapped, and states no cap at all: OpenCode refuses a step
 // count below one.
 func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {

@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-// CredentialKind is which of a CLI's two pasted credentials a value is, by the
+// CredentialKind is which of a harness's two pasted credentials a value is, by the
 // prefix its vendor gives it ([harnessprofile.Profile.TokenPrefix],
 // [harnessprofile.Profile.APIKeyPrefix]).
 //
 // It exists for the refusal of a credential pasted into the wrong slot: an API
-// key stored where the headless token belongs is handed to the CLI as a token,
+// key stored where the headless token belongs is handed to the harness as a token,
 // and the vendor's answer ("invalid bearer token") names neither the slot nor
 // the paste. Told apart before any call is made, the person is told which
 // slot the value belongs in.
@@ -51,7 +51,7 @@ func (p *Provider) CredentialKind(value string) CredentialKind {
 }
 
 // CredentialHint is the hint of the credential this entry's auth mode hands
-// its CLI, read off the environment the child is given ([childEnv]), or ""
+// its harness, read off the environment the child is given ([childEnv]), or ""
 // when the mode hands it none: the headless token under subscription (none
 // when the entry signs in with credential files), the key under api-key, and
 // under inherit-env whichever of the two the engine's own environment
@@ -136,7 +136,7 @@ func HintOf(prefix, value string) string {
 	return string(head) + "…" + string(runes[len(runes)-hintTail:])
 }
 
-// TokenLifetime is how long a headless token this CLI mints lasts, as its
+// TokenLifetime is how long a headless token this harness mints lasts, as its
 // vendor documents it ([harnessprofile.Profile.TokenLifetimeDays]); zero is
 // unknown. The token is opaque, so a caller computes its expiry from when it
 // was stored, and says that it did.

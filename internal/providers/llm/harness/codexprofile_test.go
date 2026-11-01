@@ -23,7 +23,7 @@ func codexSetting(args []string, value string) bool {
 	return false
 }
 
-// THE CODEX PROFILE KEEPS THE CLI TO ITS CALL: nothing from above the call's
+// THE CODEX PROFILE KEEPS THE HARNESS TO ITS CALL: nothing from above the call's
 // directory, nothing kept from one call for the next, and of codex's own tools
 // web search and an apply_patch that writes nothing. Each of these was
 // measured on 0.153.4 and 0.164.0 to be what removes the thing named; the

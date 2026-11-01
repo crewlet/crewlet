@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Stand-in CLIs a case writes and then runs.
+// Stand-in harnesses a case writes and then runs.
 //
 // A FILE THIS PROCESS WROTE CAN BE REFUSED WHEN IT IS RUN (ETXTBSY). os.WriteFile
 // closes its own descriptor, but a case running in parallel that forked while it
@@ -23,7 +23,7 @@ import (
 // is short and this package forks constantly — internal/sandbox's
 // suite measured 17 refusals in 200 runs of a just-written script with
 // eight goroutines forking beside it — and a refusal reads as nothing a case
-// asserts: a run's script finds no CLI, or a version probe answers nothing and
+// asserts: a run's script finds no harness, or a version probe answers nothing and
 // the gate takes its fallback. So a stand-in is written by a process of its own
 // (cp), which has exited before the case runs it: this process never holds it
 // open for writing, and no fork of its can.

@@ -24,7 +24,7 @@ import (
 // -t list names started, every one if there is no list — and their tools
 // offered by name only with the config's tool search off; its config's shell
 // hooks run (with hooks_auto_accept), the post_api_request one handed each
-// response — the model's own call names, before the CLI repairs one, and the
+// response — the model's own call names, before the harness repairs one, and the
 // request's counts, the prompt less its cached part — on stdin, in the call's
 // directory; no id with a call; the answer, or why it failed, on stdout; and
 // the run's counts in the --usage-file report (measured on 0.21.5; see the
@@ -106,7 +106,7 @@ func hermesConfig() (hermesConfigFile, error) {
 }
 
 // hermesInterpolate fills `${VAR}` from the environment, keeping one that is
-// unset as written, as the CLI does.
+// unset as written, as the harness does.
 func hermesInterpolate(s string) string {
 	return regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`).ReplaceAllStringFunc(s, func(m string) string {
 		if v, ok := os.LookupEnv(m[2 : len(m)-1]); ok {
@@ -153,7 +153,7 @@ func (h *hermesRecorder) asked(i int, r fakeResponse, _ []string) {
 	if h.hook == "" {
 		return
 	}
-	// The command as the CLI runs it: split as a shell would, in the
+	// The command as the harness runs it: split as a shell would, in the
 	// call's directory, the payload on stdin.
 	cmd := exec.Command("sh", "-c", h.hook) //nolint:gosec // the profile's own hook
 	cmd.Stdin = strings.NewReader(string(payload))
@@ -181,19 +181,19 @@ func (h *hermesRecorder) end(script fakeScript, total fakeUsage, last string) in
 
 // HERMES AGENT'S RUN IS READ FROM THE RECORD ITS OWN HOOK WRITES, AND ITS HOME
 // STARTS NO SERVER BUT THE SEAT'S. The seat's server is declared in the home's
-// config.yaml — which the CLI reads from nowhere else, and which the profile
+// config.yaml — which the harness reads from nowhere else, and which the profile
 // rewrites every generation — with its relay command and socket filled from
 // the run's environment; the -t list starts it and nothing else, and a text
 // function's starts none. Each response reaches the post_api_request hook the
 // same file declares, which appends it to a file in the call's directory: its
 // prose, its calls as the model named them, and its counts, the prompt less
-// its cached part. The CLI sends no id with a call, so a call is joined by
-// name and arguments; the host is told the CLI waits the profile's 600 seconds
+// its cached part. The harness sends no id with a call, so a call is joined by
+// name and arguments; the host is told the harness waits the profile's 600 seconds
 // for a call, does not re-read the list, and makes a response's calls one
 // after another.
 //
 // Mutation: drop the route's -t list, and the planted server starts (the fake
-// fails the run); turn tool search on, and the CLI never reaches the seat's
+// fails the run); turn tool search on, and the harness never reaches the seat's
 // tools; drop the hook, and no request is observed; read the record's input
 // as the whole prompt, and the first request is charged 100, not 140.
 func TestHermesRunIsReadFromTheRecordItsHookWrites(t *testing.T) {
@@ -243,7 +243,7 @@ func hermesSeedsWith(t *testing.T, servers string) []any {
 	return out
 }
 
-// A CALL THE CLI REPAIRED IS RECORDED AS THE MODEL ASKED FOR IT. Hermes Agent
+// A CALL THE HARNESS REPAIRED IS RECORDED AS THE MODEL ASKED FOR IT. Hermes Agent
 // rewrites a call to an unknown tool to the closest listed one and runs that
 // (difflib, ratio 0.7 or more), with the model's own arguments: measured, a
 // model asking for mcp__crewlet__echoo had echo called. Its stream and its
@@ -281,7 +281,7 @@ func TestHermesRecordsTheNameTheModelAskedFor(t *testing.T) {
 // HERMES AGENT'S SERVER WAITS AS LONG AS THE HOST IS TOLD IT DOES. Its config
 // is the seat's, written once for every call, so the server's timeout there is
 // a literal rather than a value rendered per run: it has to be the profile's
-// tool_timeout_seconds, or the host answers a slow call later than the CLI
+// tool_timeout_seconds, or the host answers a slow call later than the harness
 // gives up on it (measured: a timeout of 4 gave a 10 s call up at 4.0 s).
 //
 // Mutation: change either number alone, and this fails.

@@ -35,7 +35,7 @@ import (
 //     learn the same plan-wide limit for itself, one process launch each.
 //   - A LIMIT OF ONE MODEL HOLDS THAT MODEL ONLY. "Opus limit" leaves Sonnet
 //     on the same plan answering, so a window whose report names
-//     [llm.LimitModel] is kept under the model argument the CLI was given
+//     [llm.LimitModel] is kept under the model argument the harness was given
 //     ([Plan.scoped]) and holds no other entry. Matched on the exact
 //     argument ("sonnet" is not "claude-sonnet-5-5"), which is conservative:
 //     the other spelling learns at its first call.
@@ -121,14 +121,14 @@ type Plan struct {
 	// which holds every model on the sign-in.
 	wide bench
 	// scoped are windows of one model each, keyed by the model argument
-	// the CLI was given, from a report whose window is [llm.LimitModel].
+	// the harness was given, from a report whose window is [llm.LimitModel].
 	scoped map[string]*bench
 	// ready is the readiness memory ([Provider.Unready]).
 	ready readiness
 	// lastAnswer is when a call on the sign-in last answered.
 	lastAnswer time.Time
 	// lastFailure is the last call that set the readiness verdict: a
-	// refused sign-in, or a CLI that could not be started
+	// refused sign-in, or a harness that could not be started
 	// ([Provider.remember]). A limit is the sit-out's, not this.
 	lastFailure *Failure
 }
@@ -143,7 +143,7 @@ func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}} }
 const MaxSaid = 240
 
 // Failure is a call on a sign-in that set its readiness verdict: a refused
-// sign-in, or a CLI that could not be started.
+// sign-in, or a harness that could not be started.
 type Failure struct {
 	Kind llm.ErrorKind
 	At   time.Time

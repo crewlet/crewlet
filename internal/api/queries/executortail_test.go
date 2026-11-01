@@ -57,7 +57,7 @@ func TestAnExecutorTailNeedsTheTurnAndTheJob(t *testing.T) {
 	}
 }
 
-// WHAT A CODING AGENT PRINTS IS ITS TRANSCRIPT, so the tail is read by
+// WHAT A HARNESS PRINTS IS ITS TRANSCRIPT, so the tail is read by
 // whoever reads the run's SEAT's trail — an admin, or the seat's lead — and
 // nobody else: everybody sees that a run is running, and only they see what
 // it says (ADR-0033).

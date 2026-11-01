@@ -15,9 +15,9 @@ import (
 
 // The invariants the built-in qwen-code profile keeps, each measured against
 // Qwen Code 0.23.4 and 0.26.1 (see the profile's comments): a call offers the
-// web tools and nothing else, a seat's phases keep the CLI's own system prompt
+// web tools and nothing else, a seat's phases keep the harness's own system prompt
 // and a side pass replaces it, the answer and its token counts are read from
-// the result event, a key alone signs the CLI in, nothing above the call's
+// the result event, a key alone signs the harness in, nothing above the call's
 // directory configures it, and nothing a call leaves in the seat's home
 // reaches the next one.
 
@@ -87,7 +87,7 @@ func qwenStrings(t *testing.T, doc map[string]any, path string) []string {
 	return out
 }
 
-// qwenWebTools are the CLI's own web tools, the only ones a call keeps.
+// qwenWebTools are the harness's own web tools, the only ones a call keeps.
 var qwenWebTools = []string{"web_fetch", "web_search"}
 
 // qwenMeasuredTools is every tool name Qwen Code 0.23.4 and 0.26.1 register
@@ -150,7 +150,7 @@ func TestQwenCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 // read into every call's system prompt.
 //
 // The request-log directory is pinned in the seat's home for the same reason:
-// the CLI keys a housekeeping marker file in the home by that directory, which
+// the harness keys a housekeeping marker file in the home by that directory, which
 // otherwise lies under each call's own working directory, so the home gained a
 // marker for every call it ever ran.
 func TestQwenCodeKeepsNothingFromOneCallForTheNext(t *testing.T) {
@@ -224,7 +224,7 @@ func TestQwenCodeKeepsNothingFromOneCallForTheNext(t *testing.T) {
 // call, and the seat's system prompt was replaced by a file of the checkout's.
 // A `.qwen/.env` in the call's own directory is the first the walk meets.
 //
-// The other switches keep the CLI to the one connection the call is for —
+// The other switches keep the harness to the one connection the call is for —
 // usage statistics, update checks and the model catalogue each opened their
 // own — and stop it starting a process that holds the host awake, reading
 // hooks or listing skills.
@@ -272,14 +272,14 @@ func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 	}
 }
 
-// qwenPlainOutput reads the fake CLI's stdout as the answer, for a case whose
-// fake reports what it was handed rather than printing the CLI's events — and
+// qwenPlainOutput reads the fake harness's stdout as the answer, for a case whose
+// fake reports what it was handed rather than printing the harness's events — and
 // so drops what reads those events on a run with tools: the request record and
 // the failure events, which a text stream does not carry.
 var qwenPlainOutput = map[string]any{"output": "text", "event_type_path": []any{}, "text_events": []any{},
 	"requests": nil, "mcp": map[string]any{"failure_events": []any{}}}
 
-// qwenProvider is the shipped profile with the suite's fake CLI in its place.
+// qwenProvider is the shipped profile with the suite's fake harness in its place.
 func qwenProvider(t *testing.T, env map[string]string, overrides map[string]any, auth Auth) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -299,11 +299,11 @@ func qwenProvider(t *testing.T, env map[string]string, overrides map[string]any,
 	return p
 }
 
-// A SEAT KEEPS THE CLI'S OWN PROMPT AND A SIDE PASS REPLACES IT, each through a
+// A SEAT KEEPS THE HARNESS'S OWN PROMPT AND A SIDE PASS REPLACES IT, each through a
 // file a variable names. QWEN_SYSTEM_IDENTITY_MD swaps the default's opening
 // identity sentence for the file and keeps the rest of it byte for byte;
 // QWEN_SYSTEM_MD replaces the whole default. A call sets one and never both:
-// with QWEN_SYSTEM_MD set, the CLI ignores the identity file. The seat's text
+// with QWEN_SYSTEM_MD set, the harness ignores the identity file. The seat's text
 // opens with the note that says which prompt is the role, and the side pass's
 // is exactly its instruction. Driven through Complete, so what is checked is
 // the environment a call is handed.
@@ -353,20 +353,20 @@ func TestQwenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 			}
 			env := strings.Split(comp.Content, "\n")
 			if slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, tc.skip+"=") }) {
-				t.Errorf("the call also set %s — with QWEN_SYSTEM_MD set the CLI drops the "+
-					"identity file, so a seat would lose the CLI's prompt", tc.skip)
+				t.Errorf("the call also set %s — with QWEN_SYSTEM_MD set the harness drops the "+
+					"identity file, so a seat would lose the harness's prompt", tc.skip)
 			}
 		})
 	}
 }
 
-// A KEY ALONE SIGNS THE CLI IN. Qwen OAuth, the login the profile once
+// A KEY ALONE SIGNS THE HARNESS IN. Qwen OAuth, the login the profile once
 // carried, is refused by both measured builds ("discontinued on 2026-04-15"),
-// so the CLI's OpenAI-compatible sign-in is the one that runs: its key in
+// so the harness's OpenAI-compatible sign-in is the one that runs: its key in
 // OPENAI_API_KEY and its endpoint in OPENAI_BASE_URL. That sign-in is chosen
-// on argv, because without it the CLI picks one only when OPENAI_MODEL or
+// on argv, because without it the harness picks one only when OPENAI_MODEL or
 // QWEN_MODEL is set too, and otherwise exits "No auth type is selected"; the
-// model comes from the entry, as for every CLI.
+// model comes from the entry, as for every harness.
 func TestQwenCodeSignsInWithAKeyAlone(t *testing.T) {
 	t.Parallel()
 	p := qwenCode(t)
@@ -387,7 +387,7 @@ func TestQwenCodeSignsInWithAKeyAlone(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 	if comp.Content != "OPENAI_API_KEY present=true" {
-		t.Errorf("the key did not reach the CLI: %s", comp.Content)
+		t.Errorf("the key did not reach the harness: %s", comp.Content)
 	}
 }
 
@@ -428,12 +428,12 @@ func TestQwenCodeReadsTheAnswerFromTheResultEvent(t *testing.T) {
 }
 
 // A REFUSED REQUEST IS NAMED FOR WHAT IT IS. Measured on 0.23.4 and 0.26.1
-// against a stub answering every request with the status: the CLI exits 1 and
+// against a stub answering every request with the status: the harness exits 1 and
 // its result event's error carries "[API Error: <status> <the provider's
 // message>]" — on a 429 within about a minute, because the profile turns the
-// CLI's own retry rounds off (left on, they held the call past the engine's
+// harness's own retry rounds off (left on, they held the call past the engine's
 // timeout and the spent quota came back as a timeout) — and a call with no key
-// at all is refused before any request. Each is recognised by the CLI's own
+// at all is refused before any request. Each is recognised by the harness's own
 // words, so a spent quota sits the entry out and a refused key names the
 // sign-in.
 func TestQwenCodeRecognisesASpentQuotaAndARefusedKey(t *testing.T) {

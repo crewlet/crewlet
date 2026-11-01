@@ -35,14 +35,14 @@ const (
 		`"error":"authentication_failed","api_error_status":401}`
 )
 
-// rejected is allowedLimitEvent as the CLI writes it once the window it
+// rejected is allowedLimitEvent as the harness writes it once the window it
 // names is spent.
 func rejected(window string, resetsAt time.Time) string {
 	return `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":` +
 		strconv.FormatInt(resetsAt.Unix(), 10) + `,"rateLimitType":"` + window + `"}}`
 }
 
-// A SPENT PLAN IS DATED AND NAMED BY THE CLI'S OWN EVENT. The result line says
+// A SPENT PLAN IS DATED AND NAMED BY THE HARNESS'S OWN EVENT. The result line says
 // a limit was met (429) and the sentence may say when, in words; the rejected
 // rate-limit event says when in an epoch and which window by name, and is read
 // first. An allowed one, which every run writes, dates nothing.
@@ -87,10 +87,10 @@ func TestALimitIsDatedAndNamedByTheHarnessEvent(t *testing.T) {
 	}
 }
 
-// A REFUSED SIGN-IN IS READ FROM THE CLI'S OWN FIELDS, FIRST. The 401 is a
+// A REFUSED SIGN-IN IS READ FROM THE HARNESS'S OWN FIELDS, FIRST. The 401 is a
 // status, which survives the rewording that retires a sentence, and the
-// `api_retry` event names `authentication_failed` before the CLI gives up; both
-// were measured on 2.1.312. Only in a run the CLI reported failed: a CLI that
+// `api_retry` event names `authentication_failed` before the harness gives up; both
+// were measured on 2.1.312. Only in a run the harness reported failed: a harness that
 // retries a 401 and then answers was signed in.
 //
 // Mutation: drop auth_events, and the refused token's run is read by its
@@ -105,7 +105,7 @@ func TestARefusedSignInIsReadFromTheHarnessFields(t *testing.T) {
 	} {
 		hit, ok := classifyMarkers(p, harnessOutput{stdout: stdout, failed: true, at: reportedAt})
 		if !ok || hit.Kind != llm.KindAuth || hit.Source != sourceEvent {
-			t.Errorf("%s: classified %+v, %v; want auth from the CLI's event", name, hit, ok)
+			t.Errorf("%s: classified %+v, %v; want auth from the harness's event", name, hit, ok)
 		}
 	}
 	if hit, ok := classifyMarkers(p, harnessOutput{stdout: keyRefusedResult, failed: true}); !ok ||
@@ -155,7 +155,7 @@ func TestCodexsResetIsReadInTheZoneItWasHanded(t *testing.T) {
 }
 
 // EVERY CHILD IS HANDED THE ENGINE'S ZONE BY NAME. Inherited only where the
-// host had one, a CLI wrote its reset in whatever zone the host or a box's
+// host had one, a harness wrote its reset in whatever zone the host or a box's
 // image defaulted to, which the engine could only guess.
 //
 // Mutation: drop the TZ line from childEnv or SandboxEnv, and the child is
@@ -179,9 +179,9 @@ func TestEveryChildIsHandedTheEnginesZone(t *testing.T) {
 	}
 }
 
-// AN ENV-MODE ENTRY HANDS ITS CLI NEITHER THE PLAN TOKEN NOR A KEY (B1). A
+// AN ENV-MODE ENTRY HANDS ITS HARNESS NEITHER THE PLAN TOKEN NOR A KEY (B1). A
 // Bedrock or gateway entry signs in through its env; under the default mode the
-// convention's plan token reached its CLI, and its box, where the cloud switch
+// convention's plan token reached its harness, and its box, where the cloud switch
 // outranks it and it was never used. Its sign-in reads as the env, not as none.
 //
 // Mutation: drop the AuthEnv case from applyAuth, and the token reaches the
@@ -256,7 +256,7 @@ func TestARunRefusedItsSignInSaysSoAndIsTheSignIns(t *testing.T) {
 
 // THE ROUTE A STATUS READ PUBLISHES IS THE ONE `crewlet llm list` PRINTS, in the
 // status read's words, and a login kept in files is the one the engine asks the
-// CLI about.
+// harness about.
 func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -282,7 +282,7 @@ func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 	}{
 		"a key":   {p: shipped(t, "claude-code", "sonnet"), route: "api-key", resolve: true},
 		"the env": {p: env, route: "env", resolve: true},
-		// One word per mode, whichever CLI reads the env.
+		// One word per mode, whichever harness reads the env.
 		"a provider key under env": {p: hermes, route: RouteEnv, resolve: true},
 		"no login":                 {p: onPlans(t, nil, "sub", "sonnet", Auth{Mode: AuthSubscription}, ""), route: "none", login: true},
 		"a token": {p: onPlans(t, nil, "tok", "sonnet", Auth{Mode: AuthSubscription, Token: "sk-ant-oat01-x"}, ""),

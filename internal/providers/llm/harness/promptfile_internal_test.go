@@ -16,10 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// THE TRANSCRIPT MUST NOT REACH ARGV WHEN THE CLI OFFERS A FILE.
+// THE TRANSCRIPT MUST NOT REACH ARGV WHEN THE HARNESS OFFERS A FILE.
 //
 // A rendered prompt is the largest and most sensitive thing this backend
-// hands a CLI: the seat's identity, the tool catalogue, the conversation and
+// hands a harness: the seat's identity, the tool catalogue, the conversation and
 // every tool result in it. On argv all of that is readable through
 // /proc/<pid>/cmdline by every account on the machine, and bounded by ARG_MAX
 // (256 KB on macOS) — the ceiling a profile lives under only where its vendor
@@ -27,12 +27,12 @@ import (
 //
 // Asked from inside the child, because the per-call directory is removed on
 // release: a parent opening the path afterwards would be reading a file the
-// CLI never saw, and a file written after the spawn or unreadable to the
+// harness never saw, and a file written after the spawn or unreadable to the
 // child looks identical from outside.
 func TestFileModeKeepsTheTranscriptOffArgvAndPrivate(t *testing.T) {
 	t.Parallel()
 	// The leading "--" is for the FAKE, not for any real profile: the fake
-	// CLI is this test binary, and Go's flag package would reject
+	// harness is this test binary, and Go's flag package would reject
 	// `--prompt-file` as an unknown test flag. "--" ends its flag parsing
 	// and leaves the rest in os.Args, which is exactly what the probe reads.
 	p := fakeProvider(t, map[string]string{"FAKE_PROMPT_FILE": "--prompt-file"}, map[string]any{
@@ -46,11 +46,11 @@ func TestFileModeKeepsTheTranscriptOffArgvAndPrivate(t *testing.T) {
 	}
 	argv, rest, ok := strings.Cut(got.Content, "|")
 	if !ok {
-		t.Fatalf("the fake CLI did not report a readable prompt file: %q", got.Content)
+		t.Fatalf("the fake harness did not report a readable prompt file: %q", got.Content)
 	}
 	mode, encoded, ok := strings.Cut(rest, "|")
 	if !ok {
-		t.Fatalf("the fake CLI did not report a readable prompt file: %q", got.Content)
+		t.Fatalf("the fake harness did not report a readable prompt file: %q", got.Content)
 	}
 	if !strings.Contains(argv, "--prompt-file") {
 		t.Errorf("argv = %q, want the flag the profile declared", argv)
@@ -75,7 +75,7 @@ func TestFileModeKeepsTheTranscriptOffArgvAndPrivate(t *testing.T) {
 // for one call and removed on release — so a prompt cannot outlive the call
 // that needed it or reach the next one. Pinned separately from the system
 // prompt's file because they are two files: a phase that has both writes
-// both, and one path serving two arguments would hand the CLI its system
+// both, and one path serving two arguments would hand the harness its system
 // prompt as the user turn.
 func TestPromptFileLandsBesideTheSystemPromptAndIsNotIt(t *testing.T) {
 	t.Parallel()
@@ -108,7 +108,7 @@ func TestPromptFileLandsBesideTheSystemPromptAndIsNotIt(t *testing.T) {
 }
 
 // A file-mode profile with nothing to substitute the path into would run the
-// CLI with NO PROMPT — which a vendor answers by opening an interactive
+// harness with NO PROMPT — which a vendor answers by opening an interactive
 // session or printing usage, neither of which looks like the configuration
 // error it is. Refused at load, naming the field to set.
 func TestFileModeWithoutAFilePlaceholderIsRefused(t *testing.T) {
@@ -137,10 +137,10 @@ func TestFileModeWithoutAFilePlaceholderIsRefused(t *testing.T) {
 // `--disable-write` are absent from the vendor's own published flag list and
 // were read off the installed 1.0.3 binary instead. A build that dropped them
 // stops at argument parsing, and that is the failure this catches on any
-// machine with the CLI installed.
+// machine with the harness installed.
 //
 // Skipped unless a `muse` is on PATH, and it asserts on ARGUMENT PARSING
-// alone: the CLI stops for want of a credential, which is exactly far enough
+// alone: the harness stops for want of a credential, which is exactly far enough
 // to prove the flags were understood.
 func TestTheMuseProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	t.Parallel()
@@ -176,7 +176,7 @@ func TestTheMuseProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	// REACHING AUTHENTICATION IS THE PROOF. This was a list of five strings
 	// that had to be absent — and all five are clap's vocabulary, while muse's
 	// own `exec` parser is not clap, so the case could not fail against the
-	// CLI it names. See [assertArgvReachedAuth].
+	// harness it names. See [assertArgvReachedAuth].
 	assertArgvReachedAuth(t, args, string(combined))
 }
 
@@ -211,7 +211,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	}
 	joined := strings.Join(p.CompleteArgs, " ")
 	// --json is load-bearing for CLASSIFICATION, not for the answer: this
-	// CLI prints no failure cause on stderr ("run ended with Failed" and
+	// harness prints no failure cause on stderr ("run ended with Failed" and
 	// nothing else), so without the event stream a spent plan and a dead
 	// login reach this backend as a bare exit 1, no marker fires, and the
 	// seat's fallback chain never moves onto a metered key.
@@ -223,7 +223,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if p.Output != harnessprofile.OutputJSONL {
 		t.Errorf("output = %q, want jsonl", p.Output)
 	}
-	// --no-session-log is this CLI's isolation: without it every turn
+	// --no-session-log is this harness's isolation: without it every turn
 	// leaves a retained event log the next one can resume from.
 	if !strings.Contains(joined, "--no-session-log") {
 		t.Errorf("complete_args = %v keeps the session log, so one turn's "+
@@ -234,10 +234,10 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if strings.Contains(joined, "--yolo") || strings.Contains(joined, "--trust-workspace") {
 		t.Errorf("complete_args = %v trusts the workspace", p.CompleteArgs)
 	}
-	// --no-foreign-personal-context keeps other CLIs' personal rules and
+	// --no-foreign-personal-context keeps other harnesses' personal rules and
 	// skills out of the call: measured on 1.0.3 and 1.4.13, a CLAUDE.md and
 	// a skill under the seat home's .claude reached the developer message
-	// without it. --disable-reminders keeps the CLI's reminder observers —
+	// without it. --disable-reminders keeps the harness's reminder observers —
 	// each a model request of its own re-sending the call's prompt — from
 	// running beside every call.
 	for _, want := range []string{"--no-foreign-personal-context", "--disable-reminders"} {
@@ -246,7 +246,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		}
 	}
 	// The flags are defence in depth; run.toolset is what actually removes
-	// the tools from the model's surface, and it names the CLI's own web
+	// the tools from the model's surface, and it names the harness's own web
 	// tools and nothing else, because web is the surface this backend never
 	// denies.
 	var settings *harnessprofile.SeedFile
@@ -276,27 +276,27 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if doc.SchemaVersion != 1 {
 		t.Errorf("settings.json schema_version = %d, want 1", doc.SchemaVersion)
 	}
-	// An ALLOWLIST of the CLI's own web tools, exactly: on 1.4.13 these two
+	// An ALLOWLIST of the harness's own web tools, exactly: on 1.4.13 these two
 	// are the whole tool array (web_fetch is gated off on 1.0.3, where
 	// naming it admits nothing), and a seat on a subscription must not have
-	// less reach than the same CLI at a terminal.
+	// less reach than the same harness at a terminal.
 	if want := []string{"web_search", "web_fetch"}; !slices.Equal(doc.Run.Toolset, want) {
 		t.Errorf("run.toolset = %v, want exactly %v", doc.Run.Toolset, want)
 	}
-	// THE CLI'S RETRIES END BEFORE THE ENGINE'S SIT-OUT WOULD. Unset, it
+	// THE HARNESS'S RETRIES END BEFORE THE ENGINE'S SIT-OUT WOULD. Unset, it
 	// retries a 429 with a delay doubling from a second to a minute until
 	// the call's wall-clock cap stops it (measured on 1.4.13), so a spent
 	// plan arrives as a timeout that never sits the entry out. With n
-	// retries the CLI waits 2^n - 1 seconds and then reports the limit
+	// retries the harness waits 2^n - 1 seconds and then reports the limit
 	// itself; that wait must stay inside the first window the engine then
 	// sits the entry out for (a minute, the first step of its backoff), so
-	// the engine and not the CLI decides how long a limited entry waits.
+	// the engine and not the harness decides how long a limited entry waits.
 	switch n := doc.ProviderRetry.MaxRetries; {
 	case n == nil:
 		t.Error("settings.json sets no provider_retry.max_retries, so a 429 is retried " +
 			"until the call times out and a spent plan never sits the entry out")
 	case *n < 1 || time.Duration((1<<*n)-1)*time.Second >= limitBackoff[0]:
-		t.Errorf("provider_retry.max_retries = %d: the CLI would wait %ds, want at least "+
+		t.Errorf("provider_retry.max_retries = %d: the harness would wait %ds, want at least "+
 			"one retry and less than the engine's %s sit-out", *n, (1<<*n)-1, limitBackoff[0])
 	}
 	// The stream's run.usage event carries the run's counts
@@ -311,7 +311,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 // AND AN OPERATOR CAN SAY NO.
 //
 // The channel is TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE, which names a file whose
-// text the CLI appends to the end of its instructions (measured through the
+// text the harness appends to the end of its instructions (measured through the
 // engine on 1.0.3 and 1.4.13) — a variable naming a path, so the text never
 // reaches argv. There is no replace channel per call, so a side pass takes it
 // too. And the variable is undocumented, so switching it off must be one
@@ -349,7 +349,7 @@ func TestTheMuseSeatTextIsAppendedFromAFileAnOperatorCanTurnOff(t *testing.T) {
 	}
 	if r := off.RouteFor(true); r.Field != "" || !r.KeepsDefault {
 		t.Errorf("with the channel off a seat routes to %q (keeps default %v), want the "+
-			"transcript under the CLI's own instructions", r.Field, r.KeepsDefault)
+			"transcript under the harness's own instructions", r.Field, r.KeepsDefault)
 	}
 }
 
@@ -418,12 +418,12 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 	}
 }
 
-// The credential is where THIS CLI looks for it, and everything else it
+// The credential is where THIS HARNESS looks for it, and everything else it
 // writes is pruned between turns.
 //
 // muse is XDG-native — no relocation variable of its own — so the seat home's
 // XDG_CONFIG_HOME and XDG_DATA_HOME are what isolate it. A profile that named
-// a config_env here would point one of them somewhere the CLI does not read.
+// a config_env here would point one of them somewhere the harness does not read.
 func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("muse-code")
@@ -431,7 +431,7 @@ func TestTheMuseProfileIsIsolatedByXDGAlone(t *testing.T) {
 		t.Fatal("no built-in muse-code profile")
 	}
 	if len(p.ConfigEnv) != 0 {
-		t.Errorf("config_env = %v, but this CLI has no relocation variable", p.ConfigEnv)
+		t.Errorf("config_env = %v, but this harness has no relocation variable", p.ConfigEnv)
 	}
 	for _, want := range []string{".config/muse/auth.json"} {
 		if !slices.Contains(p.CredentialPaths, want) {
@@ -506,7 +506,7 @@ func TestBuiltinHandsBackAnIndependentCopy(t *testing.T) {
 //
 // The kind alone decides what the engine does; the MESSAGE is what the
 // operator acts on. It used to be the first non-empty line of the haystack,
-// which is the vendor's own sentence for a CLI that prints prose and the
+// which is the vendor's own sentence for a harness that prints prose and the
 // FIRST EVENT of the stream for one that prints JSONL — so a muse-code rate
 // limit was reported, correctly classified, as `run.lifecycle.started`.
 func TestAClassifiedFailureNamesTheLineItMatched(t *testing.T) {
@@ -634,7 +634,7 @@ func TestAnUnknownPromptModeNamesFileToo(t *testing.T) {
 	}
 }
 
-// A CLI whose whole command line IS its prompt flag is a legitimate shape:
+// A harness whose whole command line IS its prompt flag is a legitimate shape:
 // file mode always contributes prompt_args, so the argv is never empty.
 func TestFileModeNeedsNoCompleteArgs(t *testing.T) {
 	t.Parallel()

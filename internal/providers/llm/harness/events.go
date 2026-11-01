@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// classifyEvents finds the CLI's own structured report of how the run ended:
-// a limit ([harnessprofile.LimitEvent]) or, in a run the CLI reported failed, a
+// classifyEvents finds the harness's own structured report of how the run ended:
+// a limit ([harnessprofile.LimitEvent]) or, in a run the harness reported failed, a
 // refused sign-in ([harnessprofile.AuthEvent]). Read before every sentinel,
 // because a status code survives the rewording that silently retires one.
 //
@@ -65,7 +65,7 @@ func classifyEvents(p harnessprofile.Profile, out harnessOutput) (markerHit, boo
 }
 
 // dateLimit completes a limit the run reported with when it lifts and which
-// limit it is, from the strongest evidence the run gave: the CLI's own
+// limit it is, from the strongest evidence the run gave: the harness's own
 // structured event first ([harnessprofile.LimitResetEvent], the LAST that matches,
 // which is the newest word on a run that met the limit more than once), then
 // the sentence's own reset (already read by the classification) and its

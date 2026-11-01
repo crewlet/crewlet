@@ -32,7 +32,7 @@ func signInCases() []signInCase {
 		{
 			// THE REPORTED BUG: a hermes key given through env, the
 			// route its profile names, was "no login of its own".
-			name:  "a env key on a CLI that reads its provider's key from its environment",
+			name:  "a env key on a harness that reads its provider's key from its environment",
 			agent: "hermes", env: map[string]string{"OPENROUTER_API_KEY": "sk-or-x"},
 			signedIn: true, line: "env sets OPENROUTER_API_KEY",
 		},
@@ -43,7 +43,7 @@ func signInCases() []signInCase {
 		},
 		{
 			// kimi-code is handed KIMI_API_KEY and ignores it.
-			name:  "a env key on a CLI that does not read one",
+			name:  "a env key on a harness that does not read one",
 			agent: "kimi-code", env: map[string]string{"KIMI_API_KEY": "sk-kimi"},
 			problem: "no sign-in",
 		},
@@ -61,10 +61,10 @@ func signInCases() []signInCase {
 			problem: "env, under that provider's own variable",
 		},
 		{
-			// A CLI that fronts any provider may be pointed at a server
+			// A harness that fronts any provider may be pointed at a server
 			// that takes no key, which only the smoke test can tell
 			// apart — so the problem says how to settle it.
-			name:  "a CLI that may be served by a keyless endpoint",
+			name:  "a harness that may be served by a keyless endpoint",
 			agent: "pi", env: map[string]string{"OPENAI_BASE_URL": "http://127.0.0.1:11434/v1"},
 			problem: "served by an endpoint that takes no key, run the doctor without -no-smoke",
 		},
@@ -90,8 +90,8 @@ func signInCases() []signInCase {
 		{
 			// Gemini CLI declares no login subcommand, so `crewlet llm
 			// login sub` refuses for it: the route that works is a login
-			// made with the CLI by hand, adopted.
-			name: "a CLI with no login command of its own", agent: "gemini-cli",
+			// made with the harness by hand, adopted.
+			name: "a harness with no login command of its own", agent: "gemini-cli",
 			problem: "`crewlet llm login sub -from-host`",
 			without: "run `crewlet llm login sub`",
 		},
@@ -99,8 +99,8 @@ func signInCases() []signInCase {
 			// Qwen Code keeps no login of its own — both measured builds
 			// refuse the OAuth login it once kept — so there is nothing to
 			// adopt or broker: its key is the sign-in.
-			name: "a CLI that keeps no login", agent: "qwen-code",
-			problem: "set auth.mode: api-key and give the key as auth.api_key (the CLI reads it from OPENAI_API_KEY)",
+			name: "a harness that keeps no login", agent: "qwen-code",
+			problem: "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
 			without: "-from-host",
 		},
 		{
@@ -116,7 +116,7 @@ func signInCases() []signInCase {
 			// resolved token is not a sign-in there.
 			name: "api-key mode with no key and a token it removes", agent: "claude-code",
 			auth: Auth{Mode: AuthAPIKey, Token: "oauth-token"},
-			problem: "its auth.mode is api-key, which hands the CLI only its key " +
+			problem: "its auth.mode is api-key, which hands the harness only its key " +
 				"(providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY), and that key resolved to nothing",
 		},
 		{
@@ -254,7 +254,7 @@ func TestAnInheritedTokenIsASignInOnlyWhenThisProcessHasOne(t *testing.T) {
 }
 
 // AN ANSWERED SMOKE TEST IS A SIGN-IN, whatever the configuration shows. A
-// CLI pointed at an endpoint that takes no key, or holding a key in a file of
+// harness pointed at an endpoint that takes no key, or holding a key in a file of
 // its own, is signed in to nothing this engine hands it and works — and a
 // "no sign-in" problem beside a passing completion is the false problem the
 // doctor was raising for hermes. Without an answer the problem stands.
@@ -267,8 +267,8 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 		env      map[string]string
 		answered bool
 	}{
-		{"the CLI answers", map[string]string{"FAKE_STDOUT": reply}, true},
-		{"the CLI fails", map[string]string{"FAKE_STDERR": "unauthorized", "FAKE_EXIT": "1"}, false},
+		{"the harness answers", map[string]string{"FAKE_STDOUT": reply}, true},
+		{"the harness fails", map[string]string{"FAKE_STDERR": "unauthorized", "FAKE_EXIT": "1"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -282,7 +282,7 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 			}
 			if tc.answered {
 				if problem != "" {
-					t.Errorf("a CLI that answered was reported as signed in to nothing: %s", problem)
+					t.Errorf("a harness that answered was reported as signed in to nothing: %s", problem)
 				}
 				if !strings.Contains(d.SignIn, "the smoke test was answered") {
 					t.Errorf("sign-in line %q does not say why no problem was raised", d.SignIn)
@@ -290,14 +290,14 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 				return
 			}
 			if problem == "" {
-				t.Errorf("a CLI that failed with nothing to sign it in raised no problem (sign-in: %q)", d.SignIn)
+				t.Errorf("a harness that failed with nothing to sign it in raised no problem (sign-in: %q)", d.SignIn)
 			}
 		})
 	}
 }
 
 // A MODE'S SIGN-IN NAMES ONLY THE VARIABLES ITS PROFILE HAS, since those are
-// the only ones [applyAuth] hands the CLI. Codex has a key variable and no
+// the only ones [applyAuth] hands the harness. Codex has a key variable and no
 // token one, so inherit-env forwards one name, and an entry whose profile has
 // none for its mode — which every write of the configuration refuses, and an
 // apply only warns about — is told that the mode itself is the remedy, never

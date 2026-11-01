@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// keySessionProvider is an entry on dir whose CLI is the fake writing its key
+// keySessionProvider is an entry on dir whose harness is the fake writing its key
 // session into its login's own file ([runFakeHarness], FAKE_KEY_SESSION), under
 // auth.
 func keySessionProvider(t *testing.T, dir string, auth Auth) *Provider {

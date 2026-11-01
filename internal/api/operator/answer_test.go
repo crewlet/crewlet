@@ -272,7 +272,7 @@ func (m failingModel) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
 }
 
 // AN ANSWER NO WAIT GETS IS NOT ANSWERED "COME BACK". A chain with no model,
-// a login the model's CLI reports refused or missing and a call the engine
+// a login the model's harness reports refused or missing and a call the engine
 // itself cannot make are each told in words that say who acts or that it
 // won't answer, and they went out over this route as `503` under a two-second
 // Retry-After beside "Try again in a moment": the tool stated the class and no

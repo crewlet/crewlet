@@ -3,12 +3,12 @@ package harnessprofile
 import "strings"
 
 // BundleManifest is the name a credential bundle keeps its manifest under:
-// the one entry that is not a login file, naming the CLI the bundle was
+// the one entry that is not a login file, naming the harness the bundle was
 // exported from — `{"harness": "codex"}`.
 //
-// A BUNDLE NAMES ITS CLI BECAUSE A LOGIN FILE'S NAME DOES NOT. Six CLIs keep
+// A BUNDLE NAMES ITS HARNESS BECAUSE A LOGIN FILE'S NAME DOES NOT. Six harnesses keep
 // a login in an `auth.json` and two in an `oauth_creds.json`, and a bundle is
-// keyed by the entry rather than by its CLI, so after an entry moved from
+// keyed by the entry rather than by its harness, so after an entry moved from
 // codex to pi its configured bundle still held codex's `auth.json` — a name pi
 // keeps too. Restored by file name alone, it was written into pi's empty
 // login, which then held a credential pi cannot read and turned every later
@@ -28,9 +28,9 @@ const BundleManifest = "crewlet-bundle.json"
 // record, and the record a login file.
 const LoginInstallFile = ".crewlet-login"
 
-// ZoneVariable is the variable the engine hands every CLI, on its host and in
+// ZoneVariable is the variable the engine hands every harness, on its host and in
 // a box, to name the zone it runs in (internal/providers/llm/harness, env.go):
-// the engine's own TZ, else UTC. The engine reads a reset the CLI names with
+// the engine's own TZ, else UTC. The engine reads a reset the harness names with
 // no zone of its own in that zone, so an entry may not set it (config refuses
 // it in providers.llm.<key>.env).
 const ZoneVariable = "TZ"

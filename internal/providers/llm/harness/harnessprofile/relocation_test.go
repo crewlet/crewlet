@@ -60,7 +60,7 @@ func TestARelocationStaysInsideItsRoot(t *testing.T) {
 
 // NOTHING LAYERED OVER THE ISOLATION MAY REPLACE IT. The child's environment
 // applies the profile's env and passthrough after the variables that point the
-// CLI at its own home, so one named there replaces the seat's home — or the
+// harness at its own home, so one named there replaces the seat's home — or the
 // call's configuration directory — with whatever it says, and says nothing.
 func TestTheProfilesEnvMayNotReplaceTheIsolation(t *testing.T) {
 	t.Parallel()
@@ -140,7 +140,7 @@ func TestAnIsolationVariablesLayerIsTheOneTheChildIsGiven(t *testing.T) {
 }
 
 // A RELOCATION TAKES WHAT THE PROFILE KEEPS UNDER IT, OR IT DOES NOT LOAD. The
-// CLI finds a login, a session store, a tool policy or a discovered agent file
+// harness finds a login, a session store, a tool policy or a discovered agent file
 // through the variable that points at the directory holding it, so an override
 // moving the directory and leaving those paths behind loaded and ran every
 // call without them: OpenCode answered "Agent not found" with its agent file
@@ -428,7 +428,7 @@ func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 	}
 	if _, err := loadCustom(map[string]any{
 		"credential_paths": []any{".vendor/auth.json", ".vendor/a/../token.json"},
-		// A host file lives wherever the person's CLI keeps it, under a
+		// A host file lives wherever the person's harness keeps it, under a
 		// file name a seat reads.
 		"host_credential_paths": []any{".vendor/auth.json", ".config/vendor/token.json"},
 		// A volatile path names a directory as often as a file.
@@ -491,7 +491,7 @@ func TestAFileTheProfileWritesIsNoPathAnotherFieldNeeds(t *testing.T) {
 		"opencode's configuration directory": {
 			agent: "opencode", overrides: seed("work", ".crewlet-config"),
 			want: []string{`seed_files[0].path ".crewlet-config" is the directory ` +
-				`work_config_env.OPENCODE_CONFIG_DIR points the CLI at, in the work directory`},
+				`work_config_env.OPENCODE_CONFIG_DIR points the harness at, in the work directory`},
 		},
 		"the directory opencode's agent file goes in": {
 			agent: "opencode", overrides: seed("work", ".crewlet-config/agents"),
@@ -502,14 +502,14 @@ func TestAFileTheProfileWritesIsNoPathAnotherFieldNeeds(t *testing.T) {
 			agent: "opencode", overrides: seed("work", ".crewlet-config/agents/crewlet-seat.md"),
 			want: []string{"system_prompt.file.name", `is the file seed_files[0].path names too`},
 		},
-		"a file handed to the CLI by its path": {
+		"a file handed to the harness by its path": {
 			agent: "kimi-code", overrides: seed("work", "crewlet-seat.md"),
 			want: []string{"system_prompt.file.name", `is the file seed_files[0].path names too`},
 		},
 		"codex's home": {
 			agent: "codex", overrides: seed("home", ".codex"),
 			want: []string{`seed_files[0].path ".codex" is the directory config_env.CODEX_HOME ` +
-				`points the CLI at, in the home directory`},
+				`points the harness at, in the home directory`},
 		},
 		"codex's login": {
 			agent: "codex", overrides: seed("home", ".codex/auth.json"),
@@ -606,7 +606,7 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 	}
 	switch {
 	case policy == nil:
-		t.Error("the profile seeds no opencode.json, so nothing denies the CLI's local tools")
+		t.Error("the profile seeds no opencode.json, so nothing denies the harness's local tools")
 	case policy.Scope() != SeedWork || filepath.Clean(policy.Path) != filepath.Join(dir, "opencode.json"):
 		t.Errorf("opencode.json is seeded at %s/%s, want work/%s — the only global config "+
 			"OpenCode reads is the directory OPENCODE_CONFIG_DIR names",

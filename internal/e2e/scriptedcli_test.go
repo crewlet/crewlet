@@ -39,12 +39,12 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// THE SCRIPTED MODEL'S CLI: this test binary, re-executed, being to the engine
+// THE SCRIPTED MODEL'S HARNESS: this test binary, re-executed, being to the engine
 // what Claude Code is.
 //
-// Every model call the engine makes goes through a coding CLI
+// Every model call the engine makes goes through a harness
 // (internal/providers/llm/harness), so the golden company's model entry is a
-// real one whose CLI is this binary ([scriptedEntry]). Re-executed with
+// real one whose harness is this binary ([scriptedEntry]). Re-executed with
 // [scriptedHarnessEnv] set, the binary does what Claude Code does in print mode:
 // it reads the transcript on stdin and the system prompt from the file its
 // channel names; on a call that offers tools it starts the `crewlet` MCP server
@@ -58,26 +58,26 @@ import (
 //
 // The MODEL is the [scriptedModel]'s, asked over loopback once per model
 // request, because the script — which phase this is, which tool the executor
-// calls next — is state in the test process, and a child launched per CLI run
+// calls next — is state in the test process, and a child launched per harness run
 // keeps nothing between runs. What the child holds is one run's conversation,
-// which a real CLI holds too.
+// which a real harness holds too.
 //
 // What the two halves agree on is everything in this file: the entry that
 // launches the child, the one request it posts per model request, how the
 // model reads the transcript the backend rendered, and the record the backend
 // reads back.
 
-// scriptedHarnessEnv makes a re-execution of this binary the scripted CLI rather
+// scriptedHarnessEnv makes a re-execution of this binary the scripted harness rather
 // than the suite, and its value is the address of the model that answers.
 //
-// ONE VARIABLE FOR BOTH, so there is no way to launch a child that is the CLI
+// ONE VARIABLE FOR BOTH, so there is no way to launch a child that is the harness
 // and does not know where its model is. It reaches the child through the
 // entry's own `env`, which is the only route there is: the backend hands its
 // child an allowlisted environment, never the engine's.
 const scriptedHarnessEnv = "CREWLET_E2E_SCRIPTED_CLI"
 
 // scriptedSystemFlag and scriptedAppendFlag are Claude Code's two channels for
-// a system prompt's file — the first replacing the CLI's own prompt, the
+// a system prompt's file — the first replacing the harness's own prompt, the
 // second kept after it — which the claude-code profile the entry takes its
 // channels from passes ([claudeCodeRun]). So the system prompt reaches the
 // model on its own channel exactly as it does for the default agent, by the
@@ -106,18 +106,18 @@ const (
 	claudeCodeServer      = "crewlet"
 )
 
-// unnamedModel is the model the record names when the CLI was handed none:
+// unnamedModel is the model the record names when the harness was handed none:
 // Claude Code then runs its own default and names that, which is never the
 // model the entry chose — so a run whose `--model` went missing reads as served
 // by some other model, never as the entry's.
 const unnamedModel = "the-cli-default-model"
 
-// stoppedExit is the status the scripted CLI exits with when the engine stops
+// stoppedExit is the status the scripted harness exits with when the engine stops
 // it: a process killed by SIGTERM, as a shell reports one.
 const stoppedExit = 128 + int(syscall.SIGTERM)
 
 // scriptedHarnessBinary is this test binary's own path, which the entry names as
-// its CLI. Set once by [TestMain], before any case runs.
+// its harness. Set once by [TestMain], before any case runs.
 //
 // [os.Executable] rather than os.Args[0]: the backend runs its child in the
 // call's own working directory, so a binary launched by a relative path —
@@ -137,13 +137,13 @@ var scriptedShape map[string]any
 // TAKEN, NOT RESTATED: a copy written here would go on describing the record
 // Claude Code printed when it was copied, and the suite would pass against a
 // profile no operator runs. Taken from the table, a change to how the engine
-// reads Claude Code reaches every case here, and the scripted CLI either
+// reads Claude Code reaches every case here, and the scripted harness either
 // prints what the changed profile reads or the round trip below fails.
 //
 // What is NOT taken is everything about a real Claude Code that a scripted one
 // has none of: its sign-in, its configuration directory and the switches that
 // confine it, its spent-plan sentinels, its complete_args — whose flags the
-// scripted CLI has no use for, and in whose place the entry passes the
+// scripted harness has no use for, and in whose place the entry passes the
 // fork-bomb guard ([scriptedEntry]).
 var claudeCodeFields = []string{
 	"model_args", "system_prompt", "append_system_prompt", "prompt_mode",
@@ -152,7 +152,7 @@ var claudeCodeFields = []string{
 }
 
 // claudeCodeRun is [claudeCodeFields] out of the built-in claude-code profile,
-// as an entry's `overrides` takes them, and binary the CLI they run.
+// as an entry's `overrides` takes them, and binary the harness they run.
 //
 // By the profile's own YAML, which is how [harnessprofile.Load] merges overrides
 // into a profile, so what an override carries is what the loader reads.
@@ -179,29 +179,29 @@ func claudeCodeRun(binary string) (map[string]any, error) {
 		v, ok := fields[name]
 		if !ok {
 			// A FIELD THE PROFILE DROPPED is a change to how the engine
-			// runs Claude Code, and the scripted CLI was written against
+			// runs Claude Code, and the scripted harness was written against
 			// the profile that had it: said here, by name, rather than as
 			// every case waiting out its budget for a run read some other
 			// way.
 			return nil, fmt.Errorf("the claude-code profile no longer sets %s, which the "+
-				"scripted CLI is written against: read what replaced it, and move "+
-				"claudeCodeFields and the scripted CLI with it", name)
+				"scripted harness is written against: read what replaced it, and move "+
+				"claudeCodeFields and the scripted harness with it", name)
 		}
 		run[name] = v
 	}
 	return run, nil
 }
 
-// scriptedEntry is the providers.llm entry, under key, whose CLI is this binary
+// scriptedEntry is the providers.llm entry, under key, whose harness is this binary
 // answering from the model at endpoint and keeping its homes under stateDir —
 // indented to sit under `providers: llm:`.
 //
 // `custom` RATHER THAN claude-code WITH ITS BINARY SWAPPED, because `custom`
-// ships nothing: every field the scripted CLI is driven by is handed it here,
+// ships nothing: every field the scripted harness is driven by is handed it here,
 // and nothing else a vendor's profile carries — its sign-in, its spent-plan
-// sentinels, its configuration directory — stands between the engine and a CLI
+// sentinels, its configuration directory — stands between the engine and a harness
 // that has none of them. What it is handed is Claude Code's own run
-// ([claudeCodeRun]), so the backend reads this CLI on the paths the default
+// ([claudeCodeRun]), so the backend reads this harness on the paths the default
 // agent's are read on, and the usage it charges is the figure each response
 // names ([replyUsage]), never an estimate a budget case could not reason about.
 //
@@ -241,9 +241,9 @@ func scriptedEntry(key, endpoint, stateDir string) string {
 		overrides.String())
 }
 
-// --- what the CLI asks the model, and what it is answered ------------------ //
+// --- what the harness asks the model, and what it is answered ------------------ //
 
-// modelRequest is what the scripted CLI posts for one model request: the
+// modelRequest is what the scripted harness posts for one model request: the
 // system prompt it was handed on its own channel and which channel that was,
 // the transcript it read on stdin, the seat's tools it offers its model, and
 // the run so far.
@@ -255,13 +255,13 @@ type modelRequest struct {
 	Prompt  string `json:"prompt"`
 
 	// Tools are the crewlet server's tools, by the server's own names, as
-	// the CLI last listed them. Empty on a call with no server — a text
+	// the harness last listed them. Empty on a call with no server — a text
 	// function — and on a run whose server offered nothing.
 	Tools []string `json:"tools,omitempty"`
 
-	// Run is what this CLI run did before this request: each response the
+	// Run is what this harness run did before this request: each response the
 	// model gave and what its calls answered, in order — the conversation a
-	// real CLI sends its model, past the transcript it was started with.
+	// real harness sends its model, past the transcript it was started with.
 	Run []exchange `json:"run,omitempty"`
 }
 
@@ -272,7 +272,7 @@ type exchange struct {
 
 	// Notes are what an executor's hooks handed its model after this
 	// response — a person's notes, after its calls' results or as it was
-	// finishing ([codingHooks]). A CLI on the engine host is handed none:
+	// finishing ([codingHooks]). A harness on the engine host is handed none:
 	// the engine's own loop puts a note in its conversation.
 	Notes []string `json:"notes,omitempty"`
 }
@@ -292,7 +292,7 @@ type modelCall struct {
 	Args map[string]any `json:"args,omitempty"`
 }
 
-// callResult is what one call answered, as the CLI hands it its model.
+// callResult is what one call answered, as the harness hands it its model.
 type callResult struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
@@ -320,9 +320,9 @@ func (r modelRequest) toolResults() []string {
 	return out
 }
 
-// --- the CLI ---------------------------------------------------------------- //
+// --- the harness ---------------------------------------------------------------- //
 
-// harnessRun is one run of the scripted CLI.
+// harnessRun is one run of the scripted harness.
 type harnessRun struct {
 	endpoint string
 	model    string
@@ -341,10 +341,10 @@ type harnessRun struct {
 	last  string
 }
 
-// runScriptedHarness is the scripted CLI. It returns the exit status.
+// runScriptedHarness is the scripted harness. It returns the exit status.
 //
-// A FAILURE IS THE CLI'S OWN, on stderr with a non-zero exit, which the
-// backend reports as the CLI failing — the reason reaches the engine's log
+// A FAILURE IS THE HARNESS'S OWN, on stderr with a non-zero exit, which the
+// backend reports as the harness failing — the reason reaches the engine's log
 // rather than a wait in some case timing out with nothing said.
 func runScriptedHarness(endpoint string) int {
 	run := &harnessRun{endpoint: endpoint, model: argAfter("--model"), out: json.NewEncoder(os.Stdout)}
@@ -385,7 +385,7 @@ func (c *harnessRun) loop(req modelRequest, config string) int {
 		return failHarness("starting the %s MCP server %s names: %v", claudeCodeServer, config, err)
 	}
 	// Closing the session closes the relay's stdin, which the engine reads as
-	// the CLI being done: it answers what is in flight and closes its end.
+	// the harness being done: it answers what is in flight and closes its end.
 	defer cs.Close()
 	if req.Tools, err = listTools(cs); err != nil {
 		return failHarness("listing the %s server's tools: %v", claudeCodeServer, err)
@@ -426,7 +426,7 @@ func (c *harnessRun) loop(req modelRequest, config string) int {
 					os.Exit(stoppedExit)
 				}
 				// THE SESSION IS GONE under a call: the engine retired the
-				// run, or its end failed. A CLI whose server died has no
+				// run, or its end failed. A harness whose server died has no
 				// tools to go on with, and asking its model again would be
 				// a request the engine never sees the end of.
 				return failHarness("calling %s: %v", call.Name, err)
@@ -439,7 +439,7 @@ func (c *harnessRun) loop(req modelRequest, config string) int {
 
 // handleStop makes the engine's stop end the run AT A REQUEST'S EDGE.
 //
-// The backend stops a run it is done with by signalling the CLI's group, and a
+// The backend stops a run it is done with by signalling the harness's group, and a
 // real Claude Code goes at once. What a real one cannot do is be asked by its
 // vendor for a response it never prints, because the vendor's answer and its
 // record are one stream. Here they are two steps — the post to the model, then
@@ -457,7 +457,7 @@ func (c *harnessRun) handleStop() {
 	go func() {
 		<-signals
 		c.stopping.Store(true)
-		// SAID, as a CLI says it was signalled, and BEFORE the wait: a case
+		// SAID, as a harness says it was signalled, and BEFORE the wait: a case
 		// holding the stop to the request in flight reads this line to know
 		// the stop is in hand rather than racing it.
 		fmt.Fprintln(os.Stderr, stopNotice)
@@ -466,8 +466,8 @@ func (c *harnessRun) handleStop() {
 	}()
 }
 
-// stopNotice is what the scripted CLI says on stderr when it is stopped.
-const stopNotice = "scripted CLI: stopped; ending at the edge of the request in flight"
+// stopNotice is what the scripted harness says on stderr when it is stopped.
+const stopNotice = "scripted harness: stopped; ending at the edge of the request in flight"
 
 // respond asks the model for its next response and prints it as Claude Code's
 // record of one request, as one step a stop cannot split ([harnessRun.handleStop]),
@@ -661,11 +661,11 @@ func listTools(cs *mcpsdk.ClientSession) ([]string, error) {
 	return names, nil
 }
 
-// systemPrompt is the system prompt the CLI was handed and the channel it came
+// systemPrompt is the system prompt the harness was handed and the channel it came
 // on.
 //
 // ABSENT IS NO SYSTEM PROMPT, not a fault: the backend passes no flag for a
-// request that carries none, since a CLI handed an empty one would replace its
+// request that carries none, since a harness handed an empty one would replace its
 // default with nothing. BOTH IS: a call takes one route.
 func systemPrompt() (string, string, error) {
 	var system []byte
@@ -693,7 +693,7 @@ func systemPrompt() (string, string, error) {
 }
 
 func failHarness(format string, args ...any) int {
-	fmt.Fprintf(os.Stderr, "scripted CLI: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "scripted harness: "+format+"\n", args...)
 	return 1
 }
 
@@ -737,14 +737,14 @@ func orEmptyArgs(args map[string]any) map[string]any {
 
 // --- the model's half -------------------------------------------------------- //
 
-// readRequest reads the one request the scripted CLI posts for a model
-// request, answering the CLI with why, and reporting false, when it cannot be
-// read. The CLI prints that on stderr and exits non-zero, so the reason reaches
+// readRequest reads the one request the scripted harness posts for a model
+// request, answering the harness with why, and reporting false, when it cannot be
+// read. The harness prints that on stderr and exits non-zero, so the reason reaches
 // the engine's log as the run's failure.
 func readRequest(w http.ResponseWriter, r *http.Request) (modelRequest, bool) {
 	var req modelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "the scripted CLI posted no request: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "the scripted harness posted no request: "+err.Error(), http.StatusBadRequest)
 		return modelRequest{}, false
 	}
 	return req, true
@@ -813,7 +813,7 @@ var (
 	textReplyUsage = replyUsage{Input: 90, Output: 40, CacheRead: 60, CacheWrite: 25}
 )
 
-// tokens is what the engine charges for one such response: the CLI backend
+// tokens is what the engine charges for one such response: the harness backend
 // counts the prompt whole, both cache figures folded into its input, and the
 // output beside it — so every one of them is counted (the profile's usage
 // arithmetic, [harnessprofile.UsagePaths.PromptTokens]).
@@ -851,7 +851,7 @@ func textReply(text string) modelReply {
 
 // THE MODEL READS A RUN'S TRANSCRIPT AS THE BACKEND RENDERS IT — checked against
 // the backend's own renderer, so a change to how a conversation is handed a
-// fresh CLI run fails here, by name, rather than as the cases that key on a
+// fresh harness run fails here, by name, rather than as the cases that key on a
 // result waiting out their budget for a round that never comes.
 //
 // What it reads is what those rounds are keyed on: each tool result
@@ -903,7 +903,7 @@ func TestTheScriptedModelReadsTheTranscriptTheBackendRenders(t *testing.T) {
 type renderOnly struct{ pending []llm.Message }
 
 func (renderOnly) Serve(context.Context, llm.ServeOptions) (llm.Served, error) {
-	return llm.Served{}, errors.New("a host for rendering serves no CLI")
+	return llm.Served{}, errors.New("a host for rendering serves no harness")
 }
 func (renderOnly) Observe(llm.Turn)         {}
 func (renderOnly) Spent(llm.Usage)          {}
@@ -911,7 +911,7 @@ func (renderOnly) Done() <-chan struct{}    { return nil }
 func (renderOnly) Halted() bool             { return false }
 func (h renderOnly) Pending() []llm.Message { return h.pending }
 
-// THE SCRIPTED CLI ANSWERS THE BACKEND THE GOLDEN COMPANY BUILDS — built from
+// THE SCRIPTED HARNESS ANSWERS THE BACKEND THE GOLDEN COMPANY BUILDS — built from
 // the document as every node here builds it ([engine.BuildHarness]) and driven
 // as a phase and an auxiliary pass drive it. Every case in this package stands
 // on this round trip, and a break in it — the marker not reaching the child,
@@ -921,12 +921,12 @@ func (h renderOnly) Pending() []llm.Message { return h.pending }
 // here, where it can say which.
 //
 // THE PHASE RUNS THROUGH THE REAL LOOP AND THE REAL SESSION (toolloop over a
-// toolsession host), because that is the only way a CLI reaches a phase's
+// toolsession host), because that is the only way a harness reaches a phase's
 // tools now: the relay this binary starts, the socket, the listing, the call
 // joined to the request the record shows.
 func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	t.Parallel()
-	// WHAT THE CLI DOES IS WHAT THE PROFILE READS: the name it shows its
+	// WHAT THE HARNESS DOES IS WHAT THE PROFILE READS: the name it shows its
 	// model a seat's tool under, and the `_meta` key it hands the server its
 	// own id for a call under. A call joins its request by name and
 	// arguments where the key is not read, so the phase below would pass
@@ -935,7 +935,7 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	claude, _ := harnessprofile.Builtin("claude-code")
 	if r := claude.Requests; r == nil || r.HostPrefix != claudeCodeToolPrefix ||
 		r.CallIDMeta != claudeCodeToolUseMeta {
-		t.Fatalf("the claude-code profile reads the record by %+v, and the scripted CLI "+
+		t.Fatalf("the claude-code profile reads the record by %+v, and the scripted harness "+
 			"prints tools as %q and call ids under %q", r, claudeCodeToolPrefix, claudeCodeToolUseMeta)
 	}
 
@@ -959,7 +959,7 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	// A PHASE: a system prompt, a conversation, a tool to call and a tool to
 	// finish with, run as the runner runs a seat's executor — and a model
 	// that calls the one, reads its answer, and finishes with the other: the
-	// CLI's own loop, across two model requests of one run.
+	// harness's own loop, across two model requests of one run.
 	const system = "You are the CEO of Nimbus. You answer to the founder."
 	model.callOnExecute("search_knowledge", map[string]any{"query": "staging runbook"})
 	work := &phaseTools{names: []string{"submit_work", "search_knowledge"}}
@@ -986,7 +986,7 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	}
 	// TWO ROUNDS, ONE RUN, JOINED: each request the record showed is one of
 	// the phase's rounds, each call its round's, under the id Claude Code
-	// gave it, and the one CLI run made both.
+	// gave it, and the one harness run made both.
 	if res.RoundsUsed != 2 || len(res.Rounds) != 2 {
 		t.Errorf("the phase used %d rounds and timed %d, want its two model requests",
 			res.RoundsUsed, len(res.Rounds))
@@ -1006,11 +1006,11 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	}
 	// AND ENDED BY THE ENGINE: the submission finished the phase, so the run
 	// was stopped there rather than asked on — the engine holds the answer
-	// to the call that ends a phase until its CLI is gone.
+	// to the call that ends a phase until its harness is gone.
 	if len(res.Invocations) != 1 || !res.Invocations[0].RequestsObserved ||
 		res.Invocations[0].FirstRound != 1 || res.Invocations[0].LastRound != 2 ||
 		res.Invocations[0].Model != "claude-golden" || res.Invocations[0].Outcome != toolloop.OutcomeStopped {
-		t.Errorf("the phase recorded the CLI runs %+v, want one by claude-golden that showed "+
+		t.Errorf("the phase recorded the harness runs %+v, want one by claude-golden that showed "+
 			"both its requests and was stopped once the phase submitted", res.Invocations)
 	}
 	if res.Model != "claude-golden" {
@@ -1030,8 +1030,8 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 		t.Errorf("the model was offered %q, want the phase's two tools on each request", offered)
 	}
 	// ON ITS OWN CHANNEL, WHOLE, and nowhere else: the system prompt every
-	// prompt case here reads is the one the CLI was handed apart from the
-	// transcript — on the append channel, after the note that says the CLI's
+	// prompt case here reads is the one the harness was handed apart from the
+	// transcript — on the append channel, after the note that says the harness's
 	// own prompt stays in force and the seat's is the role.
 	got := model.systemPrompts()
 	if len(got) != 2 || !strings.HasSuffix(got[0], system) || got[0] == system || got[1] != got[0] {
@@ -1061,7 +1061,7 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 		t.Errorf("the model recorded %v, want the executor's two requests and the persist pass", got)
 	}
 	// Whole and alone, on the replace channel: a side pass has no use for
-	// the CLI's own prompt.
+	// the harness's own prompt.
 	if got := model.systemPrompts(); len(got) != 3 || got[2] != strings.TrimSpace(learning.PersistSystemPrompt) {
 		t.Errorf("the persist pass was shown %q, want its own prompt alone", got)
 	}
@@ -1070,13 +1070,13 @@ func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	}
 }
 
-// A STOPPED CLI PRINTS THE REQUEST ITS MODEL ANSWERED, and nothing after it.
+// A STOPPED HARNESS PRINTS THE REQUEST ITS MODEL ANSWERED, and nothing after it.
 //
 // The engine stops a run it is done with — a phase decided, a budget refused —
 // and every case that holds the counter to the model's log reads one fact
 // across that stop: a request the model answered is a request the engine read
-// and charged. A real CLI's answer and its record are one stream; the scripted
-// CLI's are two steps, the post and the printing, so the fact holds only
+// and charged. A real harness's answer and its record are one stream; the scripted
+// harness's are two steps, the post and the printing, so the fact holds only
 // because a stop landing between them waits for the printing
 // ([harnessRun.handleStop]). Held here, where the stop can be put exactly there,
 // rather than only in the budget cases, which would wait out their budget on
@@ -1113,7 +1113,7 @@ func TestAStoppedScriptedHarnessPrintsTheRequestItsModelAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start the scripted CLI: %v", err)
+		t.Fatalf("start the scripted harness: %v", err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	noticed, read := make(chan struct{}), make(chan string, 1)
@@ -1147,17 +1147,17 @@ func TestAStoppedScriptedHarnessPrintsTheRequestItsModelAnswered(t *testing.T) {
 
 	// THE STOP LANDS WHILE THE MODEL IS ANSWERING: after the request was
 	// posted, before its record could be printed.
-	await("the CLI to ask its model", asked)
+	await("the harness to ask its model", asked)
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("stop the scripted CLI: %v", err)
+		t.Fatalf("stop the scripted harness: %v", err)
 	}
-	await("the CLI to take the stop", noticed)
+	await("the harness to take the stop", noticed)
 	close(release)
 	said := <-read
 	err = cmd.Wait()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != stoppedExit {
-		t.Errorf("the stopped CLI exited %v, want %d; it said:\n%s", err, stoppedExit, said)
+		t.Errorf("the stopped harness exited %v, want %d; it said:\n%s", err, stoppedExit, said)
 	}
 
 	// THE ANSWERED REQUEST IS ON THE RECORD, whole — opened with its input
@@ -1188,11 +1188,11 @@ func TestAStoppedScriptedHarnessPrintsTheRequestItsModelAnswered(t *testing.T) {
 		kinds = append(kinds, kind)
 	}
 	if !slices.Contains(kinds, "message_start") || output != textReplyUsage.Output {
-		t.Errorf("the stopped CLI's record is %v with output %d, want the answered request "+
+		t.Errorf("the stopped harness's record is %v with output %d, want the answered request "+
 			"whole, its output %d counted", kinds, output, textReplyUsage.Output)
 	}
 	if slices.Contains(kinds, "result") {
-		t.Errorf("the stopped CLI printed a result, as though its run had finished: %v", kinds)
+		t.Errorf("the stopped harness printed a result, as though its run had finished: %v", kinds)
 	}
 }
 
@@ -1248,7 +1248,7 @@ func chargedAs(t *testing.T, what string, input, output, cacheRead, cacheWrite i
 	if input != usage.prompt() || output != usage.Output ||
 		cacheRead != usage.CacheRead || cacheWrite != usage.CacheWrite {
 		t.Errorf("%s was counted in=%d out=%d cache_read=%d cache_write=%d, want the "+
-			"%+v the CLI reported", what, input, output, cacheRead, cacheWrite, usage)
+			"%+v the harness reported", what, input, output, cacheRead, cacheWrite, usage)
 	}
 	if got := input + output; got != usage.tokens() {
 		t.Errorf("%s costs %d tokens, want the %d the budget cases count it as",

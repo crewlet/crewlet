@@ -86,7 +86,7 @@ func TestAChainIsLimitedOnlyWhenEveryMemberIs(t *testing.T) {
 				t.Errorf("said %q, want the head's own sentence", limit.Said)
 			}
 			if limit.Agent != "claude-code" || !limit.Subscription {
-				t.Errorf("limit names %q (subscription %v), want the head's CLI on a plan",
+				t.Errorf("limit names %q (subscription %v), want the head's harness on a plan",
 					limit.Agent, limit.Subscription)
 			}
 		})

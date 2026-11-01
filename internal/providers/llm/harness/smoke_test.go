@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// THE SMOKE TEST PASSES WHEN THE CLI CALLS THE TOOL ON A REAL SESSION — and
+// THE SMOKE TEST PASSES WHEN THE HARNESS CALLS THE TOOL ON A REAL SESSION — and
 // says how: that the call reached the server the profile's tool route started,
-// how it was joined to the CLI's record, and what the CLI offered its model,
+// how it was joined to the harness's record, and what the harness offered its model,
 // which is where a confinement that stopped holding would show first.
 //
 // Mutation: pass on an answer that names the tool rather than on the call the
@@ -34,9 +34,9 @@ func TestTheSmokeTestPassesWhenTheHarnessCallsTheTool(t *testing.T) {
 	}
 }
 
-// A RECORD THAT NEVER SHOWS THE CALL FAILS THE SMOKE TEST. The CLI reached the
+// A RECORD THAT NEVER SHOWS THE CALL FAILS THE SMOKE TEST. The harness reached the
 // tools and called one, but the profile's requests rules read nothing of it —
-// a CLI that changed what it writes, or one whose record no stand-in can
+// a harness that changed what it writes, or one whose record no stand-in can
 // produce and only a real sign-in shows (cursor-agent's) — so a phase's
 // rounds and spend would not be read as it ran, and nothing else says so.
 //
@@ -47,7 +47,7 @@ func TestTheSmokeTestFailsARecordThatNeverShowsItsCall(t *testing.T) {
 		{Calls: []fakeCall{{Name: smokeTool, Args: map[string]any{"ok": true}}}, Usage: fakeUsage{Input: 30, Output: 6}},
 		{Text: "done", Usage: fakeUsage{Input: 40, Output: 2}},
 	}}, func(c *Config) {
-		// Rules that match nothing the CLI writes.
+		// Rules that match nothing the harness writes.
 		c.Overrides["requests"] = map[string]any{"events": []any{map[string]any{
 			"match": []any{map[string]any{"path": []any{"type"}, "equals": "no-such-event"}},
 			"opens": true,
@@ -63,7 +63,7 @@ func TestTheSmokeTestFailsARecordThatNeverShowsItsCall(t *testing.T) {
 	}
 }
 
-// The one failure nothing else catches: the CLI reaches the tools, and answers
+// The one failure nothing else catches: the harness reaches the tools, and answers
 // with PROSE. Every phase a seat runs on such a provider spends corrective
 // rounds asking again — and ends without its submission when the model never
 // makes the call — while the config looks perfect.
@@ -74,14 +74,14 @@ func TestTheSmokeTestCatchesAHarnessThatAnswersWithoutCallingTheTool(t *testing.
 	}}, nil)
 	verdict, answered := p.smokeTest(t.Context())
 	if !strings.HasPrefix(verdict, "failed") || !answered {
-		t.Fatalf("smoke = %q (answered %v), want a failure from a CLI that answered", verdict, answered)
+		t.Fatalf("smoke = %q (answered %v), want a failure from a harness that answered", verdict, answered)
 	}
 	if !strings.Contains(verdict, "corrective round") || !strings.Contains(verdict, "I would call the tool.") {
-		t.Errorf("the smoke failure does not say what it costs and what the CLI said: %q", verdict)
+		t.Errorf("the smoke failure does not say what it costs and what the harness said: %q", verdict)
 	}
 }
 
-// The other failure the smoke test is the ONLY thing that catches: the CLI
+// The other failure the smoke test is the ONLY thing that catches: the harness
 // exits 0, bills output tokens and answers with nothing at all. An empty
 // answer is a model outcome the tool loop corrects, so this probe is the one
 // place an operator is told the difference between prose and silence —
@@ -107,7 +107,7 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 }
 
 // A PROFILE WITH NO TOOL ROUTE FAILS THE SMOKE TEST BY NAME — its seats would
-// be refused — while the doctor still learns whether the CLI answers at all.
+// be refused — while the doctor still learns whether the harness answers at all.
 func TestTheSmokeTestNamesAProfileWithNoToolRoute(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
@@ -116,6 +116,6 @@ func TestTheSmokeTestNamesAProfileWithNoToolRoute(t *testing.T) {
 		t.Errorf("smoke = %q, want a failure naming overrides.mcp", verdict)
 	}
 	if !answered {
-		t.Error("a CLI that answered was reported as one that did not")
+		t.Error("a harness that answered was reported as one that did not")
 	}
 }

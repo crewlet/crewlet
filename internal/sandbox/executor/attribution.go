@@ -14,7 +14,7 @@ import (
 // ([sandbox.CommitAttribution]) is given in its box.
 //
 // GIT ADDS THE CREDIT, NOT THE MODEL. An instruction in the run's standing
-// text — which is how a coding CLI adds its own co-author line — holds only as
+// text — which is how a harness adds its own co-author line — holds only as
 // long as the model remembers it, and nothing would notice the commit that
 // went out without it. A prepare-commit-msg hook runs on every commit git
 // makes, `git commit --no-verify` included, which skips pre-commit and

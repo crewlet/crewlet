@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// signIn is how one entry's CLI authenticates, as far as this engine can see:
+// signIn is how one entry's harness authenticates, as far as this engine can see:
 // the credential files on disk, and what the environment it hands the child
 // carries.
 //
@@ -37,7 +37,7 @@ type signIn struct {
 
 	// unreadable is why the shared login could not be read — a write of it
 	// that stopped part way and cannot be finished, a file that is not one —
-	// so whether credential files sign the CLI in is UNKNOWN rather than no:
+	// so whether credential files sign the harness in is UNKNOWN rather than no:
 	// read as no, an entry with a whole login waiting to be put in place was
 	// reported as one nobody had signed in.
 	unreadable error
@@ -55,7 +55,7 @@ type signInSource struct {
 //
 // The checkout is empty because the isolation paths carry no credential:
 // whether HOME points here or there does not change which key reaches the
-// CLI, and a real checkout would claim a seat for a question about none.
+// harness, and a real checkout would claim a seat for a question about none.
 func (p *Provider) signIn(ctx context.Context) signIn {
 	login, err := p.ws.Login(ctx)
 	return p.signInFrom(login, err)
@@ -102,7 +102,7 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 	if p.auth.Mode == AuthEnv {
 		// The route an env-mode entry signs in by, read off the child's map
 		// like every other: what the operator's env sets of the names the
-		// profile lists, as the CLI is handed them.
+		// profile lists, as the harness is handed them.
 		for _, name := range p.profile.SignsInWithEnv(env) {
 			s.sources = append(s.sources, signInSource{state: "env", line: "env sets " + name})
 		}
@@ -125,8 +125,8 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 			continue
 		}
 		// ONE WORD PER MODE: under auth.mode env the entry's env is the
-		// sign-in whatever CLI reads it, so it reads env as Claude Code's
-		// does; under any other mode it is the provider key the CLI reads
+		// sign-in whatever harness reads it, so it reads env as Claude Code's
+		// does; under any other mode it is the provider key the harness reads
 		// from its environment.
 		state := "environment"
 		if p.auth.Mode == AuthEnv {
@@ -137,14 +137,14 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 	return s
 }
 
-// SignInRoute is how an entry's CLI signs in, in the words a status read
+// SignInRoute is how an entry's harness signs in, in the words a status read
 // publishes: a closed set, so a reader that draws one (the Models screen) can
 // be held to it.
 type SignInRoute string
 
 // The routes, in the order [Provider.signIn] reads them.
 const (
-	// RouteCredentials is a login the CLI keeps in credential files.
+	// RouteCredentials is a login the harness keeps in credential files.
 	RouteCredentials SignInRoute = "credentials"
 	// RouteToken is a headless subscription token.
 	RouteToken SignInRoute = "token"
@@ -156,10 +156,10 @@ const (
 	// RouteEnv is the entry's env alone, a cloud provider's switch or a
 	// gateway's token (auth.mode env).
 	RouteEnv SignInRoute = "env"
-	// RouteEnvironment is a provider key in the entry's env, on a CLI that
+	// RouteEnvironment is a provider key in the entry's env, on a harness that
 	// reads one ([harnessprofile.Profile.EnvSignIn]).
 	RouteEnvironment SignInRoute = "environment"
-	// RouteNone is nothing this node can see signing the CLI in.
+	// RouteNone is nothing this node can see signing the harness in.
 	RouteNone SignInRoute = "none"
 )
 
@@ -170,7 +170,7 @@ var SignInRoutes = []SignInRoute{RouteCredentials, RouteToken, RouteAPIKey, Rout
 // Valid reports whether r is one of [SignInRoutes].
 func (r SignInRoute) Valid() bool { return slices.Contains(SignInRoutes, r) }
 
-// SignInRoute is how this entry's CLI signs in as THIS node resolves it, and
+// SignInRoute is how this entry's harness signs in as THIS node resolves it, and
 // whether anything does. The first route of [Provider.signIn], the reading
 // `crewlet llm list` prints, so the page and the command cannot disagree; a
 // shared login that cannot be read reads as [RouteNone], with resolves false.
@@ -195,10 +195,10 @@ func (p *Provider) SignInRoute(ctx context.Context) (route SignInRoute, resolves
 	}
 }
 
-// SignsInWithLogin reports whether this entry signs its CLI in with a login
-// kept in credential files, which only the CLI can say the state of: no key
-// and no env sign-in, no token reaching the CLI, and a profile that can ask the
-// CLI who it is logged in as ([harnessprofile.Profile.StatusArgs]).
+// SignsInWithLogin reports whether this entry signs its harness in with a login
+// kept in credential files, which only the harness can say the state of: no key
+// and no env sign-in, no token reaching the harness, and a profile that can ask the
+// harness who it is logged in as ([harnessprofile.Profile.StatusArgs]).
 func (p *Provider) SignsInWithLogin() bool {
 	if p.signsInWithKey() || len(p.profile.StatusArgs) == 0 {
 		return false
@@ -206,7 +206,7 @@ func (p *Provider) SignsInWithLogin() bool {
 	return len(p.handedCredentials()) == 0
 }
 
-// signsInWithKey reports whether this entry's calls sign the CLI in with
+// signsInWithKey reports whether this entry's calls sign the harness in with
 // something other than a login: every call under api-key and env, neither of
 // which ever signs in with one, and a call under inherit-env whose engine
 // environment holds the key variable. Such a call runs in the seat's key home
@@ -226,18 +226,18 @@ func (p *Provider) signsInWithKey() bool {
 	return strings.TrimSpace(env[p.profile.APIKeyEnv]) != ""
 }
 
-// ModeSignIn is the credential an entry's auth mode hands its CLI from the
+// ModeSignIn is the credential an entry's auth mode hands its harness from the
 // environment, for an entry under api-key or inherit-env: what the mode reads,
 // and how an operator supplies it.
 //
 // WORDED ONCE, for every message that tells an operator how to sign such an
 // entry in — the doctor's "no sign-in", a remote launch's refusal,
 // `crewlet llm login`'s refusal of a token the mode never reads, and its
-// `-username` refusal of a CLI with no credential login
+// `-username` refusal of a harness with no credential login
 // ([Provider.CredentialLogin]). Each used to choose its remedy for itself, and
-// three of them chose it by the CLI's profile alone: an api-key or inherit-env
+// three of them chose it by the harness's profile alone: an api-key or inherit-env
 // Claude Code entry was told to mint a headless token, which api-key removes
-// from the CLI's environment and inherit-env never looks for in the secret
+// from the harness's environment and inherit-env never looks for in the secret
 // store the token is stored in — and the command that mints one stored it
 // anyway and printed an auth.token snippet that validation refuses under
 // either mode.
@@ -249,20 +249,20 @@ func (p *Provider) signsInWithKey() bool {
 type ModeSignIn struct {
 	// Mode is the entry's auth mode, api-key or inherit-env.
 	Mode AuthMode
-	// Variables are the ones the mode hands the CLI — api-key's key
+	// Variables are the ones the mode hands the harness — api-key's key
 	// variable, the one or two inherit-env forwards — for a message that
 	// names where else one may be set (a seat's role.sandbox.env). Empty
 	// where the profile names none for the mode, or none in the reference
 	// grammar.
 	Variables []string
 	// Misnamed is the overrides field, in full, of each variable the mode
-	// hands the CLI that is outside the reference grammar. Such a variable
+	// hands the harness that is outside the reference grammar. Such a variable
 	// is left out of Variables and of Supply, since no store, ${VAR} or
 	// shell export can hold a credential under it ([misnamedVariable]);
 	// where it is all the mode has, Supply names the field instead.
 	Misnamed []string
 	// Reads completes "its auth.mode is <Mode>, which …": what the mode
-	// hands the CLI, and from where.
+	// hands the harness, and from where.
 	Reads string
 	// Unset completes the same sentence after Reads, for an entry where
 	// none of that resolved.
@@ -280,26 +280,26 @@ func (m ModeSignIn) Missing() string {
 // ModeSignIn is this entry's [ModeSignIn], or false under subscription.
 //
 // THE VARIABLES ARE THE PROFILE'S, as [applyAuth] uses them. An entry whose
-// profile names none for its mode — api-key on a CLI with no api_key_env,
+// profile names none for its mode — api-key on a harness with no api_key_env,
 // inherit-env on one with neither variable — is refused on every write of the
 // configuration and only warned about where a revision is applied, so it can
-// run; its mode then hands the CLI nothing at all, and the remedy is the mode.
+// run; its mode then hands the harness nothing at all, and the remedy is the mode.
 //
 // A VARIABLE OUTSIDE THE REFERENCE GRAMMAR IS NO ROUTE ([misnamedVariable]): no
 // secret store or ${VAR} can hold the name and no shell can export it, so a key
-// stored with `crewlet secrets set` or exported never reaches the CLI under it.
+// stored with `crewlet secrets set` or exported never reaches the harness under it.
 // It is left out of what the operator is told to supply, and where it is the
 // only variable the mode has, the remedy is the overrides field that names it —
 // never a seat's role.sandbox.env: every write of the company document refuses
 // such a name, so the field is the change to make either way, and a name
 // carrying `=` sets a different variable wherever it is placed.
 func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
-	// No Variables: none would reach the CLI.
+	// No Variables: none would reach the harness.
 	misconfigured := func(mode AuthMode, reads string) ModeSignIn {
 		return ModeSignIn{
 			Mode: mode, Reads: reads,
 			Unset:  "a pairing every write of the configuration refuses",
-			Supply: "set auth.mode: subscription, and sign the CLI in with a login",
+			Supply: "set auth.mode: subscription, and sign the harness in with a login",
 		}
 	}
 	switch p.AuthMode() {
@@ -307,14 +307,14 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		names := p.profile.SignInEnv
 		if len(names) == 0 {
 			return ModeSignIn{
-				Mode: AuthEnv, Reads: "hands the CLI only its env's credential-named variables",
+				Mode: AuthEnv, Reads: "hands the harness only its env's credential-named variables",
 				Unset:  "and its env sets none that resolves",
 				Supply: fmt.Sprintf("set the provider's key in providers.llm.%s.env", p.key),
 			}, true
 		}
 		return ModeSignIn{
 			Mode: AuthEnv, Variables: slices.Clone(names),
-			Reads: fmt.Sprintf("signs the CLI in with its env alone (one of %s)",
+			Reads: fmt.Sprintf("signs the harness in with its env alone (one of %s)",
 				words.Or(names)),
 			Unset: "and its env sets none of them",
 			Supply: fmt.Sprintf("set one in providers.llm.%s.env, with the cloud provider's "+
@@ -333,10 +333,10 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			path := p.overridePath("api_key_env")
 			return ModeSignIn{
 				Mode: AuthAPIKey, Misnamed: []string{path},
-				Reads: fmt.Sprintf("hands the CLI only its key, in %q (%s)", name, path),
+				Reads: fmt.Sprintf("hands the harness only its key, in %q (%s)", name, path),
 				Unset: "a name outside the reference grammar that no secret store, ${VAR} or " +
 					"shell export can hold",
-				Supply: fmt.Sprintf("name the variable your build of the CLI reads in %s", path),
+				Supply: fmt.Sprintf("name the variable your build of the harness reads in %s", path),
 			}, true
 		}
 		if p.profile.APIKeyEnvShared {
@@ -345,7 +345,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			// place ([harnessprofile.Profile.APIKeyEnvShared]).
 			return ModeSignIn{
 				Mode: AuthAPIKey, Variables: []string{name},
-				Reads: fmt.Sprintf("hands the CLI only its key, as %s (providers.llm.%s.auth.api_key)",
+				Reads: fmt.Sprintf("hands the harness only its key, as %s (providers.llm.%s.auth.api_key)",
 					name, p.key),
 				Unset:  "and that key resolved to nothing",
 				Supply: "store it with `crewlet secrets set` under the name auth.api_key references",
@@ -353,7 +353,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		}
 		return ModeSignIn{
 			Mode: AuthAPIKey, Variables: []string{name},
-			Reads: fmt.Sprintf("hands the CLI only its key (providers.llm.%s.auth.api_key, else %s)",
+			Reads: fmt.Sprintf("hands the harness only its key (providers.llm.%s.auth.api_key, else %s)",
 				p.key, name),
 			Unset:  "and that key resolved to nothing",
 			Supply: "store it with `crewlet secrets set`, or export it in the engine's environment",
@@ -384,7 +384,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		}
 		sign := ModeSignIn{
 			Mode: AuthInheritEnv, Variables: held, Misnamed: misnamed,
-			Reads: fmt.Sprintf("hands the CLI only %s from the engine's own process environment, "+
+			Reads: fmt.Sprintf("hands the harness only %s from the engine's own process environment, "+
 				"never from the secret store", words.Or(named)),
 			Unset:  "and it is not set there",
 			Supply: "export it in the engine's environment",
@@ -406,7 +406,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			for i := range misnamed {
 				fields[i], names[i] = words.Said(misnamed[i]), words.Said(misnamedNames[i])
 			}
-			sign.Supply = fmt.Sprintf("name %s your build of the CLI reads in %s, since no shell "+
+			sign.Supply = fmt.Sprintf("name %s your build of the harness reads in %s, since no shell "+
 				"can export %s", what, words.And(fields), words.Or(names))
 		default:
 			sign.Supply = fmt.Sprintf("export %s in the engine's environment, since no shell can "+
@@ -423,7 +423,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 // NOTHING THAT KEEPS A CREDENTIAL CAN HOLD ONE. The secret store refuses the
 // name, so `crewlet llm login -capture-token` would have nowhere to put a token
 // the vendor had just minted; a ${VAR} cannot spell it; no shell exports one;
-// and a name carrying `=` sets a different variable in the CLI's environment.
+// and a name carrying `=` sets a different variable in the harness's environment.
 // Only overrides can name one — every shipped profile names its variables in
 // the grammar — and every write of the company document refuses it, but that
 // is an admission rule: an entry loaded to run, a revision being applied or the
@@ -436,7 +436,7 @@ type misnamedVariable struct {
 	field string
 	// name is the variable as the field writes it.
 	name string
-	// credential is what the CLI is handed in it.
+	// credential is what the harness is handed in it.
 	credential string
 }
 
@@ -459,7 +459,7 @@ func (p *Provider) misnamedVariables() []misnamedVariable {
 // the field to change.
 func (p *Provider) misnamedProblem(variable misnamedVariable) string {
 	problem := fmt.Sprintf("%s is %q, which is not an environment variable name (letters, "+
-		"digits and underscores, not starting with a digit): the CLI is handed its %s under "+
+		"digits and underscores, not starting with a digit): the harness is handed its %s under "+
 		"it, and no secret store, ${VAR} or shell export can hold a name outside that grammar, "+
 		"so neither a stored value nor an export can be read under it", p.overridePath(variable.field),
 		variable.name, variable.credential)
@@ -468,7 +468,7 @@ func (p *Provider) misnamedProblem(variable misnamedVariable) string {
 			"neither stored nor referenced"
 	}
 	return problem + ". Every write of the company document refuses it: name the variable " +
-		"your build of the CLI reads"
+		"your build of the harness reads"
 }
 
 // overridePath is the full path of one of this entry's overrides fields.
@@ -476,9 +476,9 @@ func (p *Provider) overridePath(field string) string {
 	return fmt.Sprintf("providers.llm.%s.overrides.%s", p.key, field)
 }
 
-// TokenCanBeStored reports whether this CLI names a headless token variable a
+// TokenCanBeStored reports whether this harness names a headless token variable a
 // token can be kept under: one in the reference grammar, which a secret store,
-// a ${VAR} and a shell export can all hold ([misnamedVariable]). A CLI that
+// a ${VAR} and a shell export can all hold ([misnamedVariable]). A harness that
 // names none takes no headless token, and one that names a variable outside
 // the grammar can be handed none, so no message this package words offers
 // `crewlet llm login -capture-token` for either ([Provider.MintsHeadlessToken]).
@@ -502,7 +502,7 @@ func (s signIn) line() string {
 }
 
 // state is the one-word summary of the first route, or "none" — "unknown"
-// where nothing else signs the CLI in and the shared login could not be read.
+// where nothing else signs the harness in and the shared login could not be read.
 func (s signIn) state() string {
 	if len(s.sources) == 0 {
 		if s.unreadable != nil {

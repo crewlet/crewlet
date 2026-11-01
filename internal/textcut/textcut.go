@@ -128,7 +128,7 @@ func Bytes(s string, max int) string {
 // byte slice taken from the end begins mid-rune whenever the text is not ASCII
 // and a JSON encoder turns that partial rune into U+FFFD.
 //
-// It replaced a private rune-counting `tail` in the sandbox's coding-agent
+// It replaced a private rune-counting `tail` in the sandbox's harness
 // runner — a fifth copy of this package's rule, and the only one whose budget
 // was RUNES: the bound it enforced is an event's size, which is bytes, so a
 // "100 000 character" cap was anything from 100 KB to 400 KB on the wire

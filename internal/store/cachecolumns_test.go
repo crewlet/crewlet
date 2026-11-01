@@ -258,7 +258,7 @@ func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 		if execute.TotalTokens != 9700 || execute.CacheReadTokens != 6000 ||
 			execute.CostUSD != 0.42 || execute.Calls != 31 {
 			t.Errorf("%s: the executor's row holds %+v, want the launch's 9700 tokens, 6000 cached, "+
-				"$0.42 over its CLI's 31 turns", name, execute.Bucket)
+				"$0.42 over its harness's 31 turns", name, execute.Bucket)
 		}
 		if len(roll.ByModel) != 1 || roll.ByModel[0].Model != "claude-sonnet-5" {
 			t.Errorf("%s: models = %+v, want the launch's own", name, roll.ByModel)

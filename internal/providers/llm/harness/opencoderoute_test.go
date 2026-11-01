@@ -275,7 +275,7 @@ func TestAnOpenCodeStepIsToldOnceItsCallsHaveRun(t *testing.T) {
 // results.
 //
 // Mutation: drop the profile's failure events, and the error says only that
-// the CLI exited 1.
+// the harness exited 1.
 func TestAFailedOpenCodeRunSaysWhyByItsErrorEvent(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "opencode", fakeScript{

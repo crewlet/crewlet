@@ -151,13 +151,13 @@ func (c *Company) restoreBundles(ctx context.Context) {
 // time a default changed.
 //
 // A provider whose credentials are missing still BUILDS. Every call then fails
-// with the CLI's own "not authenticated", which names the CLI and is exactly
+// with the harness's own "not authenticated", which names the harness and is exactly
 // what `crewlet llm doctor` explains — far easier to diagnose than a
 // constructor that refused to exist and took the whole company down at boot
 // over one login.
 //
 // ITS CREDENTIALS DO NOT ARRIVE AS A BAG OF KEYS. The entry holds ONE login,
-// kept by the vendor's CLI in a directory on disk, and at most a single
+// kept by the vendor's harness in a directory on disk, and at most a single
 // long-lived token or API key beside it, so there is no pool here and nothing
 // to rotate: a second key is a second entry in the seat's fallback chain.
 //
@@ -170,17 +170,17 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
-	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a CLI
+	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a harness
 	// handed the raw field would receive the literal reference on its
 	// --model flag and refuse a model by that name.
 	//
 	// A REFERENCE THAT RESOLVED TO NOTHING is refused, and that is not the
 	// same as a field somebody left out (which validation refuses). An entry
 	// that plainly reads `model: "${LLM_MODEL}"` and silently ran on the
-	// CLI's own default model when LLM_MODEL was unset would bill and answer
+	// harness's own default model when LLM_MODEL was unset would bill and answer
 	// as a model nobody chose; naming the variable sends the operator to the
 	// one thing they have to change. A missing CREDENTIAL still builds,
-	// because every call then fails with the CLI's own sign-in error that
+	// because every call then fails with the harness's own sign-in error that
 	// names it; a missing model has no such tell.
 	//
 	// "RESOLVED TO NOTHING" IS THE PRESENCE RULE, NOT SUBSTITUTION'S. Expand
@@ -191,8 +191,8 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	// built with no model at all. [config.Resolver.Missing] counts an empty
 	// answer as absent and tests every reference rather than the result, so
 	// `${PROVIDER}/sonnet` with PROVIDER unset is refused too instead of
-	// handing the CLI "/sonnet". The blank check catches what is left: a
-	// value that is all white space, which no CLI reads as a model.
+	// handing the harness "/sonnet". The blank check catches what is left: a
+	// value that is all white space, which no harness reads as a model.
 	model := strings.TrimSpace(r.Value(spec.Model))
 	if missing := r.Missing(spec.Model); len(missing) > 0 || model == "" {
 		if len(missing) == 0 {
@@ -210,7 +210,7 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	// receive the literal reference as its value.
 	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.env", key), spec.Env)
 	for _, ref := range missing {
-		// Warned rather than refused: a CLI whose optional tuning
+		// Warned rather than refused: a harness whose optional tuning
 		// variable is unset still runs, and a provider that refused to
 		// build would take the company down over it.
 		log.Warn("cli_agent_env_unresolved", "provider", key,
@@ -231,7 +231,7 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote. The
-	// API key reads the CLI's own key variable — ANTHROPIC_API_KEY for
+	// API key reads the harness's own key variable — ANTHROPIC_API_KEY for
 	// Claude Code — so a key already exported, or set with `crewlet secrets
 	// set`, signs an api-key entry in with no YAML change; it reaches the
 	// child only under auth.mode api-key ([harness.Auth]).

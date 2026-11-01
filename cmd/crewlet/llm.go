@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// `crewlet llm` — the operator's window onto the coding CLIs every model runs
+// `crewlet llm` — the operator's window onto the harnesses every model runs
 // through.
 //
 // # Why these commands exist at all
@@ -40,19 +40,19 @@ import (
 // An entry can be configured perfectly and still not work: the
 // binary can be missing from the engine host, the profile's flags can have
 // drifted from the installed version, the login can be present but expired,
-// and — the one nothing else catches — the CLI can fail to reach the seat's
+// and — the one nothing else catches — the harness can fail to reach the seat's
 // tools at all (the `crewlet` MCP server it is handed) and answer in prose with
 // nothing called, which ends every phase without its submission. Only a real
 // run calling a real tool proves the last one, so `doctor` runs one.
 //
 // Two of the profile's claims are measured the same way, because a flag that
-// stopped working is silent in both directions. The shell probe asks the CLI
+// stopped working is silent in both directions. The shell probe asks the harness
 // to run a command on the engine host and reports whether it did — a profile
-// that denies local tools and a CLI that ran one is a hole where the isolation
+// that denies local tools and a harness that ran one is a hole where the isolation
 // was assumed. The web probe asks it to fetch a URL, because web is the one
 // local tool every profile keeps ON and a vendor's sandbox flag can cut it
 // without saying so.
-const llmUsage = `crewlet llm: the coding CLIs every model runs through, their logins,
+const llmUsage = `crewlet llm: the harnesses every model runs through, their logins,
 health and tokens
 
 Usage:
@@ -66,8 +66,8 @@ Usage:
                                           ... or to stdout, storing nothing
   crewlet llm login KEY -token-stdin      Store a token you already have
   crewlet llm login KEY -username U -password-stdin
-                                          Where the CLI genuinely has a credential login
-  crewlet llm status KEY                  Ask the CLI who it is logged in as
+                                          Where the harness genuinely has a credential login
+  crewlet llm status KEY                  Ask the harness who it is logged in as
   crewlet llm logout KEY                  Revoke locally and delete the credentials
   crewlet llm export KEY [-secret-store]  Pack the login into a blob, or into the secret store
   crewlet llm import KEY                  Restore a bundle from stdin onto this host
@@ -121,7 +121,7 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	tokenStdin := fs.Bool("token-stdin", false,
 		"read a headless token from stdin (login only)")
 	username := fs.String("username", "",
-		"username for a CLI with a real credential login (login only)")
+		"username for a harness with a real credential login (login only)")
 	passwordStdin := fs.Bool("password-stdin", false,
 		"read the password from stdin (login only)")
 	home := fs.String("home", "",
@@ -212,16 +212,16 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	return nil
 }
 
-// statusLLM answers `crewlet llm status KEY`: one line of what the CLI's status
+// statusLLM answers `crewlet llm status KEY`: one line of what the harness's status
 // command says of its login, read as the engine reads it
-// ([harness.Provider.LoginStatus]), then the CLI's own words for a person
+// ([harness.Provider.LoginStatus]), then the harness's own words for a person
 // ([harness.Provider.Status], its status_text_args where it has them).
 //
 // THE ENGINE'S READING FIRST, because it is the answer the dashboard and the
-// heartbeat give for the same entry, and the line a script greps; the CLI's
+// heartbeat give for the same entry, and the line a script greps; the harness's
 // words after it, because they say what the reading cannot (which plan, which
 // organisation, when it expires). It exits non-zero unless the reading is
-// signed in, as the CLI's own status command does, so a script that ran it
+// signed in, as the harness's own status command does, so a script that ran it
 // before keeps its meaning.
 func statusLLM(ctx context.Context, p *harness.Provider, stdout, stderr io.Writer) error {
 	status, err := p.LoginStatus(ctx)
@@ -236,10 +236,10 @@ func statusLLM(ctx context.Context, p *harness.Provider, stdout, stderr io.Write
 		line += " as " + status.Account
 	}
 	fmt.Fprintln(stdout, line)
-	// The CLI's words are an account for a person, never the answer: a text
+	// The harness's words are an account for a person, never the answer: a text
 	// form that fails says so on stderr and leaves the reading standing.
 	if err := p.Status(ctx, stdout, stderr); err != nil && status.State == harness.LoginSignedIn {
-		fmt.Fprintf(stderr, "crewlet: %s: the CLI's own account of its login failed: %v\n", p.Key(), err)
+		fmt.Fprintf(stderr, "crewlet: %s: the harness's own account of its login failed: %v\n", p.Key(), err)
 	}
 	switch status.State {
 	case harness.LoginSignedIn:
@@ -249,7 +249,7 @@ func statusLLM(ctx context.Context, p *harness.Provider, stdout, stderr io.Write
 			"and `crewlet llm doctor %s` reports every other way it can be signed in",
 			p.Key(), p.Key(), p.Key())
 	default:
-		return fmt.Errorf("%s: the CLI did not say whether it holds a login: %s", p.Key(), status.Detail)
+		return fmt.Errorf("%s: the harness did not say whether it holds a login: %s", p.Key(), status.Detail)
 	}
 }
 
@@ -411,7 +411,7 @@ func providerKeys(providers []harnessProvider) []string {
 	return keys
 }
 
-// listLLMProviders is `crewlet llm list`: each entry's CLI, model, state
+// listLLMProviders is `crewlet llm list`: each entry's harness, model, state
 // directory and how it is signed in.
 //
 // Each entry's configured bundle is RESTORED FIRST, as `doctor` restores it
@@ -428,7 +428,7 @@ func listLLMProviders(ctx context.Context, providers []harnessProvider, stdout, 
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {
-			model = "(the CLI's default)"
+			model = "(the harness's default)"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Harness(), model,
@@ -437,7 +437,7 @@ func listLLMProviders(ctx context.Context, providers []harnessProvider, stdout, 
 	return w.Flush()
 }
 
-// diagnosis is what doctor prints about one entry: the CLI's own report, or
+// diagnosis is what doctor prints about one entry: the harness's own report, or
 // why there is none. Declared here, by the one caller that needs those
 // reports to look alike.
 type diagnosis interface {
@@ -620,9 +620,9 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 			"\nThis is a COPY: your own login is untouched, but both copies now share\n"+
 				"one refresh token, and a vendor that rotates them can log out whichever\n"+
 				"side refreshes second.")
-		// ONLY WHERE THE ENTRY READS A STORED TOKEN AND THE CLI CAN MINT ONE
+		// ONLY WHERE THE ENTRY READS A STORED TOKEN AND THE HARNESS CAN MINT ONE
 		// THERE: under api-key or inherit-env the token this would
-		// recommend reaches nothing ([refuseUnreadToken]); a CLI with no
+		// recommend reaches nothing ([refuseUnreadToken]); a harness with no
 		// minting command has no -capture-token to run; and under a
 		// token_env outside the reference grammar the command refuses
 		// before it mints ([harness.Provider.MintsHeadlessToken]).
@@ -736,7 +736,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 // that would never read the token, BEFORE one is minted, read or stored.
 //
 // THE MODE DECIDES WHAT THE ENTRY READS, and the command used to ask only the
-// CLI. Under api-key the token variable is removed from the CLI's environment
+// harness. Under api-key the token variable is removed from the harness's environment
 // and given no fallback, so a token reaches nothing wherever it is put; under
 // inherit-env the variable is forwarded from the engine's own process
 // environment and the secret store is never read, so a STORED token reaches
@@ -751,7 +751,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 //
 // NO TOKEN VARIABLE, OR ONE NO STORE CAN HOLD, is refused before anything
 // else but api-key, whatever the mode and -print-token, since a token reaches
-// the CLI only through that variable. A CLI whose profile names none — every
+// the harness only through that variable. A harness whose profile names none — every
 // built-in one but claude-code — takes no headless token at all, and it was
 // refused only once the token was in hand: after -token-stdin had read it, or
 // after a minting command a custom profile declared had run. A name outside
@@ -763,12 +763,12 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 // only to run, so the name reaches here.
 //
 // API-KEY IS JUDGED FIRST, because the mode decides what the entry reads before
-// the CLI does ([harness.Provider.ModeSignIn]): an api-key entry reads its key
+// the harness does ([harness.Provider.ModeSignIn]): an api-key entry reads its key
 // and no token under any variable, so it is told its key, as the doctor tells
 // it, whatever the profile names. Judged after them, an api-key codex entry
 // would be told to sign in with a login, which api-key does not sign in with,
 // or to name a token variable the mode would remove; and an api-key MY-TOKEN
-// entry to name the variable its CLI reads, as if a token would then reach
+// entry to name the variable its harness reads, as if a token would then reach
 // it. Its refusal offers subscription as the mode that reads a stored token
 // only under a variable a token can be stored in, and names the field where the
 // name is outside the grammar.
@@ -781,9 +781,9 @@ func refuseUnreadToken(p *harness.Provider, key string, req loginRequest) error 
 	switch {
 	case tokenVar == "":
 		return fmt.Errorf(
-			"the %q profile names no token_env, so this CLI takes no headless token, and none "+
+			"the %q profile names no token_env, so this harness takes no headless token, and none "+
 				"was minted, read or stored: sign %s in with a login of its own (`crewlet llm "+
-				"doctor %s` names the routes it has), or, if your build of the CLI reads a "+
+				"doctor %s` names the routes it has), or, if your build of the harness reads a "+
 				"token from a variable, name that variable in providers.llm.%s.overrides.token_env",
 			p.Harness(), key, key, key)
 	case !p.TokenCanBeStored():
@@ -791,7 +791,7 @@ func refuseUnreadToken(p *harness.Provider, key string, req loginRequest) error 
 			"providers.llm.%s.overrides.token_env is %q, which is not an environment variable "+
 				"name (letters, digits and underscores, not starting with a digit): no secret "+
 				"store or ${VAR} can hold a token under it and no shell can export one, so none "+
-				"was minted, read or stored. Name the variable your build of the CLI reads",
+				"was minted, read or stored. Name the variable your build of the harness reads",
 			key, tokenVar)
 	}
 	if !fromEnv {
@@ -814,14 +814,14 @@ func refuseUnreadToken(p *harness.Provider, key string, req loginRequest) error 
 }
 
 // refuseAPIKeyToken is [refuseUnreadToken]'s refusal for an api-key entry: the
-// mode removes the token variable from the CLI's environment, so a token
+// mode removes the token variable from the harness's environment, so a token
 // reaches nothing under any variable, and the remedy is the key the mode reads
-// — or, on a CLI whose profile names no key variable, a pairing every write of
+// — or, on a harness whose profile names no key variable, a pairing every write of
 // the configuration refuses, the mode's own remedy, a login under subscription
 // ([harness.ModeSignIn]).
 //
 // Subscription is offered as the mode that reads a token only where it could
-// read one: a CLI whose profile names no token variable, or one outside the
+// read one: a harness whose profile names no token variable, or one outside the
 // reference grammar, takes none under any mode, so offering it sent an
 // operator to the refusal that names the variable instead.
 func refuseAPIKeyToken(p *harness.Provider, key string, sign harness.ModeSignIn) error {
@@ -829,22 +829,22 @@ func refuseAPIKeyToken(p *harness.Provider, key string, sign harness.ModeSignIn)
 	switch {
 	case tokenVar == "":
 		return fmt.Errorf(
-			"%s runs under auth.mode api-key, which hands the CLI no headless token, and the %q "+
+			"%s runs under auth.mode api-key, which hands the harness no headless token, and the %q "+
 				"profile names no token_env to hand one in, so a token would reach nothing, and "+
 				"none was minted or stored. The mode %s: %s",
 			key, p.Harness(), sign.Reads, sign.Supply)
 	case !p.TokenCanBeStored():
 		return fmt.Errorf(
-			"%s runs under auth.mode api-key, which removes %q from the CLI's environment, so a "+
+			"%s runs under auth.mode api-key, which removes %q from the harness's environment, so a "+
 				"headless token would reach nothing, and none was minted or stored. The mode %s: "+
 				"%s. And providers.llm.%s.overrides.token_env is %q, which is not an environment "+
 				"variable name (letters, digits and underscores, not starting with a digit), so "+
 				"no secret store or ${VAR} could hold a token under it in any mode either: name "+
-				"the variable your build of the CLI reads",
+				"the variable your build of the harness reads",
 			key, tokenVar, sign.Reads, sign.Supply, key, tokenVar)
 	}
 	return fmt.Errorf(
-		"%s runs under auth.mode api-key, which removes %s from the CLI's environment, so a "+
+		"%s runs under auth.mode api-key, which removes %s from the harness's environment, so a "+
 			"headless token would reach nothing, and none was minted or stored. The mode %s: "+
 			"%s, or set auth.mode: subscription to sign it in with a token",
 		key, tokenVar, sign.Reads, sign.Supply)
@@ -900,7 +900,7 @@ func exportLLM(ctx context.Context, providers []harnessProvider, key string, toS
 	// [secrets.MaxValueBytes], and refuses a longer one as most likely the
 	// wrong input, because a credential is a few kilobytes. A bundle is not
 	// a pasted credential: it is this entry's whole credentials directory,
-	// packed as it is, and a CLI whose directory packs to more than the
+	// packed as it is, and a harness whose directory packs to more than the
 	// store holds is not fixed by other input. What works is a route that
 	// does not go through the store: the bundle on stdout, kept wherever the
 	// operator keeps such things, or a login on each host. This caps the

@@ -46,7 +46,7 @@ func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, s
 
 // AN EXECUTOR'S BOX IS HANDED ITS ENTRY'S WHOLE ENV, IN EVERY CELL.
 //
-// An entry's env is extra environment for every invocation of its CLI, and
+// An entry's env is extra environment for every invocation of its harness, and
 // the executor's run is one. Built from the entry's sign-in alone, a run on an
 // entry that reaches its model through a company gateway called the vendor's
 // own endpoint with nothing it accepts — the gateway's bearer token is no
@@ -145,7 +145,7 @@ func TestASeatsOwnTokenReplacesTheEntrysSignInAndKeepsItsRoute(t *testing.T) {
 }
 
 // THE PROFILE'S OWN TOKEN VARIABLE IS PART OF THE SIGN-IN, WHATEVER IT IS
-// CALLED. An override names the variable a build of the CLI reads its token
+// CALLED. An override names the variable a build of the harness reads its token
 // from, and a name of no credential's shape is still the entry's sign-in: a
 // seat that signs in itself must not be handed it beside its own.
 //
@@ -165,8 +165,8 @@ func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 	}
 }
 
-// THE NAMES THAT SIGN A CLI IN ARE ITS PROFILE'S LIST, read wherever a box's
-// sign-in is judged: whether a seat already signs the CLI in, so the entry's
+// THE NAMES THAT SIGN A harness IN ARE ITS PROFILE'S LIST, read wherever a box's
+// sign-in is judged: whether a seat already signs the harness in, so the entry's
 // own sign-in stays out ([entryEnv]), and whether a remote run is signed in at
 // all ([entrySignsIn]). The list is the one `auth.mode: env` reads, so a
 // switch an override adds to it counts in both, and one it drops counts in

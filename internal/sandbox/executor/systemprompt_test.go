@@ -13,11 +13,11 @@ import (
 )
 
 // seatSystem stands in for an executor run's system prompt: who the
-// seat is, which no prompt the CLI runs may carry.
+// seat is, which no prompt the harness runs may carry.
 const seatSystem = "You are Agent SWE at Acme. SEAT-IDENTITY-MARKER"
 
 // systemOfRun is the system text a started run left in its box, and the
-// prompt its CLI was given.
+// prompt its harness was given.
 func systemOfRun(t *testing.T, runner *executor.Runner, req sandbox.RunRequest) (b *sandbox.FakeSandbox, system, script string) {
 	t.Helper()
 	b = box(t, runner)
@@ -30,7 +30,7 @@ func systemOfRun(t *testing.T, runner *executor.Runner, req sandbox.RunRequest) 
 }
 
 // A CLAUDE CODE RUN GETS ITS STANDING INSTRUCTIONS ON THE CHANNEL THAT ADDS TO
-// THE CLI'S OWN SYSTEM PROMPT, and only its task as the prompt it runs.
+// THE HARNESS'S OWN SYSTEM PROMPT, and only its task as the prompt it runs.
 //
 // `--append-system-prompt-file` keeps Claude Code's own prompt — the harness
 // an executor run exists to use — and puts the seat's text after it. Sent as
@@ -53,12 +53,12 @@ func TestTheStandingInstructionsReachClaudeCodeOnItsAppendChannel(t *testing.T) 
 	}
 	// As the path survives the wrapper's own quoting of the whole command.
 	if want := `--append-system-prompt-file '\''` + p.System() + `'\''`; !strings.Contains(script, want) {
-		t.Errorf("the CLI is not pointed at the system text (%s):\n%s", want, script)
+		t.Errorf("the harness is not pointed at the system text (%s):\n%s", want, script)
 	}
 	if strings.Contains(script, "SEAT-IDENTITY-MARKER") || strings.Contains(script, "Before you finish") {
-		t.Errorf("standing instructions ride the prompt the CLI runs:\n%s", script)
+		t.Errorf("standing instructions ride the prompt the harness runs:\n%s", script)
 	}
-	// APPENDED, never in place of the CLI's own: the replacing flag would
+	// APPENDED, never in place of the harness's own: the replacing flag would
 	// strip the harness the run is for.
 	if strings.Contains(script, "--system-prompt-file") || strings.Contains(script, "--system-prompt ") {
 		t.Errorf("the run replaces Claude Code's own system prompt:\n%s", script)
@@ -99,9 +99,9 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 	}
 }
 
-// A CLI GIVEN NO SYSTEM TEXT WRITES NOTHING AND PASSES NOTHING: no file in
+// A harness GIVEN NO SYSTEM TEXT WRITES NOTHING AND PASSES NOTHING: no file in
 // the box, no flag on the command line, no instruction in the config. The
-// runner always gives it some — the report instruction — so this is the CLI's
+// runner always gives it some — the report instruction — so this is the harness's
 // own contract, held apart from the runner's.
 func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 	t.Parallel()
@@ -197,7 +197,7 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(string(args), "\n"), "\n")
 	if prompt, err := os.ReadFile(stdin); len(lines) < 1 || lines[0] != "-p" ||
 		err != nil || string(prompt) != "fix the flake" {
-		t.Fatalf("the CLI's prompt is not the task alone: argv %q, stdin %q (%v)", lines, prompt, err)
+		t.Fatalf("the harness's prompt is not the task alone: argv %q, stdin %q (%v)", lines, prompt, err)
 	}
 	named := ""
 	for i, arg := range lines {
@@ -206,7 +206,7 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 		}
 	}
 	if named != p.System() || !strings.HasPrefix(named, box.Home()+"/") {
-		t.Fatalf("the CLI was pointed at %q, want %q inside the box home %q", named, p.System(), box.Home())
+		t.Fatalf("the harness was pointed at %q, want %q inside the box home %q", named, p.System(), box.Home())
 	}
 	info, err := os.Stat(named)
 	if err != nil {
@@ -217,16 +217,16 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	}
 	text, err := os.ReadFile(named)
 	if err != nil || !strings.HasPrefix(string(text), seatSystem) || strings.Contains(string(text), "the last run's") {
-		t.Errorf("the file the CLI read holds %q (%v), want this run's system text", text, err)
+		t.Errorf("the file the harness read holds %q (%v), want this run's system text", text, err)
 	}
 }
 
 // THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM —
-// its own CLI's: to a run whose launch wired it to its turn's notes and whose
-// CLI takes them between its steps, after the report instruction — and to no
+// its own harness's: to a run whose launch wired it to its turn's notes and whose
+// harness takes them between its steps, after the report instruction — and to no
 // other. Told to a run its launch gave nothing to ask for (the assistant's deep
-// work), or to one whose CLI takes none, it would describe a channel that never
-// opens; told another CLI's, it would describe the wrong carrier. The CLI adds
+// work), or to one whose harness takes none, it would describe a channel that never
+// opens; told another harness's, it would describe the wrong carrier. The harness adds
 // it, never the runner: a Claude Code run wired to its notes has its standing
 // instructions as they stand, for a release its box starts without the hooks,
 // and a second time told of notes, for one it starts with them
@@ -234,7 +234,7 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 //
 // Mutation: append the instruction in the runner, or whenever Steer is set, and
 // the unreading row goes red; tell Claude Code's plain text of notes and its
-// rows do; give every CLI Claude Code's and the OpenCode rows do.
+// rows do; give every harness Claude Code's and the OpenCode rows do.
 func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	t.Parallel()
 	claudeTold := func(p executor.Paths) string { return p.ClaudeNotesSystem() }
@@ -248,10 +248,10 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	}{
 		"claude code, wired to its notes": {executor.NewClaudeCode(), steerWiring, claudeTold,
 			executor.ClaudeCodeSteerInstruction},
-		"claude code, wired to none":   {executor.NewClaudeCode(), sandbox.SteerWiring{}, plain, ""},
-		"a CLI that reads no notes":    {executor.New(unreading{executor.ClaudeCode{}}), steerWiring, plain, ""},
-		"opencode, wired to its notes": {executor.NewOpenCode(), steerWiring, plain, executor.OpenCodeSteerInstruction},
-		"opencode, wired to none":      {executor.NewOpenCode(), sandbox.SteerWiring{}, plain, ""},
+		"claude code, wired to none":    {executor.NewClaudeCode(), sandbox.SteerWiring{}, plain, ""},
+		"a harness that reads no notes": {executor.New(unreading{executor.ClaudeCode{}}), steerWiring, plain, ""},
+		"opencode, wired to its notes":  {executor.NewOpenCode(), steerWiring, plain, executor.OpenCodeSteerInstruction},
+		"opencode, wired to none":       {executor.NewOpenCode(), sandbox.SteerWiring{}, plain, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -292,12 +292,12 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	}
 }
 
-// unreading is a CLI that takes no notes: Claude Code's with its
-// NoteInstruction hidden, as a CLI not taught to would be — so a runner that
+// unreading is a harness that takes no notes: Claude Code's with its
+// NoteInstruction hidden, as a harness not taught to would be — so a runner that
 // added an instruction of its own would show in its standing instructions.
 type unreading struct{ executor.Harness }
 
-// THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, whichever CLI's it
+// THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, whichever harness's it
 // is — the heading is the agent layer's to render (prompts.SteerMessage), and
 // this package cannot import it: a model told notes open one way and handed
 // one that opens another cannot tell a note from text imitating one.
@@ -316,7 +316,7 @@ func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 	}
 }
 
-// CLAUDE CODE'S INSTRUCTION NAMES WHERE ITS CLI PUTS A NOTE, on every model it
+// CLAUDE CODE'S INSTRUCTION NAMES WHERE ITS HARNESS PUTS A NOTE, on every model it
 // was measured with. Claude Code places a hook's additional context by model:
 // on 2.1.310, after a batch, a system message after the tool results for
 // claude-opus-5-5 and claude-sonnet-5, and a system reminder at the end of the
@@ -326,7 +326,7 @@ func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 // (testdata/claude/2.1.310/hook-context.jsonl, the measuring session's own
 // trailing token-count reminder dropped). An instruction that told the model a
 // note is never inside a tool result disowned every note a sonnet-4-5 run took
-// after a batch; one that names a heading the CLI does not write leaves the
+// after a batch; one that names a heading the harness does not write leaves the
 // model nothing to tell a note by.
 //
 // Mutation: drop the tool-result placement from the instruction, name another
@@ -336,12 +336,12 @@ func TestClaudeCodesInstructionNamesWhereItsHarnessPutsANote(t *testing.T) {
 	instruction := executor.ClaudeCodeSteerInstruction
 	for _, event := range executor.ClaudeNoteEvents {
 		if !strings.Contains(instruction, `"`+event+executor.ClaudeHookContext+`"`) {
-			t.Errorf("the instruction does not name the heading %q its CLI puts a note under at %s",
+			t.Errorf("the instruction does not name the heading %q its harness puts a note under at %s",
 				event+executor.ClaudeHookContext, event)
 		}
 	}
 	// WHERE EACH PLACEMENT IS SAID: the instruction's words for each place
-	// the CLI was measured putting a note.
+	// the harness was measured putting a note.
 	said := map[string]string{
 		"system":      "a system message",
 		"tool_result": "at the end of the last tool result",

@@ -65,7 +65,7 @@ func TestTheRunsOutOnAnEntryAreCounted(t *testing.T) {
 }
 
 // A CANDIDATE IS TESTED IN A HOME THAT IS GONE AFTERWARD, AND IS NEVER KEPT.
-// Whatever way the test ends (the CLI answered or failed, or the caller's
+// Whatever way the test ends (the harness answered or failed, or the caller's
 // context was already cancelled), the throwaway home the candidate ran in is
 // removed, and the value reaches neither the fleet's secret store nor any log
 // line: a credential nobody chose to store must not outlive its test.

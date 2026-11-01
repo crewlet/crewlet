@@ -171,10 +171,10 @@ func TestARecordWithLateCallsTellsARequestOnceTheRecordMovesPastIt(t *testing.T)
 
 // A CALL FILED IN THE HOST'S NAMESPACE IS THE HOST'S. Codex's rollout keeps a
 // call's namespace apart from its name; the server's tools are the namespace's,
-// reported by their own names, and a call outside it is the CLI's own.
+// reported by their own names, and a call outside it is the harness's own.
 //
 // Mutation: read the namespace as nothing, and the host's call reads as one of
-// the CLI's own.
+// the harness's own.
 func TestACallInTheHostsNamespaceIsTheHosts(t *testing.T) {
 	t.Parallel()
 	r, host, _ := readerOver(t, map[string]any{"host_prefix": "", "host_namespace": "mcp__crewlet", "events": []any{
@@ -194,7 +194,7 @@ func TestACallInTheHostsNamespaceIsTheHosts(t *testing.T) {
 		t.Errorf("the namespaced call read as %+v, want the host's search", c)
 	}
 	if c := turns[1].Calls[0]; c.Name != "apply_patch" || c.Host {
-		t.Errorf("the CLI's own call read as %+v", c)
+		t.Errorf("the harness's own call read as %+v", c)
 	}
 }
 
@@ -243,7 +243,7 @@ func TestAResponsesProseIsWhatItsDeltasSpelled(t *testing.T) {
 		t.Fatalf("first request = %+v, want its streamed prose and the one tool call", turns[0])
 	}
 	if c := turns[0].Calls[0]; c.Name != "search" || !c.Host || c.ID != "tool:call_1" {
-		t.Errorf("the call read as %+v, want the host's search under the CLI's key", c)
+		t.Errorf("the call read as %+v, want the host's search under the harness's key", c)
 	}
 	if turns[1].Text != "Done: the notes are in." {
 		t.Errorf("second request = %+v, want its streamed prose", turns[1])
@@ -257,7 +257,7 @@ func TestAResponsesProseIsWhatItsDeltasSpelled(t *testing.T) {
 }
 
 // A RECORD'S COUNTS ARE IN THE ARITHMETIC OF THE RULE THAT READ THEM, not of
-// the CLI's final report: Gemini CLI's chat records each request's WHOLE prompt
+// the harness's final report: Gemini CLI's chat records each request's WHOLE prompt
 // with its cached part inside it, where its final report gives the prompt less
 // the cached part. Read in the report's arithmetic, every cached token of every
 // request was charged twice.

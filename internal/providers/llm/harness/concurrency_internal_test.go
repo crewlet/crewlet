@@ -7,10 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// EVERY WAY A PROFILE SAYS A CLI MAKES ONE RESPONSE'S CALLS REACHES THE HOST AS
+// EVERY WAY A PROFILE SAYS A harness MAKES ONE RESPONSE'S CALLS REACHES THE HOST AS
 // ITS OWN, AND NO TWO AS ONE. The profile's words are its own (at_once is a
 // value there, the zero value in the contract), so the backend translates; a
-// value that fell through to the default would tell the host a CLI making its
+// value that fell through to the default would tell the host a harness making its
 // calls in turn makes them at once, and the host would wait for siblings that
 // never come.
 //

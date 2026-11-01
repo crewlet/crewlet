@@ -17,9 +17,9 @@ import (
 //
 //   - A run the host ended is an answer of what it did, not a failure: the
 //     host decided, and the run's record is the tool loop's to read.
-//   - A run its CLI's own turn cap ended is an answer stopped at the cap
+//   - A run its harness's own turn cap ended is an answer stopped at the cap
 //     ([llm.StopCap]), where the profile can tell one ([harnessprofile.Cap]).
-//   - A run that never listed the host's tools had none, which is the CLI or
+//   - A run that never listed the host's tools had none, which is the harness or
 //     its configuration failing rather than a model that called none.
 //   - The answer is the model's LAST response's prose where the record shows
 //     the requests — the earlier ones were the host's, observed as the run
@@ -27,7 +27,7 @@ import (
 //   - NOTHING THE RUN PRINTED IS QUOTED IN AN ERROR. Its output carries every
 //     call's arguments and every tool's result, and an error is shown and
 //     logged wherever the failure goes; what a failure says is stderr and the
-//     CLI's own failure events by field ([harnessprofile.MCP.FailureEvents]).
+//     harness's own failure events by field ([harnessprofile.MCP.FailureEvents]).
 func (p *Provider) toolCompletion(
 	ctx context.Context, res *rawResult, usageDoc string, t *toolRun, connected bool,
 ) (*llm.Completion, error) {
@@ -80,25 +80,25 @@ func (p *Provider) toolCompletion(
 			"calling a tool or answering — raise timeout_seconds if this model legitimately "+
 			"reasons for longer%s", p.timeout, failureDetail(res.stderr, events)))
 	case res.stopped:
-		// The host ended the run: whatever the CLI's exit says is the
+		// The host ended the run: whatever the harness's exit says is the
 		// signal's doing. No stop reason — the run ending was the host's.
 		return completion(""), nil
 	case t.lost:
-		// The run's loop was its CLI's server's, and the run was aborted
+		// The run's loop was its harness's server's, and the run was aborted
 		// when it went: whatever the run's own exit says is that.
-		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI's server exited %d during the run%s",
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness's server exited %d during the run%s",
 			p.harness, t.server.exitCode, failureDetail(res.stderr, events)))
 	}
 	if res.droppedStdout > 0 && !read {
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the CLI wrote more than %d bytes to stdout and %d were dropped, so the answer is "+
+			"the harness wrote more than %d bytes to stdout and %d were dropped, so the answer is "+
 				"incomplete: run `crewlet llm doctor %s` to see what it printed",
 			maxOutput, res.droppedStdout, p.key))
 	}
 	if p.capped(res, t.reader) {
 		return completion(llm.StopCap), nil
 	}
-	// The CLI's own words where they stand: the answer it located and
+	// The harness's own words where they stand: the answer it located and
 	// stderr — never the whole of stdout, which is the tools' words too.
 	if hit, ok := classifyMarkers(p.profile, harnessOutput{
 		said: out.text, stdout: res.stdout, stderr: res.stderr, failed: failed,
@@ -107,33 +107,33 @@ func (p *Provider) toolCompletion(
 		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(out.text, res.stderr)))
 	}
 	if !connected {
-		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI never reached the seat's tools: "+
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness never reached the seat's tools: "+
 			"it did not list the crewlet server's tools, so the profile's mcp block does not "+
-			"match the installed CLI or the relay could not start — run `crewlet llm doctor %s`%s",
+			"match the installed harness or the relay could not start — run `crewlet llm doctor %s`%s",
 			p.harness, p.key, failureDetail(res.stderr, t.reader.failureDetail())))
 	}
 	if failed {
-		what := fmt.Sprintf("the %s CLI exited %d", p.harness, res.exitCode)
+		what := fmt.Sprintf("the %s harness exited %d", p.harness, res.exitCode)
 		if res.exitCode == 0 {
-			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.harness)
+			what = fmt.Sprintf("the %s harness exited 0 and reported that the run failed", p.harness)
 		}
 		return nil, p.fail(llm.KindServer, fmt.Errorf("%s%s", what, failureDetail(res.stderr, events)))
 	}
 	if why := res.unfinished(); why != "" {
-		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI exited 0, but %s%s",
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness exited 0, but %s%s",
 			p.harness, why, failureDetail(res.stderr, events)))
 	}
 	if !observed && !out.located {
-		// THE PROFILE HAS DRIFTED FROM THE CLI — see [Provider.completion] —
+		// THE PROFILE HAS DRIFTED FROM THE HARNESS — see [Provider.completion] —
 		// said by the record's shape, never its lines.
 		if strings.TrimSpace(res.stdout) == "" {
 			return nil, p.fail(llm.KindServer, fmt.Errorf(
-				"the %s CLI exited 0 but printed nothing at all%s", p.harness, stderrDetail(res.stderr)))
+				"the %s harness exited 0 but printed nothing at all%s", p.harness, stderrDetail(res.stderr)))
 		}
 		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the %s CLI's record showed no model request and none of the text_paths this "+
+			"the %s harness's record showed no model request and none of the text_paths this "+
 				"profile looks in resolved (%s) — the profile no longer matches the installed "+
-				"CLI. Run `crewlet llm doctor %s` and set providers.llm.%s.overrides.requests "+
+				"harness. Run `crewlet llm doctor %s` and set providers.llm.%s.overrides.requests "+
 				"or .text_paths. Its output was %s",
 			p.harness, harnessprofile.PathList(p.profile.TextPaths), p.key, p.key, t.reader.shape()))
 	}
@@ -146,16 +146,16 @@ func (p *Provider) toolCompletion(
 	return completion(llm.StopEnd), nil
 }
 
-// confinementFailed is the failure of a CLI that said its own confinement did
+// confinementFailed is the failure of a harness that said its own confinement did
 // not load — FAILED CLOSED: it was stopped before it could act without it.
 func (p *Provider) confinementFailed(line, stderr string) error {
-	return p.fail(llm.KindServer, fmt.Errorf("the %s CLI reported that its confinement "+
+	return p.fail(llm.KindServer, fmt.Errorf("the %s harness reported that its confinement "+
 		"failed to load (%q) and was stopped — the files or flags the profile gives it no "+
-		"longer match the installed CLI; run `crewlet llm doctor %s`%s",
+		"longer match the installed harness; run `crewlet llm doctor %s`%s",
 		p.harness, line, p.key, failureDetail(stderr, "")))
 }
 
-// capped reports a run its CLI's own turn cap ended, by the profile's
+// capped reports a run its harness's own turn cap ended, by the profile's
 // signature: the exit status, and what it printed.
 func (p *Provider) capped(res *rawResult, reader *recordReader) bool {
 	c := p.profile.Cap
@@ -181,7 +181,7 @@ func (p *Provider) capped(res *rawResult, reader *recordReader) bool {
 }
 
 // failureDetail is what a failed run with tools says beyond its first
-// sentence: the CLI's own failure events and stderr's tail, each where there
+// sentence: the harness's own failure events and stderr's tail, each where there
 // is one.
 func failureDetail(stderr, events string) string {
 	var parts []string

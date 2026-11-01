@@ -105,11 +105,11 @@ func (s *surface) ToolDefs() []llm.ToolDef { return s.defs }
 // Phase names the loop for telemetry.
 func (s *surface) Phase() string { return "assistant" }
 
-// Revision is constant: a turn's tools never change while it runs, so its CLI
+// Revision is constant: a turn's tools never change while it runs, so its harness
 // never has a tool list to re-read.
 func (s *surface) Revision() uint64 { return 1 }
 
-// AnnotationsOf is a tool's hints as its kind states them, which a CLI reads
+// AnnotationsOf is a tool's hints as its kind states them, which a harness reads
 // to decide what may run beside what: a read, the docs and a navigation only
 // read, and a change is proposed, so it destroys nothing until the person
 // approves it.

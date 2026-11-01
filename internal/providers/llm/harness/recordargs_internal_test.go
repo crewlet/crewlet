@@ -12,7 +12,7 @@ import (
 // array's elements as an object (measured on 2.1.310: `["a","b"]` arrives as
 // `{"0":"a","1":"b"}`), so the record is the one witness that the call's
 // arguments did not parse; read as `{}`, the host ran the call. An absent value
-// — null, an empty string, as a CLI records a call with no arguments — is
+// — null, an empty string, as a harness records a call with no arguments — is
 // none, and is no error.
 func TestARecordedCallsArgumentsSayWhenTheyAreNotAnObject(t *testing.T) {
 	t.Parallel()

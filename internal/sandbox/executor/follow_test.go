@@ -272,7 +272,7 @@ func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 }
 
 // A READING THAT BEGINS INSIDE A LINE LONGER THAN ITS WINDOW DROPS THAT LINE
-// rather than showing its tail as if it were whole. A CLI that writes more
+// rather than showing its tail as if it were whole. A harness that writes more
 // than a window of stderr with no line break — \r-only progress, a minified
 // blob — and then a credential leaves the first live read landing mid-line;
 // the rest of that line, redacted with none of the text before it, put the

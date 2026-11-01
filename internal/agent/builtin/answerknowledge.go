@@ -863,13 +863,13 @@ func instantOrNone(at time.Time) string {
 // kind of failure the provider layer classified ([llm.KindOf]) — what
 // happened, and whether trying again can help — and whether a wait can clear
 // it, which the answer's Retry-After follows: a model that took too long and a
-// CLI that ran and gave no usable answer may answer next time, while no retry
-// gets past a login the CLI reports expired or missing, or a call the engine
+// harness that ran and gave no usable answer may answer next time, while no retry
+// gets past a login the harness reports expired or missing, or a call the engine
 // itself cannot make ([llm.KindFatal]). A model at its usage limit is not one
 // of these: it is the wait [limitedSentence] tells.
 //
 // NEVER THE ERROR ITSELF, which went to the log: it names the provider entry,
-// the model and what the CLI said, which was the whole of the sentence ("The
+// the model and what the harness said, which was the whole of the sentence ("The
 // model could not answer (llm cli-agent/claude-code/aux-small: rate_limit:
 // usage limit reached …). Try again shortly.") and nothing a person acts on.
 func modelFailed(err error) (string, bool) {

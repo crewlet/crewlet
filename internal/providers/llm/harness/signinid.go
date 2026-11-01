@@ -12,8 +12,8 @@ import (
 )
 
 // SignInID names which account an entry's calls are made as, without saying
-// it: an HMAC, under the key its [Plans] holds, of the CLI, the auth mode and
-// every credential the CLI is handed, or of the login its files hold.
+// it: an HMAC, under the key its [Plans] holds, of the harness, the auth mode and
+// every credential the harness is handed, or of the login its files hold.
 //
 //	HMAC-SHA256(k, agent 0 mode 0 sorted(name=value 0 ...) 0 login)
 //
@@ -29,7 +29,7 @@ import (
 // NEVER LOGGED AND NEVER PUBLISHED WHOLE. A heartbeat may carry [SignInID.Short]
 // so a page can say that two entries share one sign-in.
 //
-// Empty is "nothing signs the entry in": no credential reaches the CLI and no
+// Empty is "nothing signs the entry in": no credential reaches the harness and no
 // login is kept for it. Such an entry shares its [Plan] with nobody.
 type SignInID string
 
@@ -43,13 +43,13 @@ func (id SignInID) Short() string {
 }
 
 // SignInID is this entry's sign-in identity, read now. It moves only when what
-// signs the CLI in moves: a credential value the CLI is handed, the auth mode,
-// or, for a login kept in files, a new login ([LoginInstall]). A token the CLI
+// signs the harness in moves: a credential value the harness is handed, the auth mode,
+// or, for a login kept in files, a new login ([LoginInstall]). A token the harness
 // refreshes into those files is the same login, so it keeps the id, and the
 // sit-out with it.
 //
 // THE CREDENTIALS ARE READ OFF [childEnv], the environment a call is handed,
-// so the id and what the CLI signs in with cannot disagree: a token the mode
+// so the id and what the harness signs in with cannot disagree: a token the mode
 // removes from the child is no part of the id, and a gateway token set in the
 // entry's env is.
 func (p *Provider) SignInID() SignInID {
@@ -85,7 +85,7 @@ func (p *Provider) SignInID() SignInID {
 	return SignInID(hex.EncodeToString(mac.Sum(nil)))
 }
 
-// handedCredentials is every credential the CLI is handed by name: the
+// handedCredentials is every credential the harness is handed by name: the
 // profile's token and key variables, every name the profile signs in by from
 // an entry's env ([harnessprofile.Profile.SignInEnv]), and every credential-named
 // variable of the entry's env ([harnessprofile.IsCredentialName]), as [childEnv]
@@ -115,7 +115,7 @@ func (p *Provider) handedCredentials() map[string]string {
 // entry whose calls are handed no credential: the login's install record, which
 // moves only on a new login ([LoginInstall]), or, for a login installed before
 // records existed or one with no record, the directory it is kept in, which is
-// the one login every entry on that directory and CLI signs in with.
+// the one login every entry on that directory and harness signs in with.
 //
 // A record that cannot be read names the directory too: the entry still signs
 // in with whatever login is there, and sharing a plan with the other entries on

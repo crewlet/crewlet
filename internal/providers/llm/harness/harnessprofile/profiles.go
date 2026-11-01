@@ -109,7 +109,7 @@ func AssistantEligible() []string {
 }
 
 // WebDeniable lists the built-in profiles that can run with their web tools
-// off ([Profile.CanDenyWeb]), sorted: the CLIs an entry may point the
+// off ([Profile.CanDenyWeb]), sorted: the harnesses an entry may point the
 // Dashboard Assistant at. Derived from the table, so a profile that gains a
 // measured web_denial is named everywhere this list is printed.
 func WebDeniable() []string {
@@ -270,7 +270,7 @@ var ErrOverrides = errors.New("overrides does not decode into a profile")
 // directory must move what the built-in keeps under it ([Profile.strandedBy]),
 // which only the pair can show.
 //
-// The profile it returns is the one the CLI RUNS: an entry whose merged stance
+// The profile it returns is the one the HARNESS RUNS: an entry whose merged stance
 // is `web_tools: denied` comes back with its [WebDenial] already applied, so
 // every caller (the backend that launches it, config validating it, the
 // doctor probing it) reads the same argv and the same seeded files.

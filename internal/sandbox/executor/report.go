@@ -6,9 +6,9 @@ import (
 
 // FindingsInstruction is the standing instruction requiring a durable report,
 // the last part of the system text the runner composes ([finalSystem]) — which
-// only a CLI's instruction about notes follows ([withNoteInstruction]).
+// only a harness's instruction about notes follows ([withNoteInstruction]).
 //
-// The coding agent is NOT the last step: its findings go back to the Crewlet
+// The harness is NOT the last step: its findings go back to the Crewlet
 // agent, which continues the same task. The streamed final message can be lost
 // when a run's process group dies before it is written, and a tool-only run
 // leaves no parsed text at all — so a durable structured report at a known path is required,

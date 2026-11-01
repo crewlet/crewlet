@@ -32,7 +32,7 @@ const DefaultBoxTimeout = 900 * time.Second
 const DefaultPauseTTL = 1800 * time.Second
 
 // ConfigError reports providers.sandbox being misconfigured — a placement
-// with no backend behind it, or a coding agent with no registered runner.
+// with no backend behind it, or a harness with no registered runner.
 type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
@@ -55,8 +55,8 @@ type ManagerOptions struct {
 	// checked here rather than at the first launch.
 	DefaultPlacement Placement
 
-	// Runners are the coding agents a box can run, by CLI name. A launch
-	// names its own — the CLI of the executor-chain member it launches on —
+	// Runners are the harnesses a box can run, by harness name. A launch
+	// names its own — the harness of the executor-chain member it launches on —
 	// so there is no default among them to fall back to.
 	Runners map[string]Runner
 
@@ -144,7 +144,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		}
 	}
 	if len(opts.Runners) == 0 {
-		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
+		return nil, &ConfigError{msg: "providers.sandbox: no harness runners registered"}
 	}
 	m := &Manager{
 		providers: maps.Clone(opts.Providers),
@@ -361,12 +361,12 @@ func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 // BoxTimeout is the TTL the waiter refreshes a running box to on every tick.
 func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
 
-// RunnerFor returns the runner for a coding agent.
+// RunnerFor returns the runner for a harness.
 func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 	runner, ok := m.runners[codingAgent]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no coding-agent runner registered for %q (have: %s)",
+			"no harness runner registered for %q (have: %s)",
 			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
@@ -382,7 +382,7 @@ type SpecInput struct {
 	// provider default.
 	Placement Placement
 
-	// CodingAgent is the runner the box runs: the CLI of the executor-chain
+	// CodingAgent is the runner the box runs: the harness of the executor-chain
 	// member the launch picked. REQUIRED, and passed through as given — a
 	// runner chosen apart from the entry whose login and model the run
 	// carries is a run that cannot read either, so there is nothing to
@@ -454,7 +454,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	return spec
 }
 
-// Acquire provisions a box for spec, installs the coding agent, and applies
+// Acquire provisions a box for spec, installs the harness, and applies
 // the launch's setup steps.
 //
 // On install OR setup failure the box is torn down before the error
@@ -524,7 +524,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // Reconnect reattaches to an existing (possibly paused) box: Connect
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
-// which is why a box is only ever reattached for the CLI it was installed for.
+// which is why a box is only ever reattached for the harness it was installed for.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {

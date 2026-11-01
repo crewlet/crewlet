@@ -8,7 +8,7 @@ import (
 
 // THE EXECUTOR'S RUN AND A RUN ON THIS HOST ON ONE ENTRY NAME ONE MODEL.
 //
-// ModelArgument is what the executor's run of the entry's own CLI is handed,
+// ModelArgument is what the executor's run of the entry's own harness is handed,
 // and argv is what every run on this host passes; both render the
 // profile's model_args, an override's provider prefix included. A run that
 // rebuilt the value its own way addressed OpenCode's box as

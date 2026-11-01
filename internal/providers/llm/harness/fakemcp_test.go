@@ -17,7 +17,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// fakeMCPEnv carries a [fakeScript] to the fake CLI: the variable that makes
+// fakeMCPEnv carries a [fakeScript] to the fake harness: the variable that makes
 // this test binary, re-executed, play Claude Code with tools — an MCP client
 // that starts the relay its configuration names, lists the seat's tools, plays
 // a scripted model against them over the real socket, and prints the
@@ -28,7 +28,7 @@ import (
 // suite drives the profile operators run, with only the binary replaced.
 const fakeMCPEnv = "FAKE_MCP_SCRIPT"
 
-// fakeScript is what one fake CLI run plays.
+// fakeScript is what one fake harness run plays.
 type fakeScript struct {
 	// Responses are the model's, in order: each one's prose, then its calls.
 	Responses []fakeResponse `json:"responses"`
@@ -36,7 +36,7 @@ type fakeScript struct {
 	// Model names the model in the record.
 	Model string `json:"model,omitempty"`
 
-	// NoConnect never starts the relay: a CLI whose server configuration
+	// NoConnect never starts the relay: a harness whose server configuration
 	// did not take.
 	NoConnect bool `json:"no_connect,omitempty"`
 
@@ -46,7 +46,7 @@ type fakeScript struct {
 	Result  string `json:"result,omitempty"`
 	IsError bool   `json:"is_error,omitempty"`
 	Subtype string `json:"subtype,omitempty"`
-	// NoResult prints no result event at all: a CLI stopped before its end.
+	// NoResult prints no result event at all: a harness stopped before its end.
 	NoResult bool `json:"no_result,omitempty"`
 	// ResultUsage, when set, is the result event's usage in place of the
 	// sum of the responses'.
@@ -56,7 +56,7 @@ type fakeScript struct {
 	Stderr string `json:"stderr,omitempty"`
 
 	// Hang holds the process after the responses until it is signalled:
-	// a CLI whose run the host has to end. HangUnsignalled ignores SIGTERM.
+	// a harness whose run the host has to end. HangUnsignalled ignores SIGTERM.
 	Hang            bool `json:"hang,omitempty"`
 	HangUnsignalled bool `json:"hang_unsignalled,omitempty"`
 
@@ -68,7 +68,7 @@ type fakeScript struct {
 	TextAnswer string `json:"text_answer,omitempty"`
 
 	// RecordFile writes the record — every event but the result — to this
-	// file in the working directory instead of stdout: a CLI that keeps its
+	// file in the working directory instead of stdout: a harness that keeps its
 	// record in a file of its own.
 	RecordFile string `json:"record_file,omitempty"`
 
@@ -80,12 +80,12 @@ type fakeScript struct {
 	Harness string `json:"harness,omitempty"`
 
 	// ForeignRecord writes, before the run's own, a record of ANOTHER run
-	// where this CLI keeps its records — the seat's home, which every
+	// where this harness keeps its records — the seat's home, which every
 	// concurrent call of the seat shares — its one response saying FOREIGN.
 	ForeignRecord bool `json:"foreign_record,omitempty"`
 }
 
-// fakeServe is how the fake plays a CLI whose loop runs in a server of its own,
+// fakeServe is how the fake plays a harness whose loop runs in a server of its own,
 // as OpenCode 2.1's does: `serve` starts the server, which prints its address
 // and a password, connects to the crewlet server and plays the script once a
 // run hands it the prompt; `api … mcp.list` polls it; `run --server <url>` is
@@ -136,7 +136,7 @@ type fakeResponse struct {
 	// model thinking.
 	SilentMS int `json:"silent_ms,omitempty"`
 	// RefreshLogin writes this into the home's login file before the
-	// response's calls are made: a CLI that refreshed its token mid-run.
+	// response's calls are made: a harness that refreshed its token mid-run.
 	RefreshLogin string `json:"refresh_login,omitempty"`
 }
 
@@ -144,10 +144,10 @@ type fakeResponse struct {
 type fakeCall struct {
 	Name string         `json:"name"`
 	Args map[string]any `json:"args,omitempty"`
-	// Own marks a call to one of the CLI's own tools, which never reaches
+	// Own marks a call to one of the harness's own tools, which never reaches
 	// the server.
 	Own bool `json:"own,omitempty"`
-	// Asked is the name the model wrote, where the CLI repaired it to Name
+	// Asked is the name the model wrote, where the harness repaired it to Name
 	// before making the call — Hermes Agent's fuzzy repair of an unknown
 	// name. A recorder that shows what the model asked writes it.
 	Asked string `json:"asked,omitempty"`
@@ -448,7 +448,7 @@ func runFakePoll() {
 // runFakeClient is a run against the server: it hands it the prompt and prints
 // the server's record as the server writes it, exiting as the server's loop
 // did. Started before the server connected to the crewlet server, it refuses —
-// where the real CLI goes on, with none of the seat's tools.
+// where the real harness goes on, with none of the seat's tools.
 func runFakeClient() {
 	fakeServerOrExit()
 	if _, err := os.Stat(fakeConnectedFile); err != nil {

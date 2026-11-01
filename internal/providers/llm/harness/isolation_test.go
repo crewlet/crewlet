@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// A subscription seat must not have less reach than the same CLI at a
+// A subscription seat must not have less reach than the same harness at a
 // terminal: web is the one local tool every profile keeps on. The claude
 // profile has to ALLOW it, not merely stop denying it — print mode never
 // prompts, and an unlisted permission-gated tool is refused.
@@ -69,9 +69,9 @@ func TestNoShippedProfileDeniesTheWeb(t *testing.T) {
 // A BLANKET TOOL DENIAL IS ONLY HONEST WHERE THE VENDOR SHIPS NO WEB TOOL.
 //
 // `pi` is the one profile that switches every tool off rather than allowing
-// two, and it is correct there for a reason no other vendor has: this CLI's
+// two, and it is correct there for a reason no other vendor has: this harness's
 // built-in set is read, bash, powershell, edit, write, grep, find and ls —
-// there is no web tool in it to keep. Adopting the same flag on a CLI that
+// there is no web tool in it to keep. Adopting the same flag on a harness that
 // HAS one would cut the web silently, which is the rule this file exists for,
 // so the carve-out is named rather than left to whoever reads the argv next.
 func TestOnlyTheProfileWithNoWebToolDeniesEveryTool(t *testing.T) {
@@ -84,14 +84,14 @@ func TestOnlyTheProfileWithNoWebToolDeniesEveryTool(t *testing.T) {
 			}
 			if name != "pi" {
 				t.Errorf("%s denies every tool with %q — web is the one local tool "+
-					"this backend never denies, and only a CLI that ships none "+
+					"this backend never denies, and only a harness that ships none "+
 					"may switch the lot off", name, arg)
 			}
 		}
 	}
 }
 
-// THE PI PROFILE SHUTS EVERY DISCOVERY PATH ITS CLI HAS.
+// THE PI PROFILE SHUTS EVERY DISCOVERY PATH ITS HARNESS HAS.
 //
 // This vendor is unusually generous about it — one `--no-*` flag per path —
 // and that is exactly why a missing one is easy not to notice: each hole is a
@@ -143,7 +143,7 @@ func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
 //
 // Nine flags of a vendor's own spelling, on each system-prompt channel, with
 // the transcript on stdin as a call hands it over. Skipped unless a `pi` is on
-// PATH; it stops at the CLI's own missing-credential failure, which is far
+// PATH; it stops at the harness's own missing-credential failure, which is far
 // enough to prove the flags were understood.
 func TestThePiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	t.Parallel()
@@ -204,7 +204,7 @@ func allowsAfterFlag(args []string, flag string, want ...string) bool {
 	return false
 }
 
-// Every shipped profile states what it does about the CLI's own tools, and a
+// Every shipped profile states what it does about the harness's own tools, and a
 // profile that admits them says why — the silent hole this field closes is a
 // profile whose isolation was assumed rather than declared.
 func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
@@ -232,7 +232,7 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 	}
 }
 
-// THE ASSISTANT'S CLI HAS NO TOOL OF ITS OWN, BY CONSTRUCTION. Every profile
+// THE ASSISTANT'S HARNESS HAS NO TOOL OF ITS OWN, BY CONSTRUCTION. Every profile
 // the Dashboard Assistant may run on leaves its model no shell, file tool or
 // tool server in the exact argv the assistant runs (web denied, as written and
 // streamed): checked off the argv, never taken from the profile's claim. The
@@ -281,7 +281,7 @@ func TestTheAssistantArgvLeavesTheHarnessWithNoToolOfItsOwn(t *testing.T) {
 		}
 	}
 	// AN OVERRIDE THAT BRINGS A TOOL BACK IS CAUGHT ON THE ARGV: a second
-	// --tools (the CLI takes the last) and a tool server's config.
+	// --tools (the harness takes the last) and a tool server's config.
 	for _, extra := range [][]string{{"--tools", "default"}, {"--mcp-config", "servers.json"}} {
 		args := append(slices.Clone(claude.CompleteArgs), extra...)
 		p, err := harnessprofile.Load("claude-code", map[string]any{"web_tools": "denied",
@@ -424,7 +424,7 @@ func TestASeedFileMayNotEscapeItsScope(t *testing.T) {
 	}
 }
 
-// probeProvider is a fake CLI that answers the two isolation probes with
+// probeProvider is a fake harness that answers the two isolation probes with
 // the given replies, under the given stance.
 func probeProvider(t *testing.T, stance harnessprofile.LocalTools, shellReply, webReply string) *Provider {
 	t.Helper()
@@ -466,7 +466,7 @@ func TestReportsCurrentClockBelievesOnlyTheClock(t *testing.T) {
 	}
 }
 
-// A profile that says "denied" and a CLI that refused is the healthy case.
+// A profile that says "denied" and a harness that refused is the healthy case.
 func TestDoctorProbesReportADeniedShellAndAReachableWeb(t *testing.T) {
 	t.Parallel()
 	p := probeProvider(t, harnessprofile.LocalToolsDenied, noLocalToolsReply, "ts="+nowEpoch()+".123")
@@ -497,7 +497,7 @@ func probeProblem(d Diagnosis) string {
 	return ""
 }
 
-// A profile that says "denied" and a CLI that ran the command is the finding
+// A profile that says "denied" and a harness that ran the command is the finding
 // the probe exists for: the vendor's flag is not taking effect on this build.
 func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 	t.Parallel()
@@ -512,8 +512,8 @@ func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 	}
 }
 
-// A vendor-default profile whose CLI ran the command is reported as what it
-// is — a CLI with a shell on the engine host — with the note the profile gave.
+// A vendor-default profile whose harness ran the command is reported as what it
+// is — a harness with a shell on the engine host — with the note the profile gave.
 func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 	t.Parallel()
 	p := probeProvider(t, harnessprofile.LocalToolsVendorDefault, nowEpoch(), "ts="+nowEpoch())
@@ -527,7 +527,7 @@ func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 	}
 }
 
-// Web is meant to stay on; a CLI that cannot reach it is a problem naming
+// Web is meant to stay on; a harness that cannot reach it is a problem naming
 // the usual causes.
 func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 	t.Parallel()
@@ -542,7 +542,7 @@ func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 	}
 }
 
-// deniedWebProvider is a fake CLI on an entry that turns its web tools off,
+// deniedWebProvider is a fake harness on an entry that turns its web tools off,
 // answering the web probe with webReply. The fake's web_denial seeds a file
 // rather than replacing argv, because its argv is what makes it the fake.
 func deniedWebProvider(t *testing.T, webReply string) *Provider {
@@ -564,7 +564,7 @@ func deniedWebProvider(t *testing.T, webReply string) *Provider {
 
 // THE DOCTOR PROVES A WEB FETCH IS REFUSED on an entry that denies it, as it
 // proves a shell is refused on a profile denying local tools. The denial is
-// the claim the Dashboard Assistant is admitted on, so a CLI that fetched
+// the claim the Dashboard Assistant is admitted on, so a harness that fetched
 // anyway is the finding this probe exists for, and a refusal is the healthy
 // answer rather than the "web is unreachable" problem it is on a seat.
 //
@@ -722,7 +722,7 @@ func TestTheClaudeProfilePrunesTheBackupsOfWhatItPrunes(t *testing.T) {
 // A REFUSED SHELL IS NOT A REFUSED HOST. The file tools read the engine host as
 // well as a shell does, so once the shell probe is refused the doctor writes a
 // file outside the seat's home, with a value minted for the run, and asks the
-// CLI to read it on the assistant's argv: a CLI that echoes the value read the
+// harness to read it on the assistant's argv: a harness that echoes the value read the
 // host, which is a problem on a profile that says its local tools are denied.
 func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 	t.Parallel()
@@ -746,7 +746,7 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 // QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0054): the
 // assistant's own model runs Claude Code with no tool of its own and no
 // session, and one tool server, the engine's `crewlet`, whose tools are the
-// person's own requests (ADR-0049); deep work, which runs the same CLI with
+// person's own requests (ADR-0049); deep work, which runs the same harness with
 // its harness in a box, never reaches this argv. A flag added to it, a tool
 // given back or another server allowed is a change to what a quick answer can
 // reach, made on purpose here or not at all. Mutation: drop "--tools" "", or
@@ -775,6 +775,6 @@ func TestTheAssistantsQuickModeArgvIsUnchanged(t *testing.T) {
 		t.Errorf("the run's allow list changed:\n got %q\nwant %q", m.AllowArgs, want)
 	}
 	if problem := claude.ToolsOffProblem(); problem != "" {
-		t.Errorf("the pinned argv leaves the CLI a tool of its own: %s", problem)
+		t.Errorf("the pinned argv leaves the harness a tool of its own: %s", problem)
 	}
 }

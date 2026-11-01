@@ -32,7 +32,7 @@ import (
 // The per-segment arithmetic of a charge is turnspend_internal_test.go's; this
 // is the one thing only a stateless node can show: that the charge is not left
 // behind on a node that keeps no tracker. And the executor's share of it is its
-// run's, collected from the box — the cached share included, which a CLI
+// run's, collected from the box — the cached share included, which a harness
 // reports beside its tokens and the charge carries like every phase's.
 //
 // Mutation: leave the job's cached share out of the resumed segment's charge,
@@ -101,7 +101,7 @@ const (
 )
 
 // billingModel answers each phase with its own submission and bills it: a
-// coding CLI on the real session whose one request calls the phase's
+// harness on the real session whose one request calls the phase's
 // terminator — submit_review where the phase offers it, submit_work otherwise.
 func billingModel() phasedHarness {
 	return phasedHarness{model: "billing", pick: billingRun}

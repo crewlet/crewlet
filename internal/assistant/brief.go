@@ -215,7 +215,7 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 			"attempt", attempt, "attempts", BriefAnswerAttempts, "final", final,
 			"reason", reason)
 		if final {
-			// THE TURN ENDS HERE, so the call is never answered: a CLI
+			// THE TURN ENDS HERE, so the call is never answered: a harness
 			// reports its relay closed under it ("Connection closed"),
 			// which is the turn's end and not a fault of the relay.
 			return toolloop.ToolResult{}, fmt.Errorf("%w: %w", errBriefInvalid, err)

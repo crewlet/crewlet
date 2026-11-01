@@ -1,7 +1,7 @@
-// Package executor is the detached-run plumbing every coding-agent runner
+// Package executor is the detached-run plumbing every harness runner
 // shares.
 //
-// Both supported CLIs run headless in a box and follow the same shape: a
+// Both supported harnesses run headless in a box and follow the same shape: a
 // background process redirects its output to a file and drops a done marker,
 // Poll checks that marker and whether the process is still alive, Collect
 // decodes the stream and reads the result,
@@ -18,7 +18,7 @@
 // commit it authors as itself carry `Co-authored-by: Crewlet
 // <noreply@crewlet.ai>` and the run's own `Crewlet-Run:`, added by a git hook
 // the runner installs in the box and the wrapper points git at through the
-// run's environment — the same for every CLI, and whether or not the model
+// run's environment — the same for every harness, and whether or not the model
 // remembered anything (attribution.go, attribution_hook.sh).
 //
 // # A run's output is read as a stream
@@ -31,7 +31,7 @@
 // used to cost.
 //
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
-// faithful substitute and every runner is testable without a real CLI.
+// faithful substitute and every runner is testable without a real harness.
 package executor
 
 import (
@@ -65,11 +65,11 @@ func PathsFor(box sandbox.Sandbox) Paths {
 func (p Paths) WorkDir() string { return p.Home + "/.crewlet" }
 
 // Result is where the agent's RESULT is read from whole: its stdout, for a
-// CLI whose stdout is its result or its event stream; the stream's last line,
+// harness whose stdout is its result or its event stream; the stream's last line,
 // copied there after exit, for one that keeps its stream apart ([Output]).
 func (p Paths) Result() string { return p.WorkDir() + "/result.json" }
 
-// Stream is where a CLI that keeps its event stream apart from its result
+// Stream is where a harness that keeps its event stream apart from its result
 // sends its stdout — a file that grows with every tool call the run makes,
 // read as a stream and from its end, never whole.
 func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
@@ -77,24 +77,24 @@ func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 // BaseResult is where a run that CONTINUES a session in this box keeps the
 // result the job before it left ([Paths.Result]), copied there as the run
 // starts and before its own artefacts are cleared: what the session had
-// already spent when this run took it up. A CLI whose result states the
+// already spent when this run took it up. A harness whose result states the
 // SESSION's spend rather than the run's own ([sessionTotals]) is charged the
 // difference, so a continued run is never charged its predecessors' calls
 // again.
 func (p Paths) BaseResult() string { return p.WorkDir() + "/base-result.json" }
 
-// CLIVersion is where a run that continues a session records its CLI's own
-// `--version`, which says whether that CLI's result states the session's spend
+// CLIVersion is where a run that continues a session records its harness's own
+// `--version`, which says whether that harness's result states the session's spend
 // or the run's ([sessionTotals]). Written by the run's script in the box,
-// because the CLI that answers is the one the box's PATH finds there.
+// because the harness that answers is the one the box's PATH finds there.
 func (p Paths) CLIVersion() string { return p.WorkDir() + "/cli-version" }
 
-// Brief is where the brief is written for a CLI that reads it on stdin
+// Brief is where the brief is written for a harness that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
-// are written for its CLI to add to its own system prompt: named on Claude
+// are written for its harness to add to its own system prompt: named on Claude
 // Code's command line, listed in the configuration an OpenCode run is handed
 // ([Paths.OpenCodeConfig]).
 //
@@ -106,15 +106,15 @@ func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 func (p Paths) System() string { return p.WorkDir() + "/system.md" }
 
 // ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
-// its standing instructions written a second time, with its CLI's instruction
+// its standing instructions written a second time, with its harness's instruction
 // about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
 // script names in place of [Paths.System] on a release whose note hooks it
 // starts ([claudeNotesGate]), so the instruction reaches a run its notes can
 // reach and no other. Beside it, and a file for the reason it is.
 func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.md" }
 
-// CredentialDocument is where a box keeps the login a CLI holds in a database
-// of its own: the CLI's own export of it, which the engine seeds a local box
+// CredentialDocument is where a box keeps the login a harness holds in a database
+// of its own: the harness's own export of it, which the engine seeds a local box
 // with and writes back from when the box closes ([CredentialDocument]).
 func (p Paths) CredentialDocument() string { return p.Home + "/" + CredentialDocument }
 
@@ -122,8 +122,8 @@ func (p Paths) CredentialDocument() string { return p.Home + "/" + CredentialDoc
 // the key a run's credential files map it under, because a provider seeds
 // those relative to the box's home ([sandbox.Spec.CredentialFiles]).
 //
-// Under the artefact directory rather than the CLI's own data directory: no
-// CLI reads this file on its own — the runner imports it into the CLI's
+// Under the artefact directory rather than the harness's own data directory: no
+// harness reads this file on its own — the runner imports it into the harness's
 // database before the run and exports the database back into it while the run
 // works and once more after — so it lives with the rest of what the engine
 // keeps in a box, where a `git clean` in the brief cannot reach it.
@@ -145,7 +145,7 @@ func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
 
 // BinDir is the box's own bin directory, first on the run's PATH
 // ([withBoxBin]): where a setup step installs an executable for the run, a
-// coding CLI among them, without root.
+// harness among them, without root.
 //
 // Under the box's own home, not a system path: a local backend runs as an
 // unprivileged engine user with no business writing to /usr/local/bin, and two
@@ -162,7 +162,7 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
 // repository's, which the run edits and a commit carries, and a file there would
 // replace the repository's own project settings rather than sit above them.
-// `--settings` adds a layer the CLI ranks above the repository's settings and
+// `--settings` adds a layer the harness ranks above the repository's settings and
 // below a managed policy, so the repository keeps its own and the run's hooks
 // are there whatever it holds. Under WorkDir, so a `git clean` in the brief
 // cannot remove it from under the run.

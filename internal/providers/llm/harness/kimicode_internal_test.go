@@ -11,7 +11,7 @@ import (
 
 // The invariants the built-in kimi-code profile keeps, each measured against
 // Kimi Code 0.42.0 and 2.3.1 through this package's own Complete (see the
-// profile's comments): every call hands the CLI an agent file it accepts, a
+// profile's comments): every call hands the harness an agent file it accepts, a
 // seat's text comes before anything per call, and nothing a call writes about
 // itself outlives the calls that share the seat's home.
 
@@ -25,7 +25,7 @@ func kimiCode(t *testing.T) harnessprofile.Profile {
 	return p
 }
 
-// fakeChannel is a shipped channel as an override of the fake CLI's profile:
+// fakeChannel is a shipped channel as an override of the fake harness's profile:
 // the same argv and the same file.
 func fakeChannel(ch harnessprofile.Channel) map[string]any {
 	args := []any{}
@@ -38,7 +38,7 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 	}
 }
 
-// EVERY CALL HANDS THE CLI AN AGENT FILE WITH A BODY, and a seat's text opens it.
+// EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text opens it.
 //
 // Kimi Code trims the body and refuses one that trims to nothing ("Missing
 // prompt body", exit 1, on both builds measured) — so a call whose file came
@@ -82,10 +82,10 @@ func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 		if !found {
 			t.Fatalf("%s: the agent file has no frontmatter:\n%s", name, file)
 		}
-		// What the CLI reads: the body, trimmed.
+		// What the harness reads: the body, trimmed.
 		body = strings.TrimSpace(body)
 		if body == "" {
-			t.Errorf("%s: the agent file's body is empty, which the CLI refuses: %q", name, file)
+			t.Errorf("%s: the agent file's body is empty, which the harness refuses: %q", name, file)
 			continue
 		}
 		if !strings.HasPrefix(body, tc.opens) {
@@ -103,7 +103,7 @@ func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 // NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on both builds,
 // every call left in the seat's home its session (whose wire log carries the
 // prompts and tool results), an entry in the session index, its logs, an entry
-// in `workspaces.json` naming its directory — never removed by the CLI, so the
+// in `workspaces.json` naming its directory — never removed by the harness, so the
 // registry grew by one per call — and, with the vendor's telemetry on, a
 // `telemetry` queue of events kept for the next start to send. Telemetry is
 // off, so the queue is never made, and every one of them is pruned.

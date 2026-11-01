@@ -32,8 +32,8 @@ func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 	const bound = 64 << 10
 	oneLine := strings.Repeat("e", bound*3/2)
 	for name, sentences := range map[string][]string{
-		"a single line kept by its end":     {"the coding agent exited with status 1"},
-		"a key name meeting the next piece": {"the coding agent exited with status 1", "the CLI could not read pwd"},
+		"a single line kept by its end":     {"the harness exited with status 1"},
+		"a key name meeting the next piece": {"the harness exited with status 1", "the harness could not read pwd"},
 	} {
 		got := failureDetail(sentences, oneLine, unread, bound)
 		if len(got) > bound {
@@ -42,7 +42,7 @@ func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 		if redact.Secrets(got) != got {
 			t.Errorf("%s: the failure was not redacted whole, so redacting it again would grow it", name)
 		}
-		if !strings.HasPrefix(got, "the coding agent exited with status 1") || !strings.HasSuffix(got, "eee") {
+		if !strings.HasPrefix(got, "the harness exited with status 1") || !strings.HasSuffix(got, "eee") {
 			t.Errorf("%s: the failure lost its opening or the stream's end", name)
 		}
 	}

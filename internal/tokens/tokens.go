@@ -137,7 +137,7 @@ type Record struct {
 	Stage string `json:"stage,omitempty"`
 
 	// Calls is how many provider calls the record covers: a phase's model
-	// rounds, an executor launch's own CLI turns, an auxiliary record's
+	// rounds, an executor launch's own harness turns, an auxiliary record's
 	// coalesced calls. ONE UNIT under one label everywhere a bucket says "N
 	// calls" — it counted RECORDS once, so a forty-turn run was one call
 	// beside a coalesced record of seventy rewrites. A phase's count is
@@ -158,7 +158,7 @@ type Record struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 
 	// CostUSD is what the phase's own provider billed, in dollars, and it
-	// is set on a MINORITY of records: only a subscription coding CLI
+	// is set on a MINORITY of records: only a subscription harness
 	// reports a price, so every native-provider phase carries zero.
 	//
 	// Which is why [Bucket] counts PricedCalls beside the sum. A total of
@@ -197,10 +197,10 @@ type PhaseCounts struct {
 // PhaseCalls is a phase record's provider calls.
 //
 //   - An EXECUTOR's record (`execute`) covers none. Every executor is its
-//     coding CLI's own run: the engine's record of the phase states the run
+//     harness's own run: the engine's record of the phase states the run
 //     as one round — the launch and its answer — but the engine made no
 //     provider call for it, whether the run was collected or its launch was
-//     refused. The run's calls are its CLI's, counted on each launch's own
+//     refused. The run's calls are its harness's, counted on each launch's own
 //     record ([LaunchCalls]); counting the round as well put two calls on
 //     every turn that nobody made.
 //   - Every other phase covers its rounds: its `rounds` list's length where
@@ -226,8 +226,8 @@ func PhaseCalls(c PhaseCounts) int {
 }
 
 // LaunchCalls is the provider calls one launch of an executor's run covers,
-// off its own record (`executor_collected`): the model turns its CLI's own
-// loop took, as the CLI reported them (`cli_turns`), and one where it reported
+// off its own record (`executor_collected`): the model turns its harness's own
+// loop took, as the harness reported them (`cli_turns`), and one where it reported
 // none — the one run the engine asked for, which is the most it can say.
 //
 // ITS OWN RULE BESIDE [PhaseCalls], not a phase word folded into that one: a
@@ -253,7 +253,7 @@ type Bucket struct {
 	// the calls in this bucket.
 	//
 	// THE CONTRACT A READER DIVIDES BY: input_tokens ALREADY INCLUDES the
-	// cached prefix — the backend reports it that way, adding a CLI's own
+	// cached prefix — the backend reports it that way, adding a harness's own
 	// cache counts back into its input total — so these are a BREAKDOWN of
 	// InputTokens and
 	// never an addition to it. The cache's share of a bucket's input is

@@ -14,7 +14,7 @@ import (
 var reportedAt = time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
 
 // A RESET NAMED AS A TIME OF DAY IS ITS NEXT OCCURRENCE AFTER THE REPORT, in
-// the zone the vendor named, else in the zone the CLI was handed, and anything
+// the zone the vendor named, else in the zone the harness was handed, and anything
 // this reading cannot take is no instant at all rather than a guess. A weekday
 // is that day's next occurrence strictly after the report; a date carries its
 // own day.
@@ -40,7 +40,7 @@ func TestAClockResetIsTheNextOccurrenceInItsZone(t *testing.T) {
 		said    string
 		now     time.Time
 		reading *harnessprofile.ResetReading // nil for Claude Code's "resets "
-		child   *time.Location               // the zone the CLI was handed; nil for UTC
+		child   *time.Location               // the zone the harness was handed; nil for UTC
 		want    time.Time                    // zero for no instant
 	}{
 		"the line Claude Code printed": {
@@ -172,7 +172,7 @@ func TestAnEpochOrADelayResetIsReadAgainstTheReport(t *testing.T) {
 	}
 }
 
-// THE CLAUDE CODE PROFILE CLASSIFIES THE LIMIT BY THE STATUS ITS CLI WRITES,
+// THE CLAUDE CODE PROFILE CLASSIFIES THE LIMIT BY THE STATUS ITS HARNESS WRITES,
 // not by the sentence. The line below is the result event Claude Code 2.1.312
 // printed when a subscription's five-hour window ran out; its wording matches
 // no sentinel the profile shipped before this change, which is how every seat
@@ -193,7 +193,7 @@ func TestClaudeCodesLimitIsReadFromItsStatusWithTheReset(t *testing.T) {
 		t.Fatalf("classified %+v, %v; want a rate limit", hit, ok)
 	}
 	if hit.Source != sourceEvent {
-		t.Errorf("matched in %q, want the CLI's own event", hit.Source)
+		t.Errorf("matched in %q, want the harness's own event", hit.Source)
 	}
 	if want := time.Date(2026, time.October, 27, 23, 30, 0, 0, time.UTC); !hit.Reset.Equal(want) {
 		t.Errorf("reset %v, want %v", hit.Reset, want)
@@ -205,7 +205,7 @@ func TestClaudeCodesLimitIsReadFromItsStatusWithTheReset(t *testing.T) {
 
 // A MODEL CANNOT WRITE THE STATUS. A healthy run whose answer spells the whole
 // report out, status and all, is an answer: the fields the match reads are the
-// CLI's, and the model's words are inside one string of the event.
+// harness's, and the model's words are inside one string of the event.
 //
 // Mutation: search the line as text for the status, and the answer classifies.
 func TestAnAnswerThatSpellsOutTheStatusIsAnAnswer(t *testing.T) {

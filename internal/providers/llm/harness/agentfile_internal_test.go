@@ -22,7 +22,7 @@ import (
 // per-profile data rather than something this package invents — see
 // [harnessprofile.SystemPromptFile]. Asked from inside the child, for the reason every other
 // file probe here is: the per-call directory is removed on release, so a
-// parent reading the path afterwards would be reading a file the CLI never
+// parent reading the path afterwards would be reading a file the harness never
 // saw.
 func TestASystemPromptFileTemplateWrapsTheSeatsIdentity(t *testing.T) {
 	t.Parallel()
@@ -92,7 +92,7 @@ func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 	}
 	if strings.HasPrefix(got.Content, "UNREADABLE") {
 		t.Fatalf("no agent file was written for a request with no system prompt, "+
-			"so the CLI ran with its own default agent: %q", got.Content)
+			"so the harness ran with its own default agent: %q", got.Content)
 	}
 	argv, _, body := splitFileProbe(t, got.Content)
 	if !strings.Contains(argv, "--agent-file") {
@@ -108,7 +108,7 @@ func TestThePromptFileChannelIsPassedEvenWithNoSystemPrompt(t *testing.T) {
 // A side pass takes the replacing channel because its system prompt is the
 // whole instruction. With none, the replacing form of a file that is passed
 // for its policy renders an EMPTY system prompt — on Kimi Code an agent file
-// with no body, which the CLI refuses ("Missing prompt body", exit 1). The
+// with no body, which the harness refuses ("Missing prompt body", exit 1). The
 // appending form keeps the vendor's own prompt under the same frontmatter,
 // which is what a call with no system prompt asks for; a call that has one
 // still takes the channel its kind wants.
@@ -127,7 +127,7 @@ func TestACallWithNoSystemPromptTakesASeatsRoute(t *testing.T) {
 	for name, tc := range map[string]struct {
 		agent  bool
 		system string
-		want   string // the body the CLI reads
+		want   string // the body the harness reads
 	}{
 		"a side pass with a system prompt": {agent: false, system: "Classify.", want: "REPLACING Classify."},
 		"a side pass with none":            {agent: false, want: "APPENDING "},
@@ -143,7 +143,7 @@ func TestACallWithNoSystemPromptTakesASeatsRoute(t *testing.T) {
 		}
 		_, _, file := splitFileProbe(t, got.Content)
 		if body := strings.TrimPrefix(file, "---\ntools: []\n---\n"); body != tc.want {
-			t.Errorf("%s: the CLI read the body %q, want %q", name, body, tc.want)
+			t.Errorf("%s: the harness read the body %q, want %q", name, body, tc.want)
 		}
 	}
 }
@@ -209,8 +209,8 @@ func TestASystemPromptFileNameMayNotBeAPath(t *testing.T) {
 }
 
 // THE KIMI PROFILE'S AGENT FILE IS THE PROFILE'S TOOL DENIAL, on both of its
-// channels, so each has to be a file that CLI accepts: the vendor's reference
-// says a file passed through `--agent-file` "must be valid, otherwise the CLI
+// channels, so each has to be a file that harness accepts: the vendor's reference
+// says a file passed through `--agent-file` "must be valid, otherwise the harness
 // reports the error and exits", and `description` is the one required field.
 //
 // The two channels are one file whose body differs. The replacing body is the
@@ -241,7 +241,7 @@ func TestTheKimiProfilesAgentFilesDenyTheirToolsAndKeepTheWeb(t *testing.T) {
 		spec := tc.ch.File
 		if spec == nil {
 			t.Errorf("kimi-code declares no %s.file, so --agent-file would be handed a "+
-				"bare prompt and the CLI would exit on it", tc.field)
+				"bare prompt and the harness would exit on it", tc.field)
 			continue
 		}
 		if !slices.Equal(tc.ch.Args, []string{"--agent-file", "{file}"}) {
@@ -258,13 +258,13 @@ func TestTheKimiProfilesAgentFilesDenyTheirToolsAndKeepTheWeb(t *testing.T) {
 			continue
 		}
 		fronts = append(fronts, front)
-		// The CLI trims the body before it reads it.
+		// The harness trims the body before it reads it.
 		if got := strings.TrimSpace(body); got != tc.body {
 			t.Errorf("%s body = %q, want %q", tc.field, got, tc.body)
 		}
 		holdsKimiAllowlist(t, tc.field, front)
 	}
-	// One file, one policy: a seat and a side pass on this CLI are offered
+	// One file, one policy: a seat and a side pass on this harness are offered
 	// the same tools, whichever channel the call takes.
 	if len(fronts) == 2 && fronts[0] != fronts[1] {
 		t.Errorf("the two channels' frontmatter differ:\n%s\n---\n%s", fronts[0], fronts[1])
@@ -287,18 +287,18 @@ func holdsKimiAllowlist(t *testing.T, field, front string) {
 		DisallowedTools []string `yaml:"disallowedTools"`
 	}
 	if err := yaml.Unmarshal([]byte(front), &meta); err != nil {
-		t.Errorf("%s: the frontmatter is not YAML the CLI can read: %v\n%s", field, err, front)
+		t.Errorf("%s: the frontmatter is not YAML the harness can read: %v\n%s", field, err, front)
 		return
 	}
 	if meta.Description == "" {
 		t.Errorf("%s: description is empty, and it is the one REQUIRED frontmatter field — "+
-			"the CLI reports the error and exits rather than running without it", field)
+			"the harness reports the error and exits rather than running without it", field)
 	}
 	if meta.Name == "" || strings.ToLower(meta.Name) != meta.Name || strings.Contains(meta.Name, " ") {
 		t.Errorf("%s: name = %q, want a kebab-case identifier: a missing or non-kebab-case "+
 			"name is skipped with a warning", field, meta.Name)
 	}
-	// An ALLOWLIST, not a denylist: on this CLI an entry it does not
+	// An ALLOWLIST, not a denylist: on this harness an entry it does not
 	// recognise matches nothing and is reported with a warning, so a stale
 	// name costs one tool here where a denylist would cost the restriction.
 	if len(meta.Tools) == 0 {
@@ -309,16 +309,16 @@ func holdsKimiAllowlist(t *testing.T, field, front string) {
 			"second list is one more thing to keep in step", field, meta.DisallowedTools)
 	}
 	// Web is the one local tool this backend never denies, and these are
-	// what this CLI calls its two. The seat's own tools are the crewlet
-	// server's, which this CLI offers its model as mcp__crewlet__<name> — and
+	// what this harness calls its two. The seat's own tools are the crewlet
+	// server's, which this harness offers its model as mcp__crewlet__<name> — and
 	// only where the allowlist names them; a call with no such server (a
 	// text function) matches the entry to nothing.
 	tools := slices.Clone(meta.Tools)
 	slices.Sort(tools)
 	if want := []string{"FetchURL", "WebSearch", "mcp__crewlet__*"}; !slices.Equal(tools, want) {
 		t.Errorf("%s: tools = %v, want exactly %v: a subscription seat must not have "+
-			"less reach than the same CLI at a terminal, and anything else reaches the "+
-			"filesystem, the shell or another agent — a CLI acting on its own is invisible "+
+			"less reach than the same harness at a terminal, and anything else reaches the "+
+			"filesystem, the shell or another agent — a harness acting on its own is invisible "+
 			"to the tool registry and the permission model", field, meta.Tools, want)
 	}
 }
@@ -332,7 +332,7 @@ func holdsKimiAllowlist(t *testing.T, field, front string) {
 // `--prompt` is present, so the two have to arrive together.
 //
 // Skipped unless a `kimi` is on PATH, and it asserts on ARGUMENT PARSING
-// alone: without a credential the CLI stops at its own auth failure, which is
+// alone: without a credential the harness stops at its own auth failure, which is
 // exactly far enough to prove the flags were understood.
 func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	t.Parallel()
@@ -365,7 +365,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 			"of the same name is a different program", version)
 	}
 
-	// Both channels, because each is an agent file the CLI parses before
+	// Both channels, because each is an agent file the harness parses before
 	// anything else: a frontmatter or a body it refused would stop it short
 	// of the auth failure this asserts on.
 	for field, ch := range map[string]harnessprofile.Channel{
@@ -373,7 +373,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 		"append_system_prompt": p.AppendSystemPrompt,
 	} {
 		dir := t.TempDir()
-		// A MODEL THE CLI KNOWS, ON A PROVIDER WITH NO CREDENTIAL. With no
+		// A MODEL THE HARNESS KNOWS, ON A PROVIDER WITH NO CREDENTIAL. With no
 		// config.toml at all, 0.42.0 and 2.3.1 both stop at "Model … is not
 		// configured in config.toml" — before the credential, so the case
 		// proved nothing. Declared with no key, the model takes them on to
@@ -421,11 +421,11 @@ func TestTheKimiProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
 //
-// These are the BYTES THE REAL CLI EMITTED, captured from 0.42.0 driven
+// These are the BYTES THE REAL HARNESS EMITTED, captured from 0.42.0 driven
 // against a stub HTTP endpoint standing in for the model — not a stream
 // written to match the profile. Two of the three lines are the point.
 //
-// `session.resume_hint` carries its own `content` field, holding the CLI's
+// `session.resume_hint` carries its own `content` field, holding the harness's
 // prose about how to resume. A profile reading `content` off every line would
 // have appended "To resume this session: kimi -r session_…" to the model's
 // reply, and the tool loop, the reviewer and the dashboard would all have
@@ -443,7 +443,7 @@ func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 
 	got := extract(p, captured)
 	if !got.located {
-		t.Fatalf("the profile found no answer in its own CLI's real stream:\n%s", captured)
+		t.Fatalf("the profile found no answer in its own harness's real stream:\n%s", captured)
 	}
 	if got.text != "THE-STUB-REPLY" {
 		t.Errorf("text = %q, want the assistant's own words alone — a `meta` line's "+
@@ -453,12 +453,12 @@ func TestTheKimiProfileReadsOnlyTheAssistantsLines(t *testing.T) {
 
 // A SPENT PLAN REACHES THE FALLBACK CHAIN, and these are the real words.
 //
-// The classification prefix is the CLI's own and survives the vendor
+// The classification prefix is the harness's own and survives the vendor
 // rewording the sentence after it; both were captured from 0.42.0 answering a
 // stubbed 429 and 401. A marker that stopped matching would leave a spent plan
 // unrecognised: the failed run would still carry the seat to its metered key,
 // as a `server` failure, but the entry would never sit out, so every call would
-// launch the spent CLI first to hear the same sentence again — silent until
+// launch the spent harness first to hear the same sentence again — silent until
 // somebody reads why the plan's calls all fail.
 func TestTheKimiProfileClassifiesTheFailuresItsHarnessActuallyPrints(t *testing.T) {
 	t.Parallel()
@@ -501,7 +501,7 @@ func TestTheKimiProfileClassifiesTheFailuresItsHarnessActuallyPrints(t *testing.
 			t.Parallel()
 			hit, ok := classifyMarkers(p, harnessOutput{stderr: tc.stderr, failed: true})
 			if !ok {
-				t.Fatalf("no marker fired on what the CLI really printed:\n%s", tc.stderr)
+				t.Fatalf("no marker fired on what the harness really printed:\n%s", tc.stderr)
 			}
 			if hit.Kind != tc.want {
 				t.Errorf("kind = %v, want %v", hit.Kind, tc.want)
@@ -510,16 +510,16 @@ func TestTheKimiProfileClassifiesTheFailuresItsHarnessActuallyPrints(t *testing.
 	}
 }
 
-// splitFileProbe reads the fake CLI's `argv|mode|base64(body)` report.
+// splitFileProbe reads the fake harness's `argv|mode|base64(body)` report.
 func splitFileProbe(t *testing.T, reported string) (argv, mode, body string) {
 	t.Helper()
 	argv, rest, ok := strings.Cut(reported, "|")
 	if !ok {
-		t.Fatalf("the fake CLI did not report a readable file: %q", reported)
+		t.Fatalf("the fake harness did not report a readable file: %q", reported)
 	}
 	mode, encoded, ok := strings.Cut(rest, "|")
 	if !ok {
-		t.Fatalf("the fake CLI did not report a readable file: %q", reported)
+		t.Fatalf("the fake harness did not report a readable file: %q", reported)
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {

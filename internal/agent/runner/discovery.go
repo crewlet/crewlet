@@ -56,7 +56,7 @@ type listMCPTools struct{ surface func() *tools.Surface }
 func (t *listMCPTools) Name() string { return toolname.ListMCPServerTools }
 
 // Description says what the call answers and what follows it, in words every
-// CLI reads truly: "callable from your next round" — a CLI that re-lists the
+// harness reads truly: "callable from your next round" — a harness that re-lists the
 // server's tools mid-run offers an activated tool at its model's next request,
 // and one that does not is ended after the activation and starts its next run
 // with it — never "its schema arrives on the next message", which described a

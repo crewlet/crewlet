@@ -20,7 +20,7 @@ var log = logging.Get("sandbox.executor")
 
 // deliveredRefs is what a run delivered, as its own account names it: the
 // branches it pushed and the pull or merge requests it opened, read from the
-// texts given in the order given — the report before the CLI's last message.
+// texts given in the order given — the report before the harness's last message.
 //
 // THE RUN NAMES THEM, ON LINES OF THEIR OWN. The report is asked for one
 // `Delivered: <branch or URL>` line per ref ([FindingsInstruction]), and the
@@ -112,81 +112,81 @@ func namedRef(rest string) (string, bool) {
 var prPattern = regexp.MustCompile(
 	`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
 
-// CLI is what one coding agent contributes on top of the shared plumbing.
+// Harness is what one harness contributes on top of the shared plumbing.
 //
-// WHAT IS THE CLI'S, AND ONLY THAT: its invocation, its config file, where its
+// WHAT IS THE HARNESS'S, AND ONLY THAT: its invocation, its config file, where its
 // stdout lands and how its result is read back ([Output]), how its event
 // stream is decoded ([Decoder]) and how its result is parsed. Everything else
-// — when a run has ended included, which is the done marker for every CLI —
+// — when a run has ended included, which is the done marker for every harness —
 // where
 // the markers go, how the box is torn down, how a question is signalled, how
-// a stream is read and how much of one is kept — is the same for every CLI,
+// a stream is read and how much of one is kept — is the same for every harness,
 // and a runner that could override it would be a second implementation of the
 // completion protocol.
 type Harness interface {
-	// Name is the coding agent's config name: "claude-code", "opencode".
+	// Name is the harness's config name: "claude-code", "opencode".
 	Name() string
 
 	// Command builds the headless invocation. The brief and the system text
 	// are already final — the report instruction is appended to the system
-	// text by the base — but for the instruction about notes, which a CLI
+	// text by the base — but for the instruction about notes, which a harness
 	// that reads them adds where a note can reach its run ([noteReader]); and
-	// a CLI given system text puts it on the channel that adds to its own
+	// a harness given system text puts it on the channel that adds to its own
 	// system prompt, never in the prompt it runs.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
-	// Output is where the CLI's stdout lands and how its result is read
+	// Output is where the harness's stdout lands and how its result is read
 	// back — DECLARED, so the shared wrapper and the shared reads follow it
-	// rather than knowing which CLI they are driving.
+	// rather than knowing which harness they are driving.
 	Output(paths Paths) Output
 
-	// Events is a new decoder for one of this CLI's event streams, read
+	// Events is a new decoder for one of this harness's event streams, read
 	// whole or followed across many reads ([Decoder]). Asked only when
 	// [Output.Events] is set.
 	Events() Decoder
 
 	// Parse maps this agent's RESULT, read whole, onto a result: the file
-	// [Output.Result] names, or — for a CLI whose result is its stream —
+	// [Output.Result] names, or — for a harness whose result is its stream —
 	// the stream's whole text, decoded.
 	Parse(result string) sandbox.Result
 
 	// WriteConfig renders the agent's config file into the box and returns
-	// the path the CLI is pointed at, or "" when there is nothing to write.
-	// It also writes the system text where the CLI reads it from
+	// the path the harness is pointed at, or "" when there is nothing to write.
+	// It also writes the system text where the harness reads it from
 	// ([Paths.System]) when there is any, and nothing when there is none.
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 }
 
-// resumer is a CLI that continues a session an earlier run reported.
+// resumer is a harness that continues a session an earlier run reported.
 type resumer interface{ Resumes() bool }
 
-// sessionTotals is a CLI whose result, on a run that continues a session, can
+// sessionTotals is a harness whose result, on a run that continues a session, can
 // state the SESSION's spend rather than the run's own: from the release
-// TotalsRestored names, the CLI starts a continued session from the totals
+// TotalsRestored names, the harness starts a continued session from the totals
 // the job before it saved, and every result after counts them again. The
 // runner keeps that job's result as the run starts ([Paths.BaseResult]) and
 // charges a continued run the difference — unless its own stream stated what
 // the run spent ([runSpender]), which is exact on any release that says it.
 //
-// OPTIONAL, as [resumer] is: a CLI whose result is the run's own spend on
+// OPTIONAL, as [resumer] is: a harness whose result is the run's own spend on
 // every release needs nothing kept, and OpenCode measures its session before
 // and after the run in the run's own script instead ([openCodeUsageBefore]).
 type sessionTotals interface {
-	// TotalsRestored reports whether the CLI release version, as its
+	// TotalsRestored reports whether the harness release version, as its
 	// `--version` printed it, restores a continued session's totals. A
 	// version that cannot be read is taken for a current release.
 	TotalsRestored(version string) bool
 }
 
 // runSpender is a decoder that read the run's OWN spend off its stream: the
-// figures its CLI states for the calls this process made, which nothing a
+// figures its harness states for the calls this process made, which nothing a
 // resume or a kill does to the session's totals can add to.
 type runSpender interface {
 	// runSpend is that spend, and whether the stream stated any.
 	runSpend() (runSpend, bool)
 }
 
-// runSpend is what one run spent, as its CLI stated it: the prompt not served
+// runSpend is what one run spent, as its harness stated it: the prompt not served
 // from the cache, the cache's reads and writes, the reply, and the price.
 type runSpend struct {
 	input, cacheRead, cacheWrite, output int
@@ -206,10 +206,10 @@ func (s runSpend) on(result sandbox.Result) sandbox.Result {
 }
 
 // less is result with what base already stated taken off: a continued run's
-// own spend, where its CLI stated the session's. A difference below zero is
+// own spend, where its harness stated the session's. A difference below zero is
 // passed on as it is, for the coordinator to floor and say
 // ([sandbox.Result]'s floor, sandbox_usage_negative), as every negative count a
-// CLI reports is. The turn count is the process's own on every release, so it
+// harness reports is. The turn count is the process's own on every release, so it
 // is never a difference.
 func less(result, base sandbox.Result) sandbox.Result {
 	result.InputTokens -= base.InputTokens
@@ -220,50 +220,50 @@ func less(result, base sandbox.Result) sandbox.Result {
 	return result
 }
 
-// noteReader is a CLI that takes a person's notes to its run's turn between its
+// noteReader is a harness that takes a person's notes to its run's turn between its
 // own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
 // and tells its model so: NoteInstruction is the standing instruction about
 // notes its runs are given ([ClaudeCodeSteerInstruction],
-// [OpenCodeSteerInstruction]) — the CLI's own, because where a note appears in
-// what the model reads is the CLI's to decide, and the CLI adds it to its run's
+// [OpenCodeSteerInstruction]) — the harness's own, because where a note appears in
+// what the model reads is the harness's to decide, and the harness adds it to its run's
 // system text itself ([withNoteInstruction]), on the run its notes can reach.
 //
-// OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
+// OPTIONAL, as [resumer] is, because a harness is taught to read notes in its own
 // way — hooks, a plugin — and one not taught yet must not be claimed to: the
 // instruction, and the warning that a run never asked for any, both follow it.
 type noteReader interface{ NoteInstruction() string }
 
-// Output is how the wrapper connects a CLI's standard streams in the box —
+// Output is how the wrapper connects a harness's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
 // back.
 type Output struct {
-	// Stdout is the file the wrapper redirects the CLI's stdout into.
+	// Stdout is the file the wrapper redirects the harness's stdout into.
 	Stdout string
 
 	// Events says Stdout is an EVENT STREAM, decoded a line at a time by
-	// [CLI.Events] — never read whole, because it grows with every tool
+	// [harness.Events] — never read whole, because it grows with every tool
 	// call the run makes.
 	Events bool
 
-	// Result is the file the CLI's RESULT is read from, whole ([CLI.Parse]),
+	// Result is the file the harness's RESULT is read from, whole ([harness.Parse]),
 	// or "" when the result is the stream's own. When it names a file other
-	// than Stdout, the wrapper writes it after the CLI exits: the stream's
-	// last line, which is where a CLI that streams puts its result — and
+	// than Stdout, the wrapper writes it after the harness exits: the stream's
+	// last line, which is where a harness that streams puts its result — and
 	// where the wrapper died before it could, the collection reads that line
 	// from the stream in its place.
 	Result string
 
-	// BriefOnStdin says the CLI reads its brief on STDIN, from a file Start
-	// writes ([Paths.Brief]), rather than on its argv — for a CLI that does
+	// BriefOnStdin says the harness reads its brief on STDIN, from a file Start
+	// writes ([Paths.Brief]), rather than on its argv — for a harness that does
 	// not take an argv prompt verbatim. OpenCode re-quotes one: a brief
 	// passed as an argument reached the model wrapped in double quotes with
 	// every quote inside it escaped, so code and quoted text in a brief came
 	// out altered (measured on 1.18.35 and 2.0.32 alike), while the same
-	// brief on stdin arrived byte for byte. Unset, the CLI's stdin is
+	// brief on stdin arrived byte for byte. Unset, the harness's stdin is
 	// /dev/null, so a headless agent can never block waiting for input.
 	BriefOnStdin bool
 
-	// Unset is every variable the wrapper removes from the CLI's environment
+	// Unset is every variable the wrapper removes from the harness's environment
 	// before it starts: one that, from wherever it came — the seat's
 	// role.sandbox.env, the image, a profile the login shell sources —
 	// switches off something the run depends on. Removed IN the wrapper,
@@ -272,7 +272,7 @@ type Output struct {
 	Unset []string
 }
 
-// Runner drives one CLI through the detached lifecycle.
+// Runner drives one harness through the detached lifecycle.
 type Runner struct {
 	harness Harness
 
@@ -290,7 +290,7 @@ type Runner struct {
 	//
 	// THIS IS THE READ, NOT WHAT THE FAILURE CARRIES OF IT. The failure opens
 	// with the engine's own sentences — a piece it could not read, the exit
-	// status, the CLI's error — and the error stream gets what is left of the
+	// status, the harness's error — and the error stream gets what is left of the
 	// bound after them ([failureDetail]). Read to the bound and carried whole
 	// behind them, as it was, a failure built around a long stderr was always
 	// a few hundred bytes past what the compactor reads, refused before a
@@ -309,21 +309,21 @@ type Runner struct {
 
 var _ sandbox.Runner = (*Runner)(nil)
 
-// New wraps a CLI in the shared plumbing.
+// New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
 	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes}
 }
 
-// Name is the coding agent's config name.
+// Name is the harness's config name.
 func (r *Runner) Name() string { return r.harness.Name() }
 
-// ReadsNotes reports whether this runner's CLI takes a person's notes between
+// ReadsNotes reports whether this runner's harness takes a person's notes between
 // its steps — see [noteReader]. The coordinator asks it before it says a run
 // that succeeded never asked for its notes (internal/sandbox).
 func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
 
-// noteInstruction is the standing instruction about notes this runner's CLI
-// gives its runs, or "" for a CLI that takes none — see [noteReader].
+// noteInstruction is the standing instruction about notes this runner's harness
+// gives its runs, or "" for a harness that takes none — see [noteReader].
 func (r *Runner) noteInstruction() string {
 	if reader, ok := r.harness.(noteReader); ok {
 		return reader.NoteInstruction()
@@ -335,7 +335,7 @@ func (r *Runner) noteInstruction() string {
 // written under ([Paths.WorkDir]), and the box's own bin directory first on
 // the run's PATH ([Paths.BinDir]).
 //
-// The CLI itself is NOT installed here — it ships in the image, which is what
+// The harness itself is NOT installed here — it ships in the image, which is what
 // makes a coding box a template rather than a per-run build. Environment
 // provisioning (git auth, registry credentials, toolchains) is not the
 // runner's concern either: the manager applies the launch's setup steps after
@@ -397,14 +397,14 @@ func shellQuoteAll(paths []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// Start launches the coding agent detached and returns its handle.
+// Start launches the harness detached and returns its handle.
 //
 // The job runs UNCAPPED: nothing force-stops it on a wall-clock timer, so a
 // legitimately long run is free to finish. On a clean exit the shell writes the
 // exit code into both the exit-code file and the done marker — non-empty, for
 // the reason on [Paths.Done].
 //
-// Its stdin is closed — or, for a CLI that reads its brief there, the brief's
+// Its stdin is closed — or, for a harness that reads its brief there, the brief's
 // file, which ends: a headless agent must never block waiting for input, and
 // one that does would hang forever with no timer to stop it.
 func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
@@ -415,7 +415,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
 	// result the job before this one left in the box, where this run
-	// continues its session and its CLI's result may state the session's
+	// continues its session and its harness's result may state the session's
 	// spend ([sessionTotals]). Read where the job before left it — the box
 	// a continued session lives in is the box that job ran in.
 	base, err := r.baseResult(ctx, box, paths, req)
@@ -433,19 +433,19 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			return sandbox.RunHandle{}, fmt.Errorf("executor: keeping the session's spend so far: %w", err)
 		}
 	}
-	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
-	// system text from — all but the instruction about notes, which a CLI
+	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a harness writes the
+	// system text from — all but the instruction about notes, which a harness
 	// that reads them adds itself, where a note can reach its run
 	// ([noteReader]).
 	req.System = finalSystem(req.System, paths)
 	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
 	// URLs, the tool bridge's included, are written in the engine host's
 	// network, and a loopback one reaches nothing from inside a container
-	// ([sandbox.EngineAddress]). Here, because every run reaches its CLI's
+	// ([sandbox.EngineAddress]). Here, because every run reaches its harness's
 	// config through this one call, whichever caller launched it.
 	req.MCPServers = sandbox.EngineServers(box, req.MCPServers)
 	// The run's notes route too: it is the same bridge under a path of its
-	// own, and a CLI that polls it by URL rather than through its MCP server
+	// own, and a harness that polls it by URL rather than through its MCP server
 	// (OpenCode's plugin, [OpenCode.WriteConfig]) dials it from inside the
 	// box as well. A copy, since req is this call's own.
 	if req.Steer.Set() {
@@ -473,10 +473,10 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	inner := withBoxBin(r.harness.Command(req, paths, configPath), paths)
 	script := wrapperScript(inner, out, paths, hooks)
 
-	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
+	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
 	// entries exist only in a profile a login shell sources. A plain `sh -c`
-	// finds no CLI at all in exactly the images operators build.
+	// finds no harness at all in exactly the images operators build.
 	//
 	// It also means the box's PATH inside the wrapper is the PROFILE's, not
 	// the environment the engine handed the process, which is why the box's
@@ -492,12 +492,12 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 }
 
 // baseResult is the result the job before req left in box, for a run that
-// continues its session on a CLI whose result may state the session's spend
+// continues its session on a harness whose result may state the session's spend
 // ([sessionTotals]), and "" for every other run.
 //
 // A RESULT THE BOX COULD NOT GIVE BACK IS NO BASE, and the run still starts: a
 // continued session is the work the person was waiting for, and its spend is
-// then the one its CLI states, logged so that an overcharge has a cause on
+// then the one its harness states, logged so that an overcharge has a cause on
 // record. A read that failed outright fails the start, as every other read
 // of Start's does, for the launch to try again.
 func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
@@ -515,7 +515,7 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 	if refusal != "" || strings.TrimSpace(raw) == "" {
 		log.WarnContext(ctx, "coding_agent_session_spend_unread", "agent", r.harness.Name(),
 			"detail", "this run continues a session, and the result the job before it left "+
-				"could not be read, so the run is charged the spend its CLI states, which counts "+
+				"could not be read, so the run is charged the spend its harness states, which counts "+
 				"the session's earlier jobs again", "refusal", refusal)
 		return "", nil
 	}
@@ -524,9 +524,9 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 
 // ownSpend is result charged what THIS run spent ([sessionTotals],
 // [runSpender]): the spend the run's own stream stated, where it stated any;
-// else, for a run that continued a session on a CLI that restores the
+// else, for a run that continued a session on a harness that restores the
 // session's totals, the result less what the session had spent when the run
-// took it up ([Paths.BaseResult]); else the result as its CLI stated it, which
+// took it up ([Paths.BaseResult]); else the result as its harness stated it, which
 // is the run's own.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	result sandbox.Result, streamed *runSpend) (sandbox.Result, error) {
@@ -547,7 +547,7 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		// base could not be kept ([Runner.baseResult] said so).
 		return result, nil
 	}
-	version, _, err := readWhole(ctx, box, paths.CLIVersion(), "its CLI's version")
+	version, _, err := readWhole(ctx, box, paths.CLIVersion(), "its harness's version")
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -557,12 +557,12 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	return less(result, r.harness.Parse(raw)), nil
 }
 
-// wrapperScript is the shell line a job runs under: the CLI with its stdout
+// wrapperScript is the shell line a job runs under: the harness with its stdout
 // and stderr redirected, then its result, its exit code and its done marker.
 //
-// THE EXIT STATUS IS THE CLI'S OWN. It is read into code before anything else
-// runs, so the result line a streaming CLI's wrapper copies out afterwards
-// cannot replace it — and it is copied after the CLI EXITS rather than piped
+// THE EXIT STATUS IS THE HARNESS'S OWN. It is read into code before anything else
+// runs, so the result line a streaming harness's wrapper copies out afterwards
+// cannot replace it — and it is copied after the harness EXITS rather than piped
 // beside it, because a pipe's status is its last command's under a plain
 // `sh`, which has no pipefail to say otherwise.
 //
@@ -575,12 +575,12 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 		stdin = shellQuote(paths.Brief())
 	}
 	var b strings.Builder
-	// A STATEMENT OF ITS OWN, before the CLI's: an assignment prefix on the
+	// A STATEMENT OF ITS OWN, before the harness's: an assignment prefix on the
 	// command could only add to its environment, never remove from it.
 	if len(out.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
 	}
-	// AFTER THE PROFILE, BEFORE THE CLI, for the reason the unset is: an
+	// AFTER THE PROFILE, BEFORE THE HARNESS, for the reason the unset is: an
 	// entry exported around the shell would be replaced by a profile that
 	// sets the count.
 	if hooks != "" {
@@ -612,16 +612,16 @@ func finalSystem(system string, paths Paths) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// withNoteInstruction is a run's final system text with its CLI's instruction
-// about notes after it ([noteReader]) — what a CLI that reads notes hands a run
+// withNoteInstruction is a run's final system text with its harness's instruction
+// about notes after it ([noteReader]) — what a harness that reads notes hands a run
 // wired to them, as the last of its standing instructions.
 //
-// THE CLI'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose CLI
+// THE HARNESS'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose harness
 // takes none, a run wired to none, or a run started without what reads them, it
 // would describe a channel that never opens. Which of those a run is can be
-// known only where it starts — a Claude Code run's box decides from its CLI's
+// known only where it starts — a Claude Code run's box decides from its harness's
 // release ([claudeNotesGate]) — so the runner, which composes everything else,
-// leaves this to the CLI.
+// leaves this to the harness.
 func withNoteInstruction(system, instruction string) string {
 	if system == "" {
 		return instruction
@@ -653,7 +653,7 @@ func withBoxBin(cmd string, paths Paths) string {
 //     engine watched it, so that what it left is its result, which Collect
 //     surfaces with the failure (ENDED), or went with the engine that last saw
 //     it running, so that what it left is not (LOST). The wrapper is the right
-//     process to ask about: while the coding agent runs the wrapper is alive,
+//     process to ask about: while the harness runs the wrapper is alive,
 //     and once it exits it has already written the done marker, which is
 //     checked first.
 //
@@ -663,7 +663,7 @@ func withBoxBin(cmd string, paths Paths) string {
 //
 // There was a third — a terminal event read off the end of the stream, for an
 // agent that finished its work and did not exit, which was OpenCode 1.x. No
-// CLI this build drives does that: Claude Code exits, and OpenCode 2 exits
+// harness this build drives does that: Claude Code exits, and OpenCode 2 exits
 // when its session does. A signal no runner gives is a branch nothing tests.
 //
 // A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
@@ -748,22 +748,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		result, last, spent = streamed.result, streamed.last, streamed.spent
 	}
 	if out.Result != "" {
-		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its CLI printed")
+		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
 		if err == nil && out.Events && out.Result != out.Stdout && last.said() &&
 			(refusal != "" || strings.TrimSpace(raw) == "") {
 			// THE STREAM'S LAST LINE IS WHAT THE RESULT FILE HOLDS: the
-			// wrapper copies it there once the CLI has exited. So where the
+			// wrapper copies it there once the harness has exited. So where the
 			// file has nothing to give — a run whose process group died (an
 			// OOM kill, a host restart) left it empty, and Parse("") called
 			// a run that streamed a whole session "a run that produced no
 			// output"; or the box refused it, and the run's spend went
 			// uncharged — the line is read in its place: a result message
-			// the CLI did print, or whatever it was saying when it stopped,
+			// the harness did print, or whatever it was saying when it stopped,
 			// which Parse names for what it is. A refused file is still said:
 			// the run did not report as it was asked to.
 			//
 			// ONLY WHERE THE STREAM SAID SOMETHING: the wrapper writes the
-			// file whatever the CLI did, so a CLI that exited at once leaves
+			// file whatever the harness did, so a harness that exited at once leaves
 			// it empty beside an empty stream, and there is nothing to read
 			// in its place — nor anything to say about it beside the run's
 			// real failure.
@@ -791,7 +791,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 	}
 
-	// WHAT THIS RUN SPENT, never its session's: a CLI that continued a
+	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
 	result, err := r.ownSpend(ctx, box, paths, result, spent)
@@ -836,7 +836,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// written and a tool-only run that parses to no text — so it wins for the
 	// result text, and its presence is the success signal unless the process
 	// crashed.
-	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the coding agent wrote")
+	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the harness wrote")
 	if err != nil {
 		return sandbox.Result{}, err
 	}
@@ -845,15 +845,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	findings := strings.TrimSpace(findingsText)
 	// What the failure says after any piece that could not be read: the
-	// CLI's own account where the run reported something, and where it
-	// produced nothing at all, the exit status, the CLI's error and the
+	// harness's own account where the run reported something, and where it
+	// produced nothing at all, the exit status, the harness's error and the
 	// error stream.
 	var said []string
 	errStream := ""
 	switch {
 	case findings != "":
 		// THE REFS ARE THE REPORT'S BEFORE THE MESSAGE'S, read by one rule
-		// over both ([deliveredRefs]) — the message being what the CLI's
+		// over both ([deliveredRefs]) — the message being what the harness's
 		// Parse already read its own refs from, by the same rule — so a
 		// report that names its refs is never outranked by a pull request
 		// the message only mentions, nor a message that names its refs by
@@ -867,13 +867,13 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		said = append(said, result.Error)
 	case !result.Success && strings.TrimSpace(result.Text) == "":
 		// No report AND nothing parsed: the job produced nothing. Surface
-		// the exit status, the CLI's own error and the stderr — ALL THREE,
+		// the exit status, the harness's own error and the stderr — ALL THREE,
 		// in that order — so the completion reports a real failure rather
-		// than a silent stall. The CLI's error used to be REPLACED by the
+		// than a silent stall. The harness's error used to be REPLACED by the
 		// stderr whenever the stderr held anything at all, so a run that
 		// hit its turn cap and printed one warning reported the warning.
 		if crashed {
-			said = append(said, "the coding agent exited with status "+code)
+			said = append(said, "the harness exited with status "+code)
 		}
 		said = append(said, result.Error)
 		errStream = stderr
@@ -905,7 +905,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 }
 
 // failureDetail composes a run's failure: the engine's own sentences in the
-// order given — a piece it could not read, the exit status, the CLI's error —
+// order given — a piece it could not read, the exit status, the harness's error —
 // then as much of the error stream's END as is left of bound — the runner's
 // [Runner.failureBound], [sandbox.MaxFailureBytes] — after them, with what was
 // not shown of it said by size. unread is how much of the stream's start the
@@ -1030,7 +1030,7 @@ func (l streamLast) said() bool { return len(l.line) > 0 || l.skipped > 0 }
 // the copy itself would have been past what a result file is read to.
 func (l streamLast) resultLine(stream string) (string, string) {
 	if l.skipped > 0 {
-		return "", fmt.Sprintf("the result its CLI printed (the last line of %s, read in place of "+
+		return "", fmt.Sprintf("the result its harness printed (the last line of %s, read in place of "+
 			"the result file) is %s, past the %s one line of a run's output may hold, "+
 			"so it was not read", stream, humanSize(l.skipped), humanSize(int64(l.bound)))
 	}

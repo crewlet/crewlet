@@ -17,9 +17,9 @@ import (
 func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 	t.Helper()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	// THE ENTRY AS THE REVISION WRITES IT, on a CLI that is not there: a
+	// THE ENTRY AS THE REVISION WRITES IT, on a harness that is not there: a
 	// "retry now" builds its probe from the revision, and a case must never
-	// start a real CLI.
+	// start a real harness.
 	spec := c.Config.Providers.LLM["plan"]
 	spec.StateDir = t.TempDir()
 	spec.Overrides = map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
@@ -104,11 +104,11 @@ func TestRetryNowWritesNothingUnlessTheProbeAnswered(t *testing.T) {
 	}
 
 	spend(t, c, time.Now().Add(-time.Minute))
-	// The entry's CLI does not exist, so the probe fails for a reason that is
+	// The entry's harness does not exist, so the probe fails for a reason that is
 	// not a limit.
 	result, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
 	if err != nil || result.Cleared || result.Failed == "" {
-		t.Fatalf("RetryModel(probe) on a CLI that cannot answer = %+v, %v; want nothing "+
+		t.Fatalf("RetryModel(probe) on a harness that cannot answer = %+v, %v; want nothing "+
 			"cleared, saying why", result, err)
 	}
 	if _, found, _ := fleet.ModelRetry(t.Context(), "plan"); found {

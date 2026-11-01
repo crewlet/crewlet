@@ -21,10 +21,10 @@ const (
 	AuthSubscription AuthMode = "subscription"
 	AuthAPIKey       AuthMode = "api-key"
 	AuthInheritEnv   AuthMode = "inherit-env"
-	// AuthEnv is an entry whose own env signs the CLI in: a cloud
+	// AuthEnv is an entry whose own env signs the harness in: a cloud
 	// provider's switch and credentials, or a gateway's address and token
 	// ([harnessprofile.Profile.SignInEnv]). Neither the token nor the key
-	// reaches the CLI, and no login is seeded.
+	// reaches the harness, and no login is seeded.
 	AuthEnv AuthMode = "env"
 )
 
@@ -72,7 +72,7 @@ func buildEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 //
 // A map of its own, apart from [buildEnv]'s rendering, because it is also
 // what decides whether an entry is signed in ([Provider.signIn]): whether a
-// key reaches the CLI is a fact about this map after [applyAuth] has run,
+// key reaches the harness is a fact about this map after [applyAuth] has run,
 // and a second reading of the configuration beside it is what the doctor
 // had, and what drifted from it in both directions.
 func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
@@ -81,14 +81,14 @@ func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 	// os.Environ() because the engine's environment holds its keyring, its
 	// Tier A tokens, the org's chat token, its collector credential and every
 	// provider key: a child that inherited it would hand each of those to a vendor's
-	// CLI, and would silently bill a metered ANTHROPIC_API_KEY that happened
+	// harness, and would silently bill a metered ANTHROPIC_API_KEY that happened
 	// to be exported while the operator believed they were on a flat-rate
 	// plan. This package kept its own list once, and it had drifted from the
-	// sandbox's by five names. Anything else a CLI needs is declared — in the
+	// sandbox's by five names. Anything else a harness needs is declared — in the
 	// profile's passthrough_env, or the operator's env.
 	env := hostbox.Inherit()
 
-	// The isolation. Every path a CLI could keep state under is pointed
+	// The isolation. Every path a harness could keep state under is pointed
 	// inside the seat's own home; XDG_CACHE_HOME is the one exception,
 	// living beside the home rather than in it, because a cache is warm
 	// across calls and holds no conversation.
@@ -114,7 +114,7 @@ func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 	}
 	// ON EVERY COMMAND, a call's or not — see
 	// [harnessprofile.Profile.IsolationEnv]. A credential store's import, a login
-	// and the version probe start the same CLI, and a switch that kept a call
+	// and the version probe start the same harness, and a switch that kept a call
 	// from loading an ancestor's plugin but not an import would run that
 	// plugin's code anyway.
 	for name, value := range p.IsolationEnv {
@@ -139,9 +139,9 @@ func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 	}
 
 	// THE ZONE IS THE ENGINE'S, ALWAYS STATED, and over the entry's env: a
-	// CLI writes the instant its limit resets as a time of day in its own
+	// harness writes the instant its limit resets as a time of day in its own
 	// zone, Codex with no zone at all ("try again at 4:31 PM"), and the
-	// engine reads that time in the zone it handed the CLI ([resetAt]).
+	// engine reads that time in the zone it handed the harness ([resetAt]).
 	// Inherited only where the host had one, as TZ used to be, the zone of a
 	// zone-less sentence was whatever the host or a box's image defaulted
 	// to, which the engine could only guess. An entry's env may not set it
@@ -155,7 +155,7 @@ func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 // childZone is the zone every child the engine starts is handed, by its TZ
 // name and as a location: the engine's own TZ where it is set to a zone the
 // system knows, and UTC otherwise. Named rather than inherited so the engine
-// and the CLI agree on it, which is what lets a reset the CLI names with no
+// and the harness agree on it, which is what lets a reset the harness names with no
 // zone be read ([resetAt]).
 //
 // UTC, not the host's local zone, where TZ names none: Go reads the host's
@@ -193,10 +193,10 @@ func applyAuth(env map[string]string, p harnessprofile.Profile, auth Auth) {
 	case AuthEnv:
 		// THE ENTRY'S ENV IS THE SIGN-IN, and nothing else may compete
 		// with it. Left in place, the plan token the convention resolves
-		// for every subscription entry reached a Bedrock entry's CLI, and
+		// for every subscription entry reached a Bedrock entry's harness, and
 		// into its box, where the cloud switch outranks it and it was never
 		// used: a credential handed to a process that does not need it. No
-		// subscription_env either: that tells a CLI to use the login a home
+		// subscription_env either: that tells a harness to use the login a home
 		// holds, and this entry has none.
 		for _, name := range []string{p.TokenEnv, p.APIKeyEnv} {
 			if name != "" {
@@ -223,7 +223,7 @@ func applyAuth(env map[string]string, p harnessprofile.Profile, auth Auth) {
 			delete(env, p.APIKeyEnv)
 		}
 		// Part of the mode, so over the operator's env: what points the
-		// CLI at the login it would otherwise not choose
+		// harness at the login it would otherwise not choose
 		// ([harnessprofile.Profile.SubscriptionEnv]).
 		for name, value := range p.SubscriptionEnv {
 			env[name] = value
@@ -232,7 +232,7 @@ func applyAuth(env map[string]string, p harnessprofile.Profile, auth Auth) {
 }
 
 // tempDir is the TMPDIR [childEnv] hands every command run in a home: a
-// directory inside that home, so what a CLI unpacks or spools there stays with
+// directory inside that home, so what a harness unpacks or spools there stays with
 // the seat it ran for rather than in the engine's own temporary directory.
 func tempDir(home string) string { return filepath.Join(home, seatTempDir) }
 
@@ -244,7 +244,7 @@ func tempDir(home string) string { return filepath.Join(home, seatTempDir) }
 // on a TMPDIR that names nothing. Named and never made, it failed every codex
 // call from 0.164 on, whose sandbox helper resolves TMPDIR before it reads
 // the call's AGENTS.md ("failed to resolve synthetic mount registry temp
-// directory"), and it would fail any CLI that writes a temporary file.
+// directory"), and it would fail any harness that writes a temporary file.
 func prepareHome(home, cache string) error {
 	for _, dir := range []string{home, cache, tempDir(home)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -261,7 +261,7 @@ func prepareHome(home, cache string) error {
 // it is given to exec.Cmd.Env, and a nil there does not mean "no environment":
 // os/exec then hands the child the ENGINE's own, which is the company's chat
 // token, its collector credential and every provider key — precisely what the
-// allowlist [childEnv] starts from exists to keep out of a vendor's CLI. The
+// allowlist [childEnv] starts from exists to keep out of a vendor's harness. The
 // probe was the one call in this package that skipped it, so `--version` ran
 // with more access than any real completion ever gets — and [run] now refuses
 // a nil environment outright, so the next caller that forgets cannot either.
@@ -276,7 +276,7 @@ func prepareHome(home, cache string) error {
 func (p *Provider) probeEnv() []string {
 	home := filepath.Join(p.ws.Root(), "probe-home")
 	cache := filepath.Join(p.ws.Root(), "probe-cache")
-	// Best effort: a CLI that cannot write its config still prints its
+	// Best effort: a harness that cannot write its config still prints its
 	// version, and a probe that refused to run over a mkdir would report the
 	// drift it exists to detect as an absence.
 	_ = prepareHome(home, cache)

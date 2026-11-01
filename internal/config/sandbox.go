@@ -36,7 +36,7 @@ const (
 	// PlacementDirect runs a process tree on the ENGINE HOST in a per-box
 	// directory, with HOME and the XDG variables pointed at it and an
 	// allowlisted environment. That isolates STATE — no box sees another's
-	// checkout, memory or credentials — but NOT THE HOST: the coding agent
+	// checkout, memory or credentials — but NOT THE HOST: the harness
 	// runs as the engine user, so it reads what that user reads and
 	// reaches what its credentials reach. Right for a workstation or a
 	// dedicated VM; wrong for a shared host.
@@ -118,7 +118,7 @@ type SandboxProvider struct {
 	//
 	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS
 	// CONFIGURED, and the absence of one is the point: `direct` runs the
-	// coding agent as the engine user with the engine's filesystem access
+	// harness as the engine user with the engine's filesystem access
 	// and `e2b` bills a remote account, so neither may be chosen for an
 	// operator who did not say which they meant. `local:` alone is two
 	// cells, not one — it serves both `direct` and `container` — so it
@@ -337,7 +337,7 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 // happens, or empty when the catalogue cannot answer that on its own.
 //
 // EMPTY IS A REAL ANSWER, not a failure to compute one: `direct` runs the
-// coding agent as the engine user with the engine's own filesystem access,
+// harness as the engine user with the engine's own filesystem access,
 // and `e2b` bills a remote account. Guessing either for an operator who wrote
 // neither is the kind of default that is discovered afterwards. Validation
 // turns the empty answer into a message naming both fields that would fix it.
@@ -505,8 +505,8 @@ type LocalSandbox struct {
 
 	// Network is the container network. Empty uses the runtime's default.
 	// Setting `none` cuts the box off entirely — which also cuts off the
-	// coding agent's LLM, so only do it for purely local work.
-	Network string `yaml:"network,omitempty" json:"network,omitempty" desc:"Container network; setting it to none also cuts off the coding agent's LLM."`
+	// harness's LLM, so only do it for purely local work.
+	Network string `yaml:"network,omitempty" json:"network,omitempty" desc:"Container network; setting it to none also cuts off the harness's LLM."`
 
 	// RunArgs are spliced into the container run command (--cpus,
 	// --memory, extra mounts, --user). This is where a container box is
@@ -646,11 +646,11 @@ type SandboxSetupStep struct {
 	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value."`
 
 	// Commands run in order after the files land. A non-zero exit fails
-	// the whole acquisition — the coding agent's brief promises this
+	// the whole acquisition — the harness's brief promises this
 	// environment, so a partially provisioned box must never reach a run.
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty" desc:"Shell commands run in order; a non-zero exit fails the box."`
 
-	// Env is merged into the coding agent's run environment.
+	// Env is merged into the harness's run environment.
 	//
 	// It stays VERBATIM here and is resolved exactly once, with the rest
 	// of the sandbox env at launch. Resolving it at load as well would
@@ -670,11 +670,11 @@ type SandboxSetupStep struct {
 	// own block's half, for why an executor run starts either way.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, or paths of files, whose value may resolve to nothing; left out quietly rather than logged as a gap in the run's environment."`
 
-	// Brief is the paragraph handed to the coding agent: what this step
+	// Brief is the paragraph handed to the harness: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
 	// and substituting engine-host environment into it would be surprising
 	// at best.
-	Brief string `yaml:"brief,omitempty" json:"brief,omitempty" desc:"What this step made true about the box, told to the coding agent."`
+	Brief string `yaml:"brief,omitempty" json:"brief,omitempty" desc:"What this step made true about the box, told to the harness."`
 
 	// TimeoutSeconds is how long each of this step's commands may run.
 	//

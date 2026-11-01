@@ -42,7 +42,7 @@ import (
 // Generic over the payload so a caller gets its own type back rather than a
 // map it has to re-check at every use.
 //
-// SAFE FOR CONCURRENT USE. A coding CLI makes a response's calls at once, and
+// SAFE FOR CONCURRENT USE. A harness makes a response's calls at once, and
 // an executor run's bridge hands each one to the surface on its own goroutine
 // with nothing in front of them that runs a submission alone — so two
 // submissions, or a submission and the read of one, can meet here. The decoder

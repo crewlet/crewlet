@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// A CLI with no model flag cannot honour a model, and silently ignoring one
-// would run every phase on the CLI's default while the config said otherwise.
+// A harness with no model flag cannot honour a model, and silently ignoring one
+// would run every phase on the harness's default while the config said otherwise.
 func TestAProfileWithoutAModelFlagRefusesAModel(t *testing.T) {
 	t.Parallel()
 	_, err := New(Config{
@@ -39,7 +39,7 @@ func TestModelArgsWithNoPlaceholderTakeNoModel(t *testing.T) {
 		StateDir:  t.TempDir(), Timeout: 1, MaxConcurrent: 1,
 	})
 	if err == nil {
-		t.Fatal("an entry whose model never reaches its CLI was built")
+		t.Fatal("an entry whose model never reaches its harness was built")
 	}
 	if !strings.Contains(err.Error(), "{model}") {
 		t.Errorf("error %q does not name the placeholder", err)

@@ -94,7 +94,7 @@ func TestANodeWithNoModelsPublishesNoRows(t *testing.T) {
 	}
 }
 
-// statusHarness is a subscription claude-code entry whose CLI's status command
+// statusHarness is a subscription claude-code entry whose harness's status command
 // exits with code, as the login watcher runs it.
 func statusHarness(t *testing.T, key string, code int) *harness.Provider {
 	t.Helper()
@@ -114,7 +114,7 @@ func statusHarness(t *testing.T, key string, code int) *harness.Provider {
 	return provider
 }
 
-// THE LOGIN WATCHER SAYS WHAT THE CLI SAYS OF ITS LOGIN, for an entry that
+// THE LOGIN WATCHER SAYS WHAT THE HARNESS SAYS OF ITS LOGIN, for an entry that
 // signs in with one, and only for such an entry: a person's check answers the
 // status command's verdict now and the heartbeat carries it from then on; an
 // entry on a key has no login to check, and an entry the revision does not
@@ -152,7 +152,7 @@ func TestTheLoginWatcherSaysWhatTheHarnessSaysOfItsLogin(t *testing.T) {
 	e.checkHostLogins(t.Context(), true)
 	rows := beatOf(t, e).Models
 	if row := rowOf(t, rows, "gone"); row.HostLogin == nil || row.HostLogin.State != coord.HostSignedOut {
-		t.Errorf("the signed-out entry's row = %+v, want its CLI's signed_out", row.HostLogin)
+		t.Errorf("the signed-out entry's row = %+v, want its harness's signed_out", row.HostLogin)
 	}
 	if row := rowOf(t, rows, "keyed"); row.HostLogin != nil {
 		t.Errorf("the key entry's row carries a login %+v", row.HostLogin)

@@ -26,7 +26,7 @@ import (
 // picks the probe — answering `info` with the given text, and ONLY when asked
 // with the template that runtime actually understands.
 //
-// The wrong template is a template error on a real CLI, and answering it
+// The wrong template is a template error on a real harness, and answering it
 // anyway would let a probe that asked Podman a Docker question look like it
 // worked.
 func fakeRuntime(t *testing.T, name, wantFormat, info string, exit int) string {
@@ -65,7 +65,7 @@ exit %d
 // that window: no child can inherit the descriptor, rather than one that did
 // being waited out by running the script until it starts. Every script this
 // package's cases exec is written through it, the external suite's stubs too
-// ([WriteExecutable]). The coding-agent suite (internal/sandbox/executor)
+// ([WriteExecutable]). The harness suite (internal/sandbox/executor)
 // closes the same window another way: cp writes each of its stand-ins, so
 // that suite's own process never holds one open for a fork to inherit.
 func writeExecutable(t *testing.T, path, script string) {

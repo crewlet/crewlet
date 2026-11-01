@@ -18,7 +18,7 @@ import (
 
 // Credentials of the three shapes [redact.Secrets] recognises none of by
 // sight — an OAuth access token (a JWT), an OAuth refresh token and a Google
-// API key — which are exactly what a subscription CLI's login holds. Every
+// API key — which are exactly what a subscription harness's login holds. Every
 // value is invented.
 const (
 	exampleJWT     = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJleGFtcGxlIn0.c2lnbmF0dXJlLWV4YW1wbGU"
@@ -30,7 +30,7 @@ const (
 // reached an error.
 var exampleSecrets = []string{exampleJWT, exampleRefresh, exampleGoogle}
 
-// exampleDocument is a login document holding all three, as a CLI's export
+// exampleDocument is a login document holding all three, as a harness's export
 // would print one.
 func exampleDocument(t *testing.T) string {
 	t.Helper()
@@ -69,7 +69,7 @@ func assertNoSecret(t *testing.T, err error, document string) {
 	}
 }
 
-// AN IMPORT THE CLI REFUSES REPEATS NONE OF THE LOGIN IT WAS HANDED, whatever
+// AN IMPORT THE HARNESS REFUSES REPEATS NONE OF THE LOGIN IT WAS HANDED, whatever
 // its stderr quotes — including the credential shapes no redaction rule knows,
 // because what an import is handed is exactly what the engine knows is secret.
 //
@@ -87,7 +87,7 @@ func TestARefusedImportRepeatsNoneOfTheLogin(t *testing.T) {
 		env map[string]string
 	}{
 		// Quoted whole.
-		"a document the CLI rejects": {document, map[string]string{"FAKE_STORE_IMPORT_REJECT": "1"}},
+		"a document the harness rejects": {document, map[string]string{"FAKE_STORE_IMPORT_REJECT": "1"}},
 		// Truncated, so it is not JSON at all, and the fake quotes the window
 		// it stopped in — the Google key whole, and none of the document
 		// around it: what is scrubbed then is every credential-shaped run in
@@ -105,7 +105,7 @@ func TestARefusedImportRepeatsNoneOfTheLogin(t *testing.T) {
 			_, err := ask(t, p, llm.Request{})
 			assertNoSecret(t, err, doc)
 			if !strings.Contains(err.Error(), "invalid document") {
-				t.Errorf("the CLI's own account of the refusal was scrubbed away: %v", err)
+				t.Errorf("the harness's own account of the refusal was scrubbed away: %v", err)
 			}
 			if kind := llm.KindOf(err); kind != llm.KindAuth {
 				t.Errorf("kind = %v, want auth: the entry's login is unusable until somebody "+
@@ -116,7 +116,7 @@ func TestARefusedImportRepeatsNoneOfTheLogin(t *testing.T) {
 }
 
 // AN EXPORT THAT FAILS REPEATS NONE OF WHAT IT PRINTED, even where its stderr
-// quotes it: the stdout of an export is every credential the CLI holds.
+// quotes it: the stdout of an export is every credential the harness holds.
 func TestAFailedExportRepeatsNoneOfWhatItPrinted(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, map[string]string{
@@ -140,7 +140,7 @@ func TestAFailedExportRepeatsNoneOfWhatItPrinted(t *testing.T) {
 	_, err = p.exportLogin(t.Context(), home, t.TempDir())
 	assertNoSecret(t, err, string(creds))
 	if !strings.Contains(err.Error(), "export broke") {
-		t.Errorf("the CLI's own stderr was dropped: %v", err)
+		t.Errorf("the harness's own stderr was dropped: %v", err)
 	}
 	var exit *auxiliaryExitError
 	if !errors.As(err, &exit) {
@@ -174,7 +174,7 @@ func TestATimedOutCommandRepeatsNoneOfTheLogin(t *testing.T) {
 	}
 }
 
-// THE SCRUB TAKES OUT WHAT WAS HANDED AND NOTHING ELSE, so a CLI's own account
+// THE SCRUB TAKES OUT WHAT WAS HANDED AND NOTHING ELSE, so a harness's own account
 // of a failure stays readable — and redact.Secrets still runs over what is
 // left, for a credential the command was never handed.
 func TestTheScrubLeavesTheHarnessOwnWords(t *testing.T) {
@@ -195,7 +195,7 @@ func TestTheScrubLeavesTheHarnessOwnWords(t *testing.T) {
 	}
 }
 
-// A PIECE OF A HANDED CREDENTIAL IS SCRUBBED, not only the whole of one. A CLI
+// A PIECE OF A HANDED CREDENTIAL IS SCRUBBED, not only the whole of one. A harness
 // that cannot parse its input quotes the window it stopped in, which takes one
 // token whole out of a truncated document — matched by no whole-text
 // replacement, since it is not the document — or cuts one wherever the window
@@ -219,10 +219,10 @@ func TestAPieceOfAHandedCredentialIsScrubbed(t *testing.T) {
 			t.Errorf("%s: the scrub left it: %q", name, got)
 		}
 		if !strings.Contains(got, scrubMarker) || !strings.Contains(got, "at offset 112") {
-			t.Errorf("%s: the scrub did not leave a marker among the CLI's own words: %q", name, got)
+			t.Errorf("%s: the scrub did not leave a marker among the harness's own words: %q", name, got)
 		}
 	}
-	// A piece shorter than a token run is a word, and the CLI's own: kept.
+	// A piece shorter than a token run is a word, and the harness's own: kept.
 	if got := scrubAuxiliary("near "+exampleJWT[:minTokenRun-1]+"!", truncated); !strings.Contains(got, exampleJWT[:minTokenRun-1]) {
 		t.Errorf("a piece shorter than a token run was taken out: %q", got)
 	}

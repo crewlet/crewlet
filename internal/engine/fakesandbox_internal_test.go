@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A DEMONSTRATION COMPANY'S RUNS FINISH, ON EVERY CLI. `providers.sandbox.fake`
-// stands in for the box and not for the choice of CLI, so a fake company's
-// chains pick their member as a real one's do — and whichever CLI that member
+// A DEMONSTRATION COMPANY'S RUNS FINISH, ON EVERY HARNESS. `providers.sandbox.fake`
+// stands in for the box and not for the choice of harness, so a fake company's
+// chains pick their member as a real one's do — and whichever harness that member
 // drives has to be the double, with a run that completes. A real runner in a
 // fake box starts nothing that ever ends, and every turn of the company parks
 // on its first launch for good.
@@ -73,11 +73,11 @@ func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	}
 	completesOnEveryHarness(t, c.catalogue, "played: fix the failing test")
 	if len(played) != len(executor.Names()) {
-		t.Errorf("the configured play ran %d times, want once per CLI", len(played))
+		t.Errorf("the configured play ran %d times, want once per harness", len(played))
 	}
 }
 
-// completesOnEveryHarness starts one job on each executor CLI's runner in manager,
+// completesOnEveryHarness starts one job on each executor harness's runner in manager,
 // in a box of the double's, and holds it to finishing with want as its report.
 func completesOnEveryHarness(t *testing.T, manager *sandbox.Manager, want string) {
 	t.Helper()

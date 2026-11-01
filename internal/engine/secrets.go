@@ -247,7 +247,7 @@ func (e *Engine) holdsSecretStore() bool {
 //
 // THE FLEET'S STORE IS THE ONLY ONE. A credential is company-wide state: it
 // was the last kind living somewhere only one node could see, so a rotation
-// reached the node an operator pointed the CLI at and nowhere else — and a
+// reached the node an operator pointed the harness at and nowhere else — and a
 // command run with the engine stopped writes the fleet's store too, so there
 // is no node-local half left to read.
 //

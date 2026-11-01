@@ -32,7 +32,7 @@ type LocalModel struct {
 	Resolves bool
 	// Hint is the resolved credential's ([harness.Provider.CredentialHint]).
 	Hint string
-	// TokenLifetime is the CLI's documented headless-token lifetime, for a
+	// TokenLifetime is the harness's documented headless-token lifetime, for a
 	// route that signs in with one; zero otherwise.
 	TokenLifetime time.Duration
 }

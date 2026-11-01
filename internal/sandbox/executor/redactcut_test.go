@@ -20,7 +20,7 @@ const (
 
 // A CREDENTIAL IS REDACTED BEFORE A PREVIEW IS CUT, at every place a
 // transcript line previews a value: a tool call's subject, a failed call's
-// error and a run's ending, for both CLIs. The transcript is redacted again
+// error and a run's ending, for both harnesses. The transcript is redacted again
 // downstream, but by then the cut has been made — a token whose start fell
 // just before the limit survived as `ghp_` and most of its body, shorter than
 // the rule's length floor, so no later pass could see it, and it was stored
@@ -83,7 +83,7 @@ func TestACredentialIsRedactedBeforeATranscriptLineIsCut(t *testing.T) {
 	}
 }
 
-// claudeLine is one stream line: a JSON object, encoded as a CLI writes it.
+// claudeLine is one stream line: a JSON object, encoded as a harness writes it.
 func claudeLine(v any) string {
 	raw, err := json.Marshal(v)
 	if err != nil {

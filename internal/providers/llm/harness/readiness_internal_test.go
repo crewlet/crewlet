@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// signedOutProvider is a fake CLI whose every call reports an expired login,
+// signedOutProvider is a fake harness whose every call reports an expired login,
 // with a credential file declared (and none written), on a clock the case
 // moves.
 func signedOutProvider(t *testing.T) (*Provider, *testClock) {
@@ -52,7 +52,7 @@ func TestASpentPlanIsUnreadyUntilItsReset(t *testing.T) {
 	}
 	want := clock.read().Add(37 * time.Minute)
 	if d := failure.RetryAt.Sub(want); d < -2*time.Second || d > 2*time.Second {
-		t.Errorf("RetryAt = %v, want the reset the CLI named, %v", failure.RetryAt, want)
+		t.Errorf("RetryAt = %v, want the reset the harness named, %v", failure.RetryAt, want)
 	}
 	if failure.Key != "sub" {
 		t.Errorf("Key = %q, want the entry's key", failure.Key)
@@ -63,7 +63,7 @@ func TestASpentPlanIsUnreadyUntilItsReset(t *testing.T) {
 	}
 }
 
-// A LOGIN THE CLI REFUSED IS REMEMBERED, AND AN ANSWER CLEARS IT: the next
+// A LOGIN THE HARNESS REFUSED IS REMEMBERED, AND AN ANSWER CLEARS IT: the next
 // person is told the model is signed out before they ask, and the first call
 // through the entry that answers (a seat's) lifts it.
 //
@@ -81,7 +81,7 @@ func TestARefusedLoginIsUnreadyUntilACallAnswers(t *testing.T) {
 	}
 	answerNext(p)
 	if _, err := ask(t, p, llm.Request{}); err != nil {
-		t.Fatalf("the mended CLI did not answer: %v", err)
+		t.Fatalf("the mended harness did not answer: %v", err)
 	}
 	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("after an answered call Unready = %v, want nil", err)
@@ -106,7 +106,7 @@ func TestANewLoginLiftsASignedOutVerdict(t *testing.T) {
 	}
 }
 
-// NOTHING THAT SIGNS THE CLI IN IS SAID UP FRONT, and the verdict cannot lock
+// NOTHING THAT SIGNS THE HARNESS IN IS SAID UP FRONT, and the verdict cannot lock
 // the entry out: past [readinessMemory] it lifts and holds off until a call
 // has been tried, since a sign-in the engine cannot see would otherwise keep
 // a working model from every caller that checks first.
@@ -134,7 +134,7 @@ func TestNoSignInIsUnreadyForABoundedTime(t *testing.T) {
 }
 
 // A PROFILE THAT DECLARES NO SIGN-IN ROUTE IS NOT JUDGED SIGNED OUT: the engine
-// cannot see how such a CLI signs in, so its configuration says nothing.
+// cannot see how such a harness signs in, so its configuration says nothing.
 func TestAProfileWithNoSignInRouteIsNotJudged(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
@@ -143,7 +143,7 @@ func TestAProfileWithNoSignInRouteIsNotJudged(t *testing.T) {
 	}
 }
 
-// A CLI THAT CANNOT START IS SAID AS SUCH: its failure wraps
+// A HARNESS THAT CANNOT START IS SAID AS SUCH: its failure wraps
 // [llm.ErrNotRunnable], which a caller tells a person as a missing program
 // rather than a failure, and the entry stays unready until a call answers.
 //
@@ -157,6 +157,6 @@ func TestAHarnessThatCannotStartIsUnready(t *testing.T) {
 		t.Fatalf("a missing binary answered %v, want a fatal wrapping ErrNotRunnable", err)
 	}
 	if err := p.Unready(t.Context()); !errors.Is(err, llm.ErrNotRunnable) {
-		t.Errorf("Unready = %v, want the CLI that cannot start", err)
+		t.Errorf("Unready = %v, want the harness that cannot start", err)
 	}
 }

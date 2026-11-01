@@ -338,7 +338,7 @@ type Engine struct {
 	// keeps it ([runnerProbe]), published on the heartbeat.
 	runners runnerProbe
 
-	// hostLogins is what each model entry's CLI says of its login on this
+	// hostLogins is what each model entry's harness says of its login on this
 	// node's disk, and the loop that keeps it ([hostLogins]).
 	hostLogins hostLogins
 
@@ -460,7 +460,7 @@ type Engine struct {
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
 
-	// plans is the node's registry of coding-CLI sign-ins
+	// plans is the node's registry of harness sign-ins
 	// ([harness.Plans]), made once at boot under a key derived from the
 	// keyring and handed to every revision's build, so a sit-out outlives
 	// every apply and a sign-in's id is the same on every node.
@@ -531,9 +531,9 @@ type Engine struct {
 	leaveBridgeFleet queue.Unsubscribe
 
 	// sessions is where every phase the engine drives serves its tools to
-	// the CLI that runs it, on this host: this PROCESS's one
+	// the harness that runs it, on this host: this PROCESS's one
 	// [toolsession.Host], a directory only the engine's user can open,
-	// holding one socket per CLI run, which the CLI's `crewlet mcp-relay`
+	// holding one socket per harness run, which the harness's `crewlet mcp-relay`
 	// dials. Every turn's runner is handed it ([RunnerInput.Sessions]). The
 	// executor's run is the one phase that does not use it: it is in a box,
 	// and reaches the seat's tools over the bridge above.
@@ -1049,7 +1049,7 @@ type Options struct {
 	// from its document, the sandboxes it configures, the native halves it
 	// runs, equipping its seats' tools — the shared MCP servers among them,
 	// each bounded by its own `startup_timeout_seconds` — and restoring its
-	// coding CLIs' credential bundles. None of that may hold a startup probe,
+	// harnesses' credential bundles. None of that may hold a startup probe,
 	// since a probe sized for a store's recovery knows nothing about a
 	// company's secrets, tool servers or logins, so a caller answering probes
 	// (internal/api's Boot) treats this call as the moment the node is alive
@@ -1079,7 +1079,7 @@ type Options struct {
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
-	// Bridge serves a seat's tools to a coding agent. Nil builds one from
+	// Bridge serves a seat's tools to a harness. Nil builds one from
 	// the environment and BoxHostURL; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
@@ -1380,7 +1380,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 
 	// THIS PROCESS'S TOOL SESSIONS, the last of what can fail with nothing
-	// open: every phase that offers tools serves them to its CLI through a
+	// open: every phase that offers tools serves them to its harness through a
 	// socket in this directory, and a TMPDIR long enough to put that socket
 	// past the platform's bound on a unix socket's path is refused HERE,
 	// naming TMPDIR, rather than at every seat's first phase as a bind error
@@ -1393,7 +1393,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	var sessions *toolsession.Host
 	if sessions, err = toolsession.NewHost(); err != nil {
 		return nil, fmt.Errorf("engine: the directory every seat's tools are served "+
-			"to its CLI from: %w", err)
+			"to its harness from: %w", err)
 	}
 	sessionsHanded := false
 	defer func() {
@@ -1494,7 +1494,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.claims = newGateWatch(e.seatsAdmitted)
 	// THE DESK FILES ON THE SAME RECORDS: a turn's box, handed over in the
 	// write its launch makes to create the run's record — before any box or
-	// CLI exists — and every late offer to the turn after it (steer.go).
+	// harness exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
@@ -1768,7 +1768,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
 			"configures (its secret snapshot, sandboxes, Worklet, Doclet and Chatlet, tool "+
-			"servers, coding CLI logins) starts next")
+			"servers, harness logins) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
 	}
@@ -2853,7 +2853,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// LAST, once nothing can run a phase: the drain waited out every turn,
 	// the sandbox's resumes stopped with it above, and the seats are gone
 	// with the node. A phase still serving from the directory would find its
-	// socket removed under its CLI.
+	// socket removed under its harness.
 	e.closeSessions(ctx)
 }
 
@@ -2930,7 +2930,7 @@ func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
 
 // Recorder is the process's one metrics recorder, or nil.
 //
-// EXPOSED for the same reason [Engine.Backends] is: a subsystem the CLI
+// EXPOSED for the same reason [Engine.Backends] is: a subsystem the harness
 // composes beside the engine — the backup service is the one — measures
 // something the catalogue declares, and a second recorder would be a second
 // set of series for one process. Nil is legal and records nothing.

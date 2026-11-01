@@ -14,17 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// toolRun is one CLI run that is handed a phase's tools: the host's server for
-// the run, the reader of the CLI's record, the clock its model's work is
+// toolRun is one harness run that is handed a phase's tools: the host's server for
+// the run, the reader of the harness's record, the clock its model's work is
 // bounded by, and the carry of a login it refreshes on the way.
 //
 // # The shape of a run
 //
 // The host serves its tools for this run alone ([llm.ToolHost.Serve]); the
-// profile's tool route tells the CLI how to start the relay to them
-// ([harnessprofile.MCP]); the CLI runs its own loop, calling them as its model
+// profile's tool route tells the harness how to start the relay to them
+// ([harnessprofile.MCP]); the harness runs its own loop, calling them as its model
 // asks; and the run ends when the model stops or when the host needs it to
-// ([llm.ToolHost.Done]), which stops the CLI the way a timeout does — its
+// ([llm.ToolHost.Done]), which stops the harness the way a timeout does — its
 // group signalled, a grace, then killed. Then the host's server for the run is
 // released, which waits for every call still running on it.
 type toolRun struct {
@@ -34,7 +34,7 @@ type toolRun struct {
 	clock  *stretch
 	carry  *carrier
 
-	// tailing is a file record's follower, stopped once the CLI has exited.
+	// tailing is a file record's follower, stopped once the harness has exited.
 	stopTail chan struct{}
 	waitTail func()
 
@@ -64,10 +64,10 @@ type toolRun struct {
 	lost      bool
 }
 
-// serveTools opens the host to this run and hands the CLI its server: the
+// serveTools opens the host to this run and hands the harness its server: the
 // profile's tool route rendered into the run's argv, environment and working
 // directory, the clock the model's work is bounded by, the host's word that
-// the run must end, and the reader of the CLI's record.
+// the run must end, and the reader of the harness's record.
 //
 // Called once the run holds its slot and its checkout, before the system
 // prompt and the prompt are put on the argv — the route's arguments precede
@@ -99,9 +99,9 @@ func (p *Provider) serveTools(
 	if err != nil {
 		t.carry.stop()
 		// The engine could not open its own end — a socket it could not
-		// bind, a phase with no session host. Nothing about the CLI or
+		// bind, a phase with no session host. Nothing about the harness or
 		// its vendor is at fault, and the next member would fail the same.
-		return nil, p.fail(llm.KindFatal, fmt.Errorf("serving the seat's tools to the CLI: %w", err))
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("serving the seat's tools to the harness: %w", err))
 	}
 	t.served = served
 	t.values = harnessprofile.MCPValues{
@@ -117,7 +117,7 @@ func (p *Provider) serveTools(
 			return nil, p.fail(llm.KindFatal, err)
 		}
 	}
-	// AN ARGUMENT CARRYING A VALUE THE CLI'S SERVER PRINTS waits for it, as
+	// AN ARGUMENT CARRYING A VALUE THE HARNESS'S SERVER PRINTS waits for it, as
 	// its template, and is rendered once the server is up — from the template,
 	// so nothing substituted into it is read for a placeholder twice.
 	t.readyArgs = map[int]string{}
@@ -137,7 +137,7 @@ func (p *Provider) serveTools(
 		place(len(in.args)-1, tmpl)
 	}
 	// APPENDED, so they win over every layer below: the tool timeout the host
-	// was told of must be the one the CLI applies.
+	// was told of must be the one the harness applies.
 	for _, name := range slices.Sorted(maps.Keys(m.Env)) {
 		if m.ReadyPlaceholder(m.Env[name]) {
 			t.readyEnv = append(t.readyEnv, name)
@@ -168,7 +168,7 @@ func (p *Provider) serveTools(
 // line, or the first matching the owner's Match — and whether the file is this
 // run's.
 //
-// The working directory is compared as the CLI reports it, which is the path
+// The working directory is compared as the harness reports it, which is the path
 // the kernel resolved — so the call's directory is accepted as written and with
 // its links resolved, as a state_dir under a symlinked /tmp reads either way.
 func recordOwner(o *harnessprofile.RecordOwner, session, work string) func(line string) (decided, owned bool) {
@@ -206,7 +206,7 @@ func recordOwner(o *harnessprofile.RecordOwner, session, work string) func(line 
 }
 
 // callConcurrency is the profile's word for which of one response's calls the
-// CLI makes at once, in the host's. The profile's is required and validated,
+// harness makes at once, in the host's. The profile's is required and validated,
 // so at_once is the only value the default reaches.
 func callConcurrency(c harnessprofile.Concurrency) llm.CallConcurrency {
 	switch c {
@@ -231,9 +231,9 @@ func (t *toolRun) onCall(busy bool) {
 	t.clock.resume()
 }
 
-// finish reads the rest of the record once the CLI has exited, tells the host
+// finish reads the rest of the record once the harness has exited, tells the host
 // every request it showed, and releases the host's server for the run —
-// reporting whether the CLI ever reached its tools.
+// reporting whether the harness ever reached its tools.
 func (t *toolRun) finish() (connected bool) {
 	if t.waitTail != nil {
 		close(t.stopTail)
@@ -258,7 +258,7 @@ func (t *toolRun) release() bool {
 // close is the run's teardown on every way out: the tail stopped, the host's
 // server released, a serve lifecycle's own server stopped, the carry stopped
 // and waited for — before the checkout is released, which the carry works in
-// and the CLI's server runs in.
+// and the harness's server runs in.
 func (t *toolRun) close() {
 	if t.waitTail != nil {
 		close(t.stopTail)
@@ -300,7 +300,7 @@ func writeSeed(work, rel, content string) error {
 // carrier carries a refreshed login out of a running call's home at each of
 // its tool calls ([Checkout.carryRefreshed]), one carry at a time, on a
 // goroutine of its own: the host tells a run a call started under its own
-// lock, and a carry waits on the shared login's lock and may run the CLI's
+// lock, and a carry waits on the shared login's lock and may run the harness's
 // export, neither of which it may wait for.
 type carrier struct {
 	poke    chan struct{}
@@ -310,7 +310,7 @@ type carrier struct {
 }
 
 // startCarrier starts the carry for a checkout that has a login to carry: not
-// a key home, and a CLI that keeps a login at all. Nil otherwise, which every
+// a key home, and a harness that keeps a login at all. Nil otherwise, which every
 // method takes as nothing to do.
 func startCarrier(ctx context.Context, p *Provider, c *Checkout) *carrier {
 	if c == nil || c.keyed || !p.profile.KeepsLogin() {
@@ -359,7 +359,7 @@ func (k *carrier) stop() {
 	})
 }
 
-// callIDMeta is the `_meta` key the CLI sends its call ids under, where its
+// callIDMeta is the `_meta` key the harness sends its call ids under, where its
 // profile reads its requests and names one.
 func callIDMeta(r *harnessprofile.Requests) string {
 	if r == nil {

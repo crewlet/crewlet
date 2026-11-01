@@ -108,7 +108,7 @@ func (q *qwenRecorder) end(script fakeScript, total fakeUsage, last string) int 
 // RESULTS AND THE NEXT. Its stream gives a response's prose and its calls
 // events of their own, under ids of their own, so no id tells one request from
 // the next: the results of a response's calls end it, and the event after them
-// begins the next. The host is told the CLI makes only read-only calls beside
+// begins the next. The host is told the harness makes only read-only calls beside
 // each other, and re-reads no list mid-run.
 //
 // Mutation: drop closes from the profile's user rule, and both responses are
@@ -123,7 +123,7 @@ func TestQwenCodesRunIsReadFromItsStream(t *testing.T) {
 }
 
 // A QWEN CODE RUN ITS OWN TURN LIMIT ENDED IS AN ANSWER STOPPED AT THE CAP: exit
-// 53 with no result event, the CLI's code for its session-turn limit.
+// 53 with no result event, the harness's code for its session-turn limit.
 //
 // Mutation: drop the profile's cap, and this is a server failure.
 func TestAQwenCodeRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
@@ -143,7 +143,7 @@ func TestAQwenCodeRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
 // nothing else it printed.
 //
 // Mutation: drop the profile's failure events, and the error says only that
-// the CLI exited 1.
+// the harness exited 1.
 func TestAFailedQwenCodeRunSaysWhyByItsResult(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "qwen-code", fakeScript{

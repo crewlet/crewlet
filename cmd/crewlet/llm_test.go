@@ -108,7 +108,7 @@ func TestAStoredLLMCredentialSaysWhereItWentAndWhatHappensNext(t *testing.T) {
 		t.Fatal(err)
 	}
 	// ITS ONE SEAT IS A PERSON'S, as [doctorCompany]'s is: the entry is a
-	// `custom` stand-in for a CLI this suite cannot install, which can run
+	// `custom` stand-in for a harness this suite cannot install, which can run
 	// no seat's executor.
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
@@ -299,7 +299,7 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 // doctorCompany writes a company whose providers are the given block, and
 // returns the flags pointing doctor at it. The bootstrap path does not exist,
 // so references resolve from the environment alone. Its one seat is a
-// person's: the entries are `custom` stand-ins for a CLI this suite cannot
+// person's: the entries are `custom` stand-ins for a harness this suite cannot
 // install, which can run no seat's executor.
 func doctorCompany(t *testing.T, providers string) []string {
 	t.Helper()
@@ -310,14 +310,14 @@ func doctorCompany(t *testing.T, providers string) []string {
 }
 
 // healthyDoctorEntry is a providers.llm entry, under key, that doctor reports healthy
-// without a billed call: a CLI that is on PATH and prints a version, reads its
+// without a billed call: a harness that is on PATH and prints a version, reads its
 // usage figures, and is handed a headless token — its model the given one,
 // which may be a ${VAR}.
 //
-// `custom` over /bin/sh, because doctor runs the binary and no vendor's CLI is
+// `custom` over /bin/sh, because doctor runs the binary and no vendor's harness is
 // installed where this suite runs; the token is the one sign-in that needs no
 // file and no login, and the token variable is the profile's own, so it is
-// the CLI's sign-in rather than an env entry doctor would have to judge.
+// the harness's sign-in rather than an env entry doctor would have to judge.
 func healthyDoctorEntry(t *testing.T, key, model string) string {
 	t.Helper()
 	return fmt.Sprintf(`    %s:
@@ -365,7 +365,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 }
 
 // THE DOCTOR NAMES THE SEATS THAT LAUNCH ON AN ENTRY, as the company resolves
-// them: the seats whose executor chain holds it — and for a member whose CLI
+// them: the seats whose executor chain holds it — and for a member whose harness
 // no box can run, that a launch passes over it. An entry no seat's executor
 // chain holds says nothing of runners or a bridge it never needs.
 //
@@ -381,7 +381,7 @@ func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
 		"  - name: QA\n    handle: qa\n    llm: [plain, coder]\n")
 	args := []string{"doctor", "-no-smoke", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}
 	var out, notes bytes.Buffer
-	// Problems are expected — the claude-code entry's CLI is not there, and
+	// Problems are expected — the claude-code entry's harness is not there, and
 	// no bridge is set — so the exit is not the case; the report is.
 	_ = runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	reports := map[string]string{}
@@ -472,13 +472,13 @@ func tokenLoginProvider(t *testing.T, mode harness.AuthMode) []harnessProvider {
 }
 
 // A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under
-// api-key the token variable is removed from the CLI's environment, and under
+// api-key the token variable is removed from the harness's environment, and under
 // inherit-env it is forwarded from the engine's own environment, never the
 // secret store — yet `-capture-token` and `-token-stdin` minted and stored one
 // under both, and printed an auth.token snippet that validation refuses under
 // either. Each is now refused before anything is minted, read or stored,
 // naming what the mode reads; inherit-env keeps -print-token, whose token
-// reaches the CLI once exported in the engine's environment. Subscription is
+// reaches the harness once exported in the engine's environment. Subscription is
 // the control: it stores, so "nothing stored" below is a refusal and not a
 // store the harness could not reach.
 //
@@ -823,9 +823,9 @@ roles:
 	})
 }
 
-// A TOKEN FOR A CLI THAT TAKES NONE IS NEITHER MINTED NOR READ. A profile that
+// A TOKEN FOR A HARNESS THAT TAKES NONE IS NEITHER MINTED NOR READ. A profile that
 // names no token_env — codex, like every built-in one but claude-code — hands
-// its CLI no headless token, and `-token-stdin` read the token from stdin
+// its harness no headless token, and `-token-stdin` read the token from stdin
 // before it found that out, while a minting command a custom profile declared
 // ran, and the vendor issued a token, before the refusal. Each is now refused
 // first, in every mode and with -print-token too; the minting command leaves a
@@ -868,7 +868,7 @@ func TestATokenForAHarnessThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 			var out, errOut bytes.Buffer
 			err = loginLLM(t.Context(), req, &out, &errOut)
 			if err == nil {
-				t.Fatalf("a token for a CLI that takes none was accepted:\n%s%s",
+				t.Fatalf("a token for a harness that takes none was accepted:\n%s%s",
 					out.String(), errOut.String())
 			}
 			for _, want := range []string{
@@ -893,14 +893,14 @@ func TestATokenForAHarnessThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 }
 
 // AN API-KEY ENTRY IS TOLD ITS KEY BEFORE ANYTHING ABOUT ITS TOKEN VARIABLE.
-// The mode removes the token variable from the CLI's environment, so a token
-// reaches nothing under any variable — yet the refusal of a CLI that names
+// The mode removes the token variable from the harness's environment, so a token
+// reaches nothing under any variable — yet the refusal of a harness that names
 // none told api-key codex to sign in with a login or to name a token
 // variable, and that of a name outside the grammar told api-key MY-TOKEN to
-// name the variable its CLI reads, as if a token would then reach it. Both
+// name the variable its harness reads, as if a token would then reach it. Both
 // are now the api-key refusal, naming the key the mode reads, and offer no
 // subscription where no token could be read under it; MY-TOKEN's names the
-// field as well. inherit-env is judged as before: the refusal of a CLI that
+// field as well. inherit-env is judged as before: the refusal of a harness that
 // names no token variable, which a login signs in under that mode too.
 //
 // Mutation: judge the token variable before the mode, and the api-key cases
@@ -1008,12 +1008,12 @@ func (r *recordedReader) Read(p []byte) (int, error) {
 // -FROM-HOST RECOMMENDS A TOKEN ONLY WHERE THE ENTRY WOULD READ ONE. After an
 // adopted login it says to prefer `-capture-token`, which avoids the shared
 // refresh token — advice that, under api-key or inherit-env, leads to the
-// refusal above, and that a CLI with a token variable but no minting command
-// cannot follow at all: `-capture-token` refuses for it. Subscription on a CLI
+// refusal above, and that a harness with a token variable but no minting command
+// cannot follow at all: `-capture-token` refuses for it. Subscription on a harness
 // that mints is the control: it is told.
 //
 // Mutation: print the preference whatever the mode, and the api-key and
-// inherit-env cases go red; whenever the CLI names a token variable, and the
+// inherit-env cases go red; whenever the harness names a token variable, and the
 // case with no minting command does.
 func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 	t.Parallel()
@@ -1301,7 +1301,7 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 }
 
 // A PASSWORD PIPED TO `crewlet llm login -username U -password-stdin` IS READ
-// NO FURTHER THAN A PASSWORD IS, and refused before the CLI's login runs.
+// NO FURTHER THAN A PASSWORD IS, and refused before the harness's login runs.
 //
 // The command read its stdin to the end and handed the vendor's login
 // whatever arrived, so a file piped by mistake was read whole into memory and
@@ -1345,6 +1345,6 @@ func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheHarnessRuns(t *testing.T) {
 		t.Errorf("read %d bytes of the stream to refuse it, want at most %d", endless.read, most)
 	}
 	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("the CLI's login ran for a refused password (%v)", statErr)
+		t.Errorf("the harness's login ran for a refused password (%v)", statErr)
 	}
 }

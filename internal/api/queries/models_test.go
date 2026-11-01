@@ -371,7 +371,7 @@ func (fakeCatalogue) Provider(_ context.Context, provider string) (modelcatalog.
 		Models: []modelcatalog.Model{{ID: "m-1", Name: "Model One"}}}, nil
 }
 
-// A MODEL STEP IS OFFERED THE CATALOGUE'S MODELS, THE CLI'S OWN ALIASES AND
+// A MODEL STEP IS OFFERED THE CATALOGUE'S MODELS, THE HARNESS'S OWN ALIASES AND
 // THE VENDOR'S PAGE, and OpenCode its provider's models in its own grammar.
 func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 	t.Parallel()

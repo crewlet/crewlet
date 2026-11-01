@@ -36,7 +36,7 @@ import (
 //
 // # Every moving part already existed
 //
-// A run is the deep_work entry's CLI's own run in a box: the same runner, box,
+// A run is the deep_work entry's harness's own run in a box: the same runner, box,
 // credentials and live reading a seat's executor gets (agentrun.go), with the turn's own surface on the bridge in place of a
 // seat's. What it does NOT take is the sandbox coordinator: that machinery is
 // a seat's (its lease, its inbox, its fence, a durable run row its node's
@@ -141,7 +141,7 @@ func (assistantRunAs) Acting(ctx context.Context) context.Context {
 
 func (assistantRunAs) Bound() bool { return true }
 
-// target is where one run goes: its cell, the manager over it and its CLI.
+// target is where one run goes: its cell, the manager over it and its harness.
 type deepTarget struct {
 	key       string
 	agent     *harness.Provider
@@ -304,10 +304,10 @@ func (d *assistantDeep) boxManagers(t deepTarget, placement sandbox.Placement) (
 
 // confinement is what a confined run is kept from and what it may read beneath
 // it. Every path is the node's own: its store and estate, its stream store, its
-// log file, its config files, every CLI login a providers.llm entry keeps,
+// log file, its config files, every harness login a providers.llm entry keeps,
 // every seat's box and every deep-work box (the company's box root now and
 // every one this process built the confined cell under), and the operator's
-// home; the CLI's install is given back, read-only.
+// home; the harness's install is given back, read-only.
 //
 // Called with d.mu held, or on a value no other goroutine has.
 func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
@@ -347,7 +347,7 @@ func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 	}
 	add(os.Getenv(config.HarnessHomeEnv))
 	slices.Sort(deny)
-	// THE CLI ITSELF, wherever it is installed: a workstation keeps it in
+	// THE HARNESS ITSELF, wherever it is installed: a workstation keeps it in
 	// the operator's home, which is denied above.
 	if found, err := exec.LookPath("claude"); err == nil {
 		read = append(read, filepath.Dir(found))
@@ -436,7 +436,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 }
 
 // acquire is the run's box: the parked run's own, reconnected, or a new one,
-// and the CLI session it continues.
+// and the harness session it continues.
 func (d *assistantDeep) acquire(ctx context.Context, t deepTarget, spec sandbox.Spec,
 	r assistant.DeepRun) (sandbox.Sandbox, sandbox.Runner, string, error) {
 	if c := r.Continue; c != nil && c.Sandbox != "" {

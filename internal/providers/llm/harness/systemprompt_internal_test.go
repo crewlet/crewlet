@@ -17,7 +17,7 @@ import (
 // Everything else about this channel is a claim until the process sees it: the
 // env is assembled from an allowlist plus the profile's own `config_env`, and
 // a name that lost to one of those, or a path written after the child was
-// spawned, would leave the CLI reading its built-in prompt while the engine
+// spawned, would leave the harness reading its built-in prompt while the engine
 // believed it had been replaced — silently, and on every turn of every seat.
 func TestTheSystemPromptEnvVarReachesTheChildPointingAtTheText(t *testing.T) {
 	t.Parallel()
@@ -36,7 +36,7 @@ func TestTheSystemPromptEnvVarReachesTheChildPointingAtTheText(t *testing.T) {
 		t.Fatalf("the child could not read the prompt: %s", comp.Content)
 	}
 	if !filepath.IsAbs(path) {
-		t.Errorf("GEMINI_SYSTEM_MD=%q is relative — the CLI resolves it against "+
+		t.Errorf("GEMINI_SYSTEM_MD=%q is relative — the harness resolves it against "+
 			"its own working directory, which is not necessarily ours", path)
 	}
 	if body != "You are Agent CTO at Nimbus." {
@@ -112,7 +112,7 @@ func TestTheSystemPromptEnvVarTakesTheTextOutOfThePrompt(t *testing.T) {
 }
 
 // A channel may not carry the prompt both ways. Refused at load, because which
-// copy a CLI honours when handed the same prompt twice is the vendor's business.
+// copy a harness honours when handed the same prompt twice is the vendor's business.
 func TestAChannelCannotCarryThePromptOnArgvAndInAVariable(t *testing.T) {
 	t.Parallel()
 	_, err := harnessprofile.Load("custom", map[string]any{
@@ -132,7 +132,7 @@ func TestAChannelCannotCarryThePromptOnArgvAndInAVariable(t *testing.T) {
 	}
 }
 
-// A DISCOVERED AGENT FILE IS WHERE THE CLI LOOKS, PRIVATE, AND SELECTED — never
+// A DISCOVERED AGENT FILE IS WHERE THE HARNESS LOOKS, PRIVATE, AND SELECTED — never
 // carried — by the argv.
 //
 // OpenCode 2.0 has no system-prompt flag: it finds `agents/<name>.md` in its
@@ -184,7 +184,7 @@ func TestADiscoveredAgentFileIsWhereTheHarnessLooks(t *testing.T) {
 	}
 }
 
-// bothChannelsProvider is a fake CLI declaring each system-prompt channel as a
+// bothChannelsProvider is a fake harness declaring each system-prompt channel as a
 // flag of its own, so a call's argv says which channel it took and what it put
 // there. `{system}` rather than `{file}` only so the text can be read back off
 // the record: the carrier is not what these cases are about.
@@ -216,14 +216,14 @@ func valueAfter(argv []string, flag string) (string, bool) {
 	return "", false
 }
 
-// A SEAT AT WORK ADDS TO THE CLI'S PROMPT AND A TEXT FUNCTION REPLACES IT, on a
-// CLI that offers both. The vendor's harness prompt is written for an agent,
+// A SEAT AT WORK ADDS TO THE HARNESS'S PROMPT AND A TEXT FUNCTION REPLACES IT, on a
+// harness that offers both. The vendor's harness prompt is written for an agent,
 // so a seat's call keeps it and adds its own after it, under the note saying
 // which of the two is the role; a filter, a classifier or a judge has a system
 // prompt that is its whole instruction, so its call replaces the vendor's and
-// carries the text exactly — no note, which would be a coding agent's framing
+// carries the text exactly — no note, which would be a harness's framing
 // in front of an answer that is parsed. Never both channels on one call: the
-// CLI would be handed the prompt twice.
+// harness would be handed the prompt twice.
 func TestASeatAddsToTheHarnessPromptAndATextFunctionReplacesIt(t *testing.T) {
 	t.Parallel()
 	const identity = "You are Agent CTO at Nimbus."
@@ -260,17 +260,17 @@ func TestASeatAddsToTheHarnessPromptAndATextFunctionReplacesIt(t *testing.T) {
 				t.Errorf("%s carried %q, want %q", tc.take, got, tc.want)
 			}
 			if slices.Contains(argv, tc.skip) {
-				t.Errorf("argv = %q also carries %s — the CLI is handed the prompt twice", argv, tc.skip)
+				t.Errorf("argv = %q also carries %s — the harness is handed the prompt twice", argv, tc.skip)
 			}
 		})
 	}
 }
 
-// A FILE THE CLI READS ON EVERY RUN IS WRITTEN, AND ASKS NOTHING OF ARGV.
+// A FILE THE HARNESS READS ON EVERY RUN IS WRITTEN, AND ASKS NOTHING OF ARGV.
 // OpenCode reads the AGENTS.md in its configuration directory without being
 // told to, so a channel made of that file alone has to have it in place, private
 // and holding the text, when the child starts — and argv gains nothing, since a
-// flag there would be one the CLI never declared. Asked from inside the child,
+// flag there would be one the harness never declared. Asked from inside the child,
 // because the per-call directory is removed on release.
 func TestAFileTheHarnessAlwaysReadsIsWrittenAndAsksNothingOfArgv(t *testing.T) {
 	t.Parallel()
@@ -309,7 +309,7 @@ func TestAFileTheHarnessAlwaysReadsIsWrittenAndAsksNothingOfArgv(t *testing.T) {
 }
 
 // THE HARNESS NOTE OPENS A TRANSCRIPT'S ONE SYSTEM SECTION. With no channel the
-// engine's text rides the transcript under the CLI's own prompt, which says
+// engine's text rides the transcript under the harness's own prompt, which says
 // what the model is and says it first — so the note is needed on every call
 // there, a text function's included, and it goes INTO the system message
 // rather than beside it, keeping one `## system` section. The sentence about
@@ -391,7 +391,7 @@ func TestARequestWithNoSystemPromptGetsNoHarnessNote(t *testing.T) {
 			t.Fatalf("Complete: %v", err)
 		}
 		if argv := completionArgv(t, rec); slices.Contains(argv, "--append-system-prompt") {
-			t.Errorf("argv = %q hands the CLI a system prompt the request never had", argv)
+			t.Errorf("argv = %q hands the harness a system prompt the request never had", argv)
 		}
 	})
 }
@@ -450,7 +450,7 @@ func TestTheHarnessNoteIsTheSameBytesOnEveryCall(t *testing.T) {
 	}
 }
 
-// A CALL CHARGED ON AN ESTIMATE IS CHARGED FOR ITS SYSTEM PROMPT. A CLI that
+// A CALL CHARGED ON AN ESTIMATE IS CHARGED FOR ITS SYSTEM PROMPT. A harness that
 // reports no usage is billed by the characters the engine handed it, and the
 // system prompt on its own channel is handed over as surely as the transcript:
 // a budget counting the transcript alone undercounts every call by the largest
@@ -482,11 +482,11 @@ func TestAnEstimatedCallIsChargedForItsSystemPrompt(t *testing.T) {
 	}
 }
 
-// EVERY CALL IS ITS OWN PROJECT ROOT, before the CLI starts. Vendor CLIs walk
+// EVERY CALL IS ITS OWN PROJECT ROOT, before the harness starts. Vendor harnesses walk
 // from their working directory up to the nearest repository root for project
 // files (AGENTS.md, rules, skills, hooks), so a state_dir inside a checkout
 // would hand every seat a repository's instructions. The engine writes a `.git`
-// file naming a gitdir that never exists, which every measured CLI stops at.
+// file naming a gitdir that never exists, which every measured harness stops at.
 // Asked from inside the child, because the per-call directory is removed on
 // release.
 func TestEveryCallsDirectoryIsItsOwnProjectRoot(t *testing.T) {

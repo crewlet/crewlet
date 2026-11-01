@@ -23,12 +23,12 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
 
-// fakeStubborn is the fake CLI's SIGTERM-survivor mode.
+// fakeStubborn is the fake harness's SIGTERM-survivor mode.
 //
 // Unix only, because the survivor is built out of the two things that only
 // exist here: a signal it can decline, and a process group that reaches past
 // it. It re-executes this binary as a grandchild in the SAME group — the shape
-// a coding CLI has in production, where the binary is a launcher and the
+// a harness has in production, where the binary is a launcher and the
 // runtime doing the work is its child.
 func fakeStubborn() {
 	signal.Ignore(syscall.SIGTERM)
@@ -45,7 +45,7 @@ func fakeStubborn() {
 	// device, a grandchild could never witness it.
 	child.Stdout, child.Stderr = os.Stdout, os.Stderr
 	if err := child.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
+		fmt.Fprintf(os.Stderr, "fake harness could not fork: %v\n", err)
 		os.Exit(1)
 	}
 	// Holds until something ends it. os/exec's WaitDelay kill reaches this
@@ -118,7 +118,7 @@ func TestCancellingACallReapsTheWholeTree(t *testing.T) {
 }
 
 // A CANCELLED CREDENTIAL COMMAND IS LET GO when its grace runs out, even while
-// a helper the CLI forked holds its output open.
+// a helper the harness forked holds its output open.
 //
 // The one child here started without its own process group — an interactive
 // login has to read the operator's terminal — so nothing signals its
@@ -186,7 +186,7 @@ func assertLetGoAtTheProvidersGrace(t *testing.T, what string, took time.Duratio
 	}
 }
 
-// awaitPidFile waits for the fake CLI's grandchild to announce itself.
+// awaitPidFile waits for the fake harness's grandchild to announce itself.
 func awaitPidFile(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -198,7 +198,7 @@ func awaitPidFile(t *testing.T, path string) int {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("the fake CLI never announced its grandchild")
+	t.Fatal("the fake harness never announced its grandchild")
 	return 0
 }
 
@@ -219,7 +219,7 @@ func reapTree(grandchild int) {
 // A CALL WITH NO ENVIRONMENT IS NOT STARTED.
 //
 // os/exec reads a nil Cmd.Env as "inherit the parent's", so a caller that
-// forgot to build one would not run a CLI with nothing — it would run it with
+// forgot to build one would not run a harness with nothing — it would run it with
 // the engine's keyring, its Tier A tokens and every provider key, which is
 // what the version probe once did. The refusal has to come before the fork,
 // so the proof is that the child never ran at all.
@@ -247,19 +247,19 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 	}
 }
 
-// fakeLeaveHolder is the fake CLI's leave-a-helper mode: it starts a
+// fakeLeaveHolder is the fake harness's leave-a-helper mode: it starts a
 // descendant that holds ONE of its streams — "stdout", "stderr" or "stdin" —
-// and returns, so the CLI goes on to answer and exit 0 with the stream still
+// and returns, so the harness goes on to answer and exit 0 with the stream still
 // open behind it.
 //
 // The shape a launcher has when it exits before a helper it forked with that
 // stream inherited, and the one thing that tells the streams apart: a helper
 // holding all three, as [fakeStubborn]'s grandchild does, could not show that
 // a held stderr leaves the answer standing. The others go to the null device.
-// It stays in the CLI's group, as a runtime's helper does, and announces its
+// It stays in the harness's group, as a runtime's helper does, and announces its
 // pid ([fakeGrandchild]) so a case can end it — or see it ended.
 //
-// The CLI WAITS FOR THAT ANNOUNCEMENT before it answers. Exiting at once would
+// The harness WAITS FOR THAT ANNOUNCEMENT before it answers. Exiting at once would
 // let the call's grace run out while the holder is still starting, and a
 // holder reaped before it wrote its pid is one no case can account for: it
 // would read as a holder that never ran.
@@ -274,11 +274,11 @@ func fakeLeaveHolder(stream string) {
 	case "stdin":
 		holder.Stdin = os.Stdin
 	default:
-		fmt.Fprintf(os.Stderr, "fake CLI: no stream %q to leave held\n", stream)
+		fmt.Fprintf(os.Stderr, "fake harness: no stream %q to leave held\n", stream)
 		os.Exit(1)
 	}
 	if err := holder.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "fake CLI could not fork: %v\n", err)
+		fmt.Fprintf(os.Stderr, "fake harness could not fork: %v\n", err)
 		os.Exit(1)
 	}
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
@@ -287,12 +287,12 @@ func fakeLeaveHolder(stream string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	fmt.Fprintln(os.Stderr, "fake CLI: the holder never announced itself")
+	fmt.Fprintln(os.Stderr, "fake harness: the holder never announced itself")
 	os.Exit(1)
 }
 
-// fakeExitZeroOnTerm is a CLI that ends CLEANLY when it is asked to stop: on
-// SIGTERM it exits 0 having printed nothing, as a Node CLI with a shutdown
+// fakeExitZeroOnTerm is a harness that ends CLEANLY when it is asked to stop: on
+// SIGTERM it exits 0 having printed nothing, as a Node harness with a shutdown
 // handler does. Until then it holds.
 func fakeExitZeroOnTerm() {
 	stop := make(chan os.Signal, 1)
@@ -314,13 +314,13 @@ func holderOf(t *testing.T, pidFile string) {
 
 // A STDOUT A HELPER STILL HELD IS NOT AN ANSWER, AND NOT A FATAL EITHER.
 //
-// The CLI printed and exited 0, but something it started kept the stream open
+// The harness printed and exited 0, but something it started kept the stream open
 // past the grace, so what was read is cut wherever the grace ran out: a
 // launcher whose runtime was still writing the answer looks exactly like
 // this. No reading of it can be shown to be whole, so it is refused, as a
 // clipped stdout is, and as a SERVER failure, retryable and not sat out —
 // nothing about it says the engine could not make the call. It used to come
-// back from run as os/exec's ErrWaitDelay, which Complete read as a CLI that
+// back from run as os/exec's ErrWaitDelay, which Complete read as a harness that
 // could not start: fatal, the seat's chain stopped at the head.
 //
 // Mutation: report a held stdout as run's error again, or stop refusing it in
@@ -351,8 +351,8 @@ func TestAStdoutAHelperHeldIsAServerFailure(t *testing.T) {
 
 // A STDERR A HELPER STILL HELD COSTS ONLY DIAGNOSIS: the answer stands.
 //
-// The stdout reached its end when the CLI exited, so the answer on it is
-// whole; what the grace cut was the CLI's own commentary. Refusing it would
+// The stdout reached its end when the harness exited, so the answer on it is
+// whole; what the grace cut was the harness's own commentary. Refusing it would
 // throw away a completion the operator paid for over a stream nothing reads
 // from a call that succeeded.
 //
@@ -377,7 +377,7 @@ func TestAStderrAHelperHeldLeavesTheAnswerStanding(t *testing.T) {
 
 // THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE STDOUT A HELPER HELD. When the
 // held stream was a fatal, the walk stopped there, and every call of the seat
-// failed against a CLI that had exited 0.
+// failed against a harness that had exited 0.
 //
 // Mutation: report a held stdout as run's error again, and the backup is never
 // called.
@@ -410,10 +410,10 @@ func TestAChainWalksPastAHeadWhoseStdoutAHelperHeld(t *testing.T) {
 	}
 }
 
-// A WAIT THAT FAILED IS A SERVER FAILURE. A helper holding the CLI's stdin
+// A WAIT THAT FAILED IS A SERVER FAILURE. A helper holding the harness's stdin
 // with the prompt unread past the grace — more of it than a pipe buffers —
 // leaves os/exec's own copy of the prompt blocked, and Wait reports
-// ErrWaitDelay for a CLI that exited 0: a run that did not finish as one,
+// ErrWaitDelay for a harness that exited 0: a run that did not finish as one,
 // whose answer was given to part of a prompt at most.
 //
 // Mutation: report a wait error as run's error again, and the kind is fatal.
@@ -437,9 +437,9 @@ func TestAPromptAHelperHeldUnreadIsAServerFailure(t *testing.T) {
 	}
 }
 
-// A CLI THAT EXITS 0 WHEN ITS DEADLINE ARRIVES TIMED OUT. Its SIGTERM handler
+// A HARNESS THAT EXITS 0 WHEN ITS DEADLINE ARRIVES TIMED OUT. Its SIGTERM handler
 // ends it cleanly, so Wait reports the deadline rather than an exit status —
-// and run handed that back as its error, which Complete read as a CLI that
+// and run handed that back as its error, which Complete read as a harness that
 // could not start: fatal, a call that had simply run out of time stopping the
 // seat's chain instead of moving to the next member.
 //
@@ -461,7 +461,7 @@ func TestAHarnessThatEndsCleanlyAtItsDeadlineTimedOut(t *testing.T) {
 // AN AUXILIARY COMMAND WHOSE STDOUT A HELPER HELD IS NOT READ. What it printed
 // may be a login document with its end missing, and an export read as whole
 // would carry that out over the shared login. It fails as the SERVER failure
-// an exit is — not as a refused login, since the CLI refused nothing — and
+// an exit is — not as a refused login, since the harness refused nothing — and
 // repeats none of what it printed.
 //
 // Mutation: accept a held stdout as a finished command, and the document comes
@@ -515,7 +515,7 @@ func TestTheVersionProbeReadsNoHeldStdout(t *testing.T) {
 // Closing a pipe under it ends nothing: the helper is attached to a call that
 // is over, and a Node runtime ignores the SIGPIPE its next write raises, so it
 // held the seat's memory and sockets for as long as it liked — the leak the
-// group kill on a timeout exists to prevent, reached by a CLI that exited 0.
+// group kill on a timeout exists to prevent, reached by a harness that exited 0.
 // Every stream a helper can hold is a case, stdin among them: os/exec reports
 // that one as a failed wait rather than as a held stream.
 //

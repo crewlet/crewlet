@@ -31,7 +31,7 @@ const transcriptDetailLimit = 160
 
 // openCodeUsageEvent is the type of the one line the run's script adds to the
 // event stream: the session's own usage report, asked for once the run has
-// ended. A type OpenCode never prints, so nothing the CLI emits is read as it.
+// ended. A type OpenCode never prints, so nothing the harness emits is read as it.
 const openCodeUsageEvent = "crewlet.usage"
 
 // openCodeUsageBefore is the type of the line a run that CONTINUES a session
@@ -117,7 +117,7 @@ var _ Harness = OpenCode{}
 // NewOpenCode returns the runner.
 func NewOpenCode() *Runner { return New(OpenCode{}) }
 
-// Name is the coding agent's key in the runner registry.
+// Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
 // Resumes says OpenCode continues a session it reported: naming the session
@@ -277,7 +277,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	// OpenCode splits at its first slash into a provider and a model — so
 	// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5`
 	// means one thing in both places, signed in by the login or the key of
-	// the provider it names. A launch passes over every other CLI's entry,
+	// the provider it names. A launch passes over every other harness's entry,
 	// so none reaches here.
 	if req.Model != "" {
 		run = append(run, "--model", shellQuote(req.Model))
@@ -691,7 +691,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
 		},
-		// A CLI that updates itself mid-run swaps the tool under the brief
+		// A harness that updates itself mid-run swaps the tool under the brief
 		// between launch and result, needs network a box may not have, and
 		// does both while a seat's turn is suspended waiting on it.
 		"update": "disable",
@@ -707,10 +707,10 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	}
 	// THE RUN'S TURN CAP, on that agent: `steps`, OpenCode's bound on its
 	// agent's iterations, after which the agent answers in text and the run
-	// ends — Claude Code's --max-turns ([ClaudeCode.Command]) in this CLI's
+	// ends — Claude Code's --max-turns ([ClaudeCode.Command]) in this harness's
 	// own vocabulary. It is the one bound on an executor's work
 	// (providers.sandbox.default_max_turns and a seat's role.sandbox.max_turns,
-	// already reconciled into Limits), so a run on this CLI that did not
+	// already reconciled into Limits), so a run on this harness that did not
 	// carry it ran without one. Absent at zero, which is uncapped: OpenCode
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
@@ -742,7 +742,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	// directory, a project's AGENTS.md, and each entry of a config's
 	// `instructions` — after its default agent's own prompt, as
 	// "Instructions from: <path>" and the file's text (measured on 2.0.32
-	// and 2.1.4, off the request the CLI sent: the default prompt whole, the
+	// and 2.1.4, off the request the harness sent: the default prompt whole, the
 	// text after it, the user message holding the brief alone).
 	//
 	// An `instructions` entry rather than the global AGENTS.md, because the
@@ -794,7 +794,7 @@ func openCodeJSON(v any) ([]byte, error) {
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
-// openCodeAgent is the OpenCode agent a run runs as: `build`, the CLI's own
+// openCodeAgent is the OpenCode agent a run runs as: `build`, the harness's own
 // default primary agent — the one with every tool, which a run that writes
 // code is. Its config is OpenCode 2's `agents.<name>`, whose `steps` carries the
 // run's turn cap.
@@ -889,7 +889,7 @@ func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFile
 			out[name] = entry
 			continue
 		}
-		// ONE ARGV, not a command and its arguments: this CLI takes the
+		// ONE ARGV, not a command and its arguments: this harness takes the
 		// whole invocation as a single array, which is the one place its
 		// vocabulary differs structurally rather than in spelling.
 		cmd := make([]string, 0, len(s.Args)+1)
@@ -926,7 +926,7 @@ func openCodeRefs(m map[string]string, values *openCodeValueFiles) map[string]st
 // removes, so a reused box never shows a job another's. Its brief arrives on
 // stdin ([Output.BriefOnStdin]).
 //
-// The done marker is the end of a run, as it is for every CLI: 2.0 run
+// The done marker is the end of a run, as it is for every harness: 2.0 run
 // against the script's own server exits when its session does — every run
 // measured on 2.0.32 did — and the script exits after it. 1.x finished its
 // work and did not exit, and the runner once read a stream's end for a
@@ -956,7 +956,7 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 // more: the event carries the tool's whole state, its output included, and a
 // generic map of every field was several times the line it came from.
 //
-// DECODED LOOSELY. A field whose type a CLI version changed is skipped rather
+// DECODED LOOSELY. A field whose type a harness version changed is skipped rather
 // than losing the event — see [decodeOpenCodeEvent] — because the nesting has
 // moved across versions and a box runs whatever the operator's image has.
 type openCodeEvent struct {
@@ -1173,7 +1173,7 @@ func (d *openCodeEvents) Skipped(n int64, bound int) {
 
 func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawLine {
-		return sandbox.Result{Error: "the coding agent produced no output"}
+		return sandbox.Result{Error: "the harness produced no output"}
 	}
 	if !d.sawEvent {
 		// Output that is not the event stream: the whole of it is the
@@ -1230,7 +1230,7 @@ func (d *openCodeEvents) Result() sandbox.Result {
 	if !success {
 		res.Error = d.errText
 		if res.Error == "" {
-			res.Error = "the coding agent produced no answer"
+			res.Error = "the harness produced no answer"
 		}
 	}
 	return res

@@ -13,7 +13,7 @@ import (
 )
 
 // LimitResetEvent reads WHEN a limit lifts and WHICH limit it is from an event
-// the CLI writes in fields, ahead of any sentence: Claude Code's
+// the harness writes in fields, ahead of any sentence: Claude Code's
 // `rate_limit_event`, whose `rate_limit_info` carries the reset as an epoch and
 // the window as `five_hour`, `seven_day` or `seven_day_opus`.
 //
@@ -87,13 +87,13 @@ type LimitWindowWording struct {
 	Window   llm.LimitWindow `yaml:"window,omitempty"`
 }
 
-// AuthEvent recognises a refused sign-in by the CLI's own STRUCTURED report,
+// AuthEvent recognises a refused sign-in by the harness's own STRUCTURED report,
 // as [LimitEvent] does a spent plan: Claude Code's result event with
 // `is_error: true` and `api_error_status: 401`, or its `system` event of
 // subtype `api_retry` with `error: authentication_failed`.
 //
 // READ FIRST, before every limit report and every sentinel: a status code
-// survives the rewording that retires a sentence, and the CLI that names a 401
+// survives the rewording that retires a sentence, and the harness that names a 401
 // has said the sign-in is what failed whatever its prose says after.
 type AuthEvent struct {
 	// Match picks the report out; see [Match].
@@ -105,7 +105,7 @@ type AuthEvent struct {
 }
 
 // DeviceCodePatterns reads a device sign-in's verification address and its
-// one-time code out of what the CLI prints ([Profile.DeviceLoginArgs]), with
+// one-time code out of what the harness prints ([Profile.DeviceLoginArgs]), with
 // ANSI colour already stripped. Each is a regular expression whose FIRST
 // capture group is the value. Lifetime, when set, captures the code's
 // lifetime in minutes ("expires in 15 minutes").
@@ -115,7 +115,7 @@ type DeviceCodePatterns struct {
 	Lifetime string `yaml:"lifetime,omitempty"`
 }
 
-// StatusFields locates, in the JSON a CLI prints for [Profile.StatusArgs], how
+// StatusFields locates, in the JSON a harness prints for [Profile.StatusArgs], how
 // it is signed in and as whom. Each is a list of paths, the first that holds a
 // non-empty string winning: Claude Code prints `authMethod` beside `email` and
 // `orgName`, of which an API-key login has neither.
@@ -124,7 +124,7 @@ type StatusFields struct {
 	Account []Path `yaml:"account,omitempty"`
 }
 
-// ModelAlias is a model name the CLI resolves itself ("sonnet" is the CLI's
+// ModelAlias is a model name the harness resolves itself ("sonnet" is the harness's
 // latest Sonnet), which no catalogue of the vendor's models lists.
 type ModelAlias struct {
 	ID     string `yaml:"id,omitempty"`
@@ -144,7 +144,7 @@ func (p *Profile) ReadsLimitWindow(said string) llm.LimitWindow {
 }
 
 // SignsInWithEnv reports whether env, the operator's env of an entry on this
-// CLI, sets one of the names [Profile.SignInEnv] lists, and which: the names
+// harness, sets one of the names [Profile.SignInEnv] lists, and which: the names
 // that make an entry's env its sign-in under auth.mode env.
 func (p *Profile) SignsInWithEnv(env map[string]string) []string {
 	var names []string
@@ -156,7 +156,7 @@ func (p *Profile) SignsInWithEnv(env map[string]string) []string {
 	return names
 }
 
-// HasDeviceLogin reports whether the CLI has a device sign-in the engine can
+// HasDeviceLogin reports whether the harness has a device sign-in the engine can
 // run ([Profile.DeviceLoginArgs]).
 func (p *Profile) HasDeviceLogin() bool { return len(p.DeviceLoginArgs) > 0 }
 
@@ -186,7 +186,7 @@ func (p *Profile) validateSignIn(add func(string, ...any)) {
 	if p.EnvSignIn && len(p.SignInEnv) > 0 {
 		// env_sign_in counts every credential-named variable in an entry's
 		// env, and sign_in_env a fixed list: a profile with both would have
-		// two answers to "does this env sign the CLI in".
+		// two answers to "does this env sign the harness in".
 		add("sign_in_env is set on an env_sign_in profile, which already counts every " +
 			"credential-named variable of an entry's env as its sign-in: set one or the other")
 	}
@@ -274,7 +274,7 @@ func (p *Profile) validateDeviceLogin(add func(string, ...any)) {
 
 // validateEventReports holds [Profile.LimitResetEvents], [Profile.AuthEvents]
 // and [Profile.LimitWindows] to the shape [Profile.validateLimitEvents] holds
-// a limit event to: matched on fields the CLI writes, never on the model's
+// a limit event to: matched on fields the harness writes, never on the model's
 // words.
 func (p *Profile) validateEventReports(add func(string, ...any)) {
 	if (len(p.LimitResetEvents) > 0 || len(p.AuthEvents) > 0) &&
@@ -288,7 +288,7 @@ func (p *Profile) validateEventReports(add func(string, ...any)) {
 		})
 		if !named || len(match) < 2 {
 			add("%s.match must name the event type at event_type_path and at least one "+
-				"field the CLI writes beside it", what)
+				"field the harness writes beside it", what)
 		}
 	}
 	for i, e := range p.LimitResetEvents {

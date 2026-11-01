@@ -112,7 +112,7 @@ const (
 	// A dispatcher pass runs inside the completed-turn consumer, so a
 	// provider that hangs stops the company's reflection entirely rather
 	// than just this turn's. 60s is sized for a small fast model behind its
-	// CLI: a cold launch costs seconds (`crewlet llm doctor` allows ten for
+	// harness: a cold launch costs seconds (`crewlet llm doctor` allows ten for
 	// a Node runtime's), which leaves the model fifty for an answer that is
 	// one JSON object. A call cut off here is reported as "nothing to
 	// persist", which is what [PersistOptions.CallTimeout] is for when the

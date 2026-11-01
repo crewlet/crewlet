@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// recordReader reads one run's record as the CLI writes it — its stdout, line
+// recordReader reads one run's record as the harness writes it — its stdout, line
 // by line, or a file it keeps — and tells the tool host what the record shows:
 // each model request in order ([llm.ToolHost.Observe]), what each cost as soon
 // as it is read ([llm.ToolHost.Spent]), and the prose as it is written
@@ -22,7 +22,7 @@ import (
 // A run is a phase's whole loop now, and the host gates it while it runs: the
 // round budget counts requests, and the token budget is charged as each one's
 // usage is read, so a refusal stops the run at the next call rather than after
-// the phase has spent what it was refused. A record read only after the CLI
+// the phase has spent what it was refused. A record read only after the harness
 // exits would gate nothing.
 //
 // # What it never does
@@ -30,14 +30,14 @@ import (
 // It never puts a line of the record anywhere a person reads. A run's record
 // carries every call's arguments and every tool's result; what leaves this
 // reader is the model's prose, the calls' names and arguments for the host
-// (which has them anyway), the CLI's ids and counts, and — for a failed run —
-// the CLI's own failure events, by field ([harnessprofile.MCP.FailureEvents]).
+// (which has them anyway), the harness's ids and counts, and — for a failed run —
+// the harness's own failure events, by field ([harnessprofile.MCP.FailureEvents]).
 type recordReader struct {
 	p    harnessprofile.Profile
 	rule *harnessprofile.Requests
 	host llm.ToolHost
 	req  llm.Request
-	// sent is what the engine handed the CLI, for the estimates a record
+	// sent is what the engine handed the harness, for the estimates a record
 	// with no counts is charged.
 	sent string
 
@@ -55,7 +55,7 @@ type recordReader struct {
 	mu       sync.Mutex
 	requests []*request
 	current  *request
-	// offered is the tools the CLI offers its model, where its record says.
+	// offered is the tools the harness offers its model, where its record says.
 	offered []string
 	// lines is how many lines were read, and kinds the discriminators of
 	// the events among them, for a failure that has to say what the record
@@ -65,7 +65,7 @@ type recordReader struct {
 	// stdout is the extraction of a stdout record, shared with the batch
 	// path — nil for a file source.
 	stdout *streamExtractor
-	// failures are the CLI's own failure events, rendered by field.
+	// failures are the harness's own failure events, rendered by field.
 	failures []string
 	// capped is a line matching the profile's cap signature.
 	capped bool
@@ -89,7 +89,7 @@ type request struct {
 	// figures are the record's raw counts, by figure — the last value read
 	// for each — and has says which were read at all. inputHoldsCache is the
 	// arithmetic of the rule that read them ([harnessprofile.UsagePaths]): a
-	// record's counts need not be in the arithmetic of the CLI's final report
+	// record's counts need not be in the arithmetic of the harness's final report
 	// (Gemini CLI's chat records each request's whole prompt, its final
 	// report the prompt less the cached part).
 	figures         map[string]int
@@ -195,7 +195,7 @@ func decodeRecordLine(line string) (map[string]any, bool) {
 }
 
 // noteLocked keeps what a failure may say about a stdout line: its
-// discriminator, whether it is one of the CLI's own failure reports, and
+// discriminator, whether it is one of the harness's own failure reports, and
 // whether it is the cap's signature.
 func (r *recordReader) noteLocked(doc map[string]any) {
 	r.lines++
@@ -400,7 +400,7 @@ func (r *recordReader) requestForLocked(doc map[string]any, e harnessprofile.Req
 		// every other: the host keys requests by id.
 		req.id = fmt.Sprintf("request-%d", len(r.requests)+1)
 	}
-	// A REQUEST BEGINNING SETTLES EVERY ONE BEFORE IT: the CLI asked its
+	// A REQUEST BEGINNING SETTLES EVERY ONE BEFORE IT: the harness asked its
 	// model again, so the calls those asked for have all run.
 	for _, earlier := range r.requests {
 		earlier.settled = true
@@ -417,8 +417,8 @@ func (r *recordReader) requestForLocked(doc map[string]any, e harnessprofile.Req
 // input, as it is seen: the prompt the engine sent, and everything the
 // requests before it wrote — each request re-sends the conversation so far, so
 // that is a floor under what it read. Its tool results are not in it (the
-// record of most such CLIs does not carry them), so it is low rather than
-// high; the CLI's own total, where it reports one, settles the difference.
+// record of most such harnesses does not carry them), so it is low rather than
+// high; the harness's own total, where it reports one, settles the difference.
 func (r *recordReader) estimateInputLocked(req *request) {
 	var prior int
 	for _, earlier := range r.requests {
@@ -504,7 +504,7 @@ func (r *recordReader) blocksLocked(doc map[string]any, b *harnessprofile.Blocks
 
 // callOf reads one call. A tool filed in the host's namespace, or named with
 // the host's prefix, is the host's, reported by the host's own name; any other
-// is one of the CLI's own.
+// is one of the harness's own.
 func (r *recordReader) callOf(doc map[string]any, paths *harnessprofile.CallPaths) llm.TurnCall {
 	var call llm.TurnCall
 	if len(paths.ID) > 0 {
@@ -533,11 +533,11 @@ func (r *recordReader) callOf(doc map[string]any, paths *harnessprofile.CallPath
 }
 
 // argumentsOf is a call's arguments as the record carries them: an object, or
-// an object encoded as a JSON string, as some CLIs record them; null or an
+// an object encoded as a JSON string, as some harnesses record them; null or an
 // empty string is no arguments. Anything else is arguments the model wrote
 // that are not an object, and the second value says so.
 //
-// NOT NO ARGUMENTS, which is what this once read them as: a CLI may hand its
+// NOT NO ARGUMENTS, which is what this once read them as: a harness may hand its
 // server an object the model never wrote in their place — Claude Code records
 // the array its model wrote and calls the server with its elements as an
 // object — and a record read as `{}` let the host run that call. Said, the
@@ -717,7 +717,7 @@ func (r *recordReader) finish() {
 // settle reports what the run cost that nothing has reported yet — on every
 // outcome — and returns the run's whole cost.
 //
-// total is the CLI's own count of the run, where it gave one: the remainder is
+// total is the harness's own count of the run, where it gave one: the remainder is
 // the difference, figure by figure, never below what was already charged.
 // Where it gave none, what is estimated instead is what the record could not
 // count: each request's output it never gave a count for, from what the request
@@ -788,7 +788,7 @@ func (r *recordReader) observed() int {
 	return len(r.requests)
 }
 
-// offeredTools is what the CLI's record says it offered its model.
+// offeredTools is what the harness's record says it offered its model.
 func (r *recordReader) offeredTools() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -806,7 +806,7 @@ func (r *recordReader) stdoutResult() (extracted, bool) {
 	return r.stdout.result(), true
 }
 
-// failureLines is the CLI's own failure events, by field, one a line — what a
+// failureLines is the harness's own failure events, by field, one a line — what a
 // failed run's limit and sign-in markers are read in beside stderr.
 func (r *recordReader) failureLines() string {
 	r.mu.Lock()
@@ -814,7 +814,7 @@ func (r *recordReader) failureLines() string {
 	return strings.Join(r.failures, "\n")
 }
 
-// failureDetail is what a failed run's error says beyond stderr: the CLI's own
+// failureDetail is what a failed run's error says beyond stderr: the harness's own
 // failure events, by field.
 func (r *recordReader) failureDetail() string {
 	r.mu.Lock()

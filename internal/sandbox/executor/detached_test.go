@@ -131,10 +131,10 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 		t.Fatalf("the agent was not told where to write its report (system text %q, %v)", system, err)
 	}
 	if strings.Contains(script, p.Findings()) || strings.Contains(script, "Before you finish") {
-		t.Errorf("the report instruction rides the prompt the CLI runs, not its system prompt:\n%s", script)
+		t.Errorf("the report instruction rides the prompt the harness runs, not its system prompt:\n%s", script)
 	}
 	if !strings.Contains(script, "--append-system-prompt-file") {
-		t.Errorf("the system text was written and never handed to the CLI:\n%s", script)
+		t.Errorf("the system text was written and never handed to the harness:\n%s", script)
 	}
 }
 
@@ -406,9 +406,9 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 }
 
 // THE ERROR STREAM IS THE TRANSCRIPT ONLY WHERE THE STREAM SAYS NOTHING — a
-// CLI that never got as far as streaming, which says why on stderr. (It used
+// harness that never got as far as streaming, which says why on stderr. (It used
 // to be the whole of Claude Code's transcript, on a fabricated premise: under
-// `--output-format json` in print mode that CLI writes nothing to stderr, so
+// `--output-format json` in print mode that harness writes nothing to stderr, so
 // the case certified a narration no real run produced.)
 func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 	t.Parallel()
@@ -423,7 +423,7 @@ func TestTheTranscriptFallsBackToStderrWhereTheStreamSaysNothing(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 	if res.Transcript != "error: unknown option '--output-formt'" {
-		t.Fatalf("transcript = %q; want what the CLI said before it could stream", res.Transcript)
+		t.Fatalf("transcript = %q; want what the harness said before it could stream", res.Transcript)
 	}
 }
 
@@ -506,15 +506,15 @@ func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	// The CLI produced no output, so its own "no output" is the middle part.
-	want := "the coding agent exited with status 1:\nthe coding agent produced no output:\n" + stderr
+	// The harness produced no output, so its own "no output" is the middle part.
+	want := "the harness exited with status 1:\nthe harness produced no output:\n" + stderr
 	if res.Error != want {
-		t.Errorf("the failure is %d bytes opening %.80q, want the status, the CLI's error and "+
+		t.Errorf("the failure is %d bytes opening %.80q, want the status, the harness's error and "+
 			"the whole stderr (%d bytes)", len(res.Error), res.Error, len(want))
 	}
 }
 
-// THE CLI'S OWN ERROR SURVIVES A STDERR. It used to be replaced by the stderr
+// THE HARNESS'S OWN ERROR SURVIVES A STDERR. It used to be replaced by the stderr
 // whenever the stderr held anything, so a run that hit its turn cap and
 // printed one deprecation warning reported the warning as why it failed.
 func TestTheHarnessErrorIsNotReplacedByItsStderr(t *testing.T) {
@@ -532,7 +532,7 @@ func TestTheHarnessErrorIsNotReplacedByItsStderr(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 	if res.Error != "error_max_turns: Reached maximum number of turns (30):\nwarning: a deprecated flag" {
-		t.Errorf("failure = %q, want the CLI's error and then the stderr", res.Error)
+		t.Errorf("failure = %q, want the harness's error and then the stderr", res.Error)
 	}
 }
 
@@ -611,12 +611,12 @@ type containerLike struct {
 
 func (containerLike) EngineHost() string { return "host.docker.internal" }
 
-// THE CLI DIALS ITS SERVERS FROM INSIDE THE BOX, so the config it is handed
+// THE HARNESS DIALS ITS SERVERS FROM INSIDE THE BOX, so the config it is handed
 // names the engine host as the box reaches it. Every run gets its config
 // through Start, a seat's executor run and the assistant's deep work alike,
 // so the translation is here and only here: a
 // bridge at `127.0.0.1` was written into a container's config as it stood,
-// and every call the CLI made reached the container's own loopback.
+// and every call the harness made reached the container's own loopback.
 func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()

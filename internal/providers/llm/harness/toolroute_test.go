@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// fakeClaude is a claude-code entry whose CLI is this test binary playing
+// fakeClaude is a claude-code entry whose harness is this test binary playing
 // script — the shipped profile, its tool route and its request record, with
 // only the binary replaced. Signed in with a fake key: the fake reaches no
 // vendor.
@@ -55,17 +55,17 @@ func phase(host llm.ToolHost) llm.Request {
 }
 
 // A RUN'S CALLS REACH THE HOST, AND EACH IS JOINED TO THE REQUEST THAT ASKED
-// FOR IT. The CLI calls the seat's tools itself, over MCP, and the host sees
+// FOR IT. The harness calls the seat's tools itself, over MCP, and the host sees
 // nothing but the calls — so the requests between them, their prose and their
 // calls as the model asked for them reach it only as the backend reads them
-// from the CLI's record. Each request is reported in order, its calls named as
-// the host offered them (`search`, not `mcp__crewlet__search`), the CLI's own
-// tools marked as the CLI's, and the id the CLI hands the server with a call
+// from the harness's record. Each request is reported in order, its calls named as
+// the host offered them (`search`, not `mcp__crewlet__search`), the harness's own
+// tools marked as the harness's, and the id the harness hands the server with a call
 // is the id the record gives it.
 //
-// Mutation: report calls under the name the CLI shows its model, and the host
+// Mutation: report calls under the name the harness shows its model, and the host
 // would match none of them to a tool it offered; drop the host flag, and the
-// CLI's own WebFetch reads as a call the host never saw.
+// harness's own WebFetch reads as a call the host never saw.
 func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 	t.Parallel()
 	p := fakeClaude(t, fakeScript{Model: "claude-test-7", Responses: []fakeResponse{
@@ -104,7 +104,7 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 		t.Errorf("first request = %+v", first)
 	}
 	if len(first.Calls) != 2 {
-		t.Fatalf("first request's calls = %+v, want search and the CLI's own fetch", first.Calls)
+		t.Fatalf("first request's calls = %+v, want search and the harness's own fetch", first.Calls)
 	}
 	search, fetch := first.Calls[0], first.Calls[1]
 	if search.Name != "search" || !search.Host || search.Arguments["q"] != "release notes" {
@@ -115,7 +115,7 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 			calls[0].Meta["claudecode/toolUseId"], search.ID)
 	}
 	if fetch.Name != "WebFetch" || fetch.Host {
-		t.Errorf("the CLI's own fetch was reported as %+v", fetch)
+		t.Errorf("the harness's own fetch was reported as %+v", fetch)
 	}
 	if second := turns[1]; second.Text != "Done: the notes are in." || second.Stop != llm.StopEnd || len(second.Calls) != 0 {
 		t.Errorf("second request = %+v", second)
@@ -139,12 +139,12 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 // gates nothing: the input of a request is charged the moment the record shows
 // the request start — so before any call it asks for runs, since the host joins
 // a call to its request first — its output when the record closes it, and the
-// CLI's own total for the run settles whatever that missed, never charging
+// harness's own total for the run settles whatever that missed, never charging
 // anything twice.
 //
 // THE OUTPUT IS NOT ASKED FOR AT THE CALL: the record closes a request after
 // its calls are listed, and the call reaches the engine over the socket while
-// that line may still be on its way through the CLI's output — a race no host
+// that line may still be on its way through the harness's output — a race no host
 // waits out, and one this test lost now and then when it asked.
 //
 // Mutation: charge only at the end (drop the per-request spends), and the
@@ -158,7 +158,7 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 			{Text: "b", Usage: fakeUsage{Input: 200, Output: 30}},
 		},
 		// The run's own count holds 13 output tokens no request reported —
-		// a side request the CLI made on its own account.
+		// a side request the harness made on its own account.
 		ResultUsage: &fakeUsage{Input: 300, Output: 63, CacheRead: 50, CacheWrite: 7},
 	}, nil)
 	host := newTestHost(t, "search")
@@ -180,7 +180,7 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	}
 	_, _, spent, spends := host.snapshot()
 	if want := (llm.Usage{Input: 357, Output: 63, CacheRead: 50, CacheWrite: 7}); spent != want {
-		t.Errorf("the run was charged %+v in all (%+v), want the CLI's own total %+v", spent, spends, want)
+		t.Errorf("the run was charged %+v in all (%+v), want the harness's own total %+v", spent, spends, want)
 	}
 	if comp.InputTokens != 357 || comp.OutputTokens != 63 {
 		t.Errorf("completion carries %d in / %d out, want the run's totals", comp.InputTokens, comp.OutputTokens)
@@ -191,7 +191,7 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	}
 }
 
-// A CLI WHOSE RECORD SHOWS NO REQUESTS IS NOT REFUSED. Per-request structure
+// A HARNESS WHOSE RECORD SHOWS NO REQUESTS IS NOT REFUSED. Per-request structure
 // is optional per profile: the host is told the run observes none — so it
 // counts the whole run as one round — is told of no request, and is charged
 // the run's own total once it ends.
@@ -230,7 +230,7 @@ func TestARunWithNoRequestRecordIsOneRoundChargedAtTheEnd(t *testing.T) {
 
 // A RECORD THAT SHOWS REQUESTS BUT NOT THEIR COUNTS IS CHARGED AN ESTIMATE AS
 // EACH ONE STARTS — the prompt the engine sent and what the requests before it
-// wrote — so the budget gate sees a run's spend while it goes, and the CLI's
+// wrote — so the budget gate sees a run's spend while it goes, and the harness's
 // own total settles the difference at the end, never refunding below what was
 // charged.
 //
@@ -289,13 +289,13 @@ func TestARecordWithoutCountsIsChargedAnEstimateAsItGoes(t *testing.T) {
 			"of the first request's input", before, estimated)
 	}
 	if _, _, spent, _ := host.snapshot(); spent.Input != 50_000 || spent.Output != 900 {
-		t.Errorf("the run was charged %+v in all, want the CLI's own total", spent)
+		t.Errorf("the run was charged %+v in all, want the harness's own total", spent)
 	}
 }
 
 // A RUN THAT FAILS IS CHARGED WHAT IT SPENT. A run is a phase's whole loop,
 // and a failure — a crash, a refused request, a run cut off mid-answer —
-// leaves most CLIs printing no total at all: the requests the record showed
+// leaves most harnesses printing no total at all: the requests the record showed
 // are charged as they were read, and a request the record never closed is
 // charged an estimate of what it wrote, flagged as one.
 //
@@ -308,7 +308,7 @@ func TestARunThatFailsIsChargedWhatItSpent(t *testing.T) {
 			{Text: "first", Calls: []fakeCall{{Name: "search"}}, Usage: fakeUsage{Input: 100, Output: 20}},
 			{Text: strings.Repeat("words ", 40), Usage: fakeUsage{Input: 180}, StopEarly: true},
 		},
-		NoResult: true, Exit: 3, Stderr: "the CLI fell over\n",
+		NoResult: true, Exit: 3, Stderr: "the harness fell over\n",
 	}, nil)
 	host := newTestHost(t, "search")
 	_, err := p.Complete(t.Context(), phase(host))
@@ -326,18 +326,18 @@ func TestARunThatFailsIsChargedWhatItSpent(t *testing.T) {
 	}
 }
 
-// THE HOST ENDING A RUN STOPS THE CLI, WITHIN ITS GRACE, AND IS NO FAILURE. A
-// phase that finished, parked or was cut ends its run mid-way: the CLI is
+// THE HOST ENDING A RUN STOPS THE HARNESS, WITHIN ITS GRACE, AND IS NO FAILURE. A
+// phase that finished, parked or was cut ends its run mid-way: the harness is
 // signalled, given its grace, and killed if it ignores the signal — and the
 // run comes back as the answer of what it did, its record told to the host,
 // for the tool loop to read.
 //
-// Mutation: ignore Done, and the stubborn CLI holds the call until the
+// Mutation: ignore Done, and the stubborn harness holds the call until the
 // timeout; report the stopped run as an error, and the chain walks to the
 // next member over a phase that ended.
 func TestTheHostEndingARunStopsTheHarnessWithinItsGrace(t *testing.T) {
 	t.Parallel()
-	for name, stubborn := range map[string]bool{"a CLI that stops when asked": false, "one that ignores it": true} {
+	for name, stubborn := range map[string]bool{"a harness that stops when asked": false, "one that ignores it": true} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := fakeClaude(t, fakeScript{
@@ -370,7 +370,7 @@ func TestTheHostEndingARunStopsTheHarnessWithinItsGrace(t *testing.T) {
 	}
 }
 
-// A RUN THAT NEVER REACHED ITS TOOLS IS A SERVER FAILURE, NOT AN ANSWER. A CLI
+// A RUN THAT NEVER REACHED ITS TOOLS IS A SERVER FAILURE, NOT AN ANSWER. A harness
 // whose server configuration did not take answers without them, and an
 // answer from a seat that never had its tools reads exactly like a model
 // that chose to call none — so it is a failure naming the route, which the
@@ -386,7 +386,7 @@ func TestARunThatNeverReachedItsToolsIsAServerFailure(t *testing.T) {
 	host := newTestHost(t, "search")
 	_, err := p.Complete(t.Context(), phase(host))
 	if llm.KindOf(err) != llm.KindServer || !strings.Contains(err.Error(), "never reached the seat's tools") {
-		t.Fatalf("err = %v, want a server failure saying the CLI never reached its tools", err)
+		t.Fatalf("err = %v, want a server failure saying the harness never reached its tools", err)
 	}
 	if _, _, spent, _ := host.snapshot(); spent.Total() != 15 {
 		t.Errorf("the failed run was charged %+v, want what it spent", spent)
@@ -403,7 +403,7 @@ func TestARunThatNeverReachedItsToolsIsAServerFailure(t *testing.T) {
 // times out inside its tool call.
 func TestTheClockStopsWhileAToolRuns(t *testing.T) {
 	t.Parallel()
-	// The first stretch is the CLI's start too — a race-built binary, its
+	// The first stretch is the harness's start too — a race-built binary, its
 	// relay and the listing — so the limit leaves that room on a loaded
 	// runner, where 700ms was within reach of a start alone.
 	limit := 1500 * time.Millisecond
@@ -453,7 +453,7 @@ func TestTheClockStopsWhileAToolRuns(t *testing.T) {
 //
 // Mutation: drop the lease from the context the run is served under, and the
 // nested call waits until the test's deadline; lend to any caller, and the
-// unrelated call below starts a second CLI beside the first.
+// unrelated call below starts a second harness beside the first.
 func TestAModelCallInsideAToolCallRunsOnTheRunsSlot(t *testing.T) {
 	t.Parallel()
 	p := fakeClaude(t, fakeScript{
@@ -505,7 +505,7 @@ func TestAModelCallInsideAToolCallRunsOnTheRunsSlot(t *testing.T) {
 	}
 }
 
-// A RUN THE CLI'S OWN TURN CAP ENDED IS AN ANSWER STOPPED AT THE CAP. Claude
+// A RUN THE HARNESS'S OWN TURN CAP ENDED IS AN ANSWER STOPPED AT THE CAP. Claude
 // Code at --max-turns exits 1 with a result event it flags as an error; read
 // as a failure, the chain would hand the phase to another member to start
 // again, while the run did what it did and stopped — the tool loop decides
@@ -531,7 +531,7 @@ func TestARunTheHarnessOwnCapEndedIsAnAnswerStoppedAtTheCap(t *testing.T) {
 
 // A FAILED RUN'S ERROR QUOTES NO LINE OF ITS RECORD. The record carries every
 // call's arguments and every tool's result, and an error is shown and logged
-// wherever a failure goes; what it says is stderr and the CLI's own failure
+// wherever a failure goes; what it says is stderr and the harness's own failure
 // event, by field.
 //
 // Mutation: put the tail of stdout in the error, as a text function's does,
@@ -564,11 +564,11 @@ func TestAFailedRunsErrorQuotesNoLineOfItsRecord(t *testing.T) {
 	}
 }
 
-// A LOGIN THE CLI REFRESHES MID-RUN IS CARRIED BACK WHILE THE RUN GOES ON. A
+// A LOGIN THE HARNESS REFRESHES MID-RUN IS CARRIED BACK WHILE THE RUN GOES ON. A
 // run is a seat's whole phase, alive through every tool it calls, and every
 // other seat seeds its home from the shared login: a refreshed token carried
 // back only when the run ends leaves them all on the one the vendor rotated
-// away. It is carried at the next tool call — when the CLI waits on the engine
+// away. It is carried at the next tool call — when the harness waits on the engine
 // — under the shared login's compare-and-swap, and the generation's baseline
 // moves with it.
 //
@@ -591,7 +591,7 @@ func TestALoginRefreshedMidRunIsCarriedBackWhileItGoesOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	host := newTestHost(t, "check")
-	// Seen from INSIDE the run: the call waits on the engine while the CLI
+	// Seen from INSIDE the run: the call waits on the engine while the harness
 	// that refreshed the login is still alive, its generation still open.
 	carriedDuringRun := false
 	host.handle("check", func(context.Context, map[string]any) (string, bool) {
@@ -623,12 +623,12 @@ func TestALoginRefreshedMidRunIsCarriedBackWhileItGoesOn(t *testing.T) {
 	}
 }
 
-// A CLI THAT SAYS ITS CONFINEMENT FAILED TO LOAD IS STOPPED THERE. Gemini CLI
+// A HARNESS THAT SAYS ITS CONFINEMENT FAILED TO LOAD IS STOPPED THERE. Gemini CLI
 // reports a policy file it could not read and carries on with its vendor's
 // defaults — every tool the policy denied — so the run is stopped at the line,
 // not left to finish, and fails.
 //
-// Mutation: read failure_markers only once the run is over, and the CLI below
+// Mutation: read failure_markers only once the run is over, and the harness below
 // is never stopped (it holds until the test's deadline).
 func TestAHarnessWhoseConfinementFailedIsStoppedAtOnce(t *testing.T) {
 	t.Parallel()
@@ -641,14 +641,14 @@ func TestAHarnessWhoseConfinementFailedIsStoppedAtOnce(t *testing.T) {
 	started := time.Now()
 	_, err := p.Complete(t.Context(), phase(newTestHost(t, "search")))
 	if llm.KindOf(err) != llm.KindServer || !strings.Contains(err.Error(), "Policy file error") {
-		t.Fatalf("err = %v, want a server failure naming the CLI's own line", err)
+		t.Fatalf("err = %v, want a server failure naming the harness's own line", err)
 	}
 	if took := time.Since(started); took > 5*time.Second {
 		t.Errorf("the run took %v to be stopped", took)
 	}
 }
 
-// A RUN IS HANDED ITS CONVERSATION FENCED. What the CLI reads on stdin is the
+// A RUN IS HANDED ITS CONVERSATION FENCED. What the harness reads on stdin is the
 // transcript a fresh run continues from — the earlier runs' calls and results
 // included — under headings no result can forge (see prompt_test.go).
 func TestARunIsHandedItsConversationFenced(t *testing.T) {
@@ -681,11 +681,11 @@ func TestARunIsHandedItsConversationFenced(t *testing.T) {
 	}
 }
 
-// A RECORD THE CLI KEEPS IN A FILE IS FOLLOWED AS IT IS WRITTEN — for a CLI
+// A RECORD THE HARNESS KEEPS IN A FILE IS FOLLOWED AS IT IS WRITTEN — for a harness
 // whose stdout does not show its requests. The same rules read it, from a
 // file under the call's directory that did not exist when the run began.
 //
-// Mutation: read the file only after the CLI exits (or not at all), and the
+// Mutation: read the file only after the harness exits (or not at all), and the
 // call below finds no request its record showed.
 func TestARecordInAFileIsFollowedAsItIsWritten(t *testing.T) {
 	t.Parallel()

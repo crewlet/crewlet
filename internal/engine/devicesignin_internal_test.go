@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// fakeDeviceLogin is a CLI's device login a case drives: it prints its code at
+// fakeDeviceLogin is a harness's device login a case drives: it prints its code at
 // once and waits for the case to end it or for its context to.
 type fakeDeviceLogin struct {
 	finish chan error
@@ -35,7 +35,7 @@ func (f *fakeDeviceLogin) login(ctx context.Context, _ *harness.Provider, out fu
 }
 
 // signInNode is one node of a fleet sharing fleet, named node, running a codex
-// entry signed in by its CLI's login, with the sign-in watch running.
+// entry signed in by its harness's login, with the sign-in watch running.
 func signInNode(t *testing.T, fleet coord.Fleet, leases *coordmemory.Backend, node string,
 	login *fakeDeviceLogin) *Engine {
 	t.Helper()
@@ -70,7 +70,7 @@ func statusOn(t *testing.T, e *Engine, id uuid.UUID, want coord.DeviceSignInStat
 }
 
 // A DEVICE SIGN-IN IS ONE SESSION PER MODEL ACROSS THE FLEET, READ AND
-// CANCELLED THROUGH ANY NODE. The node that started it relays the CLI's code;
+// CANCELLED THROUGH ANY NODE. The node that started it relays the harness's code;
 // another node serves the status read, refuses a second start for the same
 // model naming the running session, and forwards a cancel through the record to
 // the node running the process, which ends it and says so.
@@ -89,7 +89,7 @@ func TestADeviceSignInIsOneSessionReadAndCancelledThroughAnyNode(t *testing.T) {
 		t.Fatalf("StartDeviceSignIn: %v", err)
 	}
 	if started.Status != coord.DevicePending || started.Code != "QXJM-7KPD" || started.Node != "node-1" {
-		t.Fatalf("the start answered %+v, want node-1's pending session with the CLI's code", started)
+		t.Fatalf("the start answered %+v, want node-1's pending session with the harness's code", started)
 	}
 	if read := statusOn(t, two, started.ID, coord.DevicePending); read.URL != started.URL {
 		t.Errorf("node-2 reads %+v, want the session node-1 runs", read)
@@ -254,7 +254,7 @@ func endsAudited(q *queuememory.Queue) []types.ModelActed {
 // started it.
 //
 // The route that started it answered with a pending code; whether a login was
-// stored is decided minutes later on the node running the CLI, and no route
+// stored is decided minutes later on the node running the harness, and no route
 // call marks it. The node that ran the session publishes its end, and a
 // session whose node died is published by the sweep that fails it.
 //

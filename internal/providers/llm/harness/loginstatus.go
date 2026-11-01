@@ -12,16 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// LoginState is what a CLI's own status command says of the login an entry
+// LoginState is what a harness's own status command says of the login an entry
 // keeps in its credential files.
 type LoginState string
 
 const (
-	// LoginSignedIn is a status command that exited 0: the CLI holds a login
+	// LoginSignedIn is a status command that exited 0: the harness holds a login
 	// it takes for its own.
 	LoginSignedIn LoginState = "signed_in"
 	// LoginSignedOut is a status command that exited 1, which every shipped
-	// CLI with a status command answers when it holds no login.
+	// harness with a status command answers when it holds no login.
 	LoginSignedOut LoginState = "signed_out"
 	// LoginUnknown is any other answer: another exit, a command that ran
 	// out of time, or one whose output something it left running still held.
@@ -37,18 +37,18 @@ func (s LoginState) Valid() bool {
 	return false
 }
 
-// LoginStatus is what the CLI said of its login when it was last asked
+// LoginStatus is what the harness said of its login when it was last asked
 // ([Provider.LoginStatus]).
 type LoginStatus struct {
 	// State is the answer, read off the command's exit.
 	State LoginState
-	// Method is how the CLI is signed in, as the CLI names it ("claude.ai"),
+	// Method is how the harness is signed in, as the harness names it ("claude.ai"),
 	// where the profile's status_fields read one out of the command's JSON.
 	Method string
-	// Account is who the CLI is signed in as (an email, an organisation),
+	// Account is who the harness is signed in as (an email, an organisation),
 	// read the same way, at most [maxStatusAccount] bytes.
 	Account string
-	// Detail is the first line the CLI wrote on stderr for an unknown
+	// Detail is the first line the harness wrote on stderr for an unknown
 	// answer, or what kept it from answering, scrubbed of anything shaped
 	// like a credential and at most [maxStatusDetail] bytes. Empty for the
 	// other two states.
@@ -59,49 +59,49 @@ type LoginStatus struct {
 
 // loginStatusTimeout bounds one status command.
 //
-// A status command reads the CLI's own credential file and prints it; it calls
+// A status command reads the harness's own credential file and prints it; it calls
 // no network (Claude Code's `auth status` and Codex's `login status` both answer
 // offline, which is the reason a periodic check may run it at all). What it
-// costs is the CLI's runtime starting, about the half second
+// costs is the harness's runtime starting, about the half second
 // [auxiliaryTimeout] measures for a command of this size, so ten seconds is an
-// order of magnitude of headroom on a host already running max_concurrent CLIs,
+// order of magnitude of headroom on a host already running max_concurrent harnesses,
 // and short enough that a wedged one is reported as unknown long before the
 // next check is due.
 const loginStatusTimeout = 10 * time.Second
 
 // maxStatusAccount bounds [LoginStatus.Account]: an email address is at most
 // 254 bytes by its RFC, and every one a person uses is far shorter; 120 keeps
-// any real one whole while a CLI that printed something else there cannot
+// any real one whole while a harness that printed something else there cannot
 // carry a page of it into every place the status is shown.
 const maxStatusAccount = 120
 
-// maxStatusMethod bounds [LoginStatus.Method], a short word in every CLI
+// maxStatusMethod bounds [LoginStatus.Method], a short word in every harness
 // measured ("claude.ai", "console", "api_key").
 const maxStatusMethod = 64
 
-// maxStatusDetail bounds [LoginStatus.Detail]: one sentence of the CLI's own,
+// maxStatusDetail bounds [LoginStatus.Detail]: one sentence of the harness's own,
 // which is what a person reading why the answer is unknown needs.
 const maxStatusDetail = 200
 
-// LoginStatus asks the CLI whether it holds a login, and as whom, by its
+// LoginStatus asks the harness whether it holds a login, and as whom, by its
 // profile's status_args run in the entry's login home ([Provider.Status] is
 // the same command in words, for a person).
 //
 // THE EXIT IS THE ANSWER: 0 is [LoginSignedIn], 1 is [LoginSignedOut], and
-// anything else is [LoginUnknown] with the first line the CLI wrote on stderr as
+// anything else is [LoginUnknown] with the first line the harness wrote on stderr as
 // its detail. What the command printed is read only for the profile's
 // status_fields, and only where it is JSON: Claude Code's `auth status` prints
-// `authMethod` beside `email` and `orgName`, and a CLI whose status is a
+// `authMethod` beside `email` and `orgName`, and a harness whose status is a
 // sentence has no fields to read, so its answer is the exit alone.
 //
-// IN THE LOGIN HOME, as `crewlet llm status` runs it, so the CLI reads the login
+// IN THE LOGIN HOME, as `crewlet llm status` runs it, so the harness reads the login
 // every seat is seeded from, and as a command that makes no login
-// ([syncRefresh]): a CLI that refreshed its token while it looked carries the
+// ([syncRefresh]): a harness that refreshed its token while it looked carries the
 // refresh back over the login it was seeded from and over nothing else.
 //
 // AN ERROR IS A STATUS THAT COULD NOT BE ASKED, never an answer: a profile
 // with no status command ([ErrNoLoginCommand]), another `crewlet llm` command
-// holding the login home, a CLI that could not be started, a home that could
+// holding the login home, a harness that could not be started, a home that could
 // not be prepared or carried out. A command that ran and did not say is
 // [LoginUnknown]. Bounded by [loginStatusTimeout].
 func (p *Provider) LoginStatus(ctx context.Context) (LoginStatus, error) {
@@ -112,7 +112,7 @@ func (p *Provider) LoginStatus(ctx context.Context) (LoginStatus, error) {
 // the suite shortens to watch one run out.
 func (p *Provider) loginStatus(ctx context.Context, budget time.Duration) (LoginStatus, error) {
 	if len(p.profile.StatusArgs) == 0 {
-		return LoginStatus{}, fmt.Errorf("%w: the %q CLI has no status command, so whether it "+
+		return LoginStatus{}, fmt.Errorf("%w: the %q harness has no status command, so whether it "+
 			"holds a login can only be seen by using it", ErrNoLoginCommand, p.harness)
 	}
 	var res *rawResult

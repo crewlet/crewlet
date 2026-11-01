@@ -231,7 +231,7 @@ func firstCall(fn *ast.FuncDecl, name string) token.Pos {
 	return at
 }
 
-// bundledLogin points the CLI state directories at a fresh one, sets the
+// bundledLogin points the harness state directories at a fresh one, sets the
 // conventional bundle variable of the "subscription" entry to a bundle holding
 // one claude-code login, and returns where that login lands.
 func bundledLogin(t *testing.T) string {
@@ -344,7 +344,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		}
 	}
 	if provider == nil {
-		t.Fatal("the premise: the epoch holds no CLI provider for the entry")
+		t.Fatal("the premise: the epoch holds no harness provider for the entry")
 	}
 	if has, err := provider.Workspace().HasLogin(t.Context()); err != nil || !has {
 		t.Fatalf("the premise: the epoch restored no login (%v)", err)
@@ -372,13 +372,13 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	}
 }
 
-// AN ENTRY MOVED TO ANOTHER CLI DOES NOT RESTORE THE OLD CLI'S BUNDLE, even
+// AN ENTRY MOVED TO ANOTHER HARNESS DOES NOT RESTORE THE OLD HARNESS'S BUNDLE, even
 // where the two keep their login under one file name. The bundle is keyed by
 // the entry, so the epoch after the move restores the one exported from pi
 // into codex's empty login — and pi's `auth.json` is a name codex keeps too,
 // so it was written there: a credential codex cannot read, which as a login
 // already present then kept every later restore out, the replacement bundle
-// included. The epoch warns it as a bundle that failed, naming the CLI it was
+// included. The epoch warns it as a bundle that failed, naming the harness it was
 // exported from, and writes nothing.
 //
 // NOT PARALLEL: it sets the conventional variable and swaps the process's log.
@@ -479,7 +479,7 @@ roles:
 
 // testBundle is a bundle of agent's holding one credential file, exported by
 // `crewlet llm export`'s own writer from a state directory of its own — so it
-// names the CLI it came from exactly as an export does.
+// names the harness it came from exactly as an export does.
 func testBundle(t *testing.T, agent, name, body string) string {
 	t.Helper()
 	p, err := harness.New(harness.Config{

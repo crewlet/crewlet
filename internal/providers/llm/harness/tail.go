@@ -19,10 +19,10 @@ import (
 // it — and a stat and a read a tenth of a second cost a run nothing.
 const recordPoll = 100 * time.Millisecond
 
-// recordTail follows the file a CLI keeps its record in, for a profile whose
+// recordTail follows the file a harness keeps its record in, for a profile whose
 // record is not its stdout ([harnessprofile.SourceFile]).
 //
-// The file does not exist when the run starts — the CLI creates it — so it is
+// The file does not exist when the run starts — the harness creates it — so it is
 // looked for by its glob until it appears, and a file the glob already matched
 // before the run is never taken for this run's. Where the glob cannot name the
 // run's own file, owns says which is: it is handed a new file's lines from its
@@ -86,7 +86,7 @@ func (t *recordTail) follow(stop <-chan struct{}) {
 		select {
 		case <-stop:
 			read()
-			// The last line, if the CLI ended it without a newline.
+			// The last line, if the harness ended it without a newline.
 			if f != nil {
 				_, _ = t.tee.Write([]byte("\n"))
 			}

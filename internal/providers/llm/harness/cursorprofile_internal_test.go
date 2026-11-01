@@ -90,7 +90,7 @@ func TestCursorAgentCarriesTheSystemPromptInTheTranscript(t *testing.T) {
 			profile := cursorAgent(t)
 			route := profile.RouteFor(agent)
 			if route.Channel.Declared() || !route.KeepsDefault {
-				t.Fatalf("route = %+v, want the transcript under the CLI's own prompt", route)
+				t.Fatalf("route = %+v, want the transcript under the harness's own prompt", route)
 			}
 			dir := t.TempDir()
 			t.Cleanup(func() { forgetWorkspace(dir) })
@@ -162,7 +162,7 @@ func TestCursorAgentPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
-// A SIGNED-OUT CLI NAMES ITS LOGIN AS WHAT FAILED, in the words every variant of
+// A SIGNED-OUT HARNESS NAMES ITS LOGIN AS WHAT FAILED, in the words every variant of
 // its message opens with in both builds — measured on 2026.10.22 — so the seat
 // says its login is what failed rather than reporting a server error.
 func TestCursorAgentNamesALoginItCannotUse(t *testing.T) {

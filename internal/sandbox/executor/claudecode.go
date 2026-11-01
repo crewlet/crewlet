@@ -41,9 +41,9 @@ const ClaudeCodeName = "claude-code"
 //     model a note from what a tool produced by that alone);
 //   - a note handed back at Stop continues the turn, and the run's result is the
 //     answer the model gives after it;
-//   - the hook's `timeout` is in seconds, and at it the CLI cancels the call and
+//   - the hook's `timeout` is in seconds, and at it the harness cancels the call and
 //     discards a late answer ([ClaudeHookTimeout]);
-//   - a call the bridge answers with an error makes the CLI re-initialise the
+//   - a call the bridge answers with an error makes the harness re-initialise the
 //     whole MCP server and tell the model its tools are still connecting — so
 //     the bridge answers every take with text, never an error;
 //   - the hook's `systemMessage` reaches only the run's own stream, as a
@@ -54,7 +54,7 @@ const ClaudeCodeName = "claude-code"
 // silently. `disableAllHooks` is written false ([claudeSettings]), because a
 // repository's own `true` switches every hook off with no error, and an
 // explicit false wins over it. And the wrapper UNSETS CLAUDE_CODE_SIMPLE and
-// CLAUDE_CODE_SAFE_MODE before the CLI starts ([ClaudeCode.Output]): bare mode
+// CLAUDE_CODE_SAFE_MODE before the harness starts ([ClaudeCode.Output]): bare mode
 // drops every hook (with CLAUDE.md, subagents and a plan's login), safe mode
 // drops hooks and the --mcp-config bridge, and either can arrive from the seat's
 // role.sandbox.env, the image, or a profile the login shell sources — of which
@@ -82,7 +82,7 @@ var _ Harness = ClaudeCode{}
 // NewClaudeCode returns the runner.
 func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 
-// Name is the coding agent's key in the runner registry.
+// Name is the harness's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
 // Resumes says Claude Code continues a session it reported (`--resume`).
@@ -116,17 +116,17 @@ func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 // env carries.
 //
 // STREAM-JSON, AND --verbose WITH IT. `--output-format json` prints ONE object
-// when the run ends and nothing before it, and in print mode this CLI writes
+// when the run ends and nothing before it, and in print mode this harness writes
 // nothing to stderr either — so a run on Claude Code showed a person nothing
 // while it worked and left no transcript when it was done. stream-json prints
 // every message as it happens, one JSON object a line, ending — as the vendor
 // documents the stream — in the result message, the same object json printed
-// alone. In print mode the CLI refuses stream-json without --verbose ("When
+// alone. In print mode the harness refuses stream-json without --verbose ("When
 // using --print, --output-format=stream-json requires --verbose").
 //
 // THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED: `--append-system-prompt-file`
 // adds the run's standing instructions after Claude Code's own system prompt,
-// which stays whole (measured on 2.1.310, off the request the CLI sent). That
+// which stays whole (measured on 2.1.310, off the request the harness sent). That
 // prompt is the harness this run exists to use — how to drive its shell and
 // editor and work through a task — which a run on the engine host, denying
 // every one of those tools, has no use for. The FILE variant, written by [ClaudeCode.WriteConfig]:
@@ -159,7 +159,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
 	// terms — its alias or id exactly as its runs on the engine host pass
-	// it. A launch passes over every other CLI's entry, so none reaches here.
+	// it. A launch passes over every other harness's entry, so none reaches here.
 	if req.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.Model))
 	}
@@ -172,16 +172,16 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	}
 	if configPath != "" {
 		// --strict-mcp-config so the agent gets EXACTLY the scoped surface:
-		// without it the CLI also loads whatever config the box's home
+		// without it the harness also loads whatever config the box's home
 		// happens to carry, which on a reused box is the previous run's.
 		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
 	}
 	cmd := strings.Join(parts, " ")
 	var script strings.Builder
-	// THE CLI'S RELEASE, recorded for a run that continues a session: from
+	// THE HARNESS'S RELEASE, recorded for a run that continues a session: from
 	// [claudeTotalsRestored] its result states the session's spend, which the
 	// collection charges less what the session had already spent
-	// ([sessionTotals]). Asked of the CLI the box's PATH finds, in the box,
+	// ([sessionTotals]). Asked of the harness the box's PATH finds, in the box,
 	// because that is the one that runs.
 	if req.Resume != "" {
 		script.WriteString("claude --version < /dev/null > " + shellQuote(paths.CLIVersion()) + " 2> /dev/null; ")
@@ -197,8 +197,8 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		return cmd
 	}
 	// ONE SCRIPT, so the wrapper's redirections — the brief on stdin, the
-	// stream, the error file — reach the gate and the CLI alike, and `exec`
-	// leaves the CLI where the script was.
+	// stream, the error file — reach the gate and the harness alike, and `exec`
+	// leaves the harness where the script was.
 	return "sh -c " + shellQuote(script.String()+"exec "+cmd)
 }
 
@@ -214,7 +214,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 // before the note. Started without the hooks, that release takes nothing at a
 // boundary it drops: the notes wait for the review, the run is not recorded as
 // having asked ([sandbox.RunSteer.Pulled]), and its collection says so
-// (steer_reader_never_ran) — which tells an operator the box's CLI needs an
+// (steer_reader_never_ran) — which tells an operator the box's harness needs an
 // upgrade, where taking the notes would have told them nothing at all.
 const claudeNotesFloor = "2.1.163"
 
@@ -226,7 +226,7 @@ const claudeNotesFloor = "2.1.163"
 // says, the standing instructions alone (plain, [Paths.System]) — nothing for a
 // run that has none. A version it cannot read is taken for a current release:
 // every release prints `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints
-// anything else is newer than this script, and a CLI that is not there fails at
+// anything else is newer than this script, and a harness that is not there fails at
 // the run itself.
 //
 // THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
@@ -271,7 +271,7 @@ func floorParts(version string) (major, minor, patch string) {
 //
 // A RUN WIRED TO ITS NOTES HAS ITS SYSTEM TEXT TWICE: as it stands
 // ([Paths.System]), and told of notes ([Paths.ClaudeNotesSystem]) — which of the
-// two it is started with is its box's to decide, by its CLI's release
+// two it is started with is its box's to decide, by its harness's release
 // ([claudeNotesGate]).
 //
 // The settings file is written afresh, at the mode a box writes every file with
@@ -315,7 +315,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	return paths.MCPConfig(), nil
 }
 
-// claudeCodeMCP is one server in this CLI's own .mcp.json vocabulary.
+// claudeCodeMCP is one server in this harness's own .mcp.json vocabulary.
 //
 // THE KEY NAMES ARE THIS RUNNER'S, which is why they live here: they are what
 // `claude --mcp-config` reads, and nothing above this file should have to know
@@ -323,7 +323,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 // that they belonged to a runner.
 //
 // An empty `env` or `headers` is OMITTED rather than written as an empty
-// object, which is what the CLI's own examples show and what this wrote
+// object, which is what the harness's own examples show and what this wrote
 // before.
 func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	if s.Transport == sandbox.TransportHTTP {
@@ -344,12 +344,12 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 //
 // The EVENT STREAM goes to its own file, read as a stream and from its end,
 // and the RESULT is the stream's last line, which the wrapper copies to the
-// result file after the CLI exits — so the result is read whole from a file of
+// result file after the harness exits — so the result is read whole from a file of
 // one line however long the stream grew. It exits cleanly, so the done marker
 // is its only completion signal and the poll reads nothing of the stream.
 //
 // THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; and the two
-// variables that switch hooks and the bridge off UNSET before the CLI starts
+// variables that switch hooks and the bridge off UNSET before the harness starts
 // ([claudeSwitchesOff]).
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
@@ -367,10 +367,10 @@ var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
 
-// Parse maps the CLI's result — the stream's last line — onto a result.
+// Parse maps the harness's result — the stream's last line — onto a result.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result
-// carrying an account of it, never an error. A coding agent that crashed should
+// carrying an account of it, never an error. A harness that crashed should
 // surface as "did not deliver" and let the turn continue, not blow the turn up
 // — the executor can still report what happened, which is more use to the
 // requester than a failed turn.
@@ -383,7 +383,7 @@ func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]stri
 func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	text := strings.TrimSpace(stdout)
 	if text == "" {
-		return sandbox.Result{Error: "the coding agent produced no output"}
+		return sandbox.Result{Error: "the harness produced no output"}
 	}
 	msg, ok := decodeClaudeResult(text)
 	if !ok {
@@ -392,7 +392,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 			// process stopped writing part-way, not an account of anything:
 			// its fragment — of a file it read, as like as not — is no use to
 			// a reader, and it is what the error stream beside it explains.
-			return sandbox.Result{Error: fmt.Sprintf("the coding agent's output ends in a line "+
+			return sandbox.Result{Error: fmt.Sprintf("the harness's output ends in a line "+
 				"that is not a whole JSON object (%s), so it never reported how its run ended",
 				humanSize(int64(len(last))))}
 		}
@@ -405,7 +405,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// not one: the coordinator condenses a failure past the record's
 		// bound keeping its cause, where a report keeps its findings.
 		return sandbox.Result{
-			Error: "the coding agent's output could not be parsed:\n" + text,
+			Error: "the harness's output could not be parsed:\n" + text,
 		}
 	}
 	if msg.Type != "result" {
@@ -413,7 +413,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		if msg.Type != "" {
 			what = fmt.Sprintf("a %q message", msg.Type)
 		}
-		return sandbox.Result{Error: "the coding agent stopped before it reported how its run ended: " +
+		return sandbox.Result{Error: "the harness stopped before it reported how its run ended: " +
 			"the last thing it printed was " + what + ", not its result"}
 	}
 
@@ -448,7 +448,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	return res
 }
 
-// claudeResult is the CLI's result message — the stream's last line, and the
+// claudeResult is the harness's result message — the stream's last line, and the
 // one object `--output-format json` printed — as the vendor's Agent SDK
 // documents it: `subtype` names HOW the run ended ("success",
 // "error_max_turns", "error_during_execution", "error_max_budget_usd", …),
@@ -473,7 +473,7 @@ type claudeResult struct {
 	NumTurns int `json:"num_turns"`
 	// TerminalReason is why the run's loop ended, beside the subtype:
 	// "completed" for a loop that finished, and [claudeHookStopped] for one a
-	// hook stopped. Absent on a CLI that does not report it.
+	// hook stopped. Absent on a harness that does not report it.
 	TerminalReason string `json:"terminal_reason"`
 	Usage          *struct {
 		InputTokens              int `json:"input_tokens"`
@@ -483,7 +483,7 @@ type claudeResult struct {
 	} `json:"usage"`
 	// SinceLastResult is, per model, what the calls THIS PROCESS counted
 	// since it wrote its previous result cost — since it started, for its
-	// first — on 2.1.310 and later, absent before. The CLI's own SDK schema
+	// first — on 2.1.310 and later, absent before. The harness's own SDK schema
 	// says to sum it over a conversation's results rather than subtract its
 	// totals, "whatever a resume or a kill does to modelUsage": nothing is
 	// carried into it from another process, so the sum over one run's
@@ -520,7 +520,7 @@ func (ClaudeCode) TotalsRestored(version string) bool {
 	return releaseAtLeast(version, claudeTotalsRestored)
 }
 
-// releaseAtLeast reports whether version, as a CLI's `--version` printed it,
+// releaseAtLeast reports whether version, as a harness's `--version` printed it,
 // is at or after floor. Its numbers are read up to the first character that is
 // neither a digit nor a dot; a version with fewer than three numbers is one
 // this code cannot read, and is taken for a current release.

@@ -46,7 +46,7 @@ func (p *Provider) homeEnv(home, cache string) []string {
 // exportHostLogin runs the profile's export command against a HUMAN'S home,
 // for `crewlet llm login -from-host` and the doctor's "host login" line.
 //
-// THE CLI ITSELF READS THE HOME, as it would for the human: a login held in its
+// THE HARNESS ITSELF READS THE HOME, as it would for the human: a login held in its
 // own database has no file to copy, and a copy of the database would be every
 // session they ever had. The environment is a call's with one exception —
 // TMPDIR stays this process's own, because a call's points inside the home it

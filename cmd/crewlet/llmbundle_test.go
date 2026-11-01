@@ -28,7 +28,7 @@ func bundledEntry(t *testing.T, bundle string) (flags []string, login string) {
 	return bundledEntryWithLogout(t, bundle, "")
 }
 
-// bundledEntryWithLogout is [bundledEntry] whose CLI is `sh`, whose status
+// bundledEntryWithLogout is [bundledEntry] whose harness is `sh`, whose status
 // and login succeed and whose own logout runs `sh -c logout` in the login
 // home, where a seeded login sits at .fake/creds.json — "" declares no vendor
 // logout and keeps `true` for every command.
@@ -59,7 +59,7 @@ providers:
         status_args: %s
         login_args: %s%s
 roles:
-  # A person's seat: the custom entry stands in for a CLI this suite
+  # A person's seat: the custom entry stands in for a harness this suite
   # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
@@ -69,9 +69,9 @@ roles:
 		filepath.Join(state, "custom", "credentials", "creds.json")
 }
 
-// llmBundle is a bundle of the entry's CLI, `custom`, holding one creds.json:
+// llmBundle is a bundle of the entry's harness, `custom`, holding one creds.json:
 // exported by `crewlet llm export`'s own writer from a state directory of its
-// own, so it is a bundle the export writes — the CLI it names included —
+// own, so it is a bundle the export writes — the harness it names included —
 // rather than this file's copy of one.
 func llmBundle(t *testing.T, body string) string {
 	t.Helper()
@@ -100,7 +100,7 @@ func llmBundle(t *testing.T, body string) string {
 }
 
 // codexBundle is a bundle `crewlet llm export` writes from a codex login, from
-// a state directory of its own: another CLI's, to the `custom` entry above.
+// a state directory of its own: another harness's, to the `custom` entry above.
 func codexBundle(t *testing.T, body string) string {
 	t.Helper()
 	p, err := harness.New(harness.Config{
@@ -227,7 +227,7 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 		command string
 		extra   []string
 		// fails is whether the command reports a problem anyway: doctor
-		// measures `true`, which is no CLI.
+		// measures `true`, which is no harness.
 		fails bool
 		say   string
 	}{
@@ -258,9 +258,9 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 	}
 }
 
-// A BUNDLE FROM ANOTHER CLI IS REFUSED BY EVERY COMMAND THAT RESTORES IT, as
-// the engine refuses it: an entry moved to another CLI keeps the bundle it was
-// configured with, which names the CLI it was exported from. `status` says so
+// A BUNDLE FROM ANOTHER HARNESS IS REFUSED BY EVERY COMMAND THAT RESTORES IT, as
+// the engine refuses it: an entry moved to another harness keeps the bundle it was
+// configured with, which names the harness it was exported from. `status` says so
 // on stderr and restores nothing, and `doctor` reports it with the export that
 // replaces it — named with the entry's key, where it named a bare `crewlet llm
 // export`, which a company of more than one entry refuses for want of one.
@@ -272,7 +272,7 @@ func TestABundleFromAnotherHarnessIsRefusedByTheCommandsThatRestoreIt(t *testing
 
 	stdout, _, err := runSub(t, flags, "doctor", "-no-smoke")
 	if err == nil {
-		t.Error("doctor called an entry whose bundle is another CLI's healthy")
+		t.Error("doctor called an entry whose bundle is another harness's healthy")
 	}
 	for _, want := range []string{`it names "codex"`, "Export the bundle again (`crewlet llm export sub`)"} {
 		if !strings.Contains(stdout, want) {
@@ -290,7 +290,7 @@ func TestABundleFromAnotherHarnessIsRefusedByTheCommandsThatRestoreIt(t *testing
 		}
 	}
 	if got := readLogin(t, login); got != "" {
-		t.Errorf("another CLI's bundle was restored as the entry's login: %q", got)
+		t.Errorf("another harness's bundle was restored as the entry's login: %q", got)
 	}
 }
 
@@ -312,7 +312,7 @@ func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
 		_, _, err := runSub(t, flags, "login")
 		if err == nil || !strings.Contains(err.Error(), "without leaving a login") {
-			t.Errorf("a login whose CLI stored nothing = %v, want it refused as leaving no login", err)
+			t.Errorf("a login whose harness stored nothing = %v, want it refused as leaving no login", err)
 		}
 		if got := readLogin(t, login); got != "" {
 			t.Errorf("login restored the configured bundle: %q", got)

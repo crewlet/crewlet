@@ -20,7 +20,7 @@ import (
 // CheckModel diagnoses a model entry on this node, as `crewlet llm doctor`
 // does ([harness.Provider.Diagnose]): the active entry, or, with draft, the
 // entry as a create or an edit would write it. values are candidate credential
-// values by the variable the CLI is handed each under, tested and never
+// values by the variable the harness is handed each under, tested and never
 // stored.
 //
 // THE ACTIVE ENTRY LEARNS FROM IT, a draft never does. A diagnosis of the
@@ -101,13 +101,13 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 // every seat on it does.
 //
 // A DRAFT ON A LIVE LOGIN is built on that login's own state directory: it is
-// on the directory and the CLI of an active entry, and names no bundle other
+// on the directory and the harness of an active entry, and names no bundle other
 // than that entry's, so it would sign in exactly as that entry's seats do. Its
 // calls check the login out of the shared directory under the shared login's
-// lock, and carry a login the CLI refreshed back into it
+// lock, and carry a login the harness refreshed back into it
 // ([harness.Checkout.Release]); nothing is restored, the bundle being the one
 // the apply already restored there. A COPY of the live login in a throwaway
-// home was the wrong move: a CLI that refreshed its token during the check
+// home was the wrong move: a harness that refreshed its token during the check
 // rotated the vendor's refresh token inside the copy, the copy was removed, and
 // the live directory kept the retired token, which signs every seat out at the
 // next expiry; and the copy was read without the lock.
@@ -141,7 +141,7 @@ func (e *Engine) draftAgent(ctx context.Context, c *Company, key string, draft c
 	return built, nil
 }
 
-// loginKeptIn is the active entry, on agent's CLI, whose state directory is
+// loginKeptIn is the active entry, on agent's harness, whose state directory is
 // dir: the entry whose login a draft on that directory would sign in with.
 func (e *Engine) loginKeptIn(c *Company, dir, agent string) (string, config.LLMProvider, bool) {
 	if dir == "" || c.Config == nil {

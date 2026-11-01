@@ -11,22 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// AN ENTRY MOVED TO ANOTHER CLI IS AN ORDINARY REVISION, APPLIED LIVE.
+// AN ENTRY MOVED TO ANOTHER HARNESS IS AN ORDINARY REVISION, APPLIED LIVE.
 //
 // A key keeps its state directory when its agent changes — the directory is
 // derived from the key, and the operator renders one per provider name — and
-// the process-wide workspace registry held that directory under the CLI that
+// the process-wide workspace registry held that directory under the harness that
 // first opened it, for the life of the process. So moving `k` from claude-code
 // to opencode was admitted by the API and then refused by every running node
 // (`state_dir ... is already driving "claude-code"`), while a node that
 // restarted applied it: the fleet split across two revisions until every node
-// had restarted. Each CLI now keeps its own share of the directory
-// (<state dir>/<harness>), so the new CLI opens a login directory of its own
+// had restarted. Each harness now keeps its own share of the directory
+// (<state dir>/<harness>), so the new harness opens a login directory of its own
 // and moving back finds the old one.
 //
-// NOT PARALLEL: the derived case points the CLI home at a directory of its own.
+// NOT PARALLEL: the derived case points the harness home at a directory of its own.
 //
-// Mutation: refuse a second CLI on a directory Shared already holds, as it
+// Mutation: refuse a second harness on a directory Shared already holds, as it
 // did, and the move to opencode is refused on the running node.
 func TestAnEntryMovedToAnotherHarnessAppliesLive(t *testing.T) {
 	for _, tc := range []struct {
@@ -86,7 +86,7 @@ roles:
 }
 
 // assertEntryOn checks that the running epoch's entry k drives agent, keeping
-// its files in that CLI's own share of dir.
+// its files in that harness's own share of dir.
 func assertEntryOn(t *testing.T, e *Engine, agent, dir string) {
 	t.Helper()
 	c := e.Company()
@@ -99,7 +99,7 @@ func assertEntryOn(t *testing.T, e *Engine, agent, dir string) {
 	}
 	cli, ok := provider.(*harness.Provider)
 	if !ok {
-		t.Fatalf("entry k is %T, want a CLI", provider)
+		t.Fatalf("entry k is %T, want a harness", provider)
 	}
 	if cli.Harness() != agent {
 		t.Fatalf("entry k drives %q, want %q", cli.Harness(), agent)

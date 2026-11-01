@@ -11,13 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A DEVICE SIGN-IN is a CLI's device-code login in progress for one model
+// A DEVICE SIGN-IN is a harness's device-code login in progress for one model
 // entry: the engine runs `codex login --device-auth`, relays the verification
 // address and the one-time code, and a person approves it in their browser.
 //
 // # Who has to agree on it
 //
-// The whole company, now. One node runs the CLI's process, but any node may
+// The whole company, now. One node runs the harness's process, but any node may
 // serve the status read the dashboard polls, a cancel may arrive at any node,
 // and a second start for the same entry must be refused fleet-wide: two
 // processes signing one entry in would race to write one login. So the
@@ -103,7 +103,7 @@ type DeviceSignIn struct {
 	// Entry is the model entry's key, and the record's key.
 	Entry string `json:"entry"`
 
-	// Node is the node running the CLI's process.
+	// Node is the node running the harness's process.
 	Node string `json:"node"`
 
 	// URL is the verification address and Code the one-time code the
@@ -111,7 +111,7 @@ type DeviceSignIn struct {
 	URL  string `json:"url,omitempty"`
 	Code string `json:"code,omitempty"`
 
-	// Status is where the session is, and Detail why it failed (the CLI's
+	// Status is where the session is, and Detail why it failed (the harness's
 	// own line, where it said one).
 	Status DeviceSignInStatus `json:"status"`
 	Detail string             `json:"detail,omitempty"`

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// A PER-CALL CONFIGURATION DIRECTORY IS THE CALL'S OWN AND HOLDS WHAT THE CLI
+// A PER-CALL CONFIGURATION DIRECTORY IS THE CALL'S OWN AND HOLDS WHAT THE HARNESS
 // READS WHEN IT STARTS.
 //
 // work_config_env exists for OpenCode 2, which reads its configuration —
@@ -60,7 +60,7 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheHarnessReads(t *testing.T) 
 		encoded := envValue(comp.Content, rel)
 		body, decodeErr := base64.StdEncoding.DecodeString(encoded)
 		if encoded == "" || decodeErr != nil || string(body) != want {
-			t.Errorf("%s under the config dir = %q, want %q — the CLI reads it from "+
+			t.Errorf("%s under the config dir = %q, want %q — the harness reads it from "+
 				"there when it starts:\n%s", rel, body, want, comp.Content)
 		}
 	}

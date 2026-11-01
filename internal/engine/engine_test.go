@@ -221,7 +221,7 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 
 func TestAProviderBuildsWithoutALogin(t *testing.T) {
 	// It must BUILD without credentials: the call then fails with the
-	// vendor's own "not authenticated", which names the CLI, while a
+	// vendor's own "not authenticated", which names the harness, while a
 	// constructor that refused to exist would take the whole company down
 	// at boot over one provider's login.
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())

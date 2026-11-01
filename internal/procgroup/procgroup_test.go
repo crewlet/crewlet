@@ -14,7 +14,7 @@ import (
 )
 
 // The property this package exists for: signalling the process Go started
-// must reach what that process forked. A CLI or an MCP server is nearly
+// must reach what that process forked. A harness or an MCP server is nearly
 // always a launcher over a runtime that forks helpers, and killing only the
 // launcher leaves those holding memory, sockets and the inherited stderr.
 //

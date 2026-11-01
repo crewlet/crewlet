@@ -224,8 +224,8 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 // asserts a post the teardown is racing, which is the flake this fixture is
 // written against; see "WHAT IS PROMISED, AND WHEN" above.
 //
-// A coding CLI on the real session ([phasedHarness]): the phase's tools reach it
-// over MCP and it calls the submission there, so `waiting` runs as the CLI
+// A harness on the real session ([phasedHarness]): the phase's tools reach it
+// over MCP and it calls the submission there, so `waiting` runs as the harness
 // run starts — still on the turn's goroutine, and still before the answer.
 type scripted struct{ waiting func(reviewing bool) }
 

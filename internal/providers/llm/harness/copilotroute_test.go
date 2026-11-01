@@ -127,10 +127,10 @@ func (c *copilotRecorder) end(script fakeScript, total fakeUsage, last string) i
 
 // COPILOT'S RUN IS READ FROM ITS OWN SESSION'S EVENTS. With -s its stdout is
 // the answer alone, so each request — a turn — is read from the events file
-// the CLI keeps under the home, its counts and its calls written before the
-// calls run. The session's directory is named by an id the CLI mints, so the
+// the harness keeps under the home, its counts and its calls written before the
+// calls run. The session's directory is named by an id the harness mints, so the
 // run's file is told from a concurrent run's by the working directory its
-// first event names, and its home's mcp-config.json — whose servers the CLI
+// first event names, and its home's mcp-config.json — whose servers the harness
 // starts on every run — is the profile's own, empty, whatever was there.
 //
 // Mutation: drop the profile's owner, and the other run's FOREIGN turn is this

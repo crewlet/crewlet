@@ -14,7 +14,7 @@ import (
 // checks'. The API answers a test with these lines, and a client acts on the
 // kind: a refused sign-in is a credential to replace, a configuration fault a
 // remedy to apply. A probe whose call the vendor refused is the call's kind,
-// a CLI that ran and fell short is configuration, and a missing binary is a
+// a harness that ran and fell short is configuration, and a missing binary is a
 // call the engine cannot make at all; a check with no problem has no kind.
 //
 // Mutation: give a failed probe call the configuration kind, or let a passing
@@ -75,8 +75,8 @@ func TestEachCheckSaysWhatKindOfFailureItMet(t *testing.T) {
 	}
 }
 
-// candidateEntry is an entry on a CLI that keeps a login in .fake/creds.json
-// and reads a headless token from FAKE_TOKEN, whose CLI is the fake answering
+// candidateEntry is an entry on a harness that keeps a login in .fake/creds.json
+// and reads a headless token from FAKE_TOKEN, whose harness is the fake answering
 // with env.
 func candidateEntry(t *testing.T, env map[string]string) *Provider {
 	t.Helper()
@@ -88,7 +88,7 @@ func candidateEntry(t *testing.T, env map[string]string) *Provider {
 	})
 }
 
-// said is what the CLI answered the web probe with, as the report quotes it:
+// said is what the harness answered the web probe with, as the report quotes it:
 // the probe is the last call of a diagnosis, and a fake that prints what it
 // was handed answers it with that.
 func said(t *testing.T, d Diagnosis) string {
@@ -101,13 +101,13 @@ func said(t *testing.T, d Diagnosis) string {
 	return quoted
 }
 
-// A CANDIDATE VALUE REACHES THE CLI, FOR THAT DIAGNOSIS ALONE. The credential
+// A CANDIDATE VALUE REACHES THE HARNESS, FOR THAT DIAGNOSIS ALONE. The credential
 // route tests a value before it stores it, by running the doctor with it in
-// place of what the entry resolved for its variable: the CLI has to be handed
+// place of what the entry resolved for its variable: the harness has to be handed
 // the candidate, in a home of the diagnosis's own, and the entry's next call
 // has to be handed the entry's own value as before.
 //
-// Mutation: drop the overlay, and the CLI is handed the entry's token; build
+// Mutation: drop the overlay, and the harness is handed the entry's token; build
 // the candidate on the entry's own environment map, and the entry's next call
 // carries the candidate.
 func TestACandidateValueReachesTheHarnessForThatDiagnosisAlone(t *testing.T) {
@@ -124,11 +124,11 @@ func TestACandidateValueReachesTheHarnessForThatDiagnosisAlone(t *testing.T) {
 		`FAKE_TOKEN=candidate-token`, `GATEWAY_TOKEN=candidate-gateway`, `HOME=` + home,
 	} {
 		if !strings.Contains(handed, want) {
-			t.Errorf("the CLI was not handed %s:\n%s", want, handed)
+			t.Errorf("the harness was not handed %s:\n%s", want, handed)
 		}
 	}
 	if strings.Contains(handed, "entry-token") || strings.Contains(handed, "entry-gateway") {
-		t.Errorf("the CLI was handed the entry's own value beside the candidate:\n%s", handed)
+		t.Errorf("the harness was handed the entry's own value beside the candidate:\n%s", handed)
 	}
 	if d.StateDir != home {
 		t.Errorf("state dir = %q, want the diagnosis's home %q", d.StateDir, home)
@@ -144,9 +144,9 @@ func TestACandidateValueReachesTheHarnessForThatDiagnosisAlone(t *testing.T) {
 	}
 }
 
-// A CANDIDATE THE ENTRY WOULD NOT HAND ITS CLI IS A SIGN-IN PROBLEM, never a
+// A CANDIDATE THE ENTRY WOULD NOT HAND ITS HARNESS IS A SIGN-IN PROBLEM, never a
 // value dropped in silence. A key given to a subscription entry is removed
-// from the CLI's environment by the mode, and a name the entry's env does not
+// from the harness's environment by the mode, and a name the entry's env does not
 // set is no variable of the entry's: a test that went on without either
 // would report on the entry's current sign-in as if it were the candidate's.
 //
@@ -176,13 +176,13 @@ func TestACandidateValueThatReachesNothingIsASignInProblem(t *testing.T) {
 }
 
 // THE ENTRY'S REAL LOGIN IS UNTOUCHED BY A DIAGNOSIS IN A HOME OF ITS OWN: its
-// calls are seeded from no login but the home's, and what the CLI writes into
+// calls are seeded from no login but the home's, and what the harness writes into
 // its seat comes back to the home, never to the entry's shared credentials.
 // Each half has its control, the same entry diagnosed in place, which is
 // seeded with the login and writes back to it, so the isolation is the home's
 // and not an accident of the fake.
 //
-// Mutation: run the candidate in the entry's workspace, and the CLI is handed
+// Mutation: run the candidate in the entry's workspace, and the harness is handed
 // the real login and its write lands on it.
 func TestADiagnosisInAHomeOfItsOwnLeavesTheRealLoginAlone(t *testing.T) {
 	t.Parallel()
@@ -211,14 +211,14 @@ func TestADiagnosisInAHomeOfItsOwnLeavesTheRealLoginAlone(t *testing.T) {
 		p, _ := withLogin(t, map[string]string{"FAKE_KEY_SESSION": ".fake/creds.json"})
 		d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true, Home: t.TempDir()})
 		if got := said(t, d); strings.Contains(got, "the-real-login") || !strings.Contains(got, `"nothing"`) {
-			t.Errorf("the CLI in the diagnosis's home held a login: %s", got)
+			t.Errorf("the harness in the diagnosis's home held a login: %s", got)
 		}
 		if d.Credentials != "none on disk" {
 			t.Errorf("credentials = %q, want the home's, which holds none", d.Credentials)
 		}
 		d = p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 		if got := said(t, d); !strings.Contains(got, "the-real-login") {
-			t.Errorf("in place, the CLI was not seeded with the entry's login, so the case proves nothing: %s", got)
+			t.Errorf("in place, the harness was not seeded with the entry's login, so the case proves nothing: %s", got)
 		}
 	})
 
@@ -233,7 +233,7 @@ func TestADiagnosisInAHomeOfItsOwnLeavesTheRealLoginAlone(t *testing.T) {
 		}
 		p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 		if got := read(t, path); got == login {
-			t.Error("in place, what the CLI wrote never reached the login, so the case proves nothing")
+			t.Error("in place, what the harness wrote never reached the login, so the case proves nothing")
 		}
 	})
 }

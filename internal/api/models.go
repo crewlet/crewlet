@@ -97,7 +97,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 	var handed map[string]string
 	if values != nil {
 		// A CANDIDATE IS TESTED BY THE REAL CALL: the smoke run is what
-		// signs the CLI in with it, so it always runs, within the entry's
+		// signs the harness in with it, so it always runs, within the entry's
 		// own timeout capped at the credential budget.
 		smoke = true
 		budget = min(llmapi.CredentialBudget, time.Duration(spec.Timeout()*float64(time.Second)))
@@ -119,7 +119,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 			return llmapi.Check{}, llmapi.ErrNoSuchModel
 		}
 		// AN ENTRY THAT DOES NOT BUILD is the entry's to fix, said at its
-		// CLI, as the doctor reports it.
+		// harness, as the doctor reports it.
 		out.Failure, out.Said = "fatal", err.Error()
 		out.Lines = []harness.Check{{Name: harness.CheckBinary, Detail: err.Error(), Kind: "fatal"}}
 		return out, nil
@@ -141,7 +141,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 }
 
 // candidateVariables re-keys candidate values from the store's names, which a
-// person types, to the variables the entry's CLI is handed each under, which
+// person types, to the variables the entry's harness is handed each under, which
 // the doctor tests: the token's and the key's slots by the profile's
 // variables, and an env entry by its own name. A name none of them reads is
 // kept, so the doctor reports it rather than vouching for a value nothing

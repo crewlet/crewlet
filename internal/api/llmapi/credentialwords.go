@@ -23,7 +23,7 @@ func trimValues(values map[string]string) {
 	}
 }
 
-// builtinProfile is the shipped profile of the entry's CLI, Claude Code's for
+// builtinProfile is the shipped profile of the entry's harness, Claude Code's for
 // an entry that names none, and whether there is one.
 func builtinProfile(entry *config.LLMProvider) (harnessprofile.Profile, bool) {
 	if entry.Harness == "" {
@@ -34,7 +34,7 @@ func builtinProfile(entry *config.LLMProvider) (harnessprofile.Profile, bool) {
 
 // credentialWords is how a refusal names the credential a write carries.
 type credentialWords struct {
-	// agent is the entry's CLI in a sentence ("Claude Code").
+	// agent is the entry's harness in a sentence ("Claude Code").
 	agent string
 	// noun is "token" or "API key" for a value in one of the entry's
 	// credential slots, "credential" otherwise.
@@ -43,7 +43,7 @@ type credentialWords struct {
 	// the profile names none.
 	prefix string
 	// mint is the command that makes a new token ("claude setup-token"),
-	// "" for a key or where the CLI mints none.
+	// "" for a key or where the harness mints none.
 	mint string
 }
 
@@ -75,7 +75,7 @@ func wordsFor(entry *config.LLMProvider, key string, names []string) credentialW
 }
 
 // refused is the sentence for a test the credential did not pass, by what the
-// CLI's own words meant ([harnessprofile.Profile.AuthMeaning]).
+// harness's own words meant ([harnessprofile.Profile.AuthMeaning]).
 //
 // NEVER THE STORED CREDENTIAL'S HEALTH. The write stores nothing, so the model
 // keeps the credential it had; whether that one still answers is the model's

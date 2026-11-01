@@ -21,8 +21,8 @@ const modulePath = "github.com/crewlet/crewlet"
 
 // modelInputs are the types a model is handed its prompt in, by the import
 // path of the package that declares them: a provider's request
-// (internal/providers/llm), and every request a coding CLI's run is launched
-// or continued from, whose system and brief are what the CLI prompts its model
+// (internal/providers/llm), and every request a harness's run is launched
+// or continued from, whose system and brief are what the harness prompts its model
 // with. Every seat's executor is such a run (ADR-0066), and so is the
 // Dashboard Assistant's deep work, so a walk over provider requests alone saw
 // no executor at all.
@@ -57,7 +57,7 @@ var modelCalls = map[string]modelCall{
 	"internal/agent/toolloop/toolloop.go:Run": {tests: []string{
 		// The engine's own model loop: a seat's reviewer, its onboarding
 		// pass and the workers it delegates to, never its executor, which
-		// is its coding CLI's run (runner.executeAsAgentRun, below). Every
+		// is its harness's run (runner.executeAsAgentRun, below). Every
 		// foreign word in the conversation arrived fenced under the turn's
 		// token, by a wake or by a read.
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
@@ -109,7 +109,7 @@ var modelCalls = map[string]modelCall{
 		// pass's, built in internal/learning.
 		"internal/learning.TestTheBackgroundPassesDefuseWhatTheyRead",
 	}},
-	// THE SEAT'S EXECUTOR, its coding CLI's run (ADR-0066): launched with the
+	// THE SEAT'S EXECUTOR, its harness's run (ADR-0066): launched with the
 	// seat's system prompt and the turn's brief, and carried on, after its
 	// question was answered or its job lost, with that brief again and what
 	// became of the run before it. Every foreign word in either arrived
@@ -160,7 +160,7 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
 	}},
-	// THE DASHBOARD ASSISTANT'S DEEP WORK, a coding CLI's run too: the brief
+	// THE DASHBOARD ASSISTANT'S DEEP WORK, a harness's run too: the brief
 	// the assistant composes carries the person's screen fenced as the page's
 	// own words, under the assistant turn's token, beside the standing
 	// sentence; the engine's Run is its transport.

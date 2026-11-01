@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// The transcript is the only channel a CLI has, so every message must arrive
+// The transcript is the only channel a harness has, so every message must arrive
 // under a heading naming its author: a model handed an unlabelled blob cannot
 // tell the system prompt from the user's ask.
 func TestTheTranscriptLabelsEveryAuthor(t *testing.T) {
@@ -121,7 +121,7 @@ func TestAPriorCallIsShownToTheModelAsItWroteIt(t *testing.T) {
 	}
 }
 
-// The estimate is the fallback budgets run on when a CLI reports nothing, so
+// The estimate is the fallback budgets run on when a harness reports nothing, so
 // it has to be in the right order of magnitude rather than merely non-zero.
 func TestTheTokenEstimateIsAboutFourCharactersAToken(t *testing.T) {
 	t.Parallel()
@@ -138,7 +138,7 @@ func TestTheTokenEstimateIsAboutFourCharactersAToken(t *testing.T) {
 
 // A USER MESSAGE AFTER TOOL RESULTS — a person's note to a running turn
 // (internal/agent/steer) — renders under its own `## user` heading AFTER every
-// result, so a CLI reading the transcript never reads the note as part of a
+// result, so a harness reading the transcript never reads the note as part of a
 // tool's output.
 func TestAUserMessageAfterToolResultsIsItsOwnSectionAfterThem(t *testing.T) {
 	t.Parallel()

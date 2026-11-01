@@ -4,7 +4,7 @@
 // # Why a token in the path at all
 //
 // Two edges of this engine are reachable by something running INSIDE a
-// sandbox: the OTLP receiver a coding agent exports telemetry to, and the MCP
+// sandbox: the OTLP receiver a harness exports telemetry to, and the MCP
 // bridge it calls the seat's tools through. Neither can be given the API's own
 // token — that credential reads the whole company, and handing it to a box
 // running generated code is the failure the sandbox exists to prevent. So what
@@ -55,7 +55,7 @@
 // back — its report, its transcript, its question, its live output — is
 // redacted of every text of that shape. By its SHAPE, because no node that
 // collects a run holds the tokens its launch minted: the run's row carries
-// none, so there is no value to redact by, and a coding agent that prints its
+// none, so there is no value to redact by, and a harness that prints its
 // environment or its MCP configuration prints its run's telemetry and bridge
 // tokens. A bare `v2`, which this was, is a word prose holds, so no rule could
 // key on it without redacting prose.

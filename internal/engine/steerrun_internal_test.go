@@ -36,7 +36,7 @@ import (
 )
 
 // A person's note to a turn whose executor is out, through the real turn: the
-// launch, the run's bridge, a go-sdk client playing the run's CLI, and the
+// launch, the run's bridge, a go-sdk client playing the run's harness, and the
 // resumed segment that reviews it. What each case holds is where the note goes
 // and what it is recorded as, whichever step reads it.
 
@@ -98,20 +98,20 @@ func (r *reviewWatch) reviewed() []string {
 }
 
 // steerCase is a seat whose turn parks on its executor, steerable, played by
-// a CLI that does pull with the run's bridge before its script.
+// a harness that does pull with the run's bridge before its script.
 type steerCase struct {
 	e     *Engine
 	rig   *runRig
 	q     *memory.Queue
 	model *reviewWatch
 
-	// dial, when set, is the address the CLI dials instead of the one it
+	// dial, when set, is the address the harness dials instead of the one it
 	// was launched with: its node restarted under it.
 	mu   sync.Mutex
 	dial string
 }
 
-// pull is what a run's CLI does with its bridge before its script: its hooks
+// pull is what a run's harness does with its bridge before its script: its hooks
 // and its plugin, played by a case.
 type pull func(ctx context.Context, session *mcp.ClientSession, row func() sandbox.PendingRun)
 
@@ -211,7 +211,7 @@ func takeAt(ctx context.Context, session *mcp.ClientSession, args map[string]any
 }
 
 // batchTake is the hook after a batch of the main agent's tool calls, asked
-// again until it answers or its deadline passes — as the CLI asks at every
+// again until it answers or its deadline passes — as the harness asks at every
 // batch, the bridge answers from its view of the record, which follows a filing
 // by a moment.
 func batchTake(ctx context.Context, session *mcp.ClientSession) (string, error) {
@@ -265,7 +265,7 @@ func TestANoteToARunningRunIsFiledOnItsRecord(t *testing.T) {
 
 // STEER_TAKE ANSWERS THE HOOK WITH THE NOTE: a Claude Code hook after a batch of
 // the main agent's calls is answered with the note as the hook's additional
-// context, in the shape the CLI reads — and the note is read there, by this
+// context, in the shape the harness reads — and the note is read there, by this
 // job, at that kind of step.
 func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	t.Parallel()
@@ -345,7 +345,7 @@ func TestTheReviewerOpensWithANoteTheRunTook(t *testing.T) {
 	}
 }
 
-// A SUBAGENT'S BATCH TAKES NOTHING, and neither does a hook whose agent the CLI
+// A SUBAGENT'S BATCH TAKES NOTHING, and neither does a hook whose agent the harness
 // did not fill in: a note handed to a delegated loop binds that piece of work
 // alone and is lost with it. Both leave the note waiting, for the main agent's
 // next boundary or — as here, where it has none — the reviewer.
@@ -383,8 +383,8 @@ func TestASubagentsBatchTakesNothing(t *testing.T) {
 	}
 }
 
-// STEER_TAKE IS NEVER LISTED: the CLI's model is offered the seat's tools and
-// never the hook's, which only the CLI calls.
+// STEER_TAKE IS NEVER LISTED: the harness's model is offered the seat's tools and
+// never the hook's, which only the harness calls.
 func TestSteerTakeIsNeverListed(t *testing.T) {
 	t.Parallel()
 	var listed []string
@@ -409,7 +409,7 @@ func TestSteerTakeIsNeverListed(t *testing.T) {
 	}
 }
 
-// A NOTE THE RUN NEVER PULLED IS READ BY THE REVIEWER, at its first round: a CLI
+// A NOTE THE RUN NEVER PULLED IS READ BY THE REVIEWER, at its first round: a harness
 // that never asked between its steps — one with no reader, or a run that
 // finished first — leaves its notes waiting on the record, and the segment that
 // reviews the run takes them before its first provider call.
@@ -433,7 +433,7 @@ func TestANoteTheRunNeverPulledIsReadByTheReviewer(t *testing.T) {
 
 // A RUN IS STEERABLE AFTER ITS LAUNCHING NODE RESTARTS: nothing that holds a note
 // lives in one process, so a note filed by another node onto a run whose bridge
-// was opened again after a restart reaches the run's CLI there — and a note the
+// was opened again after a restart reaches the run's harness there — and a note the
 // run read before the restart is still the turn's, carried into its review.
 func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	t.Parallel()
@@ -474,7 +474,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 		t.Fatalf("collect: %v", err)
 	}
 	if !strings.Contains(answer, "and tag the release") {
-		t.Errorf("the run's CLI was not handed the note after the restart: %q", answer)
+		t.Errorf("the run's harness was not handed the note after the restart: %q", answer)
 	}
 	reviews := c.model.reviewed()
 	if len(reviews) == 0 || !strings.Contains(reviews[0], "use the staging database") ||
@@ -563,7 +563,7 @@ func TestStopReadsTheStoreEvenWhenTheViewIsStale(t *testing.T) {
 }
 
 // A RUN PARKED ON ITS QUESTION HOLDS ITS NOTES FOR WHAT RESUMES IT: a note to it
-// is read after the answer — so steer_turn says — its CLI takes nothing while it
+// is read after the answer — so steer_turn says — its harness takes nothing while it
 // waits, and the launch that carries the answer carries the notes in its brief,
 // read there by the new job.
 func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
@@ -589,7 +589,7 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 		t.Fatalf("a note to the parked run = %+v, %v, want accepted and read after the answer", filed, err)
 	}
 	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
-		t.Errorf("the parked run's CLI took %q", got)
+		t.Errorf("the parked run's harness took %q", got)
 	}
 
 	// THE ANSWER ARRIVES and is claimed; the relaunch carries the notes.

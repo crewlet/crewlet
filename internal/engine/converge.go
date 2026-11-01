@@ -134,7 +134,7 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// that still calls as the same account finds its sign-in's
 		// sit-out ([harness.Plans]), so a limit that still holds parks the
 		// seat again at the cost of one delivery and no process: the
-		// entry refuses before any CLI is started. A seat whose mail its
+		// entry refuses before any harness is started. A seat whose mail its
 		// run holds is parked again by its run's completion, which the
 		// readmit below re-fires: collected again, and refused on the
 		// carried limit before its turn runs ([Engine.collectedRefusal]).

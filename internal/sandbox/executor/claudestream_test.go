@@ -13,7 +13,7 @@ import (
 // vendor's Agent SDK documents its messages — a `system` init, `assistant`
 // messages whose content is `text`, `thinking` and `tool_use` blocks, `user`
 // messages handing back `tool_result` blocks (with `is_error` on a failure,
-// and the CLI's own `tool_use_result` copy beside them), and the `result`
+// and the harness's own `tool_use_result` copy beside them), and the `result`
 // message last — written by hand from that schema rather than captured from
 // a run, because a test must not call a model.
 
@@ -95,7 +95,7 @@ func TestTheClaudeStreamBecomesATranscriptOfWhatTheRunDid(t *testing.T) {
 }
 
 // A TOOL RESULT'S BODY NEVER REACHES THE TRANSCRIPT — not as the result block,
-// not as the CLI's copy beside it, and not as text blocks — and neither does
+// not as the harness's copy beside it, and not as text blocks — and neither does
 // the model's thinking. A body is a whole file or everything a command
 // printed: echoed, it would grow the record and the live view by orders of
 // magnitude and push far more of somebody's files through redaction.
@@ -128,9 +128,9 @@ func TestAFailedClaudeToolCallIsMarked(t *testing.T) {
 	}
 }
 
-// A MESSAGE THIS BUILD DOES NOT KNOW IS SKIPPED, because a CLI release adds
+// A MESSAGE THIS BUILD DOES NOT KNOW IS SKIPPED, because a harness release adds
 // them; so is a line read mid-write. Text that is not an event at all is what
-// the CLI printed, and is kept.
+// the harness printed, and is kept.
 func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
 	t.Parallel()
 	got := decodeClaude(
@@ -141,12 +141,12 @@ func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
 		`Error: the stream ended unexpectedly`,
 	)
 	if got != "Error: the stream ended unexpectedly" {
-		t.Errorf("transcript = %q; want only the CLI's own text", got)
+		t.Errorf("transcript = %q; want only the harness's own text", got)
 	}
 }
 
 // AN INFORMATIONAL HOOK NOTE BECOMES A [steer] LINE: when the run's own hook
-// hands its model a person's note, the CLI streams the hook's transcript line as
+// hands its model a person's note, the harness streams the hook's transcript line as
 // `system/informational`, `<event> says: crewlet: …` (measured, the fixtures),
 // and that is the one place a person watching the run sees the note arrive.
 // Every other system line — another informational line, a hook's own start and
@@ -246,13 +246,13 @@ func TestAClaudeStreamThatEndsBeforeItsResultIsNotASuccess(t *testing.T) {
 }
 
 // A RUN WHOSE WRAPPER NEVER COPIED ITS RESULT IS READ FROM ITS STREAM. The
-// result file is the stream's last line, written by the wrapper once the CLI
+// result file is the stream's last line, written by the wrapper once the harness
 // has exited, so a run whose process group died — an OOM kill, a host
 // restart — has none, and it used to be parsed as empty: a run that streamed a
-// whole session, pushed a branch and was killed read "the coding agent
+// whole session, pushed a branch and was killed read "the harness
 // produced no output" beside a transcript of everything it did. The stream's
 // last line is what the copy would have held, so it is read in its place:
-// the CLI's result, where it printed one before the wrapper died, and what
+// the harness's result, where it printed one before the wrapper died, and what
 // the stream was saying when it stopped otherwise.
 //
 // Mutation: parse the missing result file as it is, and each case reads as a
@@ -309,9 +309,9 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 	}
 }
 
-// THE RESULT IS COPIED OUT AFTER THE CLI EXITS, and the exit status is the
-// CLI's own: read into the wrapper's variable before the copy runs, so the
-// copy's own success cannot replace a failure. A CLI whose result is its
+// THE RESULT IS COPIED OUT AFTER THE HARNESS EXITS, and the exit status is the
+// harness's own: read into the wrapper's variable before the copy runs, so the
+// copy's own success cannot replace a failure. A harness whose result is its
 // stream has nothing copied.
 func TestTheWrapperCopiesTheResultLineAfterTheHarnessExits(t *testing.T) {
 	t.Parallel()
@@ -340,12 +340,12 @@ func TestTheWrapperCopiesTheResultLineAfterTheHarnessExits(t *testing.T) {
 	ob := box(t, oc)
 	start(t, oc, ob)
 	if script := lastBackground(t, ob); strings.Contains(script, "tail") {
-		t.Errorf("a CLI whose result is its stream had a result copied:\n%s", script)
+		t.Errorf("a harness whose result is its stream had a result copied:\n%s", script)
 	}
 }
 
 // A RUN IN A REAL BOX IS COLLECTED FROM ITS STREAM — the wrapper, the shell,
-// the copy and the exit status all as they run, with a stand-in for the CLI
+// the copy and the exit status all as they run, with a stand-in for the harness
 // that prints the documented stream and exits with a status of its own.
 func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	t.Parallel()
@@ -398,7 +398,7 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 		t.Fatalf("the result file holds %q, %v; want the stream's last line", result, err)
 	}
 	if code, _ := box.ReadFile(t.Context(), p.ExitCode()); strings.TrimSpace(string(code)) != "3" {
-		t.Errorf("exit status %q; want the CLI's own 3, not the copy's", code)
+		t.Errorf("exit status %q; want the harness's own 3, not the copy's", code)
 	}
 
 	res, err := runner.Collect(t.Context(), box, handle)

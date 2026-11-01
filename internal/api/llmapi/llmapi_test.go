@@ -390,7 +390,7 @@ const sonnetKey = `{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-not-a-r
 
 // A CREDENTIAL THE VENDOR REFUSES IS NEVER STORED.
 //
-// The value is handed to the entry's own CLI first; a refusal answers 422 at
+// The value is handed to the entry's own harness first; a refusal answers 422 at
 // the value with the vendor's sentence, nothing is sealed or re-activated, and
 // the model goes on signing in with what it had. The refusal is audited.
 func TestACredentialIsTestedBeforeItIsStored(t *testing.T) {
@@ -690,7 +690,7 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 		}
 	}
 	// A CREDENTIAL'S DRY RUN IS NO CHECK (ADR-0055): it runs the candidate,
-	// and a draft's CLI, so it is decided as the write it tests, never as a
+	// and a draft's harness, so it is decided as the write it tests, never as a
 	// read grant's check.
 	if got := mux.policies["PUT /llm/providers/{key}/credential"]; got.DryRun {
 		t.Errorf("the credential route declares its dry run a check: %+v", got)
@@ -706,7 +706,7 @@ const draftBody = `{"smoke": false, "entity": {"harness": "claude-code", "model"
 
 // A DRAFT IS RUN ONLY BY WHO MAY WRITE WHAT IT STANDS FOR.
 //
-// A draft chooses its CLI, its binary, its overrides and its env, and resolves
+// A draft chooses its harness, its binary, its overrides and its env, and resolves
 // its ${VAR}s through the secret store, so checking one runs what a config
 // write could make the company run with the company's credentials. It is asked
 // as `config.write` and `secrets.write`: a person whose proof is stale is told
@@ -1123,7 +1123,7 @@ func TestACreatesRetryIsRefusedByTheRouteBeforeTheStore(t *testing.T) {
 }
 
 // A VALUE WITH A SPACE OR AN INVISIBLE CHARACTER INSIDE IS REFUSED AT THE
-// VALUE, BEFORE ANY CLI RUNS. A terminal that wraps `claude setup-token`
+// VALUE, BEFORE ANY HARNESS RUNS. A terminal that wraps `claude setup-token`
 // output turns the break into spaces when it is copied, and Claude Code then
 // ignores the token and says it is not logged in, which read as a refusal to
 // log in again. The whitespace around a value is only trimmed.
@@ -1171,8 +1171,8 @@ func TestAValueWithStrayCharactersIsRefusedBeforeItsTest(t *testing.T) {
 	}
 }
 
-// A REFUSED TEST SAYS WHAT THE CLI'S WORDS MEANT, never the CLI's own advice:
-// a token the CLI never used is named as one the vendor never saw, a refused
+// A REFUSED TEST SAYS WHAT THE HARNESS'S WORDS MEANT, never the harness's own advice:
+// a token the harness never used is named as one the vendor never saw, a refused
 // one with the command that makes a new one, and neither vouches for the
 // stored credential, which may have expired or met its limit.
 func TestARefusedTestSaysWhatItMeant(t *testing.T) {

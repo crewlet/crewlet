@@ -95,7 +95,7 @@ func TestACredentialsHintShowsItsPrefixAndLastFourAndNoMore(t *testing.T) {
 	}
 }
 
-// THE HINT IS OF THE CREDENTIAL THE MODE HANDS THE CLI, read off the child's
+// THE HINT IS OF THE CREDENTIAL THE MODE HANDS THE HARNESS, read off the child's
 // environment: a token under subscription, a key under api-key (never the
 // token beside it, which the mode removes), what inherit-env forwards from the
 // engine's own environment, and nothing under env, whose sign-in is a set of

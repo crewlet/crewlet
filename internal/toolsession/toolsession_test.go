@@ -21,7 +21,7 @@ import (
 )
 
 // TestMain answers as the relay when the session under test starts this binary
-// as one — exactly what a coding CLI does with the engine's binary.
+// as one — exactly what a harness does with the engine's binary.
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
 	os.Exit(m.Run())
@@ -142,12 +142,12 @@ func text(res *mcp.CallToolResult) string {
 	return b.String()
 }
 
-// A CLI STARTS THE RELAY IT IS HANDED AND REACHES THE SEAT'S TOOLS THROUGH IT:
-// the command [toolsession.Host.Command] names, run as a CLI runs an MCP server,
+// A harness STARTS THE RELAY IT IS HANDED AND REACHES THE SEAT'S TOOLS THROUGH IT:
+// the command [toolsession.Host.Command] names, run as a harness runs an MCP server,
 // lists what the dispatcher offers and calls it.
 //
 // Through the real relay rather than a connection to the socket, because the
-// command line is the contract a CLI is given and the one part a direct
+// command line is the contract a harness is given and the one part a direct
 // connection skips.
 func TestAHarnessReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
 	t.Parallel()
@@ -161,7 +161,7 @@ func TestAHarnessReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
 
 	command, args := h.Command(s)
 	if args[0] != mcprelay.Command || args[1] != s.Path() {
-		t.Fatalf("the CLI is told to start %s %v, want the relay on the session's socket", command, args)
+		t.Fatalf("the harness is told to start %s %v, want the relay on the session's socket", command, args)
 	}
 	c := mcp.NewClient(&mcp.Implementation{Name: "fake-cli", Version: "1"}, nil)
 	cs, err := c.Connect(t.Context(), &mcp.CommandTransport{Command: exec.Command(command, args...)}, nil)
@@ -171,7 +171,7 @@ func TestAHarnessReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
 	defer cs.Close()
 
 	if got := names(t, cs); len(got) != 1 || got[0] != "get_item" {
-		t.Fatalf("the CLI was offered %v, want the dispatcher's one tool", got)
+		t.Fatalf("the harness was offered %v, want the dispatcher's one tool", got)
 	}
 	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{
 		Name: "get_item", Arguments: map[string]any{"id": 1},
@@ -183,7 +183,7 @@ func TestAHarnessReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
 		t.Errorf("the call answered %q", got)
 	}
 	if !s.Connected() {
-		t.Error("the session does not know a CLI listed its tools")
+		t.Error("the session does not know a harness listed its tools")
 	}
 }
 
@@ -213,7 +213,7 @@ func TestALargeIntegerArgumentArrivesExact(t *testing.T) {
 
 // ARGUMENTS THAT DO NOT PARSE REACH THE DISPATCHER SAYING SO, and are not run
 // on an empty object — a call the model never made. The dispatcher answers
-// them, so what the CLI is told and what the phase records are one decision.
+// them, so what the harness is told and what the phase records are one decision.
 //
 // Mutation: answer such a call in the server, or hand it on with no
 // ArgumentsError, and the dispatcher's record here is wrong.
@@ -238,12 +238,12 @@ func TestArgumentsThatDoNotParseReachTheDispatcherAsSuch(t *testing.T) {
 		t.Fatalf("the dispatcher saw %+v, want one call naming why its arguments could not be read", calls)
 	}
 	if !res.IsError || !strings.HasPrefix(text(res), "not run:") {
-		t.Errorf("the CLI was answered %q (error %v), want the dispatcher's refusal", text(res), res.IsError)
+		t.Errorf("the harness was answered %q (error %v), want the dispatcher's refusal", text(res), res.IsError)
 	}
 }
 
 // THE CALL'S _meta REACHES THE DISPATCHER VERBATIM, because that is where a
-// CLI that names its calls puts the name — the join between a call and the
+// harness that names its calls puts the name — the join between a call and the
 // model request that asked for it.
 func TestTheCallsMetaReachesTheDispatcher(t *testing.T) {
 	t.Parallel()
@@ -266,7 +266,7 @@ func TestTheCallsMetaReachesTheDispatcher(t *testing.T) {
 	}
 }
 
-// AN ACTIVATION IS ADVERTISED ON THE SAME CONNECTION: the CLI that called
+// AN ACTIVATION IS ADVERTISED ON THE SAME CONNECTION: the harness that called
 // `activate_tool` lists the new tool next, over the session it already holds.
 //
 // Mutation: drop the Sync after a call and the list stays as it opened.
@@ -298,7 +298,7 @@ func TestAnActivationIsAdvertisedOnTheSameConnection(t *testing.T) {
 }
 
 // AN ACTIVATION'S ANSWER WAITS FOR THE CLIENT'S RE-LIST, where the client
-// re-lists: answered at once, a CLI asked its model again before its re-list
+// re-lists: answered at once, a harness asked its model again before its re-list
 // landed, and the activated tool reached the model one request late. A client
 // that never re-lists is answered anyway, once the wait is over.
 func TestAnActivationsAnswerWaitsForTheClientsRelist(t *testing.T) {
@@ -325,7 +325,7 @@ func TestAnActivationsAnswerWaitsForTheClientsRelist(t *testing.T) {
 			opts := &mcp.ClientOptions{}
 			if tc.relists {
 				opts.ToolListChangedHandler = func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
-					// A CLI that re-reads its list a moment after the notice.
+					// A harness that re-reads its list a moment after the notice.
 					time.Sleep(relistDelay)
 					_, _ = cs.ListTools(ctx, nil)
 				}
@@ -366,7 +366,7 @@ func TestAnActivationsAnswerWaitsForTheClientsRelist(t *testing.T) {
 	}
 }
 
-// THE HINTS TRAVEL WITH THE TOOL, because a CLI decides from them whether a
+// THE HINTS TRAVEL WITH THE TOOL, because a harness decides from them whether a
 // call may run beside another and whether to ask first.
 func TestAToolsHintsAreAdvertised(t *testing.T) {
 	t.Parallel()
@@ -389,7 +389,7 @@ func TestAToolsHintsAreAdvertised(t *testing.T) {
 }
 
 // RETIRING WAITS FOR A CALL THAT IS RUNNING, then leaves nothing to connect
-// to. A call is a tool that may be writing, so ending a CLI run does not cut it
+// to. A call is a tool that may be writing, so ending a harness run does not cut it
 // off; and a relay left behind by that run must find no socket, rather than the
 // next run's.
 //

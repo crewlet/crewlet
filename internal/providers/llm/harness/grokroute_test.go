@@ -20,7 +20,7 @@ import (
 // allowlist keeps it out, no id of its own with a call, and the record its
 // streaming-json stdout — a response's prose, its counts without the cached
 // part, then a tool_call per call (use_tool naming the server's tool, or one of
-// the CLI's own), and a tool_call_update per result — ending in an `end` event
+// the harness's own), and a tool_call_update per result — ending in an `end` event
 // (measured on 1.0.70; see the profile).
 func init() {
 	fakeHarnesses["grok"] = fakeHarness{
@@ -164,9 +164,9 @@ func (g *grokRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 // run with tools prints its streaming-json record where a text function prints
 // the plain answer: each response's prose, its counts — the prompt less its
 // cached part — and its calls, through use_tool, by the server's qualified
-// name; the results of its calls end it. The CLI sends no id with a call, so a
-// call is joined by name and arguments, and the host is told the CLI waits the
-// CLI's own 6000 seconds for a call, re-reads no list, and makes a response's
+// name; the results of its calls end it. The harness sends no id with a call, so a
+// call is joined by name and arguments, and the host is told the harness waits the
+// harness's own 6000 seconds for a call, re-reads no list, and makes a response's
 // calls at once. A server planted in the home's config.toml and in
 // ~/.claude.json does not start: the home's config.toml is the profile's own,
 // with the Claude source off, and its allowlist names the seat's server alone.
@@ -236,7 +236,7 @@ func TestAGrokRunThatWouldAskFails(t *testing.T) {
 //
 // Mutation: read the run's stdout as the profile's plain answer
 // (harnessprofile.Profile.Routed dropped from both the reader and the extraction),
-// and the tool's result is taken for the CLI's own limit report.
+// and the tool's result is taken for the harness's own limit report.
 func TestAFailedGrokRunIsNotJudgedByWhatItsToolsSaid(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "grok", fakeScript{Exit: 1, Stderr: "Error: the connection was reset\n",
@@ -247,7 +247,7 @@ func TestAFailedGrokRunIsNotJudgedByWhatItsToolsSaid(t *testing.T) {
 	})
 	_, err := p.Complete(t.Context(), phase(host))
 	if kind := llm.KindOf(err); kind != llm.KindServer {
-		t.Fatalf("err = %v (%v), want a server failure: the limit was the tool's, not the CLI's", err, kind)
+		t.Fatalf("err = %v (%v), want a server failure: the limit was the tool's, not the harness's", err, kind)
 	}
 	if strings.Contains(err.Error(), "Rate limited") {
 		t.Errorf("the error quotes the tool's result: %v", err)

@@ -24,7 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// helperEnv marks a re-execution of this test binary as the fake CLI rather
+// helperEnv marks a re-execution of this test binary as the fake harness rather
 // than the suite. [TestMain] reads it before the framework starts.
 //
 // The fake is this binary rather than a shell script because the two platforms
@@ -43,7 +43,7 @@ import (
 // recursively, once per case.
 const helperEnv = "CREWLET_HARNESS_FAKE"
 
-// TestMain runs the fake CLI when this binary was re-executed as one, a writer
+// TestMain runs the fake harness when this binary was re-executed as one, a writer
 // of the shared login when it was re-executed as one of those
 // ([runLoginWriter]), and the suite otherwise.
 //
@@ -57,11 +57,11 @@ const helperEnv = "CREWLET_HARNESS_FAKE"
 // It also exits before the framework parses flags, so the fake's output is
 // exactly the bytes the case asked for with nothing of testing's around them.
 //
-// THE RELAY FIRST. A run with tools hands its CLI this binary as the relay to
+// THE RELAY FIRST. A run with tools hands its harness this binary as the relay to
 // the seat's tools — the engine names its own executable, and under `go test`
-// that is this one — and the CLI starts it with an environment of its own
+// that is this one — and the harness starts it with an environment of its own
 // choosing, which for the fake is its own: started as a relay and dispatched
-// on the fake's variable, it would play a CLI instead.
+// on the fake's variable, it would play a harness instead.
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(helperEnv) == "1" {
@@ -78,7 +78,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runFakeHarness is the fake CLI the exec tests drive.
+// runFakeHarness is the fake harness the exec tests drive.
 func runFakeHarness() {
 	if ms := os.Getenv("FAKE_SLEEP_MS"); ms != "" {
 		delay, _ := strconv.Atoi(ms)
@@ -94,7 +94,7 @@ func runFakeHarness() {
 	}
 	switch {
 	case os.Getenv("FAKE_STORE") == "1":
-		// A CLI that keeps its login, its sessions and their usage in a
+		// A harness that keeps its login, its sessions and their usage in a
 		// database of its own — see credentialstore_test.go.
 		fakeStore()
 	case os.Getenv("FAKE_USAGE_COMMAND") != "" && slices.Contains(os.Args, os.Getenv("FAKE_USAGE_COMMAND")):
@@ -103,9 +103,9 @@ func runFakeHarness() {
 		// nothing at all included — and exiting 0.
 		fmt.Print(os.Getenv("FAKE_USAGE_REPORT"))
 	case os.Getenv("FAKE_STUBBORN") == "1":
-		// A CLI that ignores the polite signal and leaves a forking
+		// A harness that ignores the polite signal and leaves a forking
 		// descendant behind — a Node or Bun runtime under a launcher, which
-		// is what every coding CLI in this package actually is. It announces
+		// is what every harness in this package actually is. It announces
 		// the grandchild's pid so the parent can watch for its death, then
 		// holds its own process open for ever.
 		//
@@ -116,16 +116,16 @@ func runFakeHarness() {
 	case os.Getenv("FAKE_GRANDCHILD") == "1":
 		fakeGrandchild()
 	case os.Getenv("FAKE_HOLD_STREAM") != "":
-		// A CLI that answers and exits 0, leaving a helper behind that holds
+		// A harness that answers and exits 0, leaving a helper behind that holds
 		// one of its streams — see exec_unix_test.go.
 		fakeLeaveHolder(os.Getenv("FAKE_HOLD_STREAM"))
 		fmt.Print(os.Getenv("FAKE_STDOUT"))
 	case os.Getenv("FAKE_EXIT_0_ON_TERM") == "1":
-		// A CLI that ends cleanly when it is asked to stop — see
+		// A harness that ends cleanly when it is asked to stop — see
 		// exec_unix_test.go.
 		fakeExitZeroOnTerm()
 	case os.Getenv("FAKE_KEY_SESSION") != "":
-		// A CLI that keeps what a key signs it in to in its login's own
+		// A harness that keeps what a key signs it in to in its login's own
 		// file, as Cursor Agent does: it answers with what that file held
 		// when it started, and then, handed a key, writes it down there.
 		path := filepath.Join(os.Getenv("HOME"), os.Getenv("FAKE_KEY_SESSION"))
@@ -182,7 +182,7 @@ func runFakeHarness() {
 		// it, FROM INSIDE THE CHILD. That is the only place the question
 		// can be asked honestly: the per-call working directory is
 		// removed when the call releases, so a test that opened the path
-		// afterwards would be reading a file the CLI never saw — and a
+		// afterwards would be reading a file the harness never saw — and a
 		// prompt written after the spawn, or unreadable to the child,
 		// looks identical from outside.
 		body, err := os.ReadFile(os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")))
@@ -193,9 +193,9 @@ func runFakeHarness() {
 		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
 	case os.Getenv("FAKE_READ_DISCOVERED") != "":
 		// Reads a file at a path RELATIVE TO ITS WORKING DIRECTORY, FROM
-		// INSIDE THE CHILD, as a CLI that discovers its agents there does —
+		// INSIDE THE CHILD, as a harness that discovers its agents there does —
 		// and prints its argv beside it, so one probe settles that the file
-		// was where the CLI looks and that the argv selected rather than
+		// was where the harness looks and that the argv selected rather than
 		// carried it.
 		path := os.Getenv("FAKE_READ_DISCOVERED")
 		body, err := os.ReadFile(path)
@@ -212,10 +212,10 @@ func runFakeHarness() {
 			base64.StdEncoding.EncodeToString(body))
 	case os.Getenv("FAKE_READ_UNDER_ENV") != "":
 		// Answers, FROM INSIDE THE CHILD, where a relocation variable points
-		// and what is there when the CLI starts: `VAR:rel,rel` prints the
+		// and what is there when the harness starts: `VAR:rel,rel` prints the
 		// child's working directory, the variable's value, and each file's
 		// bytes under it. The per-call directory is removed on release, so
-		// nothing outside the child can tell a file the CLI found from one
+		// nothing outside the child can tell a file the harness found from one
 		// written after it had looked.
 		name, rels, _ := strings.Cut(os.Getenv("FAKE_READ_UNDER_ENV"), ":")
 		cwd, _ := os.Getwd()
@@ -241,14 +241,14 @@ func runFakeHarness() {
 		// Reports whether the TMPDIR the child was handed is a directory,
 		// FROM INSIDE it and before it writes anything: a program finds its
 		// temporary directory rather than making it, so this is what
-		// mktemp, or a CLI's own sandbox helper, would find.
+		// mktemp, or a harness's own sandbox helper, would find.
 		info, err := os.Stat(os.Getenv("TMPDIR"))
 		fmt.Printf("TMPDIR dir=%v", err == nil && info.IsDir())
 	case os.Getenv("FAKE_PROMPT_FILE") != "":
 		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
 		// which is the only place it can be answered honestly: the
 		// per-call working directory is removed on release, so a parent
-		// that opened the path afterwards would be reading a file the CLI
+		// that opened the path afterwards would be reading a file the harness
 		// never saw. It prints the argv it was given, the file's mode, and
 		// its bytes, so one probe settles "the path is on argv, the
 		// transcript is not, the child could read it, and it is private".
@@ -276,7 +276,7 @@ func runFakeHarness() {
 		// for it, FROM INSIDE THE CHILD — which is the only place it can
 		// be written honestly: the per-call working directory is created
 		// for one call and removed on release, so a report the parent
-		// planted would prove nothing about the path the CLI was handed.
+		// planted would prove nothing about the path the harness was handed.
 		// The variable carries the report's BYTES; an empty one is a run
 		// that wrote no report at all.
 		path := ""
@@ -306,7 +306,7 @@ func runFakeHarness() {
 		prompt, _ := io.ReadAll(os.Stdin)
 		switch {
 		case strings.Contains(string(prompt), "read the file at "):
-			// The file probe: a CLI whose file tool works reads the
+			// The file probe: a harness whose file tool works reads the
 			// path out of the prompt and answers with the file.
 			if os.Getenv("FAKE_FILE_PROBE") != "read" {
 				fmt.Print(noLocalToolsReply)
@@ -385,7 +385,7 @@ func recordedArgv(t *testing.T, dir string) [][]string {
 	return out
 }
 
-// fakeProvider builds a provider whose CLI is this test binary.
+// fakeProvider builds a provider whose harness is this test binary.
 func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -412,7 +412,7 @@ func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any)
 	return p
 }
 
-// fakeChildEnv is the environment every fake CLI this suite launches is handed
+// fakeChildEnv is the environment every fake harness this suite launches is handed
 // through [Config.Env]: the variable that makes the re-executed binary the
 // fake, the race options that let it exit the moment it is done
 // ([procgrouptest.StandInRaceOptions] — a second a call otherwise, which was
@@ -438,7 +438,7 @@ func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
 	return p.Complete(t.Context(), req)
 }
 
-// The whole point of the backend: a CLI's prose comes back as a completion.
+// The whole point of the backend: a harness's prose comes back as a completion.
 func TestAPlainReplyBecomesACompletion(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "the answer"}, nil)
@@ -453,7 +453,7 @@ func TestAPlainReplyBecomesACompletion(t *testing.T) {
 		t.Errorf("Model = %q, want the configured %q", comp.Model, p.Model())
 	}
 	if comp.InputTokens == 0 || comp.OutputTokens == 0 {
-		t.Errorf("a CLI reporting no usage must still be estimated, got in=%d out=%d",
+		t.Errorf("a harness reporting no usage must still be estimated, got in=%d out=%d",
 			comp.InputTokens, comp.OutputTokens)
 	}
 }
@@ -529,7 +529,7 @@ func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
 }
 
 // A wall-clock breach reports TIMEOUT and returns at the deadline, not when
-// the child eventually finishes: the cap exists so a wedged CLI cannot hold a
+// the child eventually finishes: the cap exists so a wedged harness cannot hold a
 // seat's concurrency slot.
 func TestTheWallClockCapEndsACall(t *testing.T) {
 	t.Parallel()
@@ -571,7 +571,7 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 const claudeOverloaded = `{"type":"result","subtype":"success","is_error":true,` +
 	`"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}`
 
-// shippedShape is the overrides that make the fake CLI's output read as the
+// shippedShape is the overrides that make the fake harness's output read as the
 // named built-in profile reads it: its output mode, where its answer and its
 // failure flag are, its markers and where they are matched — so a case built
 // on it says what the shipped entry would make of the same output.
@@ -642,14 +642,14 @@ func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
 		t.Fatalf("kind = %v, want server (err %v)", got, err)
 	}
 	if !strings.Contains(err.Error(), "overloaded_error") {
-		t.Errorf("err = %v, want the error the CLI relayed", err)
+		t.Errorf("err = %v, want the error the harness relayed", err)
 	}
 	if err := p.SittingOut(); err != nil {
 		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }
 
-// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE CLI FAILED. The point of a
+// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE HARNESS FAILED. The point of a
 // fallback list is surviving one vendor's outage; when a failed run was fatal,
 // the walk stopped at the head and the turn failed against the same dead head
 // on every redelivery, with the next entry never asked.
@@ -703,14 +703,14 @@ func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 		}
 	}
 	if !strings.Contains(comp.Content, "PATH=") {
-		t.Error("PATH did not reach the child, so the CLI cannot find its own helpers")
+		t.Error("PATH did not reach the child, so the harness cannot find its own helpers")
 	}
 	home := envValue(comp.Content, "HOME")
 	if !strings.Contains(home, filepath.Join("seats")) {
 		t.Errorf("HOME = %q, want a path inside the seat's own home", home)
 	}
 	if envValue(comp.Content, "XDG_CONFIG_HOME") == "" {
-		t.Error("XDG_CONFIG_HOME was not redirected, so the CLI reads the engine user's config")
+		t.Error("XDG_CONFIG_HOME was not redirected, so the harness reads the engine user's config")
 	}
 }
 
@@ -794,7 +794,7 @@ func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
 }
 
 // Each call runs in a per-call directory holding nothing but the engine's own
-// project-root marker, so a CLI that reads AGENTS.md or CLAUDE.md from cwd
+// project-root marker, so a harness that reads AGENTS.md or CLAUDE.md from cwd
 // finds nothing from anyone else — and, stopped at that marker, nothing from
 // the directories above it either.
 //
@@ -822,13 +822,13 @@ func TestTheWorkingDirectoryHoldsOnlyTheProjectRootMarker(t *testing.T) {
 	// The child listed its own directory, because the parent cannot: the
 	// per-call directory is removed when the call releases.
 	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != harnessprofile.ProjectRootMarker {
-		t.Errorf("the call's working directory %q holds %q, want only %s — a CLI "+
+		t.Errorf("the call's working directory %q holds %q, want only %s — a harness "+
 			"reading AGENTS.md or CLAUDE.md from cwd would find somebody "+
 			"else's", dir, entries, harnessprofile.ProjectRootMarker)
 	}
 }
 
-// The prompt must actually reach the CLI, as the labelled transcript a text
+// The prompt must actually reach the harness, as the labelled transcript a text
 // function is: every message under a heading naming its author, and nothing
 // of a tool channel, which a text function does not have.
 func TestThePromptReachesTheHarnessAsALabelledTranscript(t *testing.T) {
@@ -859,7 +859,7 @@ func TestThePromptReachesTheHarnessAsALabelledTranscript(t *testing.T) {
 // none, and the next member of the chain would be refused the same way — the
 // fault is the operator's, in the profile. Nothing is started.
 //
-// Mutation: drop the refusal in Complete, and the call runs the CLI with no
+// Mutation: drop the refusal in Complete, and the call runs the harness with no
 // tools — the fake answers — instead of failing.
 func TestAPhaseOnAProfileWithNoToolRouteIsRefused(t *testing.T) {
 	t.Parallel()
@@ -869,7 +869,7 @@ func TestAPhaseOnAProfileWithNoToolRouteIsRefused(t *testing.T) {
 		Tools:    newTestHost(t, "search"),
 	})
 	if err == nil {
-		t.Fatal("a phase ran on a profile that cannot hand its CLI any tools")
+		t.Fatal("a phase ran on a profile that cannot hand its harness any tools")
 	}
 	if llm.KindOf(err) != llm.KindFatal || !strings.Contains(err.Error(), "overrides.mcp") {
 		t.Errorf("err = %v (%v), want a fatal refusal naming overrides.mcp", err, llm.KindOf(err))
@@ -877,7 +877,7 @@ func TestAPhaseOnAProfileWithNoToolRouteIsRefused(t *testing.T) {
 }
 
 // The cap is what keeps a fleet of seats starting their turns together from
-// exhausting the engine host — each CLI is a full runtime at 200-400 MB.
+// exhausting the engine host — each harness is a full runtime at 200-400 MB.
 func TestConcurrencyIsCapped(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_SLEEP_MS": "250"}, nil)
@@ -922,8 +922,8 @@ func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
 	}
 }
 
-// A CALL STOPPED UNDER A RUNNING CLI IS A CANCELLATION, never the vendor's
-// outage: the CLI exits on the signal the stop sent (143 for a Node runtime),
+// A CALL STOPPED UNDER A RUNNING HARNESS IS A CANCELLATION, never the vendor's
+// outage: the harness exits on the signal the stop sent (143 for a Node runtime),
 // which reads exactly like a crash, so a classification from the exit status
 // walked the assistant's chain to its next model and logged a fallback for a
 // person's Stop. Nothing is learned from it either: a member that was ready
@@ -949,7 +949,7 @@ func TestAStoppedCallIsCancelledNotAServerFailure(t *testing.T) {
 	}
 }
 
-// EVERY PROVIDER GIVES A SIGNALLED CLI FIVE SECONDS to exit, the figure
+// EVERY PROVIDER GIVES A SIGNALLED HARNESS FIVE SECONDS to exit, the figure
 // [termGrace] argues for. The cases that watch a stubborn child die run at a
 // grace of their own (exec_unix_test.go), so this is what ties the value they
 // skip waiting for to the one a running engine uses — at both places a child is
@@ -985,12 +985,12 @@ func TestAnInvocationWithNoGraceIsRefused(t *testing.T) {
 	}
 }
 
-// decodePrompt reads back a prompt the fake CLI echoed.
+// decodePrompt reads back a prompt the fake harness echoed.
 func decodePrompt(t *testing.T, encoded string) string {
 	t.Helper()
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 	if err != nil {
-		t.Fatalf("the fake CLI did not echo a prompt: %v (%q)", err, encoded)
+		t.Fatalf("the fake harness did not echo a prompt: %v (%q)", err, encoded)
 	}
 	return string(raw)
 }

@@ -170,7 +170,7 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 		}
 	}
 	// EVERYTHING THE MODEL READ: each request's conversation and every answer
-	// its CLI was given over the tool session, where a read's text arrives.
+	// its harness was given over the tool session, where a read's text arrives.
 	for _, m := range rig.Model.Seen() {
 		if !strings.Contains(m.Content, injection) {
 			continue

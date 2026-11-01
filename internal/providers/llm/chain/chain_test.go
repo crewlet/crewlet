@@ -18,7 +18,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// FIRST: the session cases serve a phase's tools, and a CLI told to start
+	// FIRST: the session cases serve a phase's tools, and a harness told to start
 	// this binary as their relay starts it with `mcp-relay` alone.
 	mcprelay.DispatchIfRelay()
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)

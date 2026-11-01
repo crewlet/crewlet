@@ -55,7 +55,7 @@ func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]
 // [LiveState.applyTurnEvent].)
 //
 // EVERY WORKER RUNS WHILE ITS TURN IS PARKED. `delegate` is the executor's
-// alone and every executor is its coding CLI's run in a box, which calls it
+// alone and every executor is its harness's run in a box, which calls it
 // over the bridge after the turn has parked. Read as one of the turn's own
 // phases, a worker's record un-parked the turn: the seat's strip stopped
 // saying its executor was working while it worked on, and the seat's

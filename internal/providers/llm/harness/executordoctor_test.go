@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// doctorEntry builds an entry driving the named CLI over the `custom`
-// profile's probes, so the diagnosis runs without any CLI on the host.
+// doctorEntry builds an entry driving the named harness over the `custom`
+// profile's probes, so the diagnosis runs without any harness on the host.
 func doctorEntry(t *testing.T, agent string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -44,7 +44,7 @@ func doctorEntry(t *testing.T, agent string) *Provider {
 
 // AN EXECUTOR NEEDS A BRIDGE THE BOX CAN DIAL, AND THE FAILURE HAS NO EARLIER
 // SYMPTOM. A box that is not on the node's host dials the variable alone, so
-// without it every launch there is refused, and a coding agent with none of
+// without it every launch there is refused, and a harness with none of
 // the seat's tools could not answer anybody or submit its work even if one
 // started. `doctor` is what a deploy script gates on, so it is the last place
 // to catch it before an agent is waiting.
@@ -94,12 +94,12 @@ func TestDoctorPassesADirectEntryWithNoBridgeVariable(t *testing.T) {
 	}
 }
 
-// A CLI WITH NO IN-BOX RUNNER IN AN EXECUTOR CHAIN IS REPORTED, NOT FAULTED.
+// A harness WITH NO IN-BOX RUNNER IN AN EXECUTOR CHAIN IS REPORTED, NOT FAULTED.
 //
 // The company refuses an agent seat whose chain holds no runner at all, so a
-// CLI without one sits beside one that has it: every launch skips it, and it
+// harness without one sits beside one that has it: every launch skips it, and it
 // still serves the seat's phases on this host. A doctor that went red on it would be
-// red on a configuration the engine runs. The line says which CLIs do have
+// red on a configuration the engine runs. The line says which harnesses do have
 // runners, so the operator knows where the executor actually lands.
 //
 // Mutation: report the missing runner as a problem, and this goes red.
@@ -115,7 +115,7 @@ func TestDoctorReportsANonRunnerExecutorMemberAsSkipped(t *testing.T) {
 		t.Errorf("the executor lines do not report the skipped member: %v", d.Executor)
 	}
 	if !strings.Contains(lines, "claude-code") {
-		t.Errorf("the line does not say which CLIs do have runners: %v", d.Executor)
+		t.Errorf("the line does not say which harnesses do have runners: %v", d.Executor)
 	}
 	// A bridge the run would never dial is not this entry's concern.
 	for _, problem := range d.Problems {

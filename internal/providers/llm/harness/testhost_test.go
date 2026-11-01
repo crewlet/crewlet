@@ -13,7 +13,7 @@ import (
 )
 
 // testHost is a phase's tool host for this package's suite: a REAL
-// toolsession server, on a real unix socket the CLI's relay connects to, over
+// toolsession server, on a real unix socket the harness's relay connects to, over
 // a table of tools — and a record of everything the backend told it.
 //
 // It stands where the tool loop's dispatcher stands in production, and keeps
@@ -22,8 +22,8 @@ import (
 // a model call made inside one finds the run's slot), and the backend is told
 // when the first call of a stretch starts and the last one ends. Nothing here
 // decides anything a phase would — no fence, no budget — because what is under
-// test is the backend's half: that the CLI reaches the tools, and that what
-// the CLI's record shows reaches the host.
+// test is the backend's half: that the harness reaches the tools, and that what
+// the harness's record shows reaches the host.
 type testHost struct {
 	sessions *toolsession.Host
 
@@ -46,7 +46,7 @@ type testHost struct {
 	doneOnce sync.Once
 }
 
-// hostCall is one call the CLI made, as the server handed it over.
+// hostCall is one call the harness made, as the server handed it over.
 type hostCall struct {
 	Name    string
 	Args    map[string]any
@@ -191,7 +191,7 @@ func (h *testHost) tellBusyLocked(busy bool) {
 	}
 }
 
-// snapshot is what the backend told the host, and what the CLI called.
+// snapshot is what the backend told the host, and what the harness called.
 func (h *testHost) snapshot() (turns []llm.Turn, calls []hostCall, spent llm.Usage, spends []llm.Usage) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -203,7 +203,7 @@ func (h *testHost) snapshot() (turns []llm.Turn, calls []hostCall, spent llm.Usa
 
 // awaitRecorded waits, as the tool loop's host does before it runs a call,
 // for the record to show a request asking for a call to name (the call and
-// the record reach the engine by two ways, a socket and the CLI's output, and
+// the record reach the engine by two ways, a socket and the harness's output, and
 // race), reporting whether it did within the host's two seconds.
 func (h *testHost) awaitRecorded(ctx context.Context, name string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)

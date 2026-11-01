@@ -124,15 +124,15 @@ func (c *cursorRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 // IT, AND ITS HOME STARTS NO SERVER OF ITS OWN. The seat's server is the call's
 // own .cursor/mcp.json — the project's, approved for the run by
 // --approve-mcps — its tools allowed by the project's cli.json; the home's
-// mcp.json, whose servers the CLI starts unasked, is the profile's own, empty,
+// mcp.json, whose servers the harness starts unasked, is the profile's own, empty,
 // whatever was there. Each model call's prose and calls share its
 // model_call_id, a call's completion ends its request, and the last response's
 // prose — flushed with no id — begins the next. Calls are joined by name and
 // arguments, under the server's name; the result's counts settle the run.
-// None of this is measured against the real CLI (see the profile); the
+// None of this is measured against the real harness (see the profile); the
 // doctor's smoke test checks it on a real sign-in.
 //
-// Mutation: drop --approve-mcps, or Mcp(crewlet:*), and the CLI never reaches
+// Mutation: drop --approve-mcps, or Mcp(crewlet:*), and the harness never reaches
 // the seat's tools; drop the home's mcp.json seed, and the planted server
 // starts (the fake fails the run); drop the completion's close, and the last
 // response's prose is read into the request before it.

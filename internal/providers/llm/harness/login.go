@@ -48,7 +48,7 @@ const maxBundle = 1 << 20
 // ErrNoLoginCommand is returned when a profile declares no way to do what
 // was asked. Its own error so `crewlet llm login` can print the paragraph
 // that explains the vendor's actual login route instead of a bare failure.
-var ErrNoLoginCommand = errors.New("harness: this CLI has no such login command")
+var ErrNoLoginCommand = errors.New("harness: this harness has no such login command")
 
 // BrokerLogin runs the vendor's OWN interactive login, attached to the
 // operator's terminal.
@@ -60,7 +60,7 @@ var ErrNoLoginCommand = errors.New("harness: this CLI has no such login command"
 // vendor's next redesign, and it is exactly the kind of re-implementation
 // this whole backend exists to avoid.
 //
-// A login that leaves NO login is a failure, even where the CLI exited 0: see
+// A login that leaves NO login is a failure, even where the harness exited 0: see
 // [Provider.loginLeftNothing].
 func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	if len(p.profile.LoginArgs) == 0 {
@@ -69,14 +69,14 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 		// headless call has nobody to complete a sign-in for it anyway — so
 		// the advice to make a call and then look was advice to watch it fail.
 		//
-		// And not "adopt it from the host" for a CLI that keeps no login at
+		// And not "adopt it from the host" for a harness that keeps no login at
 		// all: there is nothing on the host to adopt.
 		if !p.profile.KeepsLogin() {
-			return fmt.Errorf("%w: the %q CLI keeps no login for Crewlet to hold — %s",
+			return fmt.Errorf("%w: the %q harness keeps no login for Crewlet to hold — %s",
 				ErrNoLoginCommand, p.harness, p.keyRemedy())
 		}
-		return fmt.Errorf("%w: the %q CLI declares no login subcommand — sign in with "+
-			"the CLI itself and adopt that login with `crewlet llm login %s -from-host`, "+
+		return fmt.Errorf("%w: the %q harness declares no login subcommand — sign in with "+
+			"the harness itself and adopt that login with `crewlet llm login %s -from-host`, "+
 			"or give the entry a key",
 			ErrNoLoginCommand, p.harness, p.key)
 	}
@@ -94,8 +94,8 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 // leaving a login anywhere this entry reads one.
 //
 // A FAILURE, NOT A SUCCESS THAT WROTE NOTHING. Its caller prints "Login written
-// to …" on a nil error, and an operator who backed out of the CLI's provider
-// picker — or whose CLI put the credential somewhere no seat is seeded from —
+// to …" on a nil error, and an operator who backed out of the harness's provider
+// picker — or whose harness put the credential somewhere no seat is seeded from —
 // was told exactly that about a directory holding nothing, and found out at
 // the first call. Every shipped profile with a login command names where that
 // login lands (its credential files, or the database its credential store
@@ -108,7 +108,7 @@ func (p *Provider) loginLeftNothing() error {
 			"can reach a seat; declare where it keeps one under "+
 			"providers.llm.%s.overrides", p.harness, p.key)
 	}
-	return fmt.Errorf("harness: the %q CLI exited without leaving a login where this "+
+	return fmt.Errorf("harness: the %q harness exited without leaving a login where this "+
 		"entry reads one (%s), so nothing was written to %s — if the sign-in did not "+
 		"finish, run `crewlet llm login %s` again",
 		p.harness, p.profile.LoginLocation(), p.ws.CredentialsDir(), p.key)
@@ -122,14 +122,14 @@ func (p *Provider) loginLeftNothing() error {
 // ephemeral container with no persistent volume.
 func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Writer) (string, error) {
 	if len(p.profile.CaptureTokenArgs) == 0 {
-		// The login route this CLI has ([Provider.loginRemedy]): Gemini CLI,
+		// The login route this harness has ([Provider.loginRemedy]): Gemini CLI,
 		// Qwen Code and Grok declare no login subcommand, so "run `crewlet
 		// llm login`" sent them to a second refusal.
-		return "", fmt.Errorf("%w: the %q CLI mints no headless token, so sign it in "+
+		return "", fmt.Errorf("%w: the %q harness mints no headless token, so sign it in "+
 			"with a login instead: %s", ErrNoLoginCommand, p.harness, p.loginRemedy(nil))
 	}
 	// MIRRORED WHILE IT IS CAPTURED, and this is the whole difficulty of the
-	// command. A minting command is INTERACTIVE — the CLI renders its UI
+	// command. A minting command is INTERACTIVE — the harness renders its UI
 	// whenever STDIN is a terminal, which it is here, since the operator has
 	// to complete a browser sign-in — and it writes every byte of that UI to
 	// STDOUT: the sign-in URL, the "paste code here" prompt, all of it.
@@ -184,7 +184,7 @@ func (l lockedWriter) Write(b []byte) (int, error) {
 
 // ansiEscape matches the control sequences a terminal UI writes between its
 // words: CSI (cursor, colour), OSC (window title, and the hyperlinks a modern
-// CLI wraps a sign-in URL in), and the bare two-character escapes.
+// harness wraps a sign-in URL in), and the bare two-character escapes.
 var ansiEscape = regexp.MustCompile(
 	"\x1b\\[[0-9;?]*[ -/]*[@-~]" + // CSI
 		"|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)" + // OSC, both terminators
@@ -244,35 +244,35 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 	return nil
 }
 
-// noCredentialLogin is [Provider.CredentialLogin]'s refusal for a CLI that
+// noCredentialLogin is [Provider.CredentialLogin]'s refusal for a harness that
 // declares no username/password login, naming the routes this entry has.
 //
-// THE MODE FIRST, THEN THE CLI, since the mode decides what the entry reads at
+// THE MODE FIRST, THEN THE HARNESS, since the mode decides what the entry reads at
 // all, in the words [Provider.ModeSignIn] keeps for every message that tells an
-// operator how to sign such an entry in. Chosen by the CLI alone, an api-key
+// operator how to sign such an entry in. Chosen by the harness alone, an api-key
 // entry was offered a login and `-capture-token`, a token the mode removes from
-// the CLI's environment and that `crewlet llm login` refuses before it mints;
+// the harness's environment and that `crewlet llm login` refuses before it mints;
 // and an inherit-env one `-capture-token`, whose token lands in the secret
 // store that mode never reads, so the command refuses to store it. So api-key
 // is told its key and nothing else, as the doctor tells it: a login in its
 // directory would sit in every seat's home beside the key, and which of the
-// two the CLI bills is the vendor's precedence rather than the entry's — except
-// on a CLI whose profile names no key variable, a pairing every write of the
-// configuration refuses, where the mode hands the CLI nothing and its remedy
+// two the harness bills is the vendor's precedence rather than the entry's — except
+// on a harness whose profile names no key variable, a pairing every write of the
+// configuration refuses, where the mode hands the harness nothing and its remedy
 // is a login under subscription, so the entry is told that and not that a
 // login is not its sign-in. inherit-env is told what it forwards, a login,
 // which it seeds like every mode, and a minted token only to stdout, to
 // export. subscription is told a login and a headless token.
 //
-// ONLY ROUTES THIS CLI HAS, judged as the doctor judges them: its own login
+// ONLY ROUTES THIS HARNESS HAS, judged as the doctor judges them: its own login
 // command where it declares one ([Provider.loginRemedy]), and -capture-token
 // where it mints a headless token ([Provider.MintsHeadlessToken]). Offered
-// whatever the CLI declared, both sent an operator of a CLI with neither to a
+// whatever the harness declared, both sent an operator of a harness with neither to a
 // second refusal.
 func (p *Provider) noCredentialLogin() error {
-	const lead = "%w: the %q CLI authenticates through the vendor's browser OAuth flow — " +
+	const lead = "%w: the %q harness authenticates through the vendor's browser OAuth flow — " +
 		"there is no username/password login to drive"
-	declare := fmt.Sprintf(". If your build of this CLI does accept a credential, declare it "+
+	declare := fmt.Sprintf(". If your build of this harness does accept a credential, declare it "+
 		"under providers.llm.%s.overrides.stdin_login", p.key)
 	sign, fromEnv := p.ModeSignIn()
 	switch {
@@ -300,7 +300,7 @@ func (p *Provider) noCredentialLogin() error {
 	return fmt.Errorf(lead+": %s%s%s", ErrNoLoginCommand, p.harness, p.loginRemedy(nil), mint, declare)
 }
 
-// Logout revokes the login where the CLI can, and removes the credential
+// Logout revokes the login where the harness can, and removes the credential
 // files either way.
 //
 // Both halves, and the local half whatever the vendor's command did: a vendor
@@ -314,7 +314,7 @@ func (p *Provider) noCredentialLogin() error {
 // a login the logout was discarding anyway.
 //
 // The vendor's command makes no login, so what it leaves is carried out as a
-// refresh ([syncRefresh]) — which a login the CLI has just revoked never is:
+// refresh ([syncRefresh]) — which a login the harness has just revoked never is:
 // it can only write over the very login it was seeded from, and a home whose
 // login is gone writes nothing. The removal takes the shared login's lock, so
 // a seat carrying a refresh out at the same moment either lands before it,
@@ -352,8 +352,8 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	// The removal is ONE WRITE of the login less every file of it that is a
 	// login ([Workspace.writeLoginLocked]), so a logout killed part way never
 	// leaves one file of the login it was removing. What it keeps is what is
-	// not a login ([Workspace.loginIn]): a settings file the CLI also keeps
-	// its login in, holding none, is the CLI's record of itself rather than
+	// not a login ([Workspace.loginIn]): a settings file the harness also keeps
+	// its login in, holding none, is the harness's record of itself rather than
 	// anybody's sign-in. A write that stopped part way is the login of record,
 	// so it is finished by the read and removed with the rest; one that cannot
 	// be finished cannot be told apart file by file, and the logout REPLACES
@@ -405,13 +405,13 @@ func (p *Provider) discardLoginHome(ctx context.Context) error {
 	return p.ws.emptyLoginHome()
 }
 
-// Status asks the CLI who it is logged in as, IN WORDS, for a person reading
+// Status asks the harness who it is logged in as, IN WORDS, for a person reading
 // `crewlet llm status`: the profile's [harnessprofile.Profile.StatusTextArgs] where
 // its status_args print JSON for the engine to read ([Provider.LoginStatus]),
-// and status_args themselves where they are already the CLI's words.
+// and status_args themselves where they are already the harness's words.
 //
 // A status makes no login, so it is carried out as a refresh ([syncRefresh]):
-// a home whose CLI changed nothing writes nothing, and one whose CLI did
+// a home whose harness changed nothing writes nothing, and one whose harness did
 // refresh writes only over the login it was seeded from — so asking who the
 // entry is signed in as can neither revert a seat's refresh that landed while
 // it ran nor bring back a login `crewlet llm logout` removed. (The command's
@@ -419,7 +419,7 @@ func (p *Provider) discardLoginHome(ctx context.Context) error {
 // after a logout, [ErrLoggedOut].)
 func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 	if len(p.profile.StatusArgs) == 0 {
-		return fmt.Errorf("%w: the %q CLI has no status command — "+
+		return fmt.Errorf("%w: the %q harness has no status command — "+
 			"`crewlet llm doctor` reports what can be observed instead",
 			ErrNoLoginCommand, p.harness)
 	}
@@ -431,7 +431,7 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 	return err
 }
 
-// AdoptHostLogin copies the CLI's login out of a human's home directory into
+// AdoptHostLogin copies the harness's login out of a human's home directory into
 // this provider's own, and reports what it took.
 //
 // A COPY, not a redirect: agents never write into the operator's personal
@@ -441,8 +441,8 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // can log out whichever side refreshes second — which is why the caller says
 // so, and recommends a headless token where the vendor mints one.
 //
-// A login the CLI keeps in a database of its own is taken the only way it can
-// leave one, through the CLI's own export run against that home
+// A login the harness keeps in a database of its own is taken the only way it can
+// leave one, through the harness's own export run against that home
 // ([Provider.exportHostLogin]) — run FIRST, before anything is written, so an
 // export that fails adopts nothing rather than half a login.
 //
@@ -499,7 +499,7 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 	}
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("harness: no %q login found under %q — log in with the "+
-			"vendor's CLI first, or name a different home with --home", p.harness, home)
+			"vendor's harness first, or name a different home with --home", p.harness, home)
 	}
 	unlock, err := p.ws.lockShared(ctx)
 	if err != nil {
@@ -558,14 +558,14 @@ func readHostFile(src string) ([]byte, bool, error) {
 	return content, true, nil
 }
 
-// HostLogin reports where this CLI's login sits in a human's home directory,
+// HostLogin reports where this harness's login sits in a human's home directory,
 // whether or not it has been adopted.
 //
-// So that "no sign-in" on a machine where the CLI plainly works explains
+// So that "no sign-in" on a machine where the harness plainly works explains
 // itself, rather than sending an operator to look for a bug that is a missing
 // `-from-host`.
 //
-// A login held in the CLI's own database is found by asking the CLI to export
+// A login held in the harness's own database is found by asking the harness to export
 // it — the one way to tell an empty database from one holding a login — and an
 // export that fails reports nothing rather than an error: this is a hint on a
 // report already explaining that nothing signs the entry in.
@@ -603,7 +603,7 @@ func (p *Provider) hostSources() []string {
 	return p.profile.CredentialPaths
 }
 
-// hostStoreName names a login found in a human's home through the CLI's own
+// hostStoreName names a login found in a human's home through the harness's own
 // export, for the lines that list where a login was found: there is no file to
 // name, so it names the home and the command that read it.
 func (p *Provider) hostStoreName(home string) string {
@@ -619,17 +619,17 @@ func (p *Provider) hostStoreName(home string) string {
 // in a bundle: they are per-seat conversation state, and shipping them across
 // hosts would restore one seat's transcripts onto another node's disk.
 //
-// And the bundle NAMES THE CLI it was exported from, in a manifest beside the
+// And the bundle NAMES THE HARNESS it was exported from, in a manifest beside the
 // files ([harnessprofile.BundleManifest]): a bundle is keyed by the entry, which
-// can move to another CLI, and the files' names cannot say whose they are —
-// six CLIs keep an `auth.json` — so the restore reads the CLI from the
+// can move to another harness, and the files' names cannot say whose they are —
+// six harnesses keep an `auth.json` — so the restore reads the harness from the
 // manifest and refuses every other ([ErrForeignBundle]).
 //
 // The files are read as ONE login ([Workspace.Login]), so a bundle never packs
 // a write that stopped part way — which every fresh volume restoring it would
 // then hold. And only the files of it that are a login travel
-// ([Workspace.loginIn]): a settings file the CLI also keeps its login in,
-// holding none, is the CLI's record of itself on this host.
+// ([Workspace.loginIn]): a settings file the harness also keeps its login in,
+// holding none, is the harness's record of itself on this host.
 //
 // And it CARRIES THE LOGIN'S INSTALL RECORD ([LoginInstall]) in its manifest,
 // read in the same hold of the shared login's lock as the files, so it is the
@@ -668,7 +668,7 @@ func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
 // that exported it — it sits in the secret store while a fleet upgrades one
 // node at a time — so a later build may add a key, and a node still on this
 // one that refused it would run the entry signed out over a bundle that is
-// its CLI's.
+// its harness's.
 type bundleManifest struct {
 	// Harness is the harness the bundle was exported from: the provider's
 	// harness, which is the directory its files are kept in under the state
@@ -733,7 +733,7 @@ func packBundle(m bundleManifest, files []bundleFile) (string, error) {
 // files only, no paths, each name once, and a total size cap. A bundle naming
 // "../../.ssh/authorized_keys" is the attack this refuses by construction.
 //
-// And only a bundle that NAMES THIS ENTRY'S CLI as the one it was exported
+// And only a bundle that NAMES THIS ENTRY'S HARNESS as the one it was exported
 // from ([ErrForeignBundle]). The file names alone cannot tell: a bundle is
 // keyed by the entry, and an entry moved from codex to pi kept a bundle whose
 // `auth.json` is a name pi keeps too — restored, it was written into pi's
@@ -756,7 +756,7 @@ func packBundle(m bundleManifest, files []bundleFile) (string, error) {
 // A BUNDLE WITH NO RECORD restores only into a directory holding no login:
 // nothing in it says it is newer than anything, so it replaces nothing. Its
 // login is then held with no record, and the first recorded bundle replaces it.
-// A bundle that cannot be read at all (another CLI's, a broken archive) is no
+// A bundle that cannot be read at all (another harness's, a broken archive) is no
 // newer login either: where a login is held it stands and nothing is said,
 // and only a directory holding none reports the refusal that leaves it
 // signed out.
@@ -812,11 +812,11 @@ func (p *Provider) RestoreConfiguredBundle(ctx context.Context) error {
 // and so restored nothing.
 var ErrLoginPresent = errors.New("harness: the entry already has a login, so the bundle was not restored")
 
-// ErrForeignBundle is a bundle that does not name this entry's CLI as the one
-// it was exported from — another CLI's, or one naming none — and so restored
-// nothing. The error that wraps it names the CLI the bundle does name, and the
+// ErrForeignBundle is a bundle that does not name this entry's harness as the one
+// it was exported from — another harness's, or one naming none — and so restored
+// nothing. The error that wraps it names the harness the bundle does name, and the
 // export that replaces it.
-var ErrForeignBundle = errors.New("harness: the credential bundle does not name this entry's CLI " +
+var ErrForeignBundle = errors.New("harness: the credential bundle does not name this entry's harness " +
 	"as the one it was exported from, so it was not restored")
 
 // ErrLoggedOut is an automatic restore that found the entry logged out by
@@ -850,16 +850,16 @@ func (p *Provider) loggedOutError() error {
 // ([Provider.LogoutNotice], [Provider.loggedOutError]), or "" where none does.
 //
 // ONLY WHERE THE ENTRY TAKES ONE. Said of every entry, it named
-// `-capture-token` and `-token-stdin` to a CLI whose profile names no token
+// `-capture-token` and `-token-stdin` to a harness whose profile names no token
 // variable — codex, like every built-in one but claude-code — which `crewlet
 // llm login` refuses both for; to one whose token variable is outside the
 // reference grammar ([misnamedVariable]), under which a token could be neither
 // stored nor referenced; and to an api-key or inherit-env entry, whose mode
 // that command refuses a stored token for: api-key removes the variable from
-// the CLI's environment, and inherit-env forwards it from the engine's own and
+// the harness's environment, and inherit-env forwards it from the engine's own and
 // never reads the secret store. So a token is named only under a variable a
 // store can hold ([Provider.TokenCanBeStored]), `-capture-token` only where the
-// CLI mints one ([Provider.MintsHeadlessToken]), and by the mode: stored under
+// harness mints one ([Provider.MintsHeadlessToken]), and by the mode: stored under
 // subscription, exported under inherit-env, and never under api-key.
 func (p *Provider) headlessTokenRoute() string {
 	if !p.TokenCanBeStored() {
@@ -884,9 +884,9 @@ func (p *Provider) headlessTokenRoute() string {
 // credential directory — what ends a logout — as THIS PROFILE offers them.
 //
 // From the profile, never a fixed list: a fixed list named `crewlet llm login
-// <key>` to an entry whose CLI declares no login subcommand (qwen-code, grok,
+// <key>` to an entry whose harness declares no login subcommand (qwen-code, grok,
 // gemini-cli), and the one remedy offered first was a command that refuses.
-// `-from-host` needs a login it can find in a person's home, the CLI's own
+// `-from-host` needs a login it can find in a person's home, the harness's own
 // export or a file the profile names; an import needs nothing, so it is always
 // there.
 func (p *Provider) loginRoutes() string {
@@ -1011,9 +1011,9 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 		// A BUNDLE THAT CANNOT BE READ IS NO NEWER LOGIN: a node that holds
 		// one keeps it, as the engine runs it, and the restore says nothing,
 		// as it did when a bundle reached only an empty directory. Reported
-		// there, a bundle another CLI's left behind refused the very
+		// there, a bundle another harness's left behind refused the very
 		// `crewlet llm export` that replaces it, on the node signed in to the
-		// new CLI. Where nothing is held the refusal is what explains a
+		// new harness. Where nothing is held the refusal is what explains a
 		// signed-out entry, so it is reported.
 		if present, hasErr := p.ws.HasLogin(ctx); !operator && hasErr == nil && present {
 			return ErrLoginPresent
@@ -1062,7 +1062,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 		}
 	}
 	// THE BUNDLE'S LOGIN WHOLE, beside the files of the directory that are no
-	// login (a settings file the CLI also keeps its login in, holding none),
+	// login (a settings file the harness also keeps its login in, holding none),
 	// which a bundle never carries ([Provider.ExportBundle]): a file of the
 	// login it replaces left beside it would make a login of two sign-ins.
 	next := p.ws.notLoginIn(current)
@@ -1079,7 +1079,7 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 
 // notLoginIn is the part of files, the shared login as read, that is NOT a
 // login ([Workspace.loginIn]): the settings files a write that replaces or
-// removes the login keeps, as the CLI's record of itself rather than anybody's
+// removes the login keeps, as the harness's record of itself rather than anybody's
 // sign-in.
 func (w *Workspace) notLoginIn(files map[string][]byte) map[string][]byte {
 	out := maps.Clone(files)
@@ -1137,9 +1137,9 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 	// The SHAPE of each entry is judged as it is read — a link, a path or an
 	// oversized file is refused there, whatever else the bundle says — and
 	// WHOSE it is once the whole archive is read: the manifest is an entry
-	// like any other, and a bundle from another CLI is refused as that,
+	// like any other, and a bundle from another harness is refused as that,
 	// naming the move behind it, rather than as whichever of its files came
-	// first and is not a name this CLI keeps.
+	// first and is not a name this harness keeps.
 	var (
 		manifest     []byte
 		haveManifest bool
@@ -1174,7 +1174,7 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 		}
 		// ONCE EACH: a name held twice is two answers to one question, and
 		// the last of them winning is a choice nothing made — for the
-		// manifest, which CLI the bundle is.
+		// manifest, which harness the bundle is.
 		if _, twice := staged[name]; twice || (name == harnessprofile.BundleManifest && haveManifest) {
 			return nil, LoginInstall{}, fmt.Errorf("harness: the credential bundle holds %q twice, so it was not "+
 				"unpacked — re-export it with `crewlet llm export %s`", name, p.key)
@@ -1208,7 +1208,7 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 	}
 	for _, name := range order {
 		if !allowed[name] {
-			// The bundle is this CLI's, by its manifest, and still holds a
+			// The bundle is this harness's, by its manifest, and still holds a
 			// file this entry does not keep: one exported while the entry's
 			// credential_paths said otherwise, or not by `crewlet llm export`.
 			return nil, LoginInstall{}, fmt.Errorf("harness: the credential bundle holds %q, which is not a %q "+
@@ -1228,11 +1228,11 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 }
 
 // checkBundleHarness answers [ErrForeignBundle] unless a bundle's manifest names
-// this entry's CLI — the provider's agent, the same name its files are kept
+// this entry's harness — the provider's agent, the same name its files are kept
 // under in the state directory, as the one the bundle was exported from, and
 // the manifest otherwise.
 //
-// A bundle naming no CLI is refused as one naming another: nothing in it says
+// A bundle naming no harness is refused as one naming another: nothing in it says
 // whose its files are, and a file name is the guess this replaces.
 func (p *Provider) checkBundleHarness(manifest []byte, found bool) (bundleManifest, error) {
 	none := fmt.Sprintf("it holds no %s", harnessprofile.BundleManifest)
@@ -1248,19 +1248,19 @@ func (p *Provider) checkBundleHarness(manifest []byte, found bool) (bundleManife
 			return named, nil
 		default:
 			// A BUNDLE IS KEYED BY THE ENTRY (CREWLET_LLM_CLI_<KEY>_CREDENTIALS,
-			// or the entry's own auth.credential_bundle), not by its CLI, so
+			// or the entry's own auth.credential_bundle), not by its harness, so
 			// the bundle an entry was configured with before it moved to
-			// another CLI is still the one restored after the move — refused
+			// another harness is still the one restored after the move — refused
 			// at every boot and apply until it is replaced, which is the
 			// remedy to name.
 			return bundleManifest{}, fmt.Errorf("%w: it names %q, and %q runs %q; a bundle restores only into "+
-				"the CLI it was exported from, so one exported before %q moved to %q, or for "+
+				"the harness it was exported from, so one exported before %q moved to %q, or for "+
 				"another entry, is refused until it is replaced: sign %q in and export its "+
 				"bundle again (`crewlet llm export %s`)",
 				ErrForeignBundle, named.Harness, p.key, p.harness, p.key, p.harness, p.harness, p.key)
 		}
 	}
-	return bundleManifest{}, fmt.Errorf("%w: it names none (%s), and a bundle restores only into the CLI it was "+
+	return bundleManifest{}, fmt.Errorf("%w: it names none (%s), and a bundle restores only into the harness it was "+
 		"exported from, so one that cannot say which is refused until it is replaced: sign %q "+
 		"in and export its bundle again (`crewlet llm export %s`)",
 		ErrForeignBundle, none, p.harness, p.key)
@@ -1283,7 +1283,7 @@ func (p *Provider) declineAfterLogout(operator bool) error {
 	return nil
 }
 
-// runInCredentialHome runs one of the CLI's own auth commands in the LOGIN
+// runInCredentialHome runs one of the harness's own auth commands in the LOGIN
 // HOME, which is seeded from and carried back to the shared credential
 // directory rather than a seat's, and reports whether the home held a login
 // once the command was done.
@@ -1304,7 +1304,7 @@ func (p *Provider) declineAfterLogout(operator bool) error {
 //
 // It sweeps NO SEAT'S HOME, though a seat's generation can be left open just
 // as this home's can ([Workspace.sweep]): the engine sweeps those at every
-// seat's first call, and a command doing it too would pay a CLI export per
+// seat's first call, and a command doing it too would pay a harness export per
 // kept seat home — for a home kept because its export keeps failing, up to
 // [auxiliaryTimeout] each, on every `crewlet llm status` — for a seed whose only
 // readers are a login, which replaces it, and a status, which reads it.
@@ -1329,7 +1329,7 @@ func (p *Provider) runInCredentialHome(
 		// [DeviceLogin], [Provider.LoginStatus].)
 		//
 		// WaitDelay still applies. Without it, cancelling this context killed
-		// the CLI while a forked helper kept the inherited pipes open, and Wait
+		// the harness while a forked helper kept the inherited pipes open, and Wait
 		// blocked on EOF that was never coming: an operator's Ctrl+C left the
 		// command hanging.
 		cmd.WaitDelay = p.termGrace
@@ -1397,7 +1397,7 @@ func (p *Provider) inCredentialHome(
 	// The login home is seeded from and carried back to the shared
 	// directory exactly like a seat's, so re-running a login updates the
 	// one credential every seat reads — and PRUNED first exactly like one,
-	// so a login the CLI keeps in its own database is imported into an
+	// so a login the harness keeps in its own database is imported into an
 	// empty one rather than skipped by a database still holding an older
 	// copy of the same credential.
 	if err := p.ws.prune(home); err != nil {
@@ -1408,7 +1408,7 @@ func (p *Provider) inCredentialHome(
 	switch {
 	case err == nil:
 	case mode == syncLogin && errors.As(err, &refused):
-		// A LOGIN REPLACES A SHARED LOGIN THE CLI CANNOT READ, for the reason
+		// A LOGIN REPLACES A SHARED LOGIN THE HARNESS CANNOT READ, for the reason
 		// it replaces one it cannot carry out: the refusal names `crewlet llm
 		// login` as the remedy, and a login that stopped at the same refusal
 		// left the operator in a loop with the fleet signed out. It starts
@@ -1420,7 +1420,7 @@ func (p *Provider) inCredentialHome(
 		log.WarnContext(ctx, "cli_agent_shared_login_refused", "provider", p.key, "agent", p.harness,
 			"path", refused.path, "error", refused.err)
 		if errOut != nil {
-			_, _ = fmt.Fprintf(errOut, "crewlet: the CLI refused to import the shared login %s "+
+			_, _ = fmt.Fprintf(errOut, "crewlet: the harness refused to import the shared login %s "+
 				"(%v), so it cannot be read; signing in afresh replaces it\n", refused.path, refused.err)
 		}
 		if emptyErr := p.ws.emptyLoginHome(); emptyErr != nil {
@@ -1483,7 +1483,7 @@ func (p *Provider) inCredentialHome(
 		}
 		return holds, errors.Join(fmt.Errorf("harness: the login in %q could not be carried "+
 			"back to %s, so it was kept there, and the next `crewlet llm` command that runs "+
-			"the CLI for %q carries it out before anything else: %w",
+			"the harness for %q carries it out before anything else: %w",
 			home, p.ws.CredentialsDir(), p.key, syncErr), recordErr, runErr)
 	}
 	// Emptied after as well, so the login home keeps NO second copy of the

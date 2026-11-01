@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// fakeStore is a CLI that keeps its logins, its sessions and each session's
+// fakeStore is a harness that keeps its logins, its sessions and each session's
 // usage in a DATABASE OF ITS OWN under XDG_DATA_HOME — OpenCode 2.0's shape —
 // rather than in a file the engine could copy. Its verbs are words on argv:
 //
@@ -32,7 +32,7 @@ import (
 //   - store-device-login plays a device-code sign-in ([fakeDeviceLogin]);
 //   - store-status plays a status command ([fakeStatus]);
 //   - store-file-login writes a login FILE, $HOME/.fake/creds.json, holding
-//     FAKE_LOGIN_KEY — a CLI that keeps its login in a file, for the cases
+//     FAKE_LOGIN_KEY — a harness that keeps its login in a file, for the cases
 //     about one;
 //   - store-two-file-login writes ONE LOGIN IN TWO FILES, $HOME/.fake/auth.json
 //     and $HOME/.fake/config.toml, each naming FAKE_LOGIN_KEY — kimi-code's
@@ -132,7 +132,7 @@ func fakeStore() {
 			failing = true
 		}
 		if failing {
-			// A CLI that printed its logins and THEN failed: the half
+			// A harness that printed its logins and THEN failed: the half
 			// on stdout is every secret it holds.
 			printed := `[{"id":"cred_1","key":"LEAKED-SECRET"}]`
 			if creds := read(); len(creds) > 0 {
@@ -156,7 +156,7 @@ func fakeStore() {
 		doc, _ := io.ReadAll(os.Stdin)
 		var in []map[string]string
 		if os.Getenv("FAKE_STORE_IMPORT_REJECT") == "1" {
-			// Quoting what it rejected, as a CLI may.
+			// Quoting what it rejected, as a harness may.
 			fmt.Fprintf(os.Stderr, "invalid document: %s", doc)
 			os.Exit(1)
 		}
@@ -242,7 +242,7 @@ const fakeQuotedTail = 40
 // command start and taken a lock nobody else holds.
 const fakeAwaitBound = time.Minute
 
-// storeProvider builds a provider whose CLI is [fakeStore].
+// storeProvider builds a provider whose harness is [fakeStore].
 func storeProvider(t *testing.T, env map[string]string, extra map[string]any) *Provider {
 	t.Helper()
 	merged := map[string]string{"FAKE_STORE": "1"}
@@ -327,7 +327,7 @@ func seatHome(t *testing.T, p *Provider) string {
 	return filepath.Join(p.ws.SeatDir(llm.SeatOf(t.Context())), "home")
 }
 
-// seatDatabase is where [fakeStore] keeps the database of that seat's CLI.
+// seatDatabase is where [fakeStore] keeps the database of that seat's harness.
 func seatDatabase(t *testing.T, p *Provider) string {
 	t.Helper()
 	return filepath.Join(seatHome(t, p), ".local", "share", "fake")
@@ -362,7 +362,7 @@ func TestASeatNeverCreatesALogin(t *testing.T) {
 	}
 }
 
-// A DATABASE HOLDING NO LOGIN NEVER REPLACES ONE. A CLI that dropped a
+// A DATABASE HOLDING NO LOGIN NEVER REPLACES ONE. A harness that dropped a
 // credential it could not refresh exports nothing, and the shared login is the
 // better one to keep — exactly as a credential file a call deleted is not
 // deleted from the shared directory.
@@ -381,7 +381,7 @@ func TestADatabaseWithNoLoginNeverReplacesTheSharedOne(t *testing.T) {
 // AN IMPORT THAT FAILS FAILS THE CALL, naming the remedy — a seat run with no
 // login while the shared directory holds one would fail with a vendor's "not
 // authenticated" that points at nothing — and never repeats the document: a
-// CLI that rejects one may quote it, and it is a credential.
+// harness that rejects one may quote it, and it is a credential.
 //
 // The fake quotes the WHOLE document, and the failure carries none of it: not
 // the secret, which the redaction rules would have caught anyway, and not the
@@ -407,7 +407,7 @@ func TestAnImportThatFailsFailsTheCallWithoutRepeatingTheDocument(t *testing.T) 
 }
 
 // AN EXPORT THAT FAILS NEVER REPORTS WHAT IT PRINTED. Its stdout is every
-// secret the CLI holds, so the error is the command, its exit and its stderr.
+// secret the harness holds, so the error is the command, its exit and its stderr.
 func TestAFailedExportNeverRepeatsWhatItPrinted(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, map[string]string{"FAKE_STORE_EXPORT_FAIL": "1"}, nil)
@@ -420,7 +420,7 @@ func TestAFailedExportNeverRepeatsWhatItPrinted(t *testing.T) {
 		t.Errorf("the failure repeats the export's stdout: %v", err)
 	}
 	if !strings.Contains(err.Error(), "export broke") {
-		t.Errorf("the failure drops the CLI's own stderr: %v", err)
+		t.Errorf("the failure drops the harness's own stderr: %v", err)
 	}
 }
 
@@ -460,11 +460,11 @@ func TestALoginIsMadeInTheLoginHomeAndRemovedByLogout(t *testing.T) {
 	}
 }
 
-// A LOGIN REPLACES A SHARED LOGIN THE CLI REFUSES TO IMPORT. The refusal sends
+// A LOGIN REPLACES A SHARED LOGIN THE HARNESS REFUSES TO IMPORT. The refusal sends
 // the operator to `crewlet llm login`, and the login began by importing the very
 // document that was refused, stopped at the same refusal and never started the
 // vendor's sign-in — so the one remedy named was a loop, with the fleet signed
-// out. A bundle exported by another build of the CLI, whose shapes this one
+// out. A bundle exported by another build of the harness, whose shapes this one
 // decodes strictly, is how a document gets here. A status still refuses: it
 // makes no login to put in the document's place.
 //
@@ -514,7 +514,7 @@ func TestALoginReplacesASharedLoginTheHarnessRefusesToImport(t *testing.T) {
 }
 
 // A BUNDLE CARRIES THE DOCUMENT, so an engine rebuilt on every deploy comes up
-// signed in to a CLI that keeps its login in its own database too.
+// signed in to a harness that keeps its login in its own database too.
 func TestABundleCarriesTheDocument(t *testing.T) {
 	t.Parallel()
 	source := storeProvider(t, nil, nil)
@@ -532,7 +532,7 @@ func TestABundleCarriesTheDocument(t *testing.T) {
 	}
 }
 
-// A HUMAN'S LOGIN IS EXPORTED, NOT COPIED: the CLI reads their home as it
+// A HUMAN'S LOGIN IS EXPORTED, NOT COPIED: the harness reads their home as it
 // would for them, and nothing is left behind in it — a call's TMPDIR would
 // point inside the home it is given.
 func TestAHostLoginIsExportedFromTheHumansHome(t *testing.T) {
@@ -674,7 +674,7 @@ func TestALogoutDuringACallIsNotUndoneByTheSeat(t *testing.T) {
 		t.Fatalf("the seat imported %q, want the shared document", store.held)
 	}
 
-	// The operator logs out mid-call; the CLI refreshes both kinds.
+	// The operator logs out mid-call; the harness refreshes both kinds.
 	for _, path := range loginOnDisk(t, ws) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)

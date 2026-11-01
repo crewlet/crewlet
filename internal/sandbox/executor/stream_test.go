@@ -16,7 +16,7 @@ import (
 
 // What these protect: A RUN IS NEVER LOST TO THE SIZE OF ITS OWN LOG.
 //
-// A coding agent's stdout event stream and its stderr grow with the run, and
+// A harness's stdout event stream and its stderr grow with the run, and
 // every path used to read them whole and refuse them past 32 MiB. Each case
 // below is a run the engine used to wedge or destroy for that alone. The fake
 // refuses a whole read past its cap exactly as every real backend does — at
@@ -67,7 +67,7 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	}
 }
 
-// A STREAM'S END NEVER ENDS A RUN. Every CLI this build drives exits, so the
+// A STREAM'S END NEVER ENDS A RUN. Every harness this build drives exits, so the
 // done marker its wrapper writes after it is the end — and an OpenCode run
 // whose final step printed its finish has not yet had its script add the
 // session's usage or write the box's refreshed login back. A live wrapper is
@@ -118,7 +118,7 @@ func TestAReadThatFailsNeverSkipsTheLivenessProbe(t *testing.T) {
 	}
 }
 
-// A CLI THAT EXITS HAS NO STREAM TO POLL. The done marker is its only signal,
+// A HARNESS THAT EXITS HAS NO STREAM TO POLL. The done marker is its only signal,
 // and reading its output on every tick was a transfer per box per tick that
 // could never change the answer.
 func TestAHarnessThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
@@ -271,7 +271,7 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 
 // THE WHOLE FAILURE IS WHAT ONE CONDENSATION CAN TAKE, not the error stream
 // inside it. The failure opens with the engine's own sentences — a piece it
-// could not read, the exit status, the CLI's error — and the error stream used
+// could not read, the exit status, the harness's error — and the error stream used
 // to be read to the compactor's whole input and carried behind them, so every
 // failure built around a long stderr was a few hundred bytes over what the
 // compactor reads, refused before a model was asked, and the run's record
@@ -289,9 +289,9 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 //
 // EVERYTHING SIZED FROM THE BOUND the runner is given ([testFailureBound]),
 // in the proportions it had to the real one: the error stream half again past
-// it, and the CLI's own error about a hundredth of it — small enough that the
+// it, and the harness's own error about a hundredth of it — small enough that the
 // stream still gets room after the sentences, which is the branch this case
-// is about. A CLI error sized for the real bound would fill a small one and
+// is about. A harness error sized for the real bound would fill a small one and
 // leave the stream unshown, a different branch.
 func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 	t.Parallel()
@@ -325,8 +325,8 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					len(res.Error), len(res.Error)-testFailureBound, testFailureBound)
 			}
 			for _, want := range []string{
-				"the report the coding agent wrote", // the refused piece, first
-				"the coding agent exited with status 1",
+				"the report the harness wrote", // the refused piece, first
+				"the harness exited with status 1",
 				"error_during_execution: the provider answered 529",
 				"were not read: a run's failure is read from its end",
 			} {
@@ -334,7 +334,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					t.Errorf("the failure lost %q: %.400q", want, res.Error)
 				}
 			}
-			if !strings.HasPrefix(res.Error, "the report the coding agent wrote") {
+			if !strings.HasPrefix(res.Error, "the report the harness wrote") {
 				t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
 			}
 			if !strings.HasSuffix(res.Error, "FATAL: the last line") {
@@ -345,7 +345,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 }
 
 // A FAILURE WHOSE OWN SENTENCES FILL THE BOUND SAYS THE ERROR STREAM WAS NOT
-// SHOWN, rather than showing a fragment of it or nothing at all: the CLI's
+// SHOWN, rather than showing a fragment of it or nothing at all: the harness's
 // error is taken as it is — it is what nobody can find elsewhere — and the
 // coordinator holds the whole to what a condensation reads.
 func TestAFailureWhoseSentencesFillTheBoundSaysItsStreamWasNotShown(t *testing.T) {
@@ -397,7 +397,7 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	}
 	// By the cap the BOX refused it at, which is the fake's own here.
 	capText := fmt.Sprintf("past the %.1f MiB the engine reads back", float64(b.ReadCap())/(1<<20))
-	if !strings.Contains(res.Error, "the report the coding agent wrote") || !strings.Contains(res.Error, capText) {
+	if !strings.Contains(res.Error, "the report the harness wrote") || !strings.Contains(res.Error, capText) {
 		t.Errorf("the refusal is not described by size and the box's cap (%q): %q", capText, res.Error)
 	}
 	if res.InputTokens != 100 || res.OutputTokens != 50 {

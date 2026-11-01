@@ -16,7 +16,7 @@ import (
 
 // The cases here hold WHEN A LOGIN'S INSTALL RECORD MOVES ([LoginInstall]):
 // on every write that installs a login and on no other, and never into
-// anything a CLI reads.
+// anything a harness reads.
 
 // installRecord is the record the entry's credential directory holds, a record
 // that cannot be read failing the case.
@@ -160,9 +160,9 @@ func TestARefreshCarriedBackKeepsTheInstallRecord(t *testing.T) {
 	}
 }
 
-// THE RECORD REACHES NO CLI: a seat's home is seeded from the login's own
+// THE RECORD REACHES NO HARNESS: a seat's home is seeded from the login's own
 // files, a box from the paths SandboxCredentials names, and a bundle packs the
-// login's files with the record in its manifest. A record handed to a CLI is a
+// login's files with the record in its manifest. A record handed to a harness is a
 // file in its home the vendor never wrote, and one packed as a file would be
 // restored as a credential file no profile keeps.
 //
@@ -238,7 +238,7 @@ func bundleEntries(t *testing.T, blob string) []string {
 	}
 }
 
-// installedLoginOf is a bundle of the `custom` CLI holding one creds.json of
+// installedLoginOf is a bundle of the `custom` harness holding one creds.json of
 // body, carrying the install record g, as another node's export of a login
 // installed with g writes one.
 func installedLoginOf(t *testing.T, body string, g LoginInstall) string {
@@ -439,8 +439,8 @@ func TestABundleWhoseRecordCannotBeOrderedIsRefused(t *testing.T) {
 }
 
 // A BUNDLE THAT CANNOT BE READ IS NO NEWER LOGIN. A node signed in to the
-// entry's new CLI keeps its login when the configured bundle is still the old
-// CLI's, and the restore says nothing, so `crewlet llm export`, which restores
+// entry's new harness keeps its login when the configured bundle is still the old
+// harness's, and the restore says nothing, so `crewlet llm export`, which restores
 // first and is the very command that replaces that bundle, is not refused over
 // it; a node holding no login is told, since the refusal is why it runs signed
 // out.
@@ -453,13 +453,13 @@ func TestABundleThatCannotBeReadKeepsTheLoginHeld(t *testing.T) {
 	p := fileProvider(t, nil)
 	writeCreds(t, p, `{"token":"k-held"}`)
 	if err := p.RestoreBundle(t.Context(), foreign); err != nil {
-		t.Errorf("RestoreBundle of another CLI's bundle over a held login = %v, want nothing said", err)
+		t.Errorf("RestoreBundle of another harness's bundle over a held login = %v, want nothing said", err)
 	}
 	if got := readCreds(t, p); got != `{"token":"k-held"}` {
 		t.Errorf("the held login is %q", got)
 	}
 	empty := fileProvider(t, nil)
 	if err := empty.RestoreBundle(t.Context(), foreign); !errors.Is(err, ErrForeignBundle) {
-		t.Errorf("RestoreBundle of another CLI's bundle into an empty directory = %v, want ErrForeignBundle", err)
+		t.Errorf("RestoreBundle of another harness's bundle into an empty directory = %v, want ErrForeignBundle", err)
 	}
 }

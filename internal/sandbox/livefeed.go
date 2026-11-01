@@ -94,7 +94,7 @@ type LiveRead struct {
 	AsOf time.Time
 	// Spent is every token the job's model calls have reported since the
 	// reading began, for a caller that stops a run at a cap while it works.
-	// Zero for a CLI whose stream reports none until it ends.
+	// Zero for a harness whose stream reports none until it ends.
 	Spent int
 }
 

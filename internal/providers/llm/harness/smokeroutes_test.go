@@ -6,7 +6,7 @@ import (
 )
 
 // THE DOCTOR'S SMOKE TEST CERTIFIES EVERY SHIPPED TOOL ROUTE, and says how each
-// CLI's calls are joined to its record: Codex and Muse Code by the id each
+// harness's calls are joined to its record: Codex and Muse Code by the id each
 // sends in `_meta`, every other by name and arguments. It runs the route a
 // seat's phase runs — the profile's configuration, the relay, the record — so
 // a route the doctor passes is one a seat can use. The requests are of a real
@@ -14,7 +14,7 @@ import (
 // estimate of each as it is read, which is never refunded.
 //
 // Mutation: judge the join as though no profile read its record, and every
-// CLI's smoke line says a run counts as one round.
+// harness's smoke line says a run counts as one round.
 func TestTheSmokeTestCertifiesEveryShippedToolRoute(t *testing.T) {
 	t.Parallel()
 	for agent, join := range map[string]string{

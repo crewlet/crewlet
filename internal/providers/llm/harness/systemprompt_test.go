@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// A SYSTEM PROMPT IS NOT A USER MESSAGE, where the CLI has a channel for it.
+// A SYSTEM PROMPT IS NOT A USER MESSAGE, where the harness has a channel for it.
 //
 // Folded into the transcript it arrives as user content — the model is asked
 // to treat an ordinary message as its standing instructions, underneath a
@@ -49,7 +49,7 @@ func TestSplitSystemLiftsTheSystemPromptOutOfTheTranscript(t *testing.T) {
 	}
 }
 
-// NOTHING TO LIFT IS NOT AN EMPTY SYSTEM PROMPT. A CLI handed an empty one
+// NOTHING TO LIFT IS NOT AN EMPTY SYSTEM PROMPT. A harness handed an empty one
 // would replace its default with nothing; the caller passes no flag at all,
 // which it can only do if this reports the absence honestly.
 func TestSplitSystemReportsNothingToLift(t *testing.T) {
@@ -119,12 +119,12 @@ func TestTheClaudeProfileKeepsTheSystemPromptOffArgv(t *testing.T) {
 	}
 }
 
-// envChannel marks a CLI that reads its system prompt from a FILE named by an
+// envChannel marks a harness that reads its system prompt from a FILE named by an
 // environment variable rather than from argv — a third channel, and the one
 // `--help` never shows.
 const envChannel = "{env}"
 
-// discoveredChannel marks a CLI that FINDS its system prompt in a file at a
+// discoveredChannel marks a harness that FINDS its system prompt in a file at a
 // place of its own choosing in the working directory, and is told on argv
 // only which of what it found to use — a fourth channel, and one with no
 // placeholder at all.
@@ -134,17 +134,17 @@ const discoveredChannel = "{discovered}"
 // carrier it chose.
 //
 // A placeholder the code does not substitute is the failure mode with no
-// symptom: the CLI is handed the literal "{file}" as its system prompt, takes
+// symptom: the harness is handed the literal "{file}" as its system prompt, takes
 // it without complaint, and every seat on that provider runs with a one-word
 // identity. The two spellings are the whole vocabulary [systemArgs] knows.
 //
-// The table is the SHIPPED set, so adopting a flag for a new CLI has to come
+// The table is the SHIPPED set, so adopting a flag for a new harness has to come
 // through here — which is where the argv trade gets stated rather than
 // stumbled into. It records system_prompt, the channel that replaces the
-// CLI's own prompt; the one-shape rules below hold both channels.
+// harness's own prompt; the one-shape rules below hold both channels.
 func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing.T) {
 	t.Parallel()
-	// Checked against each CLI's own --help — or, where the vendor
+	// Checked against each harness's own --help — or, where the vendor
 	// documents its flags rather than printing them all, against that — at
 	// the version named in docs/concepts/llm-backends.md.
 	// Seven of the twelve have no such flag at all — two of those read a
@@ -153,7 +153,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
-		// 1.0.70, xAI's OWN CLI from x.ai/cli:
+		// 1.0.70, xAI's OWN HARNESS from x.ai/cli:
 		// --system-prompt-override, string only — a path there is sent as
 		// the text — and --rules the same on the appending channel. NOT
 		// the same-named community package on npm, which has no such
@@ -180,7 +180,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
 		// AGENT — `agents/<name>.md` in its configuration directory, which
 		// the profile points inside the per-call directory, its body
-		// replacing the CLI's own prompt — which `--agent` selects. Its
+		// replacing the harness's own prompt — which `--agent` selects. Its
 		// append channel is the AGENTS.md of the same directory, which the
 		// default agent reads on every run.
 		"opencode": discoveredChannel,
@@ -191,7 +191,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// names (TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE), which a side pass
 		// takes too.
 		"muse-code": "",
-		// 0.42.0 and 2.3.1, MoonshotAI's OWN CLI from
+		// 0.42.0 and 2.3.1, MoonshotAI's OWN HARNESS from
 		// @moonshot-ai/kimi-code: --agent-file, a path — but an AGENT
 		// FILE rather than a bare prompt, which is what a channel's file
 		// spec exists for, and the appending channel is the same file
@@ -200,22 +200,22 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// wrapper and has none of this.
 		"kimi-code": "{file}",
 		// No channel, measured on 0.21.5. Its identity slot, SOUL.md,
-		// lives in the CLI's home, which a seat's concurrent calls share,
+		// lives in the harness's home, which a seat's concurrent calls share,
 		// and a .hermes.md in the call's directory — the one per-call file
 		// it reads — is replaced whole by a "[BLOCKED: …]" line, silently,
-		// when ordinary company prose matches its scan. `-p` on this CLI
+		// when ordinary company prose matches its scan. `-p` on this harness
 		// selects a PROFILE, not a prompt.
 		"hermes": "",
 		// 0.85.1 and 1.4.0: --system-prompt, which reads its value as a
 		// path when a file exists there — and sends the value itself as
 		// the prompt when none does, silently, so the file has to be
-		// written before the CLI starts. --append-system-prompt reads it
+		// written before the harness starts. --append-system-prompt reads it
 		// the same way.
 		"pi": "{file}",
 	}
 	// THE TABLE IS THE SHIPPED SET. Without this, a profile added later is
 	// simply absent from the map and covered by nothing — the failure is
-	// that adopting a system-prompt flag for a new CLI never has to state
+	// that adopting a system-prompt flag for a new harness never has to state
 	// the argv trade here, which is the whole reason the table exists.
 	for _, name := range harnessprofile.BuiltinNames() {
 		if name == "custom" {
@@ -225,7 +225,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		}
 		if _, ok := want[name]; !ok {
 			t.Errorf("the %q profile ships but this table does not say which "+
-				"system-prompt channel its CLI has", name)
+				"system-prompt channel its harness has", name)
 		}
 	}
 	for name, placeholder := range want {
@@ -235,7 +235,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 			continue
 		}
 		// ONE CARRIER PER CHANNEL, ever, on both: a channel naming an
-		// argv and a variable would hand the CLI the prompt twice, and
+		// argv and a variable would hand the harness the prompt twice, and
 		// one naming {file} and {system} would write the prompt to disk
 		// and then put it on argv as well.
 		for field, ch := range map[string]harnessprofile.Channel{
@@ -256,10 +256,10 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		case envChannel:
 			if ch.Env == "" {
 				t.Errorf("%s carries no system_prompt.env, so its seats' identities "+
-					"go in the transcript although its CLI reads a file", name)
+					"go in the transcript although its harness reads a file", name)
 			}
 			if joined != "" {
-				t.Errorf("%s puts the prompt on argv although its CLI reads a file: %v",
+				t.Errorf("%s puts the prompt on argv although its harness reads a file: %v",
 					name, ch.Args)
 			}
 		case discoveredChannel:
@@ -274,7 +274,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 			}
 		case "":
 			if ch.Declared() {
-				t.Errorf("%s declares system_prompt = %+v, but its CLI has no such "+
+				t.Errorf("%s declares system_prompt = %+v, but its harness has no such "+
 					"channel — the text would reach it as a literal argument, or "+
 					"nowhere", name, ch)
 			}

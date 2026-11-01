@@ -109,7 +109,7 @@ type MCPServer struct {
 	// for it, which lands in the same environment or the same headers.
 	//
 	// EVERY OTHER REFERENCE MUST RESOLVE before the server is started — on
-	// the engine host or in a coding agent's box — because a credential that
+	// the engine host or in a harness's box — because a credential that
 	// arrives empty either fails the server or lets it act as nobody
 	// (internal/engine, toolcredentials.go). What that rule cannot tell on
 	// its own is a host setting passed through by name, like a private

@@ -40,7 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// chainMember is one entry of a fixture's executor chain: its key, its CLI, the
+// chainMember is one entry of a fixture's executor chain: its key, its harness, the
 // model it names and, for an entry whose plan is spent, that it sits out.
 type chainMember struct {
 	key, agent, model string
@@ -49,7 +49,7 @@ type chainMember struct {
 	// the engine host, rather than with an API key that travels.
 	subscription bool
 	// spent sits the entry out on this node before the launch, as a text
-	// call that met the CLI's usage-limit line leaves it.
+	// call that met the harness's usage-limit line leaves it.
 	spent bool
 	// env is the entry's env, as resolved.
 	env map[string]string
@@ -58,8 +58,8 @@ type chainMember struct {
 // harnessProvider is a REAL harness provider for m: the question every case here
 // asks is what the provider's own answer makes the launch do, and a fake would
 // answer whatever the case wanted. Its binary does not exist, so no case can
-// start a CLI on the machine running the suite — except an entry that has to
-// sit out, whose stand-in prints the CLI's own usage-limit line once.
+// start a harness on the machine running the suite — except an entry that has to
+// sit out, whose stand-in prints the harness's own usage-limit line once.
 func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	t.Helper()
 	overrides := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
@@ -71,7 +71,7 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 		script := filepath.Join(t.TempDir(), "spent-cli")
 		if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\n"+
 			"echo 'Usage limit reached · resets 5pm'\n"), 0o755); err != nil {
-			t.Fatalf("writing the spent CLI: %v", err)
+			t.Fatalf("writing the spent harness: %v", err)
 		}
 		overrides = map[string]any{
 			"binary": script, "complete_args": []any{"run"},
@@ -149,7 +149,7 @@ func executorCompany(t *testing.T) (*Company, *org.Role) {
 // shapes with nothing to launch on.
 //
 // AND EVERY AGENT SEAT GETS ONE, over the turn's pinned company: the member,
-// its CLI and its cell are the launch's to choose, from that company, so
+// its harness and its cell are the launch's to choose, from that company, so
 // nothing about them is resolved here.
 func TestEverySeatGetsALauncherOverItsPinnedCompanyAndNoneGetsATypedNil(t *testing.T) {
 	t.Parallel()
@@ -177,7 +177,7 @@ func TestEverySeatGetsALauncherOverItsPinnedCompanyAndNoneGetsATypedNil(t *testi
 
 // launchRig is an engine that can take an executor launch all the way to a
 // box — the in-process double for every cell, the double's runner for every
-// CLI that has one, a durable run store, a queue for the start event and the
+// harness that has one, a durable run store, a queue for the start event and the
 // given bridge, mounted — and the runners every launch starts its job on.
 func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sandbox.FakeRunner) {
 	t.Helper()
@@ -185,7 +185,7 @@ func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sa
 	return e, runners["claude-code"]
 }
 
-// launchRigRunners is [launchRig] answering every CLI's runner, by name: a case
+// launchRigRunners is [launchRig] answering every harness's runner, by name: a case
 // about WHICH runner a launch starts its job on has to see the one it did not.
 func launchRigRunners(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, map[string]*sandbox.FakeRunner) {
 	t.Helper()
@@ -329,7 +329,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 
 // FALLBACK AT LAUNCH. A head whose plan is spent on this node is passed over
 // for the next member that can take the run, and the run is that member's
-// whole: its model, its CLI and the entry the job is recorded under — which is
+// whole: its model, its harness and the entry the job is recorded under — which is
 // what the run's spend is charged to. The hand-off is the runner's to publish,
 // against the turn, so it is handed to the request's hook naming both entries.
 //
@@ -364,13 +364,13 @@ func TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt(t *testing.T) {
 	}
 }
 
-// A LAUNCH RUNS ON ITS MEMBER'S OWN CLI. The box's runner is the picked
+// A LAUNCH RUNS ON ITS MEMBER'S OWN HARNESS. The box's runner is the picked
 // member's, never a constant and never the chain head's: an OpenCode entry's
 // model and login handed to Claude Code is a run that can read neither — and
 // on a fallback the head is exactly the member that was NOT picked. So an
 // OpenCode member alone, and one taking the launch from a spent Claude Code
 // head, both start on the OpenCode runner, with the entry's model as written,
-// and the row records the CLI the job runs.
+// and the row records the harness the job runs.
 func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -412,7 +412,7 @@ func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 	}
 }
 
-// A MEMBER WITH NO IN-BOX RUNNER IS PASSED OVER SILENTLY. Its CLI can serve the
+// A MEMBER WITH NO IN-BOX RUNNER IS PASSED OVER SILENTLY. Its harness can serve the
 // seat's text phases and never its executor, which is a fact of the
 // configuration rather than a refusal of the moment: config says so once, as
 // a warning, and announcing a hand-off on every launch would publish a
@@ -469,13 +469,13 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 	refusedCleanly(t, e, "t1", jobs)
 }
 
-// A CHAIN WITH NO RUNNER MEMBER IS REFUSED NAMING IT, and the CLIs that could
+// A CHAIN WITH NO RUNNER MEMBER IS REFUSED NAMING IT, and the harnesses that could
 // take it: config refuses this chain on every write, so reaching it is a
 // company built by hand, and the operator's to fix rather than a retry's. The
-// chain is said as a list and the CLIs as the set an entry picks from, each
+// chain is said as a list and the harnesses as the set an entry picks from, each
 // quoted, never as Go prints a slice or a list joined by hand.
 //
-// Mutation: print the chain with brackets or the CLIs joined by commas and
+// Mutation: print the chain with brackets or the harnesses joined by commas and
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
@@ -1268,7 +1268,7 @@ func TestAnExecutorOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) 
 
 // THE SEAT'S SYSTEM PROMPT REACHES THE RUN AS ITS STANDING INSTRUCTIONS, and
 // the turn's ask as its task, each on its own field all the way to the runner —
-// which hands the first to the CLI on the channel that adds to its own system
+// which hands the first to the harness on the channel that adds to its own system
 // prompt and runs the second. Dropped here, the run went out with the box's
 // framing alone and a seat that did not know whose work it was doing.
 func TestAnExecutorRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {

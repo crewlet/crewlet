@@ -14,9 +14,9 @@ import (
 )
 
 // The invariants the built-in grok profile keeps, each measured against xAI's
-// Grok Build CLI 1.0.70 (see the profile's comments): a call offers the web
-// tools and nothing else, a seat's phases keep the CLI's own system prompt and
-// a side pass replaces it, the transcript reaches the CLI in a file, the side
+// Grok Build harness 1.0.70 (see the profile's comments): a call offers the web
+// tools and nothing else, a seat's phases keep the harness's own system prompt and
+// a side pass replaces it, the transcript reaches the harness in a file, the side
 // requests that can be switched off are, and nothing a call leaves in the
 // seat's home outlives the calls that share it.
 
@@ -96,7 +96,7 @@ func TestGrokAllowsTheFetchItOffers(t *testing.T) {
 	}
 }
 
-// grokProvider is the shipped profile driven against the fake CLI.
+// grokProvider is the shipped profile driven against the fake harness.
 func grokProvider(t *testing.T, env map[string]string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -114,7 +114,7 @@ func grokProvider(t *testing.T, env map[string]string) *Provider {
 	return p
 }
 
-// A SEAT KEEPS THE CLI'S OWN PROMPT AND A SIDE PASS REPLACES IT: --rules lands
+// A SEAT KEEPS THE HARNESS'S OWN PROMPT AND A SIDE PASS REPLACES IT: --rules lands
 // the seat's text after the vendor's static prompt, under the note that says
 // which of the two is the role, and --system-prompt-override makes a side
 // pass's text the whole system message. Never both flags on one call. Driven
@@ -148,7 +148,7 @@ func TestGrokSeatAppendsAndASidePassReplaces(t *testing.T) {
 				t.Fatalf("Complete: %v", err)
 			}
 			if comp.Content != "ok" {
-				t.Errorf("content = %q, want the answer the CLI printed", comp.Content)
+				t.Errorf("content = %q, want the answer the harness printed", comp.Content)
 			}
 			argv := completionArgv(t, rec)
 			got, ok := valueAfter(argv, tc.take)
@@ -159,13 +159,13 @@ func TestGrokSeatAppendsAndASidePassReplaces(t *testing.T) {
 				t.Errorf("%s carried %q, want %q", tc.take, got, tc.want)
 			}
 			if slices.Contains(argv, tc.skip) {
-				t.Errorf("argv = %q also carries %s — the CLI is handed the prompt twice", argv, tc.skip)
+				t.Errorf("argv = %q also carries %s — the harness is handed the prompt twice", argv, tc.skip)
 			}
 		})
 	}
 }
 
-// THE TRANSCRIPT REACHES THE CLI IN A FILE: --prompt-file is a headless single
+// THE TRANSCRIPT REACHES THE HARNESS IN A FILE: --prompt-file is a headless single
 // turn like -p, with the transcript private in the call's directory rather than
 // on argv, where ARG_MAX bounds it and every account on the machine can read
 // it. Asked from inside the child, which prints its argv, the file's mode and
@@ -265,7 +265,7 @@ func TestGrokPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
-// WHAT THE API REFUSED IS NAMED, in the CLI's own words as 1.0.70 printed them:
+// WHAT THE API REFUSED IS NAMED, in the harness's own words as 1.0.70 printed them:
 // signed out and a key the API refuses are the login, and a 402 is a spent
 // account, which sits the entry out rather than failing every seat on it as a
 // server error.

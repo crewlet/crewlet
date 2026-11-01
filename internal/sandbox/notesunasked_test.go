@@ -32,11 +32,11 @@ func (r *coordRig) launchAnchored(turnID string) PendingRun {
 }
 
 // A RUN THAT SUCCEEDED WITHOUT ONCE ASKING FOR ITS NOTES IS SAID, as
-// steer_reader_never_ran, at its collection: for a CLI that reads notes, a run
+// steer_reader_never_ran, at its collection: for a harness that reads notes, a run
 // that finishes always asks at its last step, so one that never did had its
 // reading switched off in its box — and every note sent while it worked waited
-// for its review. Said only where it means that: not for a run whose CLI asked
-// (its record names the job as having pulled), not for a CLI that reads no
+// for its review. Said only where it means that: not for a run whose harness asked
+// (its record names the job as having pulled), not for a harness that reads no
 // notes, not for a run its launch wired to none (its record names no seat), and
 // not for a run that did not succeed, which may never have reached its end.
 //
@@ -51,7 +51,7 @@ func TestARunThatNeverAskedForItsNotesIsSaid(t *testing.T) {
 	}{
 		"a reader that never asked": {reads: true, anchored: true, result: Result{Success: true, Text: "done"}, said: true},
 		"a reader that asked":       {reads: true, anchored: true, pulled: true, result: Result{Success: true, Text: "done"}},
-		"a CLI that reads none":     {anchored: true, result: Result{Success: true, Text: "done"}},
+		"a harness that reads none": {anchored: true, result: Result{Success: true, Text: "done"}},
 		"a run wired to no notes":   {reads: true, result: Result{Success: true, Text: "done"}},
 		"a run that failed":         {reads: true, anchored: true, result: Result{Error: "error_max_turns"}},
 	} {

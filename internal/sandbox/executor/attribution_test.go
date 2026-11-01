@@ -19,12 +19,12 @@ const (
 
 // ONLY A RUN WHOSE REQUEST ASKS FOR ATTRIBUTION HAS ITS GIT POINTED AT THE
 // HOOK, and it is pointed there by the wrapper, after the statement that
-// clears the profile's variables and before the CLI starts: the hook is
+// clears the profile's variables and before the harness starts: the hook is
 // linked under every hook name in the run's own directory, and the run's
 // GIT_CONFIG entry names that directory. A run that asks for none links no
 // hook and exports no entry, so its git is exactly the box's.
 //
-// Mutation: export the entry whatever the request, or after the CLI, or link
+// Mutation: export the entry whatever the request, or after the harness, or link
 // no hook, and this goes red.
 func TestOnlyARunAskingForAttributionHasItsGitPointedAtTheHook(t *testing.T) {
 	t.Parallel()
@@ -70,7 +70,7 @@ func TestOnlyARunAskingForAttributionHasItsGitPointedAtTheHook(t *testing.T) {
 			}
 			launch := strings.Index(script, "claude -p")
 			if launch < 0 || exported > launch {
-				t.Errorf("the entry is not exported before the CLI starts:\n%s", script)
+				t.Errorf("the entry is not exported before the harness starts:\n%s", script)
 			}
 			if unset := strings.Index(script, "unset "); unset < 0 || unset > exported {
 				t.Errorf("the entry is not exported after the profile's variables are cleared:\n%s", script)
@@ -108,12 +108,12 @@ func TestARunWhoseNameIsNotOneLineIsRefusedBeforeItStarts(t *testing.T) {
 }
 
 // A RUN'S COMMITS CREDIT CREWLET, AND ONLY THE RUN'S OWN — through a whole
-// run in a real box, with a stand-in for the CLI that runs git the way an
+// run in a real box, with a stand-in for the harness that runs git the way an
 // agent would: the hook is installed by Start, the wrapper points git at it
 // after the login profile, and git runs it.
 //
 //   - A commit of its own carries the co-author and the run, once, however
-//     often it is amended, beside the CLI's own co-author line, and with
+//     often it is amended, beside the harness's own co-author line, and with
 //     --no-verify too, which skips commit-msg but not prepare-commit-msg.
 //   - The repository's hooks still run and still refuse, from its hooks
 //     directory or from its own core.hooksPath.
@@ -153,7 +153,7 @@ func TestARunsCommitsCreditCrewletAndOnlyTheRunsOwn(t *testing.T) {
 			script: `echo a > a; git add a; git commit -qm "add a"
 git commit -q --amend --no-edit; git commit -q --amend --no-edit`,
 		},
-		"beside the CLI's own co-author": {
+		"beside the harness's own co-author": {
 			attribution: turn7, credits: 1, names: 1,
 			script: `echo a > a; git add a
 git commit -qm "add a" -m "Co-Authored-By: Claude <noreply@anthropic.com>"`,

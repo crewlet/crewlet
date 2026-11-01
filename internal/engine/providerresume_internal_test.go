@@ -29,7 +29,7 @@ import (
 // the turn was reverted, and the control topic NAKed the completion, which the
 // broker redelivered into the same limit 25 times in about ten minutes.
 
-// spentEntry is a model whose CLI already reported its usage limit, as
+// spentEntry is a model whose harness already reported its usage limit, as
 // harness's entry knows it ([chain.Unready]), until the case lifts it. calls
 // counts what reached it, which a limit its entry knows should keep out.
 type spentEntry struct {

@@ -13,16 +13,16 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// THE LOGIN WATCHER keeps, for every model entry that signs in with the CLI's
-// own login on this node's disk, what the CLI says of that login (M12 of the
+// THE LOGIN WATCHER keeps, for every model entry that signs in with the harness's
+// own login on this node's disk, what the harness says of that login (M12 of the
 // Models design): signed in, signed out, or unknown, and as whom. The Models
 // page shows it per node, with the command to run there; it is never a
-// sign-in. The engine does not log a CLI in; a person runs `crewlet llm login`
+// sign-in. The engine does not log a harness in; a person runs `crewlet llm login`
 // on the node.
 //
 // # When it asks
 //
-// The CLI's status command is local and never calls the network, but it is a
+// The harness's status command is local and never calls the network, but it is a
 // process, so it is not run per read. It runs for an entry at boot and at
 // every apply, when the login's files change (a stat each [hostLoginBeat]),
 // and otherwise every [hostLoginRecheck]. A person's "check now" runs it at
@@ -47,10 +47,10 @@ const hostLoginRecheck = 10 * time.Minute
 // ErrNoModel is a model entry the active revision does not have.
 var ErrNoModel = errors.New("engine: no such model entry")
 
-// ErrNoHostLogin is an entry that does not sign in with a CLI login on this
-// node: it signs in with a token, a key or its env, or its CLI has no status
+// ErrNoHostLogin is an entry that does not sign in with a harness login on this
+// node: it signs in with a token, a key or its env, or its harness has no status
 // command.
-var ErrNoHostLogin = errors.New("engine: the model does not sign in with a CLI login on this node")
+var ErrNoHostLogin = errors.New("engine: the model does not sign in with a harness login on this node")
 
 // hostLogins is the watcher's state and its loop.
 type hostLogins struct {
@@ -118,7 +118,7 @@ func (e *Engine) kickHostLogins() {
 	}
 }
 
-// loginEntries is every entry of the active revision that signs in with a CLI
+// loginEntries is every entry of the active revision that signs in with a harness
 // login here, by key.
 func (e *Engine) loginEntries() map[string]*harness.Provider {
 	c := e.Company()
@@ -213,7 +213,7 @@ func (e *Engine) hostLoginOf(key string) *coord.HostLogin {
 // CheckHostLogin runs an entry's status command on this node now and answers
 // what it said, which the heartbeat publishes from then on. [ErrNoModel] for an
 // entry the active revision does not have, and [ErrNoHostLogin] for one that
-// does not sign in with a CLI login here.
+// does not sign in with a harness login here.
 func (e *Engine) CheckHostLogin(ctx context.Context, key string) (coord.HostLogin, error) {
 	c := e.Company()
 	if c == nil || c.Config == nil || c.Models == nil {

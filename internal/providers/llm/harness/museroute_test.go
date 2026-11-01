@@ -142,19 +142,19 @@ func (m *museRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 // MUSE CODE'S RUN IS READ FROM ITS EXEC STREAM, AND ITS HOME STARTS NO SERVER OF
 // ITS OWN. The crewlet server is declared for the run on argv (`-c`), and the
 // run's toolset admits its tools; the home's settings file, whose servers —
-// and approved plugins' — the CLI starts on every call, is the profile's own,
+// and approved plugins' — the harness starts on every call, is the profile's own,
 // whatever was there. Each model task is a request, its prose the fragments
 // streamed after it, run together, and each call a tool task's side effect,
-// joined to the call by the key the CLI sends in `_meta`. The stream carries
+// joined to the call by the key the harness sends in `_meta`. The stream carries
 // no counts per request: each is estimated as it is read, and the run's own
 // count — the prompt with its cached part in it — settles the rest. The host is
-// told the CLI waits 300 seconds for a call, does not re-read the list, and
+// told the harness waits 300 seconds for a call, does not re-read the list, and
 // makes a response's calls one after another.
 //
 // Prompts of a real size here, because an estimate is never refunded: it is a
 // floor under what the request read, and the run's count settles what it left.
 //
-// Mutation: drop the run.toolset setting, and the CLI never reaches the seat's
+// Mutation: drop the run.toolset setting, and the harness never reaches the seat's
 // tools; drop the settings seed, and the planted server starts (the fake fails
 // the run); join by callId, and no call is joined; read the run's prompt as
 // less its cached part, and it is charged 1,000 tokens more than it spent.
@@ -190,7 +190,7 @@ func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 	}
 	if want := (llm.Usage{Input: 3400, Output: 29, CacheRead: 1000}); spent.Input != want.Input ||
 		spent.Output != want.Output || spent.CacheRead != want.CacheRead {
-		t.Errorf("the run was charged %+v in all (%+v), want the CLI's own count %+v", spent, spends, want)
+		t.Errorf("the run was charged %+v in all (%+v), want the harness's own count %+v", spent, spends, want)
 	}
 	if len(spends) < 2 || !spends[0].Estimated {
 		t.Errorf("charged %+v, want each request estimated as it was read", spends)
@@ -208,7 +208,7 @@ func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 // A FAILED MUSE CODE RUN SAYS WHY IN ITS TERMINAL EVENT, and only there: its
 // stderr says "run ended with Failed" and nothing else, so the reason a spent
 // plan is told by is the run.terminal.failed event's — read by field, as the
-// CLI's own failure event, and never the run's other lines.
+// harness's own failure event, and never the run's other lines.
 //
 // Mutation: drop the profile's failure event, and the spent plan is a server
 // failure.

@@ -30,7 +30,7 @@ func (c *testClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// spentProvider is a fake CLI that reports a spent plan — with a reset
+// spentProvider is a fake harness that reports a spent plan — with a reset
 // instant `reset` from now when reset is non-zero, and none otherwise — on a
 // clock the case moves.
 func spentProvider(t *testing.T, reset time.Duration) (*Provider, *testClock) {
@@ -49,11 +49,11 @@ func spentProvider(t *testing.T, reset time.Duration) (*Provider, *testClock) {
 }
 
 // A SPENT PLAN SITS THE ENTRY OUT UNTIL ITS RESET, AND NO PROCESS IS LAUNCHED
-// TO LEARN IT AGAIN. Once the CLI has said the plan is spent, every call in
+// TO LEARN IT AGAIN. Once the harness has said the plan is spent, every call in
 // the window fails at once as a rate limit naming the instant — the chain
-// moves to the next model — and the first call after it reaches the CLI again.
+// moves to the next model — and the first call after it reaches the harness again.
 //
-// Proved by taking the CLI AWAY after the first call: a call that launched
+// Proved by taking the harness AWAY after the first call: a call that launched
 // one would fail as a missing binary, not as the spent plan.
 //
 // Mutation: make SittingOut always answer nil, and the second call reaches the
@@ -65,11 +65,11 @@ func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 	if llm.KindOf(first) != llm.KindRateLimit {
 		t.Fatalf("the spent plan answered %v, want a rate limit", first)
 	}
-	// WHAT THE LIMIT IS OF, for whoever tells a person: the entry's CLI and
+	// WHAT THE LIMIT IS OF, for whoever tells a person: the entry's harness and
 	// that it signs in on a plan.
 	var failure *llm.Error
 	if !errors.As(first, &failure) || failure.Agent != "custom" || !failure.Subscription {
-		t.Errorf("the limit names %+v, want the entry's CLI on a subscription", failure)
+		t.Errorf("the limit names %+v, want the entry's harness on a subscription", failure)
 	}
 	p.profile.Binary = "/nonexistent/crewlet-no-cli"
 
@@ -83,24 +83,24 @@ func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 		}
 	}
 	if left := sitOutUntil(p).Sub(clock.read()); left < 36*time.Minute || left > 38*time.Minute {
-		t.Errorf("sits out %v, want the 37 minutes the CLI named", left)
+		t.Errorf("sits out %v, want the 37 minutes the harness named", left)
 	}
 
 	clock.advance(38 * time.Minute)
 	_, err = ask(t, p, llm.Request{})
 	if err == nil || llm.KindOf(err) == llm.KindRateLimit || strings.Contains(err.Error(), "sitting out") {
-		t.Fatalf("the first call after the window answered %v, want it to reach the CLI again", err)
+		t.Fatalf("the first call after the window answered %v, want it to reach the harness again", err)
 	}
 }
 
 // A CALL QUEUED FOR A SLOT WHEN THE ENTRY IS SAT OUT LAUNCHES NOTHING. With
 // every slot busy, a call passes the sit-out check before the spent plan is
 // reported and waits for a slot; the call ahead of it then reports the plan
-// spent. Taking the slot and starting a whole CLI to hear the same sentence is
+// spent. Taking the slot and starting a whole harness to hear the same sentence is
 // what the sit-out exists to prevent, so the call is refused once it holds the
 // slot — and gives the slot back for the next one in the queue.
 //
-// Proved with the CLI taken AWAY: a call that launched one would fail as a
+// Proved with the harness taken AWAY: a call that launched one would fail as a
 // missing binary, not as the sit-out.
 //
 // Mutation: drop the check made once the slot is held, and the queued call
@@ -136,7 +136,7 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	err := <-done
 	if llm.KindOf(err) != llm.KindRateLimit || !strings.Contains(err.Error(), "sitting out until") {
 		t.Fatalf("the queued call answered %v, want the sit-out — it took its slot and "+
-			"launched a CLI to hear the spent plan again", err)
+			"launched a harness to hear the spent plan again", err)
 	}
 	if held := len(p.slots); held != 0 {
 		t.Errorf("%d slot(s) still held after the refusal, want the slot handed back", held)
@@ -224,7 +224,7 @@ func TestALaterBenchNeverShortensAnEarlierOne(t *testing.T) {
 	}
 }
 
-// A LOGIN THE CLI CANNOT USE IS NOT BENCHED: `crewlet llm login` mends it from
+// A LOGIN THE HARNESS CANNOT USE IS NOT BENCHED: `crewlet llm login` mends it from
 // another process, and the very next call must find it rather than sit out a
 // window on the fallback.
 //

@@ -54,7 +54,7 @@ func statusProvider(t *testing.T, env map[string]string) *Provider {
 // THE STATUS COMMAND'S EXIT IS THE ANSWER, and its JSON says how and as whom,
 // in the shapes measured on `claude auth status`: signed in exits 0 with
 // `authMethod` and `email`; signed out exits 1; anything else is unknown, with
-// the CLI's first line on stderr as why. An account is bounded, and a status
+// the harness's first line on stderr as why. An account is bounded, and a status
 // that runs past its budget is unknown rather than a wedged check.
 //
 // Mutation: read exit 1 as unknown, drop the fields, or drop the account's
@@ -117,7 +117,7 @@ func TestALoginStatusIsTheHarnessExitAndItsFields(t *testing.T) {
 }
 
 // A STATUS IS NEVER A WEDGED CHECK: one that runs past its budget is unknown
-// and says so, its CLI stopped.
+// and says so, its harness stopped.
 //
 // Mutation: drop the timeout from the status command's run, and this case
 // waits out the fake's sleep and is red.
@@ -138,7 +138,7 @@ func TestALoginStatusPastItsBudgetIsUnknown(t *testing.T) {
 	}
 }
 
-// A STATUS THAT COULD NOT BE ASKED IS AN ERROR, not an answer: a CLI with no
+// A STATUS THAT COULD NOT BE ASKED IS AN ERROR, not an answer: a harness with no
 // status command says so rather than reading as signed out.
 func TestALoginStatusWithNoCommandIsAnError(t *testing.T) {
 	t.Parallel()

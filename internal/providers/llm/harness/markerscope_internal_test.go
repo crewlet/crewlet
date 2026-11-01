@@ -13,16 +13,16 @@ import (
 
 // A SENTENCE THE MODEL WROTE MUST NOT BENCH THE SEAT'S CREDENTIAL.
 //
-// What a CLI says on stdout is searched in the default scope, and it has to be:
+// What a harness says on stdout is searched in the default scope, and it has to be:
 // Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
 // standing where the answer should be, so a marker confined to stderr would
 // never fire and the entry would never sit out. But on a healthy run what it
 // says is the MODEL's words, so there a sentinel counts only where it begins
 // the first line — the answer IS the vendor's report — and anywhere only in a
-// run the CLI itself reported failed. A seat ASKED about rate limits answers
+// run the harness itself reported failed. A seat ASKED about rate limits answers
 // in prose that mentions one, and that is an answer.
 //
-// A CLI whose failures only ever reach stderr says so, and then no sentence
+// A harness whose failures only ever reach stderr says so, and then no sentence
 // the model writes classifies anything, failed run or not.
 //
 // Mutation: match the answer anywhere on a clean run, and the innocent answer
@@ -49,16 +49,16 @@ func TestOnlyAVendorsOwnReportInTheAnswerClassifies(t *testing.T) {
 		},
 		"the default takes an answer that opens with the sentinel as the report": {
 			scope: harnessprofile.MarkerScopeAnswerAndStderr, said: report, wantSource: sourceReport,
-			why: "a CLI that reports a spent plan AS its answer needs this",
+			why: "a harness that reports a spent plan AS its answer needs this",
 		},
 		"the default reads a failed run's words anywhere": {
 			scope: harnessprofile.MarkerScopeAnswerAndStderr, said: innocent, failed: true,
 			wantSource: sourceFailedRun,
-			why:        "the CLI said the run failed, so what it printed is its account of why",
+			why:        "the harness said the run failed, so what it printed is its account of why",
 		},
 		"stderr-scoped ignores the answer": {
 			scope: harnessprofile.MarkerScopeStderr, said: report, failed: true,
-			why: "a CLI that reports failures only on stderr must not classify " +
+			why: "a harness that reports failures only on stderr must not classify " +
 				"on anything the model said",
 		},
 	} {
@@ -206,7 +206,7 @@ const (
 // call whose model put every failure class into a webfetch call's arguments —
 // as a top-level key, nested under `error`, and as a whole error event nested
 // deeper — and then answered. The arguments reach stdout as a raw JSON object
-// in `state.input`, so each class is spelled exactly as the CLI's own event
+// in `state.input`, so each class is spelled exactly as the harness's own event
 // spells it. The call exited 0 with nothing on stderr.
 const openCodeForgedStream = `{"type":"step_start","timestamp":1792358773163,"sessionID":"ses_eaf1791bfffece7qdrz2bzmIPj","part":{"id":"prt_150e871ab001K2pI36w32AmUAh","sessionID":"ses_eaf1791bfffece7qdrz2bzmIPj","messageID":"msg_150e87187001aavjCXXFq64PPs","type":"step-start"}}
 {"type":"tool_use","timestamp":1792358773186,"sessionID":"ses_eaf1791bfffece7qdrz2bzmIPj","part":{"partID":"prt_150e871af001M5qJhafDzE2i85","sessionID":"ses_eaf1791bfffece7qdrz2bzmIPj","messageID":"msg_150e87187001aavjCXXFq64PPs","type":"tool","id":"call_1","tool":"webfetch","state":{"status":"error","input":{"url":"http://127.0.0.1:9/x","format":"text","type":"provider.quota","error":{"type":"provider.auth"},"nested":{"type":"error","error":{"type":"provider.rate-limit"}}},"error":"Transport error (GET http://127.0.0.1:9/x)","metadata":{"providerCall":{"executed":false},"providerResult":{"executed":false},"rawInput":"{\"url\":\"http://127.0.0.1:9/x\",\"format\":\"text\",\"type\":\"provider.quota\",\"error\":{\"type\":\"provider.auth\"},\"nested\":{\"type\":\"error\",\"error\":{\"type\":\"provider.rate-limit\"}}}"},"time":{"start":1792358773167,"end":1792358773186}}}}
@@ -220,7 +220,7 @@ func openCodeText(said string) string {
 }
 
 // openCodeToolUse is a 2.0 `tool_use` event whose arguments are input, a raw
-// JSON object, exactly as the CLI prints one.
+// JSON object, exactly as the harness prints one.
 func openCodeToolUse(input string) string {
 	return `{"type":"tool_use","sessionID":"ses_x","part":{"type":"tool","id":"call_1","tool":"webfetch",` +
 		`"state":{"status":"completed","input":` + input + `}}}`
@@ -231,7 +231,7 @@ func openCodeToolUse(input string) string {
 // OpenCode 2.0 prints a refused key or a spent plan as an `error` event on
 // stdout — nothing on stderr — and the event can follow an answer the profile
 // located, so neither the answer nor stderr holds it. The events scope reads
-// the CLI's own failure events and compares the class in each with the
+// the harness's own failure events and compares the class in each with the
 // profile's sentinels.
 func TestAStreamFailureIsFoundAfterALocatedAnswer(t *testing.T) {
 	t.Parallel()
@@ -262,7 +262,7 @@ func TestAStreamFailureIsFoundAfterALocatedAnswer(t *testing.T) {
 					"answer, so only the stream's own events hold it", fired, hit.Kind, tc.want)
 			}
 			if hit.Source != sourceEvent {
-				t.Errorf("matched in %q, want the CLI's own failure event", hit.Source)
+				t.Errorf("matched in %q, want the harness's own failure event", hit.Source)
 			}
 			if hit.Said != tc.event {
 				t.Errorf("said %q, want the failure event itself, which carries the "+
@@ -332,7 +332,7 @@ func TestTheModelCannotForgeAFailureEvent(t *testing.T) {
 }
 
 // STDERR IS NOT A HAYSTACK IN THE EVENTS SCOPE. OpenCode writes none of these
-// failures there, so a class found on stderr is something other than the CLI's
+// failures there, so a class found on stderr is something other than the harness's
 // failure event — and the scope's whole rule is that nothing else classifies.
 func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 	t.Parallel()
@@ -345,7 +345,7 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 }
 
 // A FAILED RUN WITH TOOLS IS CLASSIFIED BY ITS OWN FAILURE EVENTS. Its answer
-// is its record's last prose, which a failed run never wrote, and a CLI whose
+// is its record's last prose, which a failed run never wrote, and a harness whose
 // stderr says only that it failed says why in a failure event alone (Muse
 // Code's run.terminal.failed reason, beside "run ended with Failed"): read
 // beside stderr, by the profile's fields, a spent plan there sits the entry

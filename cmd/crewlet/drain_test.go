@@ -46,7 +46,7 @@ import (
 // only when the parent says so. That is what makes the drain last long enough
 // to observe, and it is a real turn on the real path: a signed GitLab delivery
 // on the webhook edge, the notification service, the seat's mailbox, and the
-// CLI backend running the model's CLI ([heldHarness]) as a child of the node — for
+// harness backend running the model's harness ([heldHarness]) as a child of the node — for
 // the seat's first turn's onboarding pass, the one call a turn makes on the
 // seat's own model before its executor's run is launched and the turn parks.
 const (
@@ -457,23 +457,23 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 	}
 }
 
-// heldHarness is the seat's model: a CLI that marks every call it is handed and
+// heldHarness is the seat's model: a harness that marks every call it is handed and
 // answers none until the test lets it go, and then fails them all at once.
 //
 // A FAILURE rather than an answer, because the case is about the node that
-// waits for the turn and not about the turn: a CLI that exits non-zero ends
+// waits for the turn and not about the turn: a harness that exits non-zero ends
 // the call as a `server` failure, which the backend does not retry, and the
-// one member behind it ([unreachableCoder]) has no CLI to start. The
+// one member behind it ([unreachableCoder]) has no harness to start. The
 // onboarding pass fails, which a turn carries on from, and the turn ends at
 // its executor's launch however that goes. Nothing in the case turns on how
-// the turn ends, only on its ending once the CLI is let go.
+// the turn ends, only on its ending once the harness is let go.
 //
 // /bin/sh UNDER THE `custom` PROFILE rather than this binary re-executed: a
 // held call computes nothing, and both of its halves — the mark that a call
 // arrived and the file it waits for — are things the parent sees from
 // outside, as it sees the node's probes. `custom` because it ships nothing, so
 // no vendor's sign-in, sentinels or configuration stands between the engine
-// and a CLI that has none of them.
+// and a harness that has none of them.
 type heldHarness struct {
 	t *testing.T
 	// marker is the file a call creates on arrival; release is the one the
@@ -527,12 +527,12 @@ func newHeldHarness(t *testing.T) *heldHarness {
 func (m *heldHarness) letGo() {
 	m.released.Do(func() {
 		if err := os.WriteFile(m.release, nil, 0o600); err != nil {
-			m.t.Errorf("releasing the held CLI: %v", err)
+			m.t.Errorf("releasing the held harness: %v", err)
 		}
 	})
 }
 
-// entry is the providers.llm entry, under key, whose CLI this is, keeping its
+// entry is the providers.llm entry, under key, whose harness this is, keeping its
 // homes under stateDir — indented to sit under `providers: llm:`.
 //
 // The paths are quoted twice over: single quotes inside the script, so the
@@ -554,9 +554,9 @@ func (m *heldHarness) entry(key, stateDir string) string {
 }
 
 // unreachableCoder is the providers.llm entry, under key, that the seat's
-// executor launches on: a claude-code entry, the CLI a run in the fake catalogue
+// executor launches on: a claude-code entry, the harness a run in the fake catalogue
 // is played for, whose binary does not exist — so a call on this host that falls
-// through to it fails at once rather than starting a real CLI on the machine
+// through to it fails at once rather than starting a real harness on the machine
 // running the suite. Indented to sit under `providers: llm:`.
 func unreachableCoder(key, stateDir string) string {
 	return fmt.Sprintf(`    %s:

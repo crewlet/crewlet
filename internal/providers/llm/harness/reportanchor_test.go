@@ -17,12 +17,12 @@ func claudeResult(said string) string {
 // A SENTINEL IN THE MODEL'S OWN WORDS IS AN ANSWER, ON EVERY SHIPPED PROFILE
 // THAT READS THE ANSWER FOR ONE.
 //
-// What a CLI says on a healthy run is the model's prose and the arguments of
+// What a harness says on a healthy run is the model's prose and the arguments of
 // every tool call it makes, and the shipped sentinels include generic phrases
 // a model writes as readily as a vendor prints them: "rate limit", "quota",
 // "Usage limit reached". Matched anywhere in there, the answer was thrown away
 // as a spent plan and the entry sat out for every seat on the node — and the
-// redelivered turn wrote the same sentence a minute later. On a run the CLI
+// redelivered turn wrote the same sentence a minute later. On a run the harness
 // did not report failed, a sentinel counts only where it opens what was said.
 //
 // Mutation: match a clean run's answer anywhere ([haystack.find] ignoring
@@ -77,9 +77,9 @@ func TestAnAnswerThatMentionsALimitIsAnAnswer(t *testing.T) {
 
 // THE VENDOR'S OWN REPORT STILL CLASSIFIES AND STILL SITS THE ENTRY OUT —
 // standing where the answer should be on a clean exit, anywhere in a run the
-// CLI reported failed, and anywhere on stderr. The rule above is only safe
+// harness reported failed, and anywhere on stderr. The rule above is only safe
 // beside this half: a rule that stopped recognising a spent plan would leave
-// every seat on the entry relaunching the CLI to be refused again.
+// every seat on the entry relaunching the harness to be refused again.
 //
 // Mutation: drop the failed-run exception (search what was said only at its
 // start), and the relayed API error stops classifying; drop the anchored match

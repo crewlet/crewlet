@@ -521,10 +521,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // trail names them: `company` once the company is built, so a catalogue
 // refused after it is reported past the company, as it always was.
 //
-// What it leaves behind is what an apply's build leaves: a coding CLI's
-// working directory is claimed in this process for the CLI an entry names
+// What it leaves behind is what an apply's build leaves: a harness's
+// working directory is claimed in this process for the harness an entry names
 // (the cli-agent backend's workspace registry), so a later revision driving
-// another CLI from the same directory is refused until a restart — as it is
+// another harness from the same directory is refused until a restart — as it is
 // after an apply that built and was refused.
 func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Plans,
 	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
@@ -543,7 +543,7 @@ func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Pla
 	return next, manager, built, nil
 }
 
-// signIns is the sign-in of every coding-CLI entry of an epoch, for
+// signIns is the sign-in of every harness entry of an epoch, for
 // [harness.Plans.Sweep]: the sign-ins whose records an apply must keep.
 func signIns(c *Company) []harness.SignInID {
 	if c == nil || c.Models == nil {

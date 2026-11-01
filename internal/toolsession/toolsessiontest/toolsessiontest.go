@@ -1,11 +1,11 @@
 // Package toolsessiontest is the contract suite every [toolsession.Dispatcher]
-// runs: the gates a call is held to wherever the coding CLI that made it runs.
+// runs: the gates a call is held to wherever the harness that made it runs.
 //
 // # Why one suite
 //
-// Two dispatchers stand between a coding CLI and a seat's tools. The tool
-// loop's serves a CLI on this host, over the unix socket `crewlet mcp-relay`
-// reaches (internal/agent/toolloop); the bridge's serves a CLI in a sandbox
+// Two dispatchers stand between a harness and a seat's tools. The tool
+// loop's serves a harness on this host, over the unix socket `crewlet mcp-relay`
+// reaches (internal/agent/toolloop); the bridge's serves a harness in a sandbox
 // box, over HTTP (internal/api/mcpbridge). A call is the same call from either
 // place, so the gates it passes are the same gates — and two packages each
 // testing their own copy of them is how one of the copies drifts while its
@@ -23,18 +23,18 @@
 //
 // A gate only one of them has BY DESIGN stays in that package's own tests: the
 // tool loop's round cap, its terminator barrier, its pause for a person's note
-// and its answers withheld from a CLI it is stopping; the bridge's credential,
+// and its answers withheld from a harness it is stopping; the bridge's credential,
 // its route and the durable ledger a resume reads. A detached run's loop is its
-// CLI's own, and its phase is settled when the run is collected.
+// harness's own, and its phase is settled when the run is collected.
 //
-// # Through a real session, as a CLI calls
+// # Through a real session, as a harness calls
 //
 // A [Factory] builds a dispatcher of its kind over the surface the suite
 // describes ([Spec]) and serves it through a REAL session: the suite connects
-// an MCP client to it the way a coding CLI's own client does — over the socket
+// an MCP client to it the way a harness's own client does — over the socket
 // for the tool loop's, over the bridge URL for the box's — lists the tools,
 // calls them, gives up on them and hangs up. A suite that called the
-// dispatcher around its session would test a path no CLI takes: the session's
+// dispatcher around its session would test a path no harness takes: the session's
 // server, its tool list and its held answers are on the way of every call.
 //
 // The one call made around the session is the one no session can deliver: a
@@ -43,10 +43,10 @@
 // # What a case asserts once a run is ending
 //
 // The two dispatchers answer a run that is ending differently, on purpose. The
-// tool loop STOPS its CLI, so it withholds every answer from then until the
-// CLI is gone — a CLI that read one would ask its model again, a request it
+// tool loop STOPS its harness, so it withholds every answer from then until the
+// harness is gone — a harness that read one would ask its model again, a request it
 // would be billed for — and the conversation carries the real results. A box's
-// CLI cannot be stopped from here, so the bridge answers at once that the
+// harness cannot be stopped from here, so the bridge answers at once that the
 // run's tools are closed. So a case never waits for the answer to a call made
 // once the run's end was decided: it reads the dispatcher's record of the call
 // ([Served.Recorded]) and what the tool did, ends the run, and only then
@@ -120,10 +120,10 @@ type ToolCall struct {
 
 // Served is one run, served, as the suite drives it.
 type Served struct {
-	// Dial is a new connection to the run's session, the way a coding CLI's
-	// own MCP client reaches it — and hangUp cuts it the way a CLI that dies
+	// Dial is a new connection to the run's session, the way a harness's
+	// own MCP client reaches it — and hangUp cuts it the way a harness that dies
 	// does: the socket closed, the requests in flight aborted. Never the
-	// client's own Close, which a dead CLI does not send and which waits for
+	// client's own Close, which a dead harness does not send and which waits for
 	// the calls in flight to be answered.
 	Dial func(t *testing.T) (transport mcp.Transport, hangUp func())
 
@@ -131,7 +131,7 @@ type Served struct {
 	// that was already past the transport when the run ended.
 	Dispatcher toolsession.Dispatcher
 
-	// End ends the run the way its owner does — the tool loop's CLI run is
+	// End ends the run the way its owner does — the tool loop's harness run is
 	// over and its session released; the bridge closes the run — and
 	// returns once it has ended. Called with every call it holds free to
 	// return, and safe to call more than once.

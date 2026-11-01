@@ -54,7 +54,7 @@ func writeHostLogin(t *testing.T, home, body string) {
 	}
 }
 
-// The usual starting point: the operator has been running the CLI on this box
+// The usual starting point: the operator has been running the harness on this box
 // for months. Adopting is a COPY, so their own login is never written to by a
 // fleet of agents refreshing tokens.
 func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
@@ -166,7 +166,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	if !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
-	// The command takes the entry's KEY: naming the CLI ("custom") sent the
+	// The command takes the entry's KEY: naming the harness ("custom") sent the
 	// operator to `crewlet llm export` for a provider that does not exist.
 	if !strings.Contains(err.Error(), "`crewlet llm export sub`") {
 		t.Errorf("the refusal does not name the export that replaces it: %v", err)
@@ -176,26 +176,26 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	}
 }
 
-// A BUNDLE RESTORES ONLY INTO THE CLI IT NAMES. A bundle is keyed by the
+// A BUNDLE RESTORES ONLY INTO THE HARNESS IT NAMES. A bundle is keyed by the
 // entry — CREWLET_LLM_CLI_<KEY>_CREDENTIALS, or the entry's
-// auth.credential_bundle — not by its CLI, so an entry moved to another CLI
+// auth.credential_bundle — not by its harness, so an entry moved to another harness
 // still restores the bundle it was configured with. Judged by its files' names
-// alone, that bundle was refused only where the two CLIs keep different names:
+// alone, that bundle was refused only where the two harnesses keep different names:
 // six keep an `auth.json`, so codex's bundle was
 // written into pi's empty login, where it is a credential pi cannot read and,
 // as a login already present, turned every later restore away — the right
 // bundle included.
 //
-// Every built-in CLI's bundle, restored and imported into every other CLI's
+// Every built-in harness's bundle, restored and imported into every other harness's
 // empty login on the same state directory — the move — is refused naming the
-// CLI it came from, the move and the export that replaces it, and leaves that
-// login's directory empty; and it restores into its own CLI byte for byte,
+// harness it came from, the move and the export that replaces it, and leaves that
+// login's directory empty; and it restores into its own harness byte for byte,
 // with nothing beside its login files.
 //
 // Mutation: skip the manifest's check in restoreBundle, and every pair that
 // shares a file name restores (codex into pi, among others), and
 // every other pair is refused as a file it does not keep rather than as
-// another CLI's bundle.
+// another harness's bundle.
 func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 	t.Parallel()
 	var clis []string
@@ -218,10 +218,10 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 		}
 	}
 	if len(shared) == 0 {
-		t.Fatal("the premise: no two built-in CLIs keep a login file under one name, so no " +
+		t.Fatal("the premise: no two built-in harnesses keep a login file under one name, so no " +
 			"pair here is one a file name alone would have let through")
 	}
-	t.Logf("login file names more than one CLI keeps: %s", strings.Join(slices.Sorted(slices.Values(shared)), "; "))
+	t.Logf("login file names more than one harness keeps: %s", strings.Join(slices.Sorted(slices.Values(shared)), "; "))
 
 	build := func(t *testing.T, dir, agent string) *Provider {
 		t.Helper()
@@ -241,7 +241,7 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"harness":%q,"file":%q}`, from, file)
 				if key, ok := source.profile.LoginKeys[file]; ok {
-					// A file the CLI keeps settings in too is a login
+					// A file the harness keeps settings in too is a login
 					// only holding its key.
 					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, key)
 				}
@@ -284,7 +284,7 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 				t.Fatalf("%s's bundle into %s: %v", from, from, err)
 			}
 			if got, files := credentialEntries(t, own), slices.Sorted(maps.Keys(want)); !slices.Equal(got, files) {
-				t.Errorf("%s's bundle restored %v into its own CLI, want exactly its login files %v", from, got, files)
+				t.Errorf("%s's bundle restored %v into its own harness, want exactly its login files %v", from, got, files)
 			}
 			for file, body := range want {
 				got, err := os.ReadFile(filepath.Join(own.ws.CredentialsDir(), file)) //nolint:gosec // the test's own state directory
@@ -309,7 +309,7 @@ func profileLoginNames(profile harnessprofile.Profile) []string {
 	return names
 }
 
-// A BUNDLE THAT NAMES NO CLI IS REFUSED AS ONE THAT NAMES ANOTHER: nothing in
+// A BUNDLE THAT NAMES NO HARNESS IS REFUSED AS ONE THAT NAMES ANOTHER: nothing in
 // it says whose its files are, and a file's name is the guess the manifest
 // replaced. So is one that names a file or the manifest twice — two answers to
 // one question, the last winning by accident — and one that holds no login,
@@ -328,7 +328,7 @@ func TestABundleThatDoesNotSayWhoseItIsIsRefused(t *testing.T) {
 	ours := manifest(`{"harness":"custom"}`)
 	for name, tc := range map[string]struct {
 		entries []bundleFile
-		// foreign is whether it is refused as naming no CLI.
+		// foreign is whether it is refused as naming no harness.
 		foreign bool
 		say     string
 	}{
@@ -476,7 +476,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	}
 }
 
-// The three CLIs whose login is browser OAuth must say so in a sentence an
+// The three harnesses whose login is browser OAuth must say so in a sentence an
 // operator can act on, rather than hanging on a prompt or failing obscurely.
 func TestAHarnessWithNoCredentialLoginExplainsItself(t *testing.T) {
 	t.Parallel()
@@ -493,17 +493,17 @@ func TestAHarnessWithNoCredentialLoginExplainsItself(t *testing.T) {
 	}
 }
 
-// AND IT NAMES ONLY ROUTES THAT RUN. It offered `crewlet llm login` to a CLI
+// AND IT NAMES ONLY ROUTES THAT RUN. It offered `crewlet llm login` to a harness
 // that declares no login subcommand, which that command refuses, and
-// `-capture-token` "where the vendor mints a headless token" to every CLI,
+// `-capture-token` "where the vendor mints a headless token" to every harness,
 // which that command refuses for one that mints none — and a token minted
 // under an overrides.token_env no store can hold (MY-TOKEN) could be neither
 // stored nor referenced. Claude Code as shipped is the control: it has both
 // routes, and is told both.
 //
-// Mutation: offer -capture-token whatever the CLI mints, and the custom case
+// Mutation: offer -capture-token whatever the harness mints, and the custom case
 // is told it; by the profile's token variable alone, and the MY-TOKEN case
-// is; offer `crewlet llm login KEY` whatever the CLI declares, and the custom
+// is; offer `crewlet llm login KEY` whatever the harness declares, and the custom
 // case is.
 func TestACredentialLoginRefusalNamesOnlyRoutesThatRun(t *testing.T) {
 	t.Parallel()
@@ -540,7 +540,7 @@ func TestACredentialLoginRefusalNamesOnlyRoutesThatRun(t *testing.T) {
 			notWant: []string{"capture-token"},
 		},
 		{
-			name:     "a CLI with no login subcommand",
+			name:     "a harness with no login subcommand",
 			provider: loginProvider,
 			want:     []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
 			notWant:  []string{"run `crewlet llm login sub`", "capture-token"},
@@ -567,12 +567,12 @@ func TestACredentialLoginRefusalNamesOnlyRoutesThatRun(t *testing.T) {
 	}
 }
 
-// A CLI THAT MINTS NO TOKEN IS SENT TO THE LOGIN IT HAS. `-capture-token` on
+// A HARNESS THAT MINTS NO TOKEN IS SENT TO THE LOGIN IT HAS. `-capture-token` on
 // one told the operator to "run `crewlet llm login`" to broker its own login,
-// which a CLI declaring no login subcommand refuses in turn. Codex, which has
+// which a harness declaring no login subcommand refuses in turn. Codex, which has
 // one, is the control.
 //
-// Mutation: name `crewlet llm login KEY` whatever the CLI declares, and the
+// Mutation: name `crewlet llm login KEY` whatever the harness declares, and the
 // custom case is told it.
 func TestATokenMintRefusalNamesTheLoginTheHarnessHas(t *testing.T) {
 	t.Parallel()
@@ -595,10 +595,10 @@ func TestATokenMintRefusalNamesTheLoginTheHarnessHas(t *testing.T) {
 	}{
 		{
 			name: "codex", provider: codex,
-			want: []string{`the "codex" CLI mints no headless token`, "run `crewlet llm login sub`"},
+			want: []string{`the "codex" harness mints no headless token`, "run `crewlet llm login sub`"},
 		},
 		{
-			name: "a CLI with no login subcommand", provider: loginProvider,
+			name: "a harness with no login subcommand", provider: loginProvider,
 			want:    []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
 			notWant: []string{"run `crewlet llm login"},
 		},
@@ -616,33 +616,33 @@ func TestATokenMintRefusalNamesTheLoginTheHarnessHas(t *testing.T) {
 			}
 			for _, bad := range tc.notWant {
 				if strings.Contains(err.Error(), bad) {
-					t.Errorf("the refusal names %q, a route this CLI does not have: %v", bad, err)
+					t.Errorf("the refusal names %q, a route this harness does not have: %v", bad, err)
 				}
 			}
 		})
 	}
 }
 
-// AND THE MODE CHOOSES ITS ROUTES BEFORE THE CLI DOES. Chosen by the CLI alone,
-// an api-key entry was told to run the CLI's login or, on Claude Code, to mint
+// AND THE MODE CHOOSES ITS ROUTES BEFORE THE HARNESS DOES. Chosen by the harness alone,
+// an api-key entry was told to run the harness's login or, on Claude Code, to mint
 // a headless token with `-capture-token` — a login is not what an api-key entry
-// signs in with, and the token is one the mode removes from the CLI's
+// signs in with, and the token is one the mode removes from the harness's
 // environment and `crewlet llm login` refuses before it mints; an inherit-env
 // Claude Code entry was told the same mint, whose token lands in the secret
 // store that mode never reads, so the command refuses to store it. api-key is
 // now told its key alone, and inherit-env what it forwards, a login and, where
-// the CLI mints, a token minted to stdout to export. Codex, which mints none,
+// the harness mints, a token minted to stdout to export. Codex, which mints none,
 // is held to the same split. OpenCode under api-key, a pairing every write of
 // the configuration refuses and `crewlet llm` still loads, names no key
-// variable, so the mode hands its CLI nothing and the remedy is the mode's own,
+// variable, so the mode hands its harness nothing and the remedy is the mode's own,
 // a login under subscription: it was told that and, in the same sentence, that
 // a login is not its sign-in. Codex under api-key with its key variable
 // outside the reference grammar (MY=KEY), which leaves ModeSignIn's Variables
 // empty too, still keeps a key and is told to name the variable.
 //
-// Mutation: choose the routes by the CLI alone, and every case is red; word
+// Mutation: choose the routes by the harness alone, and every case is red; word
 // the opencode case as an api-key entry that keeps its key, and it is red; ask
-// Variables alone for a CLI that names no key variable, and the MY=KEY case is
+// Variables alone for a harness that names no key variable, and the MY=KEY case is
 // worded as one, losing that a login is not its sign-in.
 func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 	t.Parallel()
@@ -685,7 +685,7 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 			mode: AuthAPIKey,
 			want: []string{"its auth.mode is api-key, which puts its key in no variable",
 				"a pairing every write of the configuration refuses",
-				"set auth.mode: subscription, and sign the CLI in with a login"},
+				"set auth.mode: subscription, and sign the harness in with a login"},
 			notWant: []string{"a login is not this entry's sign-in", "crewlet llm login sub",
 				"capture-token", "stdin_login"},
 		},
@@ -693,7 +693,7 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 			name: "codex under api-key, its key variable outside the grammar", agent: "codex",
 			mode: AuthAPIKey, overrides: map[string]any{"api_key_env": "MY=KEY"},
 			want: []string{"a login is not this entry's sign-in",
-				"name the variable your build of the CLI reads in providers.llm.sub.overrides.api_key_env"},
+				"name the variable your build of the harness reads in providers.llm.sub.overrides.api_key_env"},
 			notWant: []string{"a pairing every write", "auth.mode: subscription", "crewlet llm login sub",
 				"`crewlet secrets set`"},
 		},
@@ -727,7 +727,7 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 	}
 }
 
-// A CLI THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
+// A HARNESS THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
 // Qwen Code keeps none — both measured builds refuse the OAuth login it once
 // kept — so `-from-host` would find nothing to adopt.
 func TestBrokeringALoginForAHarnessThatKeepsNoneNamesItsKey(t *testing.T) {
@@ -747,10 +747,10 @@ func TestBrokeringALoginForAHarnessThatKeepsNoneNamesItsKey(t *testing.T) {
 	}
 }
 
-// NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped CLI has
+// NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped harness has
 // one. opencode's did — `auth login --username`, a flag no release of either
 // OpenCode major accepts, which printed usage and exited 1 — and a declared
-// login a CLI cannot serve sends operators down a path that only fails. The
+// login a harness cannot serve sends operators down a path that only fails. The
 // mechanism stays for an operator whose build does accept one.
 func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 	t.Parallel()
@@ -763,13 +763,13 @@ func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
 		if p.StdinLogin != nil {
-			t.Errorf("%s: ships a stdin_login (%v) its CLI cannot serve", name, p.StdinLogin.Args)
+			t.Errorf("%s: ships a stdin_login (%v) its harness cannot serve", name, p.StdinLogin.Args)
 		}
 	}
 }
 
 // bundleOf builds a one-file bundle with an arbitrary entry name, naming agent
-// as the CLI it was exported from, through the export's own writer.
+// as the harness it was exported from, through the export's own writer.
 func bundleOf(t *testing.T, agent, name, body string) string {
 	t.Helper()
 	blob, err := packBundle(bundleManifest{Harness: agent}, []bundleFile{{name: name, data: []byte(body)}})
@@ -826,7 +826,7 @@ func credentialEntries(t *testing.T, p *Provider) []string {
 	return names
 }
 
-// An auth command must be a SUBCOMMAND the CLI runs and exits from, never a
+// An auth command must be a SUBCOMMAND the harness runs and exits from, never a
 // prompt typed at an interactive session.
 //
 // `claude` takes a bare argument as its prompt, so the `["/login"]` this
@@ -836,7 +836,7 @@ func credentialEntries(t *testing.T, p *Provider) []string {
 // and THEN replayed the queued `/login`, so an operator who had just
 // authenticated was asked to authenticate again — and was then left in a REPL
 // that never exits, having to interrupt a login that had already succeeded.
-// A leading "/" is how that mistake is spelled for every CLI here.
+// A leading "/" is how that mistake is spelled for every harness here.
 func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 	t.Parallel()
 	for _, name := range harnessprofile.BuiltinNames() {
@@ -864,8 +864,8 @@ func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 // The docs tell every operator to run `crewlet llm status` and
 // `crewlet llm logout`, and the flagship profile has to answer both.
 //
-// It answered neither: with no status_args the command failed with "this CLI
-// has no status command" for a CLI that has one (now JSON for the engine's
+// It answered neither: with no status_args the command failed with "this harness
+// has no status command" for a harness that has one (now JSON for the engine's
 // reading, [Provider.LoginStatus], and --text for the person reading
 // `crewlet llm status`), and with no logout_args
 // `logout` deleted the local files while leaving the session live at the
@@ -937,7 +937,7 @@ func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
 	}
 }
 
-// Markers are matched VERBATIM against the CLI's own words, so a sentinel the
+// Markers are matched VERBATIM against the harness's own words, so a sentinel the
 // installed binary never emits can never fire — and the failure is silent
 // until somebody hits their cap.
 //
@@ -1049,7 +1049,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	// A CLI that takes a headless token, as Claude Code does, so the decline
+	// A harness that takes a headless token, as Claude Code does, so the decline
 	// and the notice have a token to say does not end the logout: they name
 	// one only for an entry it signs in ([Provider.headlessTokenRoute]). It
 	// declares no minting command, so `-token-stdin` is the one route.
@@ -1116,7 +1116,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 
 // THE WAY BACK FROM A LOGOUT IS WHAT THE PROFILE OFFERS. The decline and the
 // notice once named `crewlet llm login <key>` to every entry, including ones
-// whose CLI declares no login subcommand (qwen-code, grok, gemini-cli), so the
+// whose harness declares no login subcommand (qwen-code, grok, gemini-cli), so the
 // first remedy an operator tried refused. Each route is named exactly when the
 // profile has what it needs, and an import, which needs nothing, always is.
 //
@@ -1270,9 +1270,9 @@ func logoutNotice(t *testing.T, p *Provider) string {
 // profile names no token variable, takes none, and `crewlet llm login`
 // refuses both commands for it; under a token variable outside the reference
 // grammar (MY-TOKEN) a token could be neither stored nor referenced; api-key
-// removes the token variable from the CLI's environment; and inherit-env
+// removes the token variable from the harness's environment; and inherit-env
 // never reads the secret store a token would be stored in, so the token that
-// signs it in is one exported in the engine's environment. A CLI with a token
+// signs it in is one exported in the engine's environment. A harness with a token
 // variable and no minting command is told `-token-stdin` alone. Claude Code
 // as shipped is the control: it mints a token and reads a stored one, and is
 // told both commands.
@@ -1311,7 +1311,7 @@ func TestALoggedOutEntryIsToldOfAHeadlessTokenOnlyWhereOneSignsItIn(t *testing.T
 			refusal: true,
 		},
 		{
-			name: "a CLI with no minting command", agent: "claude-code",
+			name: "a harness with no minting command", agent: "claude-code",
 			overrides: map[string]any{"capture_token_args": []any{}},
 			want:      []string{"a headless token from `-token-stdin` signs it in"},
 			notWant:   []string{"-capture-token"},

@@ -676,7 +676,7 @@ func (i *routeInbox) Close() {}
 // THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE. The other cases answer the
 // plugin from a stand-in of the route; this one runs it against a real bridge
 // serving a run's session, its inbox a stand-in of the engine's, so the
-// route's answer and its read are crossed as a run's CLI crosses them — the
+// route's answer and its read are crossed as a run's harness crosses them — the
 // note's place, its id, the id it is admitted under and its message, the
 // cursor the plugin asks past and the ids it confirms. A field either side
 // renamed would leave every OpenCode run admitting nothing, with no error

@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A RUN THAT CONTINUES A SESSION ASKS ITS CLI FOR THAT SESSION: deep work
+// A RUN THAT CONTINUES A SESSION ASKS ITS HARNESS FOR THAT SESSION: deep work
 // parks on a proposal and its approval continues the same conversation in the
 // same box, so the brief is the next message in it rather than a new task.
 func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
@@ -40,11 +40,11 @@ func TestAnOpenCodeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	}
 }
 
-// noResume is a CLI that cannot continue a session: Claude Code's runner with
-// its Resumes hidden, as any CLI added without one would be.
+// noResume is a harness that cannot continue a session: Claude Code's runner with
+// its Resumes hidden, as any harness added without one would be.
 type noResume struct{ executor.Harness }
 
-// A CLI THAT CANNOT CONTINUE A SESSION REFUSES A RUN THAT ASKS IT TO, rather
+// A HARNESS THAT CANNOT CONTINUE A SESSION REFUSES A RUN THAT ASKS IT TO, rather
 // than start a new conversation the caller believes is the old one.
 //
 // Mutation: drop the resumer gate from Runner.Start, and the run starts.
@@ -53,6 +53,6 @@ func TestARunnerThatCannotResumeRefusesToPretend(t *testing.T) {
 	runner := executor.New(noResume{executor.ClaudeCode{}})
 	b := box(t, runner)
 	if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "x", Resume: "ses_1"}); err == nil {
-		t.Fatal("a CLI with no way to continue a session started a run it was asked to continue one for")
+		t.Fatal("a harness with no way to continue a session started a run it was asked to continue one for")
 	}
 }

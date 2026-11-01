@@ -47,7 +47,7 @@ func TestCustomShipsNothingAndSaysWhatIsMissing(t *testing.T) {
 
 // A fully declared custom profile must work with no built-in help at all —
 // this is the escape hatch for an operator's own wrapper or a self-hosted
-// gateway CLI.
+// gateway harness.
 func TestCustomWorksWhenFullyDeclared(t *testing.T) {
 	t.Parallel()
 	p, err := Load("custom", map[string]any{
@@ -186,7 +186,7 @@ func TestOverridesDoNotLeakIntoTheBuiltinTable(t *testing.T) {
 	}
 }
 
-// A sentinel is matched as a plain substring against whatever the CLI printed,
+// A sentinel is matched as a plain substring against whatever the harness printed,
 // which on a healthy call is the MODEL'S OWN ANSWER — so one that can occur in
 // ordinary text does not recognise a spent plan, it misclassifies replies as
 // one. Both kinds a marker produces bench the credential, so the cost is a
@@ -420,10 +420,10 @@ func TestTheDocsListEveryProfileField(t *testing.T) {
 	}
 }
 
-// Which variable each CLI reads a key and a headless token from, as each
+// Which variable each harness reads a key and a headless token from, as each
 // profile's note records it from the vendor. A variable missing here is a key
 // `auth.mode: api-key` has nowhere to put — cursor-agent's CURSOR_API_KEY was
-// — and one named here that the CLI ignores is a key that reaches nothing.
+// — and one named here that the harness ignores is a key that reaches nothing.
 func TestEachProfileNamesTheVariablesItsHarnessReads(t *testing.T) {
 	t.Parallel()
 	want := map[string][2]string{ // agent: {api_key_env, token_env}
@@ -455,9 +455,9 @@ func TestEachProfileNamesTheVariablesItsHarnessReads(t *testing.T) {
 	}
 }
 
-// Which CLIs read their model provider's key from their own environment, as
+// Which harnesses read their model provider's key from their own environment, as
 // each profile's note records it from the vendor. Declared where it is not
-// true, `doctor` reports a key the CLI ignores as a sign-in (kimi-code is
+// true, `doctor` reports a key the harness ignores as a sign-in (kimi-code is
 // handed KIMI_API_KEY and reads only config.toml); missing where it is, the
 // supported route is reported as no sign-in at all, which is what hermes
 // suffered.
@@ -470,7 +470,7 @@ func TestEnvSignInIsDeclaredExactlyWhereTheHarnessReadsItsKeyFromItsEnvironment(
 			t.Errorf("%s: env_sign_in = %v, want %v", name, got, want)
 		}
 	}
-	// And like every field it is an operator's to declare for a CLI this
+	// And like every field it is an operator's to declare for a harness this
 	// build does not ship.
 	p, err := Load("custom", map[string]any{
 		"binary": "my-gateway-cli", "complete_args": []any{"-p"}, "output": "text",
@@ -484,9 +484,9 @@ func TestEnvSignInIsDeclaredExactlyWhereTheHarnessReadsItsKeyFromItsEnvironment(
 	}
 }
 
-// Which CLIs read their model as `<provider>/<model>` split at the first
-// slash, as measured from each CLI's own source. Declared where it is not
-// true, config refuses a model the CLI accepts; hermes and pi document a
+// Which harnesses read their model as `<provider>/<model>` split at the first
+// slash, as measured from each harness's own source. Declared where it is not
+// true, config refuses a model the harness accepts; hermes and pi document a
 // `provider/id` model too, but whether they REFUSE a bare one is unmeasured,
 // so they do not declare it and a bare model is theirs to judge.
 func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
@@ -506,7 +506,7 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 	}
 }
 
-// A SHARED KEY VARIABLE NEEDS A VARIABLE. api_key_env_shared says the CLI's key
+// A SHARED KEY VARIABLE NEEDS A VARIABLE. api_key_env_shared says the harness's key
 // variable holds other vendors' keys too; on a profile that names none it
 // declares nothing, and an override that dropped the variable and kept the
 // flag is a mistake to say rather than a no-op to ignore.
@@ -563,9 +563,9 @@ func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
 	}
 }
 
-// NO SHIPPED AGENT FILE TELLS ITS CLI IT IS A TEXT MODEL BEHIND THE ENGINE'S
-// LOOP. That was true when the engine parsed tool calls out of a CLI's prose;
-// every CLI now drives its own loop and calls the seat's tools as the crewlet
+// NO SHIPPED AGENT FILE TELLS ITS HARNESS IT IS A TEXT MODEL BEHIND THE ENGINE'S
+// LOOP. That was true when the engine parsed tool calls out of a harness's prose;
+// every harness now drives its own loop and calls the seat's tools as the crewlet
 // MCP server, and a vendor that shows its model an agent's description shows
 // it a claim that no longer holds.
 func TestNoAgentFileCallsItsHarnessATextModel(t *testing.T) {
@@ -574,7 +574,7 @@ func TestNoAgentFileCallsItsHarnessATextModel(t *testing.T) {
 		p, _ := Builtin(name)
 		for _, ch := range p.channels() {
 			if ch.File != nil && strings.Contains(ch.File.Template, "text model") {
-				t.Errorf("%s's %s file says its CLI is a text model: %q", name, ch.field, ch.File.Template)
+				t.Errorf("%s's %s file says its harness is a text model: %q", name, ch.field, ch.File.Template)
 			}
 		}
 	}
@@ -722,7 +722,7 @@ func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
 
 // A LOGIN KEY DECIDES WHETHER A FILE HOLDS A LOGIN, AND NOTHING ELSE DOES. Only
 // a file login_keys names is read, its `//` header lines set aside as Copilot
-// CLI writes them; an empty value is no login; and a file the rule cannot read
+// harness writes them; an empty value is no login; and a file the rule cannot read
 // is taken for one, the direction that never drops somebody's login. A key may
 // only name a credential file, and must say which key.
 func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
@@ -762,7 +762,7 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 	}
 }
 
-// WHAT A REFUSED SIGN-IN MEANT is read off the CLI's own words, first marker
+// WHAT A REFUSED SIGN-IN MEANT is read off the harness's own words, first marker
 // first: Claude Code says "Not logged in" of a token it never used (one with a
 // space inside), and ends a revoked token's report in the same "Please run
 // /login" clause, which must not read as unused.

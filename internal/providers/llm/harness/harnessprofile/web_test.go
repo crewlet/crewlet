@@ -62,7 +62,7 @@ func TestAWebDenialReplacesOnlyWhatItNames(t *testing.T) {
 }
 
 // A STANCE NOTHING HONOURS IS REFUSED. `web_tools: denied` on a profile with
-// no measured web_denial would run a CLI that still fetches under a
+// no measured web_denial would run a harness that still fetches under a
 // configuration saying it cannot, and the assistant is admitted on exactly
 // that saying.
 func TestWebDeniedIsRefusedOnAProfileWithNoDenial(t *testing.T) {

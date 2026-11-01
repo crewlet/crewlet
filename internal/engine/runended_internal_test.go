@@ -18,7 +18,7 @@ import (
 )
 
 // A RUN THAT ENDED ON ITS VENDOR'S SPENT PLAN MOVES THE TURN'S NEXT LAUNCH ON.
-// The run is its CLI's own, so nothing a text call reads saw the limit; the
+// The run is its harness's own, so nothing a text call reads saw the limit; the
 // segment that collects it reads the run's own ending, sits the entry out on
 // this node, and the turn's next launch — a reviewer's send-back — takes the
 // chain's next member, announced as the hand-off it is. A run that ended any
@@ -135,7 +135,7 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	}
 }
 
-// planOf is c's "plan" entry, as the coding CLI it is.
+// planOf is c's "plan" entry, as the harness it is.
 func planOf(t *testing.T, c *Company) *harness.Provider {
 	t.Helper()
 	p, ok := c.Models.Provider("plan")

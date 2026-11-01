@@ -10,7 +10,7 @@ import (
 
 // resetAt reads the instant a limit lifts out of the vendor's report, or the
 // zero time when the report names none this reading can take. zone is the zone
-// the CLI ran in ([childZone]), which a time of day named with no zone of its
+// the harness ran in ([childZone]), which a time of day named with no zone of its
 // own is in; nil reads UTC.
 //
 // ZERO IS AN ANSWER, not a failure: [Provider.bench] reads it as "the vendor
@@ -107,7 +107,7 @@ const clockResetGrace = 5 * time.Minute
 // none, the year whose occurrence is the next.
 //
 // THE ZONE is the parenthesised one where the sentence names it, else zone,
-// the zone the CLI ran in: the engine hands every child, on its host and in a
+// the zone the harness ran in: the engine hands every child, on its host and in a
 // box, an explicit TZ ([childZone]), so a sentence without a zone is read in
 // the zone it was written in rather than guessed. A parenthesised zone the
 // system's zone database does not know is no instant.

@@ -102,21 +102,21 @@ func probeBridge(t *testing.T, inbox mcpbridge.SteerInbox, ledger mcpbridge.Ledg
 // The one place the run's settings, the box and the bridge meet: a Claude Code
 // run in a real `direct` box, its `claude` a stand-in that records the argv,
 // the environment and the stdin it was started with and keeps the settings file
-// it was named. Then each hook in that file is played as the CLI plays it — a
+// it was named. Then each hook in that file is played as the harness plays it — a
 // call of its tool, over a real MCP client, on the server the run's MCP config
 // names under the hook's own server name, with ${hook_event_name} and
 // ${agent_id} filled in — against a real bridge serving the run's session, so
 // what the file names and what the bridge serves are held to each other rather
 // than each to a copy of the other's names.
 //
-// What it holds: the brief reaches the CLI on stdin and nowhere on its argv;
+// What it holds: the brief reaches the harness on stdin and nowhere on its argv;
 // --settings names the file; the two variables that switch hooks off are gone
-// from the CLI's environment though the seat's environment set them; each of
+// from the harness's environment though the seat's environment set them; each of
 // the main agent's two boundaries is answered with the note, as the hook's
 // additional context for that event; and a subagent's boundary takes nothing.
 //
 // Mutation: rename the hook input's `event` key and no boundary takes the note;
-// drop Output.Unset and the variables reach the CLI.
+// drop Output.Unset and the variables reach the harness.
 func TestARealBoxsHooksReachTheBridgeTool(t *testing.T) {
 	t.Parallel()
 	inbox := &probeInbox{}
@@ -151,17 +151,17 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 
 	argv := lines(t, filepath.Join(record, "argv"))
 	if argv[0] != "-p" || slices.Contains(argv, brief) {
-		t.Errorf("the brief is on the CLI's argv: %q", argv)
+		t.Errorf("the brief is on the harness's argv: %q", argv)
 	}
 	if got := after(argv, "--settings"); got != p.ClaudeSettings() {
 		t.Errorf("--settings names %q, want %q", got, p.ClaudeSettings())
 	}
 	if stdin := strings.Join(lines(t, filepath.Join(record, "stdin")), "\n"); stdin != brief {
-		t.Errorf("the CLI read %q on stdin, want the brief", stdin)
+		t.Errorf("the harness read %q on stdin, want the brief", stdin)
 	}
 	for _, kv := range lines(t, filepath.Join(record, "env")) {
 		if strings.HasPrefix(kv, "CLAUDE_CODE_SIMPLE=") || strings.HasPrefix(kv, "CLAUDE_CODE_SAFE_MODE=") {
-			t.Errorf("the CLI started with %s, which switches its hooks off", kv)
+			t.Errorf("the harness started with %s, which switches its hooks off", kv)
 		}
 	}
 
@@ -184,7 +184,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 	}
 	readJSON(t, filepath.Join(record, "mcp.json"), &servers)
 
-	// EACH HOOK, PLAYED AS THE CLI PLAYS IT.
+	// EACH HOOK, PLAYED AS THE HARNESS PLAYS IT.
 	play := func(event, agent string) []string {
 		var answers []string
 		for _, matcher := range settings.Hooks[event] {
@@ -254,7 +254,7 @@ func callHookTool(t *testing.T, url, tool string, args map[string]any) string {
 		t.Fatalf("call %s: %v", tool, err)
 	}
 	if res.IsError {
-		t.Fatalf("%s answered an error, which makes the CLI re-initialise its bridge", tool)
+		t.Fatalf("%s answered an error, which makes the harness re-initialise its bridge", tool)
 	}
 	var out strings.Builder
 	for _, c := range res.Content {

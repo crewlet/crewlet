@@ -22,30 +22,30 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// Workspace owns one CLI's share of a state directory: the shared login, and a
+// Workspace owns one harness's share of a state directory: the shared login, and a
 // home per seat, all under <state dir>/<harness>.
 //
-// One per (RESOLVED state directory, CLI), from a package-level registry,
-// because entries that point at the same directory AND drive the same CLI are
+// One per (RESOLVED state directory, harness), from a package-level registry,
+// because entries that point at the same directory AND drive the same harness are
 // meant to share it — that is how per-phase models work off a single
 // `crewlet llm login`. Two Workspace values over one directory would each
 // believe they owned the pruning, and the opus entry's prune would delete the
 // sonnet entry's live session.
 //
-// KEYED BY THE CLI TOO, ON DISK AND IN THE REGISTRY, because two CLIs agree
+// KEYED BY THE HARNESS TOO, ON DISK AND IN THE REGISTRY, because two harnesses agree
 // on nothing a workspace keeps: which files are credentials, which are
 // conversation memory, how a login is stored. Keyed by the directory alone, a
 // codex entry on a directory Claude Code had written would seed its seats'
 // homes from, and prune, a login it cannot read — so the registry refused the
-// second CLI for the life of the process, and an ordinary edit (moving a key
+// second harness for the life of the process, and an ordinary edit (moving a key
 // from claude-code to codex) produced a revision every running node refused
 // to apply while a restarted one applied it, splitting the fleet. Under its
-// own subdirectory each CLI's files never meet another's: switching an
-// entry's CLI opens a login directory of its own, signed out until it is
+// own subdirectory each harness's files never meet another's: switching an
+// entry's harness opens a login directory of its own, signed out until it is
 // signed in, and switching back finds the old login where it was left.
 type Workspace struct {
 	// stateDir is the resolved state directory, as the entry names it, and
-	// root is this CLI's share of it, <stateDir>/<harness>, under which every
+	// root is this harness's share of it, <stateDir>/<harness>, under which every
 	// file the workspace keeps lives.
 	stateDir string
 	root     string
@@ -80,7 +80,7 @@ type seatState struct {
 }
 
 // workspaceKey is a workspace's identity: the resolved state directory and
-// the CLI that keeps its files there.
+// the harness that keeps its files there.
 type workspaceKey struct{ dir, agent string }
 
 // registry is the process-wide table of workspaces by [workspaceKey].
@@ -89,12 +89,12 @@ var registry = struct {
 	m  map[workspaceKey]*Workspace
 }{m: make(map[workspaceKey]*Workspace)}
 
-// Shared returns the workspace of one CLI in a state directory, creating it
-// once: <stateDir>/<harness>, so two CLIs on one directory never share a file.
+// Shared returns the workspace of one harness in a state directory, creating it
+// once: <stateDir>/<harness>, so two harnesses on one directory never share a file.
 //
 // The agent names a directory, so it must be one path element — the profile
 // table's names all are, and a name that could climb out of the state
-// directory or land two CLIs on one subdirectory is refused here rather than
+// directory or land two harnesses on one subdirectory is refused here rather than
 // written under.
 func Shared(stateDir, agent string, profile harnessprofile.Profile) (*Workspace, error) {
 	key, err := keyOf(stateDir, agent)
@@ -135,7 +135,7 @@ func keyOf(stateDir, agent string) (workspaceKey, error) {
 	return workspaceKey{dir: filepath.Clean(resolved), agent: agent}, nil
 }
 
-// forgetWorkspace drops every CLI's workspace in a state dir from the
+// forgetWorkspace drops every harness's workspace in a state dir from the
 // registry. Tests only: they stand for a process that ended, so that the next
 // Shared opens the directory as a fresh process would.
 func forgetWorkspace(stateDir string) {
@@ -153,11 +153,11 @@ func forgetWorkspace(stateDir string) {
 	}
 }
 
-// StateDir is the resolved state directory this workspace keeps its CLI's
+// StateDir is the resolved state directory this workspace keeps its harness's
 // share of — what the entry's state_dir names, or the one derived for its key.
 func (w *Workspace) StateDir() string { return w.stateDir }
 
-// Root is this CLI's share of the state directory, <state dir>/<harness>: the
+// Root is this harness's share of the state directory, <state dir>/<harness>: the
 // directory every file the workspace keeps lives under.
 func (w *Workspace) Root() string { return w.root }
 
@@ -177,7 +177,7 @@ func (w *Workspace) KeySeatDir(seat string) string {
 	return filepath.Join(w.root, "key-seats", seatSlug(seat))
 }
 
-// loginHome is the home every `crewlet llm` auth command runs the CLI in,
+// loginHome is the home every `crewlet llm` auth command runs the harness in,
 // rebuilt from the shared login for each one — see
 // [Provider.runInCredentialHome].
 func (w *Workspace) loginHome() string { return filepath.Join(w.root, "login-home") }
@@ -187,7 +187,7 @@ func (w *Workspace) loginHome() string { return filepath.Join(w.root, "login-hom
 func (w *Workspace) loginCache() string { return filepath.Join(w.root, "login-cache") }
 
 // The files a workspace keeps BESIDE its homes rather than in one, so that
-// neither a bundle (which carries the credentials directory) nor a CLI (whose
+// neither a bundle (which carries the credentials directory) nor a harness (whose
 // HOME is a home) ever reads one as its own.
 const (
 	// generationFile is a seat's open [generation], in its seat directory.
@@ -229,7 +229,7 @@ const slugReadable = 48
 //
 // Not a hash outright: an operator looking at a state directory to see whose
 // home is filling a disk needs to recognise the seat. But not a lossy
-// rendering either — this directory is a seat's HOME, holding its coding-CLI
+// rendering either — this directory is a seat's HOME, holding its harness
 // session, its history and its credentials, and two seats that land on one
 // slug get one home. That is the first thing this package's doc says must
 // never happen: seven seats on one subscription reading each other's
@@ -275,12 +275,12 @@ func seatSlug(seat string) string {
 }
 
 // loginStore moves a [harnessprofile.CredentialStore]'s document into and out of a
-// home through the CLI's own commands.
+// home through the harness's own commands.
 //
-// The PROVIDER implements it, because running the CLI takes what only the
+// The PROVIDER implements it, because running the harness takes what only the
 // provider holds — the environment its calls are given — while the workspace
 // decides WHEN a home is seeded and synced. One interface for the two places
-// that need it, a seat generation and the login home, so neither runs the CLI
+// that need it, a seat generation and the login home, so neither runs the harness
 // its own way.
 type loginStore interface {
 	// importLogin stores the document's logins in home's database.
@@ -311,7 +311,7 @@ type Checkout struct {
 	keyed bool
 	// record is where the seat's open generation is kept on disk.
 	record string
-	// store is the generation's way back out for a login held in the CLI's
+	// store is the generation's way back out for a login held in the harness's
 	// own database: whichever provider seeded the home exports from it.
 	store    loginStore
 	released bool
@@ -343,11 +343,11 @@ type Checkout struct {
 //     discard it: the call is refused, classified so the fallback chain can
 //     move on, and the next call tries again.
 //
-// store imports a login the CLI keeps in its own database ([loginStore]); it is
+// store imports a login the harness keeps in its own database ([loginStore]); it is
 // asked only by a profile that declares a [harnessprofile.CredentialStore], and the
 // generation's [Checkout.Release] exports through the same one — as does the
 // sweep, for the other seats' homes, which is sound because a workspace drives
-// ONE CLI ([Shared]) and an export reads that CLI's database whichever entry
+// ONE HARNESS ([Shared]) and an export reads that harness's database whichever entry
 // runs it.
 func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	dir := w.SeatDir(seat)
@@ -362,11 +362,11 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 	return checkout, nil
 }
 
-// AcquireForKey prepares a place for one call whose CLI signs in with a KEY —
+// AcquireForKey prepares a place for one call whose harness signs in with a KEY —
 // an entry under auth.mode api-key, or inherit-env handing it the engine's own
 // key — in the seat's key home ([Workspace.KeySeatDir]).
 //
-// A HOME APART FROM THE LOGIN'S, because a CLI may keep what a key signs it in
+// A HOME APART FROM THE LOGIN'S, because a harness may keep what a key signs it in
 // to in the very file its login lives in. Cursor Agent exchanges
 // CURSOR_API_KEY for a session and writes the session, and the key itself, to
 // the auth.json a login is kept in; on its next start it prefers the key that
@@ -378,7 +378,7 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 //
 // So a key home is never seeded with the login, and nothing in it is carried
 // out: each generation opens and closes it with no credential file in it
-// ([Workspace.dropCopies]), so a key the CLI wrote down stays no longer than
+// ([Workspace.dropCopies]), so a key the harness wrote down stays no longer than
 // the calls it was handed to.
 func (w *Workspace) AcquireForKey(ctx context.Context, seat, callID string) (*Checkout, error) {
 	dir := w.KeySeatDir(seat)
@@ -416,7 +416,7 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 	}()
 
 	// The directories exist BEFORE the seed rather than after it, which is
-	// the order a seed that RUNS THE CLI needs: an import is a child whose
+	// the order a seed that RUNS THE HARNESS needs: an import is a child whose
 	// HOME is this directory and whose working directory is too.
 	if err = prepareHome(home, cache); err != nil {
 		return nil, err
@@ -424,12 +424,12 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 	if err = os.MkdirAll(work, 0o700); err != nil {
 		return nil, fmt.Errorf("harness: preparing %q: %w", work, err)
 	}
-	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor CLI here
+	// THE CALL'S DIRECTORY IS ITS OWN PROJECT ROOT. Every vendor harness here
 	// looks for project files — AGENTS.md, CLAUDE.md, its own rules, skills,
 	// hooks, a project config — from its working directory UP to the nearest
 	// repository root, so a state_dir inside a checkout handed every seat the
 	// instructions of a repository the engine does not control, and some
-	// CLIs ran git in it. A `.git` file here ends that walk where the call
+	// harnesses ran git in it. A `.git` file here ends that walk where the call
 	// begins: measured, it confines codex, OpenCode, Kimi Code, Qwen Code,
 	// Hermes, Copilot's instruction files and Gemini CLI's GEMINI.md, and it
 	// changes nothing else they send. See [harnessprofile.ProjectRootMarker].
@@ -457,7 +457,7 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 
 // openKeyGeneration is the first call into a key home taking its generation
 // lock and emptying the home of every credential file and volatile path —
-// whatever an earlier generation's CLI wrote down, a process that ended
+// whatever an earlier generation's harness wrote down, a process that ended
 // mid-call included — before the home's own settings are seeded: the
 // profile's, then a key home's own over them
 // ([harnessprofile.Profile.KeySeedFiles]). On success the lock is the seat's to
@@ -533,7 +533,7 @@ func (w *Workspace) openGeneration(
 // The LAST call out of a seat carries a refreshed login back to the shared
 // directory and prunes. Carrying it back matters more than it looks: OAuth
 // access tokens expire in hours and most vendors rotate the refresh token with
-// them, so discarding the login the CLI rewrote logs the whole fleet out at the
+// them, so discarding the login the harness rewrote logs the whole fleet out at the
 // next expiry.
 //
 // A FAILED CARRY PRUNES NOTHING. The home then holds the only copy of what the
@@ -543,7 +543,7 @@ func (w *Workspace) openGeneration(
 // comes first ([Workspace.sweep]). Either way the generation's lock is let go,
 // which is what tells a sweep the home is idle.
 //
-// ctx bounds the export a login held in the CLI's own database leaves through.
+// ctx bounds the export a login held in the harness's own database leaves through.
 // A caller hands it [context.WithoutCancel] of its own: a release is a teardown,
 // and a call that ended BECAUSE its context was cancelled still has a refreshed
 // token to write back.
@@ -575,7 +575,7 @@ func (c *Checkout) Release(ctx context.Context) error {
 		}
 	}()
 	if c.keyed {
-		// Nothing to carry: what a key signed the CLI in to goes with
+		// Nothing to carry: what a key signed the harness in to goes with
 		// the generation ([Workspace.AcquireForKey]).
 		return errors.Join(workErr, c.ws.dropCopies(c.Home), c.ws.prune(c.Home))
 	}
@@ -588,17 +588,17 @@ func (c *Checkout) Release(ctx context.Context) error {
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
 }
 
-// carryRefreshed carries a login the CLI refreshed WHILE ITS CALL GOES ON back
+// carryRefreshed carries a login the harness refreshed WHILE ITS CALL GOES ON back
 // to the shared directory, and moves the generation's baseline to the login
 // the shared directory then holds — on disk too, so a later carry-out compares
 // against it.
 //
-// A call is a seat's whole phase now, its CLI alive through every tool it
+// A call is a seat's whole phase now, its harness alive through every tool it
 // calls, and a generation stays open for as long as any call of the seat runs:
-// carried out only at the last release, a token the CLI refreshed an hour into
+// carried out only at the last release, a token the harness refreshed an hour into
 // a phase would sit in this home while every other seat seeded from the shared
 // login the vendor had already rotated away, and failed its own refresh. So it
-// is carried at each tool call the CLI makes, which is when its process waits
+// is carried at each tool call the harness makes, which is when its process waits
 // on the engine rather than writing to its home.
 //
 // THE BASELINE MOVES WITH THE WRITE, WHOLE: the shared login now holds what
@@ -644,7 +644,7 @@ func (w *Workspace) seatState(dir string) *seatState {
 
 // seatTempDir is the directory TMPDIR names, under the seat's home.
 //
-// The ENGINE'S, not a profile's: every child is handed it, and every CLI
+// The ENGINE'S, not a profile's: every child is handed it, and every harness
 // leaves something in it — Claude Code a probe directory on almost every call,
 // Qwen Code a compile cache, OpenCode its own scratch — so it is pruned with
 // the volatile paths whatever the profile lists, and made again, private and
@@ -667,7 +667,7 @@ func (w *Workspace) prune(home string) error {
 			return fmt.Errorf("harness: pruning %q: %w", target, err)
 		}
 	}
-	// MADE AGAIN, because a CLI handed a TMPDIR that does not exist fails
+	// MADE AGAIN, because a harness handed a TMPDIR that does not exist fails
 	// the first temporary file it opens rather than making the directory.
 	if err := os.MkdirAll(tempDir(home), 0o700); err != nil {
 		return fmt.Errorf("harness: preparing the seat's temporary directory: %w", err)
@@ -717,7 +717,7 @@ func (w *Workspace) emptyLoginHome() error {
 // login was read at ([generation.SeededEpoch]), which is also the one its
 // login is ordered after until it finishes ([generation.After]).
 //
-// A COPY rather than a symlink into the shared directory: the CLI rewrites
+// A COPY rather than a symlink into the shared directory: the harness rewrites
 // this file in place when it refreshes, and seven seats sharing one inode
 // would have seven writers on it. The copy back out is [syncCredentialsOut],
 // which runs once, when the seat's last call finishes.
@@ -730,20 +730,20 @@ func (w *Workspace) emptyLoginHome() error {
 // read ([hostbox.WriteCredentials]).
 //
 // The digest is of the very bytes written into the home: a digest read
-// separately could describe a newer file than the one the CLI started from,
+// separately could describe a newer file than the one the harness started from,
 // and the baseline would then excuse a write it should have refused.
 //
-// A login held in the CLI's own database is IMPORTED last, after the home's
-// own settings files, because the import is the CLI itself starting in this
+// A login held in the harness's own database is IMPORTED last, after the home's
+// own settings files, because the import is the harness itself starting in this
 // home and reads whatever global settings a home holds: see
 // [Workspace.importLogin]. The one profile with a credential store today,
 // OpenCode, seeds nothing in the home — its settings are each call's own
 // ([harnessprofile.Profile.WorkConfigEnv]) — so its import reads only the
 // database location the home's variables name.
 //
-// AN IMPORT THE CLI REFUSED ([*loginRefusedError]) still returns the
+// AN IMPORT THE HARNESS REFUSED ([*loginRefusedError]) still returns the
 // generation, the refused document's digest included, beside the error: a seat
-// stops there, but a command that MAKES a login replaces a document the CLI
+// stops there, but a command that MAKES a login replaces a document the harness
 // cannot read, and what it stores is judged against — and written over —
 // exactly that document ([Provider.runInCredentialHome]). Every other failure
 // returns none.
@@ -773,13 +773,13 @@ func (w *Workspace) seed(
 		content, present := login[name]
 		if !present {
 			// NO LOGIN YET is not an error here. The call then fails with
-			// the CLI's own "not authenticated", which names the vendor
+			// the harness's own "not authenticated", which names the vendor
 			// and is what `crewlet llm doctor` explains — far better than
 			// a provider that refused to start.
 			//
 			// AND THE HOME KEEPS NONE EITHER. A credential file is not
 			// volatile, so the copy an earlier generation left is still in
-			// the home — and skipping the seed used to leave the CLI signed
+			// the home — and skipping the seed used to leave the harness signed
 			// in with it, so a seat went on calling as a login `crewlet llm
 			// logout` had removed.
 			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
@@ -832,7 +832,7 @@ func (w *Workspace) seedFrom(ctx context.Context, mode syncMode) (map[string][]b
 // read it, into a home's database, for a profile that declares one, and
 // records the document in seeded.
 //
-// INTO A DATABASE THE PRUNE HAS JUST EMPTIED, which is not incidental: the CLI
+// INTO A DATABASE THE PRUNE HAS JUST EMPTIED, which is not incidental: the harness
 // skips a credential id its database already holds rather than updating it, so
 // importing a refreshed document over an older database would keep the older
 // token. Both callers prune first.
@@ -869,14 +869,14 @@ func (w *Workspace) importLogin(
 	return nil
 }
 
-// loginRefusedError is a shared login the CLI ran and REFUSED to import: a
+// loginRefusedError is a shared login the harness ran and REFUSED to import: a
 // document it cannot read, which the same call made again would be refused
 // identically — what [acquireFailureKind] reads as an unusable login.
 //
-// It NAMES THE WAYS OUT, every one of which works on a document the CLI cannot
+// It NAMES THE WAYS OUT, every one of which works on a document the harness cannot
 // read: a login replaces it ([Provider.runInCredentialHome]), `-from-host`
 // adopts a working one over it without importing it, and a logout removes it.
-// A bundle exported by another build of the CLI — one whose shapes this build
+// A bundle exported by another build of the harness — one whose shapes this build
 // decodes strictly — is the usual way to get here.
 type loginRefusedError struct {
 	key, path string
@@ -884,7 +884,7 @@ type loginRefusedError struct {
 }
 
 func (e *loginRefusedError) Error() string {
-	return fmt.Sprintf("harness: the CLI refused to import the shared login %q: %v — sign "+
+	return fmt.Sprintf("harness: the harness refused to import the shared login %q: %v — sign "+
 		"in again with `crewlet llm login %s`, which replaces it, adopt a login that works "+
 		"with `crewlet llm login %s -from-host`, or remove it with `crewlet llm logout %s`",
 		e.path, e.err, e.key, e.key, e.key)
@@ -893,23 +893,23 @@ func (e *loginRefusedError) Error() string {
 func (e *loginRefusedError) Unwrap() error { return e.err }
 
 // acquireFailureKind classifies a seat that could not be made ready to run,
-// which since a seat's generation began running the CLI is no longer only a
+// which since a seat's generation began running the harness is no longer only a
 // filesystem fact.
 //
 //   - A command that ran out of time — the auxiliary bound, or the call's own
 //     deadline — is a TIMEOUT, as the call's own is in [Provider.completion]:
 //     a busy host, not a request nobody can serve, so the chain may try
 //     another member and the credential is not benched.
-//   - A shared login the CLI refused to import is AUTH: this entry's login is
+//   - A shared login the harness refused to import is AUTH: this entry's login is
 //     unusable until somebody signs in again, which is what an auth failure
 //     says, so the chain moves on — and the next call tries the login again,
 //     since `crewlet llm login` mends it and that call must find it.
 //   - Any other command that ran and did not succeed — exited non-zero, or
 //     exited 0 without being seen to its end — is a SERVER failure: the local
-//     CLI failed to answer, as a 5xx is a vendor failing to, and the login it
+//     harness failed to answer, as a 5xx is a vendor failing to, and the login it
 //     holds is fine, merely not out (or in) yet. The export a previous
 //     generation's login is carried out through is the usual one.
-//   - Everything else is a filesystem failure on this host, or a CLI it could
+//   - Everything else is a filesystem failure on this host, or a harness it could
 //     not start, and stays FATAL.
 func acquireFailureKind(err error) llm.ErrorKind {
 	var refused *loginRefusedError
@@ -929,7 +929,7 @@ func acquireFailureKind(err error) llm.ErrorKind {
 
 // seedFiles writes the profile's settings files for one scope into root.
 //
-// Written on EVERY seed rather than once: the CLI may rewrite its own
+// Written on EVERY seed rather than once: the harness may rewrite its own
 // settings file during a call, and a vendor's tool policy that quietly
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
@@ -968,7 +968,7 @@ type syncMode string
 
 const (
 	// syncRefresh is a seat's generation, and every auth command that makes
-	// no login (`status`, a vendor's own logout). Its CLI can only have
+	// no login (`status`, a vendor's own logout). Its harness can only have
 	// REFRESHED the login it was seeded from, so the write is a
 	// COMPARE-AND-SWAP against that login, WHOLE: made only while the shared
 	// directory still holds exactly what the home was seeded from — every
@@ -978,7 +978,7 @@ const (
 	// kept ([Workspace.carry]).
 	syncRefresh syncMode = "refresh"
 	// syncLogin is a command that MAKES a login: `crewlet llm login`, a
-	// credential login, a token capture. What its CLI stored is written
+	// credential login, a token capture. What its harness stored is written
 	// whenever it differs from what the command started with, OVER whatever
 	// the shared directory holds by then — an operator's new login has to
 	// win over a refresh a seat wrote during a browser flow that took
@@ -991,7 +991,7 @@ const (
 // Valid reports whether m is one of the two modes.
 func (m syncMode) Valid() bool { return m == syncRefresh || m == syncLogin }
 
-// generation is one home's OPEN GENERATION: how a login its CLI changed is
+// generation is one home's OPEN GENERATION: how a login its harness changed is
 // carried out, and what the home's login was seeded from, which is what a
 // changed one is told from an unchanged one by — and, for a refresh, what the
 // shared directory must still hold for the write to be made.
@@ -1083,7 +1083,7 @@ func clearGeneration(path string) error {
 // was one.
 //
 // Under the record's own mode and baseline, exactly as the release it stands in
-// for would have — so carrying out a home whose CLI changed nothing writes
+// for would have — so carrying out a home whose harness changed nothing writes
 // nothing, a login the shared directory has since moved past is not written
 // over it, and a home whose export holds no login is carried out by doing
 // nothing. Only then is the record removed and the home free to prune; a carry
@@ -1106,7 +1106,7 @@ func (w *Workspace) carryOut(
 // carryOutError is an open generation whose login could not be carried out, so
 // its home was kept as it is.
 //
-// It NAMES THE WAY OUT, because a carry that fails for good — a CLI upgrade that
+// It NAMES THE WAY OUT, because a carry that fails for good — a harness upgrade that
 // broke its export, a login past what an export may print — refuses the seat, or
 // the auth command, every time it is asked: what discards the kept login is the
 // one thing the person reading this needs and cannot otherwise find.
@@ -1118,7 +1118,7 @@ type carryOutError struct {
 func (e *carryOutError) Error() string {
 	return fmt.Sprintf("harness: the login an earlier generation left in %q has not been "+
 		"carried back to the shared directory, and it may be the only copy of a token the "+
-		"CLI refreshed, so it was kept and the CLI was not started on top of it — it is "+
+		"harness refreshed, so it was kept and the harness was not started on top of it — it is "+
 		"tried again next time; %s: %v", e.home, e.remedy, e.err)
 }
 
@@ -1150,10 +1150,10 @@ type carryRetry struct {
 // that is the point of sweeping: every other seat starting now would otherwise
 // be seeded with a rotated-away token. After that the attempts double from a
 // minute — which is how long a transient cause (an export that timed out on a
-// host busy with max_concurrent coding CLIs, a CLI killed for memory) takes to
-// clear — to half an hour, because each attempt is a CLI export of up to
+// host busy with max_concurrent harnesses, a harness killed for memory) takes to
+// clear — to half an hour, because each attempt is a harness export of up to
 // [auxiliaryTimeout] made inside some OTHER seat's call, and a carry that fails
-// for good (a CLI upgrade that broke its export) must not cost every seat's
+// for good (a harness upgrade that broke its export) must not cost every seat's
 // first call that long. Half an hour holds that cost to one attempt per
 // half-hour per wedged seat across the whole workspace, while the seat's own
 // next call still tries every time ([Workspace.Acquire]).
@@ -1211,7 +1211,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // (`cli_agent_carry_out_failed`), paced ([carryRetryFloor]) and left for the
 // next attempt, and the calling seat seeds from the shared login regardless —
 // as it does while another seat is mid-call, which is the same not-knowing
-// whether that seat's CLI has refreshed. Refusing it instead would turn one
+// whether that seat's harness has refreshed. Refusing it instead would turn one
 // seat's broken export into every seat's outage.
 //
 // THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
@@ -1283,7 +1283,7 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 		store, record, seatRemedy(record))
 }
 
-// syncCredentialsOut carries a login a home's CLI CHANGED back to the shared
+// syncCredentialsOut carries a login a home's harness CHANGED back to the shared
 // directory, and reports whether the home holds a login at all.
 //
 // CHANGED IS JUDGED AGAINST THE GENERATION'S BASELINE, never against the shared
@@ -1301,8 +1301,8 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 // logged as `cli_agent_login_superseded` and dropped.
 //
 // Neither kind of home deletes the shared directory's SEEDED COPY of a file its
-// CLI REMOVED: a credential file a call removed, or a database exporting no login
-// — what a CLI that dropped a credential it could not refresh leaves — is not a
+// harness REMOVED: a credential file a call removed, or a database exporting no login
+// — what a harness that dropped a credential it could not refresh leaves — is not a
 // login worth keeping over the shared one — whether that is the copy the home
 // was seeded with or a seat's refresh of it. A login does REPLACE a file
 // another sign-in wrote — one it never held, or one it removed that an
@@ -1352,10 +1352,10 @@ func (w *Workspace) carryChanged(
 		}
 		name := filepath.Base(rel)
 		held[name] = content
-		// A settings file the CLI also keeps its login in is carried with
+		// A settings file the harness also keeps its login in is carried with
 		// the rest, but answers "holds a login" only holding one
 		// ([harnessprofile.Profile.HoldsLogin]): a login command that left
-		// just the CLI's own record of itself signed nobody in.
+		// just the harness's own record of itself signed nobody in.
 		if w.profile.HoldsLogin(name, content) {
 			holds = true
 		}
@@ -1468,7 +1468,7 @@ func (w *Workspace) carryChanged(
 //     WHOLE LOGIN ITS SIGN-IN LEFT: every file the home holds, the ones the
 //     sign-in left as they were seeded included, so a file another writer —
 //     a seat's refresh included — replaced while the sign-in ran goes back to
-//     this sign-in's copy, the one its CLI left beside its new token, rather
+//     this sign-in's copy, the one its harness left beside its new token, rather
 //     than staying beside that token; and NO FILE THE HOME NEVER HELD — one
 //     it was not seeded with and does not hold is another sign-in's, landed
 //     while this one ran (a restore into the directory it found empty, an
@@ -1476,13 +1476,13 @@ func (w *Workspace) carryChanged(
 //     as the changed files alone, as it once was, a sign-in that refreshed its
 //     token and left its config.toml as it was put that token beside whichever
 //     config.toml the last writer left. A file the home was seeded with and no
-//     longer holds is NOT REMOVED — a CLI's removal is never carried
-//     ([Workspace.syncCredentialsOut]), because a CLI that dropped a file is
+//     longer holds is NOT REMOVED — a harness's removal is never carried
+//     ([Workspace.syncCredentialsOut]), because a harness that dropped a file is
 //     no reason to log the fleet out of the login it was seeded with — so it
 //     goes back as the shared login holds it, for as long as that is still
 //     the seeded login: the copy the home was seeded with, or that copy as a
 //     seat's or a local box's refresh has rewritten it since, which is the
-//     same login, newer — and the CLI left no copy of its own to prefer to
+//     same login, newer — and the harness left no copy of its own to prefer to
 //     it. Once an operator's write has replaced the login instead — a
 //     `-from-host`, or a logout and an import after it — its copy is ANOTHER
 //     SIGN-IN'S, and is dropped like a file the home never held: kept, as it
@@ -1498,7 +1498,7 @@ func (w *Workspace) carryChanged(
 //     file and every absence, and then only of the files the home was seeded
 //     with — a refresh never creates a login, nor a file of one. Judged a
 //     file at a time, as it once was, a refresh of one file was written beside
-//     a newer sign-in's other file, and the shared login became one no CLI
+//     a newer sign-in's other file, and the shared login became one no harness
 //     ever wrote.
 //
 // A home whose changes the shared login already holds — two homes that
@@ -1726,7 +1726,7 @@ func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 // seat's generation, an engine that lost the seat's lease and is still
 // finishing a call in its home, which no wait this call can afford outlasts.
 // So the bound is the sweep's, and the second case is refused as a timeout the
-// fallback chain moves past rather than run in a home somebody else's CLI is
+// fallback chain moves past rather than run in a home somebody else's harness is
 // using.
 const seatLockWait = auxiliaryTimeout + hostbox.CredentialLockWait + time.Second
 
@@ -1757,8 +1757,8 @@ const seatHolder = "another process running a call in this seat's home — an en
 // login still waiting on its browser flow, which then stored its credential in
 // a database nothing could find again and was told it had written a login.
 //
-// ONE PER WORKSPACE — a state directory and a CLI — not per entry: entries
-// that share a state_dir and drive one CLI share one login home, so a command
+// ONE PER WORKSPACE — a state directory and a harness — not per entry: entries
+// that share a state_dir and drive one harness share one login home, so a command
 // for one refuses a command for the other.
 //
 // NOT WAITED ON. The holder may be a person part way through a sign-in, for
@@ -1946,7 +1946,7 @@ func (w *Workspace) documentPath() string {
 
 // holdsLogin reports whether an exported document carries any login at all.
 //
-// The document's format is the CLI's, so this reads only the one shape every
+// The document's format is the harness's, so this reads only the one shape every
 // such export shares when it is empty — nothing, or an empty JSON array,
 // object or null — and takes anything else as a login. Guessing harder would
 // mean parsing a vendor's credential format here, and a wrong guess in that
@@ -1992,7 +1992,7 @@ func (w *Workspace) sharedPath(name string) string { return filepath.Join(w.Cred
 
 // Login reads the shared login — ONE login, every file it holds by name — under
 // the shared login's lock: see [Workspace.readLoginLocked]. A settings file
-// holding no login is among them, as the CLI keeps it; [Workspace.loginIn] is
+// holding no login is among them, as the harness keeps it; [Workspace.loginIn] is
 // the part that signs anybody in.
 func (w *Workspace) Login(ctx context.Context) (map[string][]byte, error) {
 	unlock, err := w.lockShared(ctx)
@@ -2076,14 +2076,14 @@ func (w *Workspace) HasLogin(ctx context.Context) (bool, error) {
 }
 
 // loginIn is the part of files — the shared login as [Workspace.Login] reads
-// it, by name — that is a login: every file but a settings file the CLI also
+// it, by name — that is a login: every file but a settings file the harness also
 // keeps its login in that holds none, by its profile's
 // [harnessprofile.Profile.HoldsLogin]. Copilot writes `firstLaunchAt` into the
 // config.json its plaintext login lives in on its first start, signed in or
 // not, and Cursor Agent's cli-config.json is written on every run.
 //
 // Such a file is still the login's — read, seeded into a seat's home, carried
-// out and written with the rest, as the CLI keeps it. It is just not a login:
+// out and written with the rest, as the harness keeps it. It is just not a login:
 // not reported as one, exported in a bundle, removed by a logout, nor in a
 // bundle's way. Counted as one, the doctor reported a sign-in nobody made, and
 // a configured bundle — the real login — was refused as a login present.

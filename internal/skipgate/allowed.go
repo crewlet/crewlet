@@ -170,7 +170,7 @@ var allowed = []Allowance{
 	//
 	// These are the only skips here that are a real coverage gap rather than
 	// a property of the code, and they are the argument for a scheduled
-	// workflow that installs the CLIs at a pin and runs them — not for
+	// workflow that installs the harnesses at a pin and runs them — not for
 	// downloading ~450 MB of vendor binaries on every PR, past a
 	// supply-chain surface no Dependabot ecosystem watches.
 	// -----------------------------------------------------------------
@@ -179,7 +179,7 @@ var allowed = []Allowance{
 		Test:    "TestTheGrokProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why: "Needs xAI's own `grok` on PATH. Nothing else can catch a vendor flag rename: " +
-			"the fake CLI accepts any argv and a unit test over the slice re-states the " +
+			"the fake harness accepts any argv and a unit test over the slice re-states the " +
 			"profile back to itself. `crewlet llm doctor` reports the same drift to an operator.",
 	},
 	{
@@ -193,14 +193,14 @@ var allowed = []Allowance{
 		Package: "internal/providers/llm/harness",
 		Test:    "TestThePiProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
-		Why: "Needs `pi` on PATH. Same reasoning as the other real-CLI argv cases; the " +
+		Why: "Needs `pi` on PATH. Same reasoning as the other real-harness argv cases; the " +
 			"profile's isolation flags are what it proves and the fake cannot refuse them.",
 	},
 	{
 		Package: "internal/providers/llm/harness",
 		Test:    "TestTheHermesProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
-		Why:     "Needs `hermes` on PATH. Same reasoning as the other real-CLI argv cases.",
+		Why:     "Needs `hermes` on PATH. Same reasoning as the other real-harness argv cases.",
 	},
 	{
 		Package: "internal/providers/llm/harness",

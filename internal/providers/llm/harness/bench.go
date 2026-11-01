@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// An entry whose CLI reported a spent plan or a rate limit SITS OUT for a
+// An entry whose harness reported a spent plan or a rate limit SITS OUT for a
 // while, on this node: every call in that window fails at once as a rate
 // limit, so the seat's chain moves to its next model without launching a
 // process to hear the same sentence again — a call that arrives in it, and a
@@ -23,12 +23,12 @@ import (
 // A call through [Provider.Complete] reads the sit-out as it arrives and again
 // once it holds a slot.
 // A seat's EXECUTOR reads it at launch ([Provider.SittingOut]): the run is the
-// CLI's own, started in a box rather than through [Provider.Complete], so the
+// harness's own, started in a box rather than through [Provider.Complete], so the
 // engine asks before it launches and takes the next member of the seat's
 // executor chain that can run in a box when this one sits out. A run that
 // meets the limit after it started is not relaunched on another member — its
 // work so far lives in its own box and session — but how it ended is read by
-// the same classification every call takes, the CLI's structured limit report
+// the same classification every call takes, the harness's structured limit report
 // first, when it is collected ([Provider.RunEnded]), so the turn's NEXT
 // launch, and every other seat's on this node, skips the spent entry as a call
 // on this host would.
@@ -36,23 +36,23 @@ import (
 // # Why the backend benches itself
 //
 // A spent subscription window lasts hours, and a seat makes a call per round.
-// Unbenched, every round of every seat on the entry starts a CLI — seconds of
+// Unbenched, every round of every seat on the entry starts a harness — seconds of
 // a Node or Rust runtime holding one of the entry's few slots — only to be told
 // the plan is spent and fall through to the next model anyway. The entry holds
 // ONE login, so there is one thing to bench, and it is benched here rather than
-// in the chain because only the backend knows the reset instant its CLI named.
+// in the chain because only the backend knows the reset instant its harness named.
 //
 // # Only on the vendor's word
 //
 // A sit-out takes a working entry from every seat on the node, so what starts
 // one has to be the vendor's report and never the model's sentence. The
 // classification is what guarantees it, not this file: a sentinel counts on
-// stderr, in a run the CLI reported failed, in the CLI's own failure event, or
+// stderr, in a run the harness reported failed, in the harness's own failure event, or
 // where it OPENS what a clean run said — the vendor's sentence standing where
 // the answer should be — and nowhere else (classifyMarkers). A seat writing
 // about the GitHub rate limit, or a tool call carrying "Usage limit reached"
 // in its arguments, is an answer, so every rate limit that reaches
-// [Provider.bench] is evidence from the CLI. That rule, and not the wording of
+// [Provider.bench] is evidence from the harness. That rule, and not the wording of
 // a sentinel, is what makes the shipped profiles' generic, unmeasured
 // sentinels — Copilot's "rate limit", Cursor's "quota" — safe to bench on.
 //
@@ -78,7 +78,7 @@ import (
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
 // where a window would hold a signed-in seat on its fallback for nothing; and
-// finding out that a login is still missing costs a CLI that exits at once
+// finding out that a login is still missing costs a harness that exits at once
 // rather than a model call.
 
 // limitBackoff is how long an entry sits out after a limit report that named
@@ -90,7 +90,7 @@ import (
 // probes an hour.
 var limitBackoff = [...]time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}
 
-// maxLimitBench caps a reset instant the CLI named: an hour, so an operator
+// maxLimitBench caps a reset instant the harness named: an hour, so an operator
 // who signs in again or raises the plan has the entry back within the hour
 // even when the vendor's window runs for days.
 const maxLimitBench = time.Hour
@@ -99,7 +99,7 @@ const maxLimitBench = time.Hour
 // [Plan] and guarded by the plan's mutex.
 type bench struct {
 	until time.Time
-	// said is the CLI's own sentence that started it, repeated on every
+	// said is the harness's own sentence that started it, repeated on every
 	// call it refuses so the reason never reads as the engine's.
 	said string
 	// resetsAt is when the vendor said the limit lifts, zero where it named
@@ -124,7 +124,7 @@ type limitReport struct {
 	// at is when the report was made: the instant the window runs from.
 	at time.Time
 	// window is which limit it is; [llm.LimitModel] holds only the model
-	// argument the entry hands its CLI.
+	// argument the entry hands its harness.
 	window llm.LimitWindow
 }
 
@@ -253,7 +253,7 @@ func (b *bench) clearBefore(before time.Time) bool {
 }
 
 // heldBy is the window this entry's calls are held by at now: the later of
-// the plan-wide one and the one of the model it hands its CLI.
+// the plan-wide one and the one of the model it hands its harness.
 func (p *Provider) heldBy(now time.Time) (SitOut, bool) {
 	plan := p.Plan()
 	model := p.ModelArgument()
@@ -278,7 +278,7 @@ func (p *Provider) SitOut() (SitOut, bool) {
 }
 
 // SittingOut is the classified refusal of a call made while the entry sits
-// out — an [llm.KindRateLimit] naming the CLI's own sentence and the instant
+// out — an [llm.KindRateLimit] naming the harness's own sentence and the instant
 // the entry is tried again — or nil when it does not.
 //
 // Exported for the executor's launch, which is not a [Provider.Complete] and
@@ -331,11 +331,11 @@ func (p *Provider) limited(err error, until, resets time.Time, window llm.LimitW
 // collected it ([Provider.RunEnded]).
 type RunEnd struct {
 	// Answer is what the run said last, Error the error it reported, and
-	// Failed whether the CLI said the run failed.
+	// Failed whether the harness said the run failed.
 	Answer, Error string
 	Failed        bool
 
-	// Event is the CLI's own terminal event, verbatim, where it prints one
+	// Event is the harness's own terminal event, verbatim, where it prints one
 	// (Claude Code's result line): how the vendor said the run ended in
 	// fields — a status code — beside the words of Answer and Error.
 	Event string
@@ -350,7 +350,7 @@ type RunEnd struct {
 }
 
 // RunEnded reads how one of this entry's EXECUTOR runs ended by the one
-// classification every call takes, the CLI's structured limit report first
+// classification every call takes, the harness's structured limit report first
 // ([harnessprofile.Profile.LimitEvents]), and sits the entry out exactly as a call
 // on this host that met the same report would. It reports whether it did.
 //
@@ -367,7 +367,7 @@ type RunEnd struct {
 // `api_error_status` 429 on its result line, in a sentence ("You've hit your
 // 5-hour limit") that is deliberately no sentinel — then the sentinels, by the
 // rules a call's output is held to: the answer of a run that did not fail
-// counts only where a sentinel opens it, its error anywhere, and for a CLI
+// counts only where a sentinel opens it, its error anywhere, and for a harness
 // whose failures are typed events ([harnessprofile.MarkerScopeEvents]) the error
 // the runner collected is that event's own payload, read at the profile's
 // marker path as the event it came in.
@@ -459,9 +459,9 @@ func (p *Provider) endedHit(end RunEnd, at time.Time) (markerHit, harnessOutput,
 }
 
 // failureEvent is the failure event a run's collected error came out of, as one
-// line of its CLI's event stream: the payload put back where the profile's
+// line of its harness's event stream: the payload put back where the profile's
 // marker path reads it, under the first of its failure event types. Empty when
-// the error is not an object — no payload the CLI typed — or the profile names
+// the error is not an object — no payload the harness typed — or the profile names
 // no event to put it in.
 func failureEvent(p harnessprofile.Profile, errText string) string {
 	if len(p.MarkerEvents) == 0 || len(p.EventTypePath) == 0 || len(p.MarkerPath) < 2 {

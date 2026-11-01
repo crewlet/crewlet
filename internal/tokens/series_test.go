@@ -130,7 +130,7 @@ func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 	}
 	got := tokens.BucketDaily([]tokens.Cell{
 		// The executor's record and its launch's, as a day holds them: one
-		// on the executor's entry, the other on the CLI the run spent on.
+		// on the executor's entry, the other on the harness the run spent on.
 		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
 		cell("2026-06-14", "ceo", tokens.PhaseExecute, "cli", 30),
 		cell("2026-06-14", "ceo", "subagent", "haiku", 5),

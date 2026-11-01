@@ -8,7 +8,7 @@ import (
 )
 
 // askAndAnswer launches t1, has its job park on a question in the box it ran
-// in — its CLI's session named — with one bridged call made before it asked,
+// in — its harness's session named — with one bridged call made before it asked,
 // and answers it, running relaunch inside the resume the answer drives, as a
 // turn that carries the run on does.
 func askAndAnswer(t *testing.T, rig *coordRig, reap bool,
@@ -65,7 +65,7 @@ func continuing(asked *AskedRun) LaunchRequest {
 
 // AN ANSWERED RUN CARRIES ON IN ITS OWN CONVERSATION, IN ITS OWN BOX. The run
 // that asked knew what it had read, tried and decided, and all of that is in
-// its CLI's session in the box it asked from — so the relaunch continues that
+// its harness's session in the box it asked from — so the relaunch continues that
 // session there, with the answer as its next prompt, rather than starting a
 // conversation told only the question and the answer. And the round goes on:
 // the call the run made before it asked is still the round's, on the row.

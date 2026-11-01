@@ -96,7 +96,7 @@ func wholeRunes(b []byte) []byte {
 	return b
 }
 
-// containerCLI is the container runtime's own CLI as this backend drives it:
+// containerCLI is the container runtime's own harness as this backend drives it:
 // the binary [ResolveContainerRuntime] picked, and the variables an operator
 // DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
@@ -122,11 +122,11 @@ type containerCLI struct {
 // and a plugin its own settings — and a fixed list with no
 // way to add to it leaves an operator whose runtime needs one of those with
 // no way to say so. The declared layer wins over the fixed one, because a
-// value an operator wrote down for this CLI is a decision and the host's is a
+// value an operator wrote down for this harness is a decision and the host's is a
 // default.
 //
-// The run environment a coding agent gets is NOT here: it travels as an
-// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// The run environment a harness gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this harness holds
 // is what the runtime needs and nothing a box does. A bare `-e NAME` in
 // `local.run_args` therefore copies only a name this environment carries,
 // which is what the configuration's advisory about one says.
@@ -250,10 +250,10 @@ var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
 // childEnv is the allowlisted host environment plus the box's home, its
 // temporary directory and the run env.
 //
-// Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
+// Allowlisted for the same reason the harness backend allowlists: the engine's
 // environment holds the org's chat token, its collector credential
 // (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
-// the coding agent has any business reading.
+// the harness has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()

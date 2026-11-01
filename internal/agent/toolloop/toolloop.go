@@ -5,21 +5,21 @@
 // Every phase the ENGINE drives is this loop with a different surface and a
 // different prompt: the reviewer, a delegated worker, the onboarding pass and
 // its extension judge, and the Dashboard Assistant's turn. A seat's executor
-// is not one of them — it is its coding CLI's own agentic run, in a box, which
+// is not one of them — it is its harness's own agentic run, in a box, which
 // reaches the seat's tools over the tool bridge rather than through a loop
 // here.
 //
-// THE CLI DRIVES THE ROUNDS; THE LOOP HOLDS THE PHASE. Every model call is a
-// vendor's coding CLI, which runs its own loop — ask the model, call a tool,
-// ask again — and calls the phase's tools over MCP. [Run] starts CLI runs of
+// THE HARNESS DRIVES THE ROUNDS; THE LOOP HOLDS THE PHASE. Every model call is a
+// vendor's harness, which runs its own loop — ask the model, call a tool,
+// ask again — and calls the phase's tools over MCP. [Run] starts harness runs of
 // the phase's provider, each served the phase's tools by a [dispatcher]
 // (dispatcher.go) that decides every call as it arrives, ends the run when
-// the phase needs it ended, and is told what the CLI's own record shows of
+// the phase needs it ended, and is told what the harness's own record shows of
 // each model request; and between runs it does what only the loop can: a
 // person's note, a corrective, a call's result the run ended before. The fold
 // (fold.go) turns each run back into the record the loop kept when it drove
 // each round itself, so nothing downstream can tell the two apart. A round is
-// still one model request. That a phase's tools reach its CLI as one MCP
+// still one model request. That a phase's tools reach its harness as one MCP
 // server, and every call passes these gates, is ADR-0049.
 //
 // Seven things here are load-bearing and each replaced an incident:
@@ -40,12 +40,12 @@
 //     showed a seat doing nothing for exactly the stretch somebody was
 //     watching it.
 //   - THE LOOP IS THE CLOCK. Every model request and every tool call is
-//     timed here — a request from the moment its CLI had everything it needed
+//     timed here — a request from the moment its harness had everything it needed
 //     to ask to the moment its record was read, a call around the surface —
 //     and carried on the record as a start and a duration. A reader that
 //     reconstructs timing from event arrival subtracts two publishers' clocks
 //     and a queue's latency, and a request's cache tokens exist nowhere else:
-//     the CLI's record reports them and this is the one frame that sees every
+//     the harness's record reports them and this is the one frame that sees every
 //     request.
 //   - THE SEAT FENCE RUNS BEFORE EVERY RUN, before any tokens are spent and
 //     before anything fires, AND BEFORE AND AFTER EACH TOOL CALL, because a
@@ -155,20 +155,20 @@ const maxEmptyAnswerRetries = 1
 // reviewer sees only the tool it submits its decision with, a worker sees a
 // subset of its parent's, onboarding sees the seat's own. Its offer is re-read
 // whenever its [Surface.Revision] moves, so a surface mutated mid-run — a
-// meta-tool activating another tool — is listed to the CLI before its next
-// request, or the run is ended for a CLI that never re-lists.
+// meta-tool activating another tool — is listed to the harness before its next
+// request, or the run is ended for a harness that never re-lists.
 type Surface interface {
 	// ToolDefs returns the tools to offer the model now.
 	ToolDefs() []llm.ToolDef
 
 	// Revision changes whenever ToolDefs would answer differently — an
 	// activation — so a session re-lists only when something moved, and a
-	// run whose CLI never re-lists is ended after one.
+	// run whose harness never re-lists is ended after one.
 	Revision() uint64
 
 	// AnnotationsOf is one tool's behavioural hints, which the session
-	// advertises to the CLI beside it: whether a call is read-only decides,
-	// in several CLIs, whether it may run beside another and whether to ask
+	// advertises to the harness beside it: whether a call is read-only decides,
+	// in several harnesses, whether it may run beside another and whether to ask
 	// first.
 	AnnotationsOf(name string) mcp.Annotations
 
@@ -176,7 +176,7 @@ type Surface interface {
 	// repeat count an operation id carries is read in — and returns the call
 	// bound to that place, to be run once.
 	//
-	// AT ADMISSION, NOT AT RETURN, because a CLI makes a response's calls at
+	// AT ADMISSION, NOT AT RETURN, because a harness makes a response's calls at
 	// once and they return in whatever order their tools finish: a count read
 	// against the order calls return in is one a re-run, making the same
 	// calls, does not reproduce. The loop admits each call under its own
@@ -220,7 +220,7 @@ type Refuser interface {
 }
 
 // Admitted is one call a [Surface] admitted, bound to its place in the run's
-// call log: run it once, with the call as the CLI made it.
+// call log: run it once, with the call as the harness made it.
 //
 // It returns a ToolResult rather than an error because a failing tool is
 // ORDINARY: its message goes back to the model, which is expected to react to
@@ -295,7 +295,7 @@ type Execution struct {
 	Name  string
 	Args  map[string]any
 
-	// CallID is the CLI's own id for the call, where its record or the
+	// CallID is the harness's own id for the call, where its record or the
 	// call itself named one, and the loop's otherwise — what the
 	// conversation pairs the call's result with.
 	CallID string
@@ -334,16 +334,16 @@ type Execution struct {
 // model and a slow tool the same number. A round's wall clock is therefore its
 // StartedAt to the end of its last call, and a reader has both halves to hand.
 //
-// Recorded for every request a CLI's record showed, including the runs a
+// Recorded for every request a harness's record showed, including the runs a
 // corrective re-prompt follows: each is a priced request and a reader adding
-// up where the time went needs all of them. A CLI whose record shows no
+// up where the time went needs all of them. A harness whose record shows no
 // requests has its whole run recorded as one round, untimed.
 type Round struct {
 	// Round is one-based, on the same scale as [Execution.Round] and
 	// [Narration.Round], so the three lists join on it.
 	Round int
 
-	// StartedAt is when the request was made — when its CLI had everything
+	// StartedAt is when the request was made — when its harness had everything
 	// it needed to ask — in UTC, and Duration how long it took to answer,
 	// on the monotonic clock.
 	StartedAt time.Time
@@ -373,13 +373,13 @@ type Round struct {
 	StopReason llm.StopReason
 }
 
-// Invocation is one CLI run of the loop: one process, driving its own loop
+// Invocation is one harness run of the loop: one process, driving its own loop
 // over the phase's tools, from launch to exit.
 //
-// THE UNIT THE ENGINE OBSERVES FOR EVERY CLI. A [Round] is one model request,
-// which a CLI's own record shows for most CLIs and not for all; a run is what
+// THE UNIT THE ENGINE OBSERVES FOR EVERY HARNESS. A [Round] is one model request,
+// which a harness's own record shows for most harnesses and not for all; a run is what
 // the engine starts and ends itself, so it is on every record whatever the
-// CLI reports.
+// harness reports.
 type Invocation struct {
 	StartedAt time.Time
 	Duration  time.Duration
@@ -399,7 +399,7 @@ type Invocation struct {
 	// are sequential, so a run's rounds are one contiguous stretch.
 	FirstRound, LastRound int
 
-	// RequestsObserved says the CLI's record showed the run's model
+	// RequestsObserved says the harness's record showed the run's model
 	// requests, each a [Round]. False: the whole run is recorded as one.
 	RequestsObserved bool
 
@@ -413,19 +413,19 @@ type Invocation struct {
 	Calls int
 }
 
-// InvocationOutcome is how a CLI run ended.
+// InvocationOutcome is how a harness run ended.
 type InvocationOutcome string
 
 const (
 	// OutcomeEnd is a run whose model stopped: its last response called
 	// nothing.
 	OutcomeEnd InvocationOutcome = "end"
-	// OutcomeCap is a run its CLI's own turn cap ended.
+	// OutcomeCap is a run its harness's own turn cap ended.
 	OutcomeCap InvocationOutcome = "cap"
 	// OutcomeStopped is a run the engine ended: the phase finished,
 	// parked, paused, ran out of rounds or was stopped.
 	OutcomeStopped InvocationOutcome = "stopped"
-	// OutcomeFailed is a run that failed — its CLI's error, or no CLI.
+	// OutcomeFailed is a run that failed — its harness's error, or no harness.
 	OutcomeFailed InvocationOutcome = "failed"
 )
 
@@ -621,11 +621,11 @@ type BudgetMeter interface {
 	// whether they fitted, in ONE operation against the shared counter.
 	//
 	// Already spent, because the loop charges a round once its reply is
-	// in — a round's size is known no sooner — as the CLI's record shows
+	// in — a round's size is known no sooner — as the harness's record shows
 	// it, which is before any tool the round asked for runs: a call waits
 	// for the record of the request that made it. So a refusal decides
 	// what FOLLOWS the round: its tools do not run, and no later model call
-	// of the turn is made ([BudgetMeter.Refused]). A CLI whose record shows
+	// of the turn is made ([BudgetMeter.Refused]). A harness whose record shows
 	// no requests is charged for its whole run once it is over, its tools
 	// already run, and the refusal stops the run after it. It does not undo the round, which the vendor
 	// has billed, and a meter must record a round it refuses exactly as it
@@ -859,7 +859,7 @@ type Result struct {
 	// rather than a second copy of the config beside it.
 	MaxRounds int
 
-	// RunStartedAt is when the CLI run in flight was started, in UTC — the
+	// RunStartedAt is when the harness run in flight was started, in UTC — the
 	// [Invocation.StartedAt] it will be recorded with — on a live snapshot
 	// published while one is out, and zero between runs and on a finished
 	// Result. Apart from [Result.RoundStartedAt] because a run is many
@@ -869,13 +869,13 @@ type Result struct {
 
 	// Running is the tool calls in flight, in the order they arrived,
 	// present only on a live snapshot published while calls run — see
-	// [RunningCall]. A LIST because a CLI may issue a response's calls at
+	// [RunningCall]. A LIST because a harness may issue a response's calls at
 	// once. Never on a finished Result or a failure snapshot: a call that
 	// has returned is an Execution, and one that never returned is the
 	// failure.
 	Running []RunningCall
 
-	// Invocations is one entry per CLI run, in order — see [Invocation].
+	// Invocations is one entry per harness run, in order — see [Invocation].
 	Invocations []Invocation
 
 	// RoundStartedAt is when the latest round's request was made, in UTC,
@@ -1004,11 +1004,11 @@ type Config struct {
 
 	// Host is where this loop's tool sessions are opened — this process's
 	// [toolsession.Host]. Required: every caller of this loop offers tools,
-	// and a CLI reaches them only through a session.
+	// and a harness reaches them only through a session.
 	Host *toolsession.Host
 
-	// ServerTitle is how the session names itself in a CLI's handshake —
-	// the seat, for the CLI's own logs. Empty takes the phase.
+	// ServerTitle is how the session names itself in a harness's handshake —
+	// the seat, for the harness's own logs. Empty takes the phase.
 	ServerTitle string
 
 	// ProviderKey is the providers.llm key Provider was resolved under —
@@ -1062,14 +1062,14 @@ type Config struct {
 	// AllowSuspend permits a tool to suspend this loop — see
 	// [ToolResult.Suspend]. Only the Dashboard Assistant's turn sets it: no
 	// phase of a seat's turn persists a partial conversation, since the
-	// one that outlives its process, the executor, is its CLI's own run.
+	// one that outlives its process, the executor, is its harness's own run.
 	AllowSuspend bool
 
 	// Budget is the shared counter. Nil disables charging, which is for
 	// tests and for loops the caller has already charged.
 	Budget BudgetMeter
 
-	// Fence is checked before every CLI run and before and after every one
+	// Fence is checked before every harness run and before and after every one
 	// of the phase's tool calls — because the calls are what reach outside
 	// the engine. A non-nil error ends the loop and is returned unwrapped so
 	// the caller can recognise its own sentinel.
@@ -1095,8 +1095,8 @@ type Config struct {
 	// after it: every phase of a turn and every worker.
 	//
 	// The Dashboard Assistant sets it. It is not a seat: it acts as a
-	// person, its CLI is run with no tool of its own beside the engine's
-	// server, and the harness's prompt is written for a coding agent at a
+	// person, its harness is run with no tool of its own beside the engine's
+	// server, and the harness's prompt is written for a harness at a
 	// terminal whose tools it would describe.
 	OwnPrompt bool
 
@@ -1104,7 +1104,7 @@ type Config struct {
 	// response is read, before and after each tool call, and when the run
 	// ends. Failures are the caller's business — telemetry must never fail
 	// a phase — so this returns nothing. It is called from more than one
-	// goroutine (a CLI's calls arrive on their own), never concurrently.
+	// goroutine (a harness's calls arrive on their own), never concurrently.
 	OnProgress func(Result)
 
 	// Progress is the failure view. Nil means the caller does not want
@@ -1134,7 +1134,7 @@ func (c Config) validate() error {
 		errs = append(errs, errors.New("toolloop: Surface is required"))
 	}
 	if c.Host == nil {
-		errs = append(errs, errors.New("toolloop: Host is required — a CLI reaches the "+
+		errs = append(errs, errors.New("toolloop: Host is required — a harness reaches the "+
 			"phase's tools only through a session on it"))
 	}
 	if c.MaxRounds <= 0 {
@@ -1147,7 +1147,7 @@ func (c Config) validate() error {
 	return errors.Join(errs...)
 }
 
-// Run drives the loop: CLI runs of the phase's provider, each calling the
+// Run drives the loop: harness runs of the phase's provider, each calling the
 // phase's tools through one [dispatcher], until the phase finishes, parks,
 // runs out of rounds or is stopped.
 //
@@ -1215,7 +1215,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			out.Rounds = append(out.Rounds, more.rounds...)
 			out.Running = d.running()
 			// THE ROUND IN FLIGHT, and when it began: the request a run's
-			// CLI is making while the model answers, or the round whose
+			// harness is making while the model answers, or the round whose
 			// calls are running — see [Result.RoundStartedAt].
 			round, started := d.inFlight(time.Now())
 			out.RoundsUsed, out.RoundStartedAt = round, started.UTC()
@@ -1321,7 +1321,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 		// The run is over, and an end it reached is taken; then EVERY CALL
 		// OF THE RUN HAS SETTLED before anything is read: a call answered
-		// "still running" goes on after its CLI stopped, and its result is
+		// "still running" goes on after its harness stopped, and its result is
 		// part of what the next run is handed.
 		d.finish()
 		d.awaitSettled()
@@ -1380,7 +1380,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			exhausted = true
 		case stateLocalPark, statePausing, stateRelist:
 			// The run was ended for a reason the next run answers: a
-			// call's result, a person's note, a tool the CLI could not
+			// call's result, a person's note, a tool the harness could not
 			// see. Not a decline, and no corrective.
 			continue
 		}
@@ -1391,14 +1391,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("toolloop: %s: %w", cfg.Surface.Phase(), err)
 		}
 		if completion != nil && completion.StopReason == llm.StopCap {
-			// THE CLI'S OWN TURN CAP stopped its loop with the model still
+			// THE HARNESS'S OWN TURN CAP stopped its loop with the model still
 			// working — a backstop set past this phase's budget, so it is
 			// the budget's exhaustion by another name.
 			exhausted = true
 			break
 		}
 
-		// THE CLI ENDED ON ITS OWN: its model's last response called
+		// THE HARNESS ENDED ON ITS OWN: its model's last response called
 		// nothing. What that response was decides what follows, exactly as
 		// a round of prose did when the loop drove each round.
 		if folded.called {
@@ -1464,12 +1464,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	return &out, nil
 }
 
-// endRunSpan closes a CLI run's `llm.run` span with what the run came to.
+// endRunSpan closes a harness run's `llm.run` span with what the run came to.
 //
-// ONCE EVERY CALL OF THE RUN HAS SETTLED, not when the CLI exits: a call's
+// ONCE EVERY CALL OF THE RUN HAS SETTLED, not when the harness exits: a call's
 // `tool.call` span is a child of the run's, and one answered "still running"
-// goes on after its CLI stopped. The tokens are the run's whole spend — what
-// the CLI reported request by request and what was charged when it ended —
+// goes on after its harness stopped. The tokens are the run's whole spend — what
+// the harness reported request by request and what was charged when it ended —
 // because a span that carried only the final answer's count would show a
 // twenty-request run as one request's worth.
 func endRunSpan(span trace.Span, inv Invocation, err error) {
@@ -1487,7 +1487,7 @@ func endRunSpan(span trace.Span, inv Invocation, err error) {
 
 // streamTo is the OnDelta a run streams its text through, or nil where the
 // caller asked for no streaming. One partial per response, numbered by the
-// response it belongs to: the next one the CLI's record has not shown.
+// response it belongs to: the next one the harness's record has not shown.
 func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, publish func()) func(llm.Delta) {
 	if !cfg.StreamPartials || cfg.OnProgress == nil {
 		return nil
@@ -1540,7 +1540,7 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 // refusal as the loop reads one: a [*BudgetError], or the counter's own error
 // when it could not be reached. Exported for a caller that spends tokens
 // outside this loop and must charge them by the same rule: the Dashboard
-// Assistant's deep-work run, whose tokens are spent in a coding CLI's own loop.
+// Assistant's deep-work run, whose tokens are spent in a harness's own loop.
 func Charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil

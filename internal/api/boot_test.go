@@ -263,7 +263,7 @@ func TestAStartingSeatsNodeServesOnlyItsProbes(t *testing.T) {
 // routes its own direct boxes dial on api.port, to this host's loopback alone
 // ([api.Probes]), and a direct run outlives its node's process: while the node
 // restarts, the run's calls reach the boot surface, and an absent route would
-// read to its CLI as a bridge that is gone rather than one about to answer. So
+// read to its harness as a bridge that is gone rather than one about to answer. So
 // a loopback caller of either route is answered `503 starting`, and every
 // other path — and every caller off the host — exactly as before. A node that
 // runs no seats launches no box, and tells nobody to come back for them.

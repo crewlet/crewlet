@@ -137,14 +137,14 @@ func (p *piRecorder) end(script fakeScript, _ fakeUsage, last string) int {
 }
 
 // PI'S RUN IS READ FROM ITS OWN SESSION FILE, AND ITS HOME STARTS NO SERVER OF ITS
-// OWN. A run with tools keeps its session in its own directory, where the CLI
+// OWN. A run with tools keeps its session in its own directory, where the harness
 // appends each message as it completes — each response's prose, calls and
 // counts, the prompt less its cached part — and prints the plain answer as a
 // text function does. The server is registered by an extension the run loads
-// by its path; the agent directory's mcp.json, whose servers the CLI starts
+// by its path; the agent directory's mcp.json, whose servers the harness starts
 // whenever its MCP support is on, is the profile's own, empty, whatever was
-// there. The CLI sends no id with a call, so a call is joined by name and
-// arguments; the host is told the CLI waits the profile's 600 seconds for a
+// there. The harness sends no id with a call, so a call is joined by name and
+// arguments; the host is told the harness waits the profile's 600 seconds for a
 // call, re-reads the list when told it changed, and makes a response's calls
 // at once.
 //
@@ -163,7 +163,7 @@ func TestPisRunIsReadFromItsOwnSessionFile(t *testing.T) {
 }
 
 // A FAILED PI RUN SAYS WHY ON STDERR, and is judged by it: its session records
-// the failed request with nothing in it, and the CLI prints the provider's
+// the failed request with nothing in it, and the harness prints the provider's
 // error and exits 1 — where a spent plan's words are read, as a text
 // function's are. (Its --mode json stream, the other record it could have
 // been read from, exits 0 with nothing on stderr on a failed request.)
@@ -180,6 +180,6 @@ func TestAFailedPiRunSaysWhyOnStderr(t *testing.T) {
 	host.handle("search", func(context.Context, map[string]any) (string, bool) { return "3 results", false })
 	_, err := p.Complete(t.Context(), phase(host))
 	if kind := llm.KindOf(err); kind != llm.KindRateLimit {
-		t.Fatalf("err = %v (%v), want the spent plan the CLI reported on stderr", err, kind)
+		t.Fatalf("err = %v (%v), want the spent plan the harness reported on stderr", err, kind)
 	}
 }

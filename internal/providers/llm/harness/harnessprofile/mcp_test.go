@@ -266,7 +266,7 @@ func TestTheToolRoutesEnvCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// A VALUE THE CLI'S OWN SERVER MINTS IS NO STORED CREDENTIAL. OpenCode's
+// A VALUE THE HARNESS'S OWN SERVER MINTS IS NO STORED CREDENTIAL. OpenCode's
 // `serve` prints a password as it starts, and the run is handed it in
 // OPENCODE_PASSWORD: the profile holds only the placeholder, so the rule above —
 // about a secret the profile would hold — does not apply to it. A placeholder

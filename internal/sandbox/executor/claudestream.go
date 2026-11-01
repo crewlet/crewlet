@@ -32,11 +32,11 @@ import (
 // the live view by orders of magnitude and push far more of somebody's files
 // through redaction. Thinking is not shown either: it is the model's working,
 // not what the run did. A message type this build does not know is skipped,
-// because a CLI release adds them (the SDK's union has dozens).
+// because a harness release adds them (the SDK's union has dozens).
 //
 // ONE SYSTEM LINE IS SHOWN: the line the run's own hooks print when they hand
 // its model a person's note ([ClaudeHookAnswer]'s transcript line), which the
-// CLI streams as `system/informational`, its content `<event> says: <line>`
+// harness streams as `system/informational`, its content `<event> says: <line>`
 // (measured on 2.1.263 and 2.1.310), and which becomes a `[steer]` line — the
 // one place a person watching the run sees the note arrive. Every other system
 // line — the session's init, a retry, a hook's own start and end — is skipped,
@@ -95,7 +95,7 @@ type claudeBlock struct {
 }
 
 // claudeToolInput is what a transcript line names of a tool call: the field
-// each of the CLI's tools takes its subject in — Bash its command, Read, Edit
+// each of the harness's tools takes its subject in — Bash its command, Read, Edit
 // and Write their file, NotebookEdit its notebook, Grep and Glob their
 // pattern, WebFetch its URL, WebSearch its query, Task its description.
 type claudeToolInput struct {
@@ -180,7 +180,7 @@ func (d *claudeEvents) Line(line []byte) {
 		return
 	}
 	if line[0] != '{' {
-		// Not an event: something the CLI printed as text (a banner, a
+		// Not an event: something the harness printed as text (a banner, a
 		// crash), which is part of what the run said.
 		d.transcript.add(string(line))
 		return
@@ -257,7 +257,7 @@ func (d *claudeEvents) Result() sandbox.Result {
 	return sandbox.Result{Transcript: d.transcript.String()}
 }
 
-// claudeSteerPrefix is how the CLI opens the informational line a hook of the
+// claudeSteerPrefix is how the harness opens the informational line a hook of the
 // run's own prints — the event that fired it and the line's own opening
 // ([ClaudeHookAnswer]) — and which events those are.
 var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +

@@ -1,12 +1,12 @@
-// Package harnessprofile is what each coding CLI accepts: the profile table the
-// cli-agent backend drives a CLI from — its binary, its flags, the JSON shapes
+// Package harnessprofile is what each harness accepts: the profile table the
+// cli-agent backend drives a harness from — its binary, its flags, the JSON shapes
 // its answer and usage arrive in, where it keeps its login and which
 // environment variables carry a credential — plus the merge of an operator's
 // `overrides` into it and the rules a merged profile is held to.
 //
 // A PACKAGE OF ITS OWN, and a leaf, because config validates an entry against
 // it. Whether a typo in `overrides` names a real field, whether the merged
-// profile can drive its CLI, and which variable the CLI reads its key from
+// profile can drive its harness, and which variable the harness reads its key from
 // decide whether a `providers.llm` entry runs, and runs signed in. Judged only
 // where the backend is built, they would be refused by `crewlet validate` and
 // by every node's apply but ADMITTED by every API write, which never builds a
@@ -17,7 +17,7 @@
 // YAML decoder alone.
 //
 // TWO RULE SETS, because config holds them differently. [Profile.Validate],
-// which [Load] runs, is whether the merged profile can drive a CLI at all —
+// which [Load] runs, is whether the merged profile can drive a harness at all —
 // RUNNABLE, so a node refuses to apply a revision that breaks it.
 // [Profile.ValidateCredentials] is where the profile lets a credential in
 // around auth — ADMISSION, so a write is refused and an applied revision

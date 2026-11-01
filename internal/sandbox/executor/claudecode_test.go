@@ -38,7 +38,7 @@ func realBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	return runner, box
 }
 
-// steerWiring is what an executor run's launch hands its CLI for its turn's
+// steerWiring is what an executor run's launch hands its harness for its turn's
 // notes: the bridge's server and its unlisted tool, as the engine names them.
 var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
 	URL: "http://127.0.0.1:7/mcp/tok/steer"}
@@ -74,7 +74,7 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 					t.Fatalf("the brief is on the command line (%q):\n%s", piece, cmd)
 				}
 			}
-			// A RUN WIRED TO ITS NOTES is one script, which reads the CLI's
+			// A RUN WIRED TO ITS NOTES is one script, which reads the harness's
 			// version before it starts it ([claudeNotesFloor]).
 			invocation := "claude -p --output-format stream-json --verbose "
 			if tc.settings {
@@ -98,10 +98,10 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 }
 
 // CLAUDE'S BRIEF IS READ FROM STDIN: the runner writes it to the brief's file,
-// whole, and the wrapper points the CLI's standard input at that file rather
+// whole, and the wrapper points the harness's standard input at that file rather
 // than at /dev/null — which still ends, so a headless run never waits on input.
 //
-// Mutation: drop BriefOnStdin from Claude's Output and the CLI reads nothing.
+// Mutation: drop BriefOnStdin from Claude's Output and the harness reads nothing.
 func TestClaudesBriefIsReadFromStdin(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -115,24 +115,24 @@ func TestClaudesBriefIsReadFromStdin(t *testing.T) {
 		t.Fatalf("the brief's file holds %q (%v), want the brief whole", written, err)
 	}
 	if want := `< '\''` + p.Brief() + `'\''`; !strings.Contains(script, want) {
-		t.Errorf("the CLI's stdin is not the brief's file (%s):\n%s", want, script)
+		t.Errorf("the harness's stdin is not the brief's file (%s):\n%s", want, script)
 	}
-	// THE CLI'S OWN STDIN: the version the script reads first is asked with
+	// THE HARNESS'S OWN STDIN: the version the script reads first is asked with
 	// none, which is no prompt at all.
 	if _, cli, _ := strings.Cut(script, "claude -p"); strings.Contains(cli, "< /dev/null") {
-		t.Errorf("the CLI's stdin is closed, so it runs no prompt:\n%s", script)
+		t.Errorf("the harness's stdin is closed, so it runs no prompt:\n%s", script)
 	}
 }
 
 // THE WRAPPER UNSETS THE VARIABLES THAT SWITCH HOOKS OFF, as a statement of its
-// own before the CLI's: bare mode (CLAUDE_CODE_SIMPLE) drops every hook, and
+// own before the harness's: bare mode (CLAUDE_CODE_SIMPLE) drops every hook, and
 // safe mode (CLAUDE_CODE_SAFE_MODE) drops hooks and the --mcp-config bridge;
 // either can come from the seat's environment, the image or a profile the login
 // shell sources, and only the script, which runs after all three, reaches every
 // one. For every Claude run — the bridge is every run's tools — and for no
-// other CLI, whose environment those names mean nothing to.
+// other harness, whose environment those names mean nothing to.
 //
-// Mutation: drop Unset from Claude's Output, or emit it after the CLI, and this
+// Mutation: drop Unset from Claude's Output, or emit it after the harness, and this
 // goes red.
 func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 	t.Parallel()
@@ -147,7 +147,7 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 			unset := strings.Index(script, "unset CLAUDE_CODE_SIMPLE CLAUDE_CODE_SAFE_MODE; ")
 			launch := strings.Index(script, "claude -p")
 			if unset < 0 || launch < 0 || unset > launch {
-				t.Fatalf("the variables are not unset before the CLI starts (unset at %d, CLI at %d):\n%s",
+				t.Fatalf("the variables are not unset before the harness starts (unset at %d, harness at %d):\n%s",
 					unset, launch, script)
 			}
 		})
@@ -162,7 +162,7 @@ func TestTheWrapperUnsetsTheVariablesThatSwitchHooksOff(t *testing.T) {
 // written false (a repository's own true otherwise switches every hook off
 // without a word), one mcp_tool hook at PostToolBatch and one at Stop, each
 // calling the tool the launch named on the server it named, with the event and
-// the agent id the CLI fills in, under a ten-second timeout. No field newer than
+// the agent id the harness fills in, under a ten-second timeout. No field newer than
 // 2.1.263 — print mode ignores a file it cannot validate, hooks and all — which
 // the whole-document comparison holds: a key added is a key this case did not
 // measure.
@@ -260,7 +260,7 @@ func TestTheSettingsFileIsWrittenPrivateUnderTheWorkDir(t *testing.T) {
 // repository's own hook that exits 2 ends the loop as subtype success, no error
 // and an empty result, its terminal reason hook_stopped — which, read as it
 // reports itself, was a run that succeeded and said nothing. A run whose loop
-// completed, and a result from a CLI that reports no terminal reason, stay
+// completed, and a result from a harness that reports no terminal reason, stay
 // successful.
 //
 // Mutation: drop the terminal reason from succeeded() and the stopped rows go
@@ -301,7 +301,7 @@ func TestAHookStoppedRunFailsWithItsReason(t *testing.T) {
 func TestClaudeCodeReadsNotes(t *testing.T) {
 	t.Parallel()
 	if !executor.NewClaudeCode().ReadsNotes() {
-		t.Fatal("the Claude Code runner says its CLI reads no notes, so no run is told notes arrive")
+		t.Fatal("the Claude Code runner says its harness reads no notes, so no run is told notes arrive")
 	}
 }
 
@@ -311,7 +311,7 @@ func TestClaudeCodeReadsNotes(t *testing.T) {
 func TestOpenCodeReadsNotes(t *testing.T) {
 	t.Parallel()
 	if !executor.NewOpenCode().ReadsNotes() {
-		t.Fatal("the OpenCode runner says its CLI reads no notes, so no run is told notes arrive")
+		t.Fatal("the OpenCode runner says its harness reads no notes, so no run is told notes arrive")
 	}
 }
 
@@ -435,12 +435,12 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 				}
 				raw, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // under the case's own dir
 				if err != nil {
-					t.Fatalf("the CLI never started: %v\n%s", err, stderr.String())
+					t.Fatalf("the harness never started: %v\n%s", err, stderr.String())
 				}
 				args := strings.Split(strings.TrimSpace(string(raw)), "\n")
 				named := slices.Contains(args, "--settings")
 				if named != tc.settings {
-					t.Errorf("on %q the CLI was started with --settings: %v, want %v (argv %q)",
+					t.Errorf("on %q the harness was started with --settings: %v, want %v (argv %q)",
 						tc.version, named, tc.settings, args)
 				}
 				if named && args[slices.Index(args, "--settings")+1] != p.ClaudeSettings() {
@@ -459,7 +459,7 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 				}
 				if n := strings.Count(strings.Join(args, "\n"), "--append-system-prompt-file"); n != 1 ||
 					after(args, "--append-system-prompt-file") != want {
-					t.Errorf("on %q the CLI was handed %d system texts, %q, want %q alone (argv %q)",
+					t.Errorf("on %q the harness was handed %d system texts, %q, want %q alone (argv %q)",
 						tc.version, n, after(args, "--append-system-prompt-file"), want, args)
 				}
 			})

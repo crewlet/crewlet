@@ -33,7 +33,7 @@ func refused(t *testing.T, extra map[string]any, wants ...string) {
 	}
 }
 
-// A LOGIN IN THE CLI'S OWN DATABASE NEEDS BOTH HALVES. An export with no
+// A LOGIN IN THE HARNESS'S OWN DATABASE NEEDS BOTH HALVES. An export with no
 // import leaves every seat's home with an empty database, and an import with
 // no export can never write back the token a call refreshed — which is how a
 // whole fleet is logged out at the next expiry.
@@ -127,7 +127,7 @@ func TestAUsageCommandIsAskedAboutTheCallsOwnSession(t *testing.T) {
 }
 
 // A DISCOVERED SYSTEM-PROMPT FILE IS FOUND BY WHERE IT IS AND SELECTED BY THE
-// ARGV. A discovered file with no name writes the default bare file no CLI
+// ARGV. A discovered file with no name writes the default bare file no harness
 // looks for; one with no argv is found and never used; one whose argv carries
 // the path or the text as well is two channels for one prompt — and the text,
 // `{system}`, is the seat's whole system prompt on argv, where every account on
@@ -151,7 +151,7 @@ func TestADiscoveredSystemPromptFileIsFoundAndSelected(t *testing.T) {
 	refused(t, discovered(agent, "/etc/agents/seat.md"), "relative")
 	// A directory where a file goes: `.` and `x/..` are the working
 	// directory itself, which a write fails on with EISDIR, and a trailing
-	// separator writes a regular FILE where the CLI looks for a directory of
+	// separator writes a regular FILE where the harness looks for a directory of
 	// agents — every call then fails "Agent not found".
 	for _, name := range []string{".", "./", ".agents/", ".agents/..", "x/../", ".agents/seat.md/."} {
 		refused(t, discovered(agent, name), "must name a FILE", name)
@@ -191,7 +191,7 @@ func TestADiscoveredSystemPromptFileIsFoundAndSelected(t *testing.T) {
 // it, because its system prompt is the whole instruction and its answer is
 // parsed. Each falls back to the other rather than to the transcript — a seat's
 // instructions there arrive as a user message — and only a profile with
-// neither leaves the text in the transcript, under the CLI's own prompt.
+// neither leaves the text in the transcript, under the harness's own prompt.
 func TestACallTakesTheChannelItsKindOfWorkWants(t *testing.T) {
 	t.Parallel()
 	replace := map[string]any{"args": []any{"--system-prompt", "{file}"}}
@@ -221,7 +221,7 @@ func TestACallTakesTheChannelItsKindOfWorkWants(t *testing.T) {
 			agent:    want{"append_system_prompt", true, "--append-system-prompt"},
 			side:     want{"append_system_prompt", true, "--append-system-prompt"},
 		},
-		"an appending file the CLI always reads": {
+		"an appending file the harness always reads": {
 			channels: map[string]any{"system_prompt": replace, "append_system_prompt": always},
 			agent:    want{"append_system_prompt", true, ""},
 			side:     want{"system_prompt", false, "--system-prompt"},
@@ -259,7 +259,7 @@ func TestACallTakesTheChannelItsKindOfWorkWants(t *testing.T) {
 	}
 }
 
-// A FILE THE CLI READS ON EVERY RUN IS A CHANNEL ON ITS OWN. OpenCode reads the
+// A FILE THE HARNESS READS ON EVERY RUN IS A CHANNEL ON ITS OWN. OpenCode reads the
 // AGENTS.md in its configuration directory without being asked, so a channel
 // made of that file alone, with no argv, is declared and writes a file — while
 // a file handed over by path, or one the argv must select, declares nothing
@@ -297,16 +297,16 @@ func TestAFileTheHarnessAlwaysReadsDeclaresItsChannelAlone(t *testing.T) {
 	if _, err := loadCustom(map[string]any{"append_system_prompt": map[string]any{
 		"file": map[string]any{"name": ".cfg/AGENTS.md", "discovered": "always"},
 	}}); err != nil {
-		t.Errorf("a file the CLI reads on every run, with no argv, was refused: %v", err)
+		t.Errorf("a file the harness reads on every run, with no argv, was refused: %v", err)
 	}
 }
 
 // EACH SYSTEM-PROMPT CHANNEL IS HELD TO ONE SHAPE, AND THE REFUSAL NAMES THE
 // CHANNEL. The same rules on both fields, because an operator overrides either:
-// one carrier per channel (a variable and an argv would hand the CLI the text
+// one carrier per channel (a variable and an argv would hand the harness the text
 // twice), never `{file}` and `{system}` together (the second puts the text the
 // first kept private on argv), a discovery the engine knows, an argv that
-// selects a selected file, and no path handed over for a file the CLI finds by
+// selects a selected file, and no path handed over for a file the harness finds by
 // its location.
 func TestEachSystemPromptChannelIsHeldToOneShape(t *testing.T) {
 	t.Parallel()
@@ -346,7 +346,7 @@ func TestEachSystemPromptChannelIsHeldToOneShape(t *testing.T) {
 				channel: map[string]any{"env": "VENDOR_SYSTEM_MD", "file": discovered("always")},
 				want:    ".file is discovered but " + field + ".env is set",
 			},
-			"a file the CLI always reads, with no argv": {
+			"a file the harness always reads, with no argv": {
 				channel: map[string]any{"file": discovered("always")},
 			},
 		} {
@@ -380,7 +380,7 @@ func TestEachSystemPromptChannelIsHeldToOneShape(t *testing.T) {
 // TAKE. A call takes one channel or the other, so a vendor whose agent file
 // carries the prompt with or without its own (Kimi's, with and without
 // `${base_prompt}`) writes that file once per call, and two channels naming it
-// are no collision. A seed at the same path is: it is replaced before the CLI
+// are no collision. A seed at the same path is: it is replaced before the harness
 // ever reads it — and it is refused once, under the first channel's name.
 func TestBothChannelsMayNameOneFileButASeedMayNot(t *testing.T) {
 	t.Parallel()
@@ -427,7 +427,7 @@ func TestBothChannelsMayNameOneFileButASeedMayNot(t *testing.T) {
 
 // THE ENGINE OWNS THE CALL'S `.git`. Every call's working directory is made a
 // project root of its own by a `.git` file the engine writes, so a seed at that
-// path would be overwritten before the CLI started — or, written after it,
+// path would be overwritten before the harness started — or, written after it,
 // would put a real repository's pointer where the confinement belongs. Refused
 // under a label naming the marker, so the operator is told the path is not
 // theirs to seed rather than that two of their own fields collide.
@@ -443,7 +443,7 @@ func TestASeedMayNotClaimTheCallsProjectRootMarker(t *testing.T) {
 		t.Errorf("the refusal does not name %q: %v", want, err)
 	}
 	// The same path in the seat's HOME is the operator's: the marker is
-	// written only where the CLI runs.
+	// written only where the harness runs.
 	if _, err := loadCustom(map[string]any{
 		"seed_files": []any{map[string]any{"path": ProjectRootMarker, "in": "home", "content": "x"}},
 	}); err != nil {

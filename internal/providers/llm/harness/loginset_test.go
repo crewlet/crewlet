@@ -43,7 +43,7 @@ func twoFileLogin(signIn string) map[string]string {
 	}
 }
 
-// twoFileConfig is a provider over stateDir whose CLI keeps ONE LOGIN IN TWO
+// twoFileConfig is a provider over stateDir whose harness keeps ONE LOGIN IN TWO
 // FILES, with a login command that writes both ([fakeStore]'s
 // store-two-file-login). A function of the directory rather than of a test,
 // because [runLoginWriter] builds the same provider in a process of its own.
@@ -117,7 +117,7 @@ func bundleOfFiles(t *testing.T, files map[string]string) string {
 	return blob
 }
 
-// twoFileBundle is [Provider.ExportBundle]'s format over files, for the CLI
+// twoFileBundle is [Provider.ExportBundle]'s format over files, for the harness
 // [twoFileConfig] runs: written by [packBundle], the format's one writer.
 func twoFileBundle(files map[string]string) (string, error) {
 	entries := make([]bundleFile, 0, len(files))
@@ -327,7 +327,7 @@ func TestAnAdoptedLoginKeepsNoFileOfTheOneItReplaced(t *testing.T) {
 	}
 }
 
-// A SIGN-IN IS WRITTEN AS THE WHOLE LOGIN IT LEFT. Its CLI renewed the token and
+// A SIGN-IN IS WRITTEN AS THE WHOLE LOGIN IT LEFT. Its harness renewed the token and
 // left config.toml as the command seeded it — or held none — while another
 // writer's config.toml landed in the shared directory. Carried out as the files
 // it changed alone, the new token was written beside the other writer's
@@ -376,8 +376,8 @@ func TestASignInIsWrittenAsTheWholeLoginItLeft(t *testing.T) {
 }
 
 // A FILE A SIGN-IN REMOVED GOES BACK ONLY FROM THE LOGIN IT WAS SEEDED FROM.
-// Its CLI renewed the token and removed config.toml. No CLI's removal reaches
-// the shared directory — a CLI that dropped a file is no reason to log the
+// Its harness renewed the token and removed config.toml. No harness's removal reaches
+// the shared directory — a harness that dropped a file is no reason to log the
 // fleet out of the login it was seeded with — so the shared login's
 // config.toml stays beside the new token while it is still that login's: the
 // copy the sign-in was seeded with, or that copy as a seat refreshed it while
@@ -450,7 +450,7 @@ func TestAFileASignInRemovedGoesBackOnlyFromTheLoginItWasSeededFrom(t *testing.T
 
 // THE OPERATOR EPOCH TELLS A SEAT'S REFRESH FROM ANOTHER SIGN-IN, written by the
 // writers themselves rather than by hand: a sign-in seeded from one login, whose
-// CLI renewed the token and removed config.toml, is carried out after a real
+// harness renewed the token and removed config.toml, is carried out after a real
 // writer replaced the shared config.toml while it ran. A seat's refresh moves no
 // epoch and is the seeded login, newer, so its config.toml stays beside the new
 // token; `-from-host`, and a logout followed by an import, move it, so theirs is
@@ -524,7 +524,7 @@ func TestTheOperatorEpochTellsASeatsRefreshFromAnotherSignIn(t *testing.T) {
 			// any epoch, but judged by the one it was seeded at.
 			gen.After = nil
 			c.meanwhile(t, p)
-			// The sign-in's CLI renews the token and removes config.toml.
+			// The sign-in's harness renews the token and removes config.toml.
 			writeFile(t, filepath.Join(home, ".fake", "auth.json"), token)
 			if err := os.Remove(filepath.Join(home, ".fake", "config.toml")); err != nil {
 				t.Fatal(err)
@@ -610,7 +610,7 @@ func TestAnOperatorsWriteIsCountedBeforeItLands(t *testing.T) {
 // refreshed the token while somebody else rewrote the config.toml beside it:
 // judged a file at a time the token's file still held its seed, so the
 // refresh was written — and the shared login became one token beside another
-// writer's config.toml, a login no CLI wrote. The shared login moved past the
+// writer's config.toml, a login no harness wrote. The shared login moved past the
 // seed, so the newer one is kept whole.
 //
 // Mutation: compare each changed file with its own seed alone, and the
@@ -787,7 +787,7 @@ const (
 //
 //   - import-logout: an import of one login, then a logout, in turn;
 //   - adopt: `-from-host` from each of two homes in turn;
-//   - carry: a seat seeded with one login whose CLI rewrote it to the other,
+//   - carry: a seat seeded with one login whose harness rewrote it to the other,
 //     carried back by its release, in turn.
 func runLoginWriter(op string) {
 	fail := func(err error) {
@@ -984,7 +984,7 @@ func TestALoginWriteThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		logs.Reset()
 		p := twoFileProvider(t, nil)
 		// The record as a logout writes it: under the shared login's lock,
-		// whose file is what brings the CLI's share of the state directory
+		// whose file is what brings the harness's share of the state directory
 		// into being on a fresh one.
 		unlock, err := p.ws.lockShared(t.Context())
 		if err != nil {

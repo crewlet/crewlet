@@ -9,7 +9,7 @@ import (
 )
 
 // sonnetEntry is an api-key entry whose key is read from its own variable,
-// on a CLI binary that is not there, so nothing in a test calls a vendor.
+// on a harness binary that is not there, so nothing in a test calls a vendor.
 func sonnetEntry(t *testing.T) config.LLMProvider {
 	t.Helper()
 	return config.LLMProvider{Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),

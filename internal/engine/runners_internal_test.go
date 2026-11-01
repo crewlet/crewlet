@@ -11,11 +11,11 @@ import (
 
 // THE DOCTOR'S LIST AND THE ENGINE'S REGISTRY ARE THE SAME LIST.
 //
-// `crewlet llm doctor` checks an executor entry's CLI against
+// `crewlet llm doctor` checks an executor entry's harness against
 // executor.Names(); the engine builds its runner map here. Nothing connects
 // them, and a drift fails in the direction that is hardest to see: the doctor
 // passes the entry, the deploy script goes green, and the seat's first turn
-// refuses with "no coding-agent runner registered" — which is precisely the
+// refuses with "no harness runner registered" — which is precisely the
 // failure the probe exists to catch, reintroduced by the check for it.
 func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 	t.Parallel()

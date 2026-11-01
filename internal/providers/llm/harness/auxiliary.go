@@ -13,15 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// auxiliaryTimeout bounds one AUXILIARY command — a short run of the CLI that
+// auxiliaryTimeout bounds one AUXILIARY command — a short run of the harness that
 // is not the call itself but brackets it: a [harnessprofile.CredentialStore]'s
 // import before a seat's generation and export after it, and a
 // [harnessprofile.Profile.UsageArgs] report after a call.
 //
 // Measured against OpenCode 2.0.32 on an idle host, each takes about half a
-// second — most of it the CLI starting the private server `--standalone`
+// second — most of it the harness starting the private server `--standalone`
 // gives it. Thirty seconds is sixty times that, so a host already running
-// max_concurrent coding CLIs does not fail a seat's generation or lose a
+// max_concurrent harnesses does not fail a seat's generation or lose a
 // call's real counts over a slow start, and a twentieth of the default
 // per-call cap (timeout_seconds, 600), so a wedged command cannot quietly
 // spend much of the call it brackets: every one of them runs inside the
@@ -35,10 +35,10 @@ const auxiliaryTimeout = 30 * time.Second
 // runAuxiliary runs one auxiliary command and returns its stdout.
 //
 // NOTHING IT WAS HANDED OR PRINTED IS EVER PART OF AN ERROR. A credential
-// store's export prints every secret the CLI holds, and its import is handed
+// store's export prints every secret the harness holds, and its import is handed
 // them on stdin, so a failure names the command, its exit and its stderr —
 // and the stderr is SCRUBBED of what stdin and stdout carried first
-// ([scrubAuxiliary]), because a CLI that rejects a document may well quote the
+// ([scrubAuxiliary]), because a harness that rejects a document may well quote the
 // part it rejected, and the shape-based [redact.Secrets] recognises none of
 // an OAuth access token, a refresh token or a Google key by sight.
 //
@@ -124,7 +124,7 @@ func (e *auxiliaryTimeoutError) Error() string {
 func (e *auxiliaryTimeoutError) Unwrap() error { return context.DeadlineExceeded }
 
 // auxiliaryExitError is an auxiliary command that ran and exited non-zero —
-// a CLI that answered, and refused.
+// a harness that answered, and refused.
 type auxiliaryExitError struct {
 	command string
 	code    int
@@ -140,10 +140,10 @@ func (e *auxiliaryExitError) Error() string {
 // cannot be taken as done: something it left running held its stdout past the
 // grace, so what it printed was cut there, or waiting for it failed.
 //
-// NOT an [auxiliaryExitError], which an import reads as the CLI refusing the
-// login ([loginRefusedError]): this CLI refused nothing, and the next call
+// NOT an [auxiliaryExitError], which an import reads as the harness refusing the
+// login ([loginRefusedError]): this harness refused nothing, and the next call
 // imports the same login again. To [acquireFailureKind] it is the SERVER
-// failure an exit is, a local CLI that did not answer usably.
+// failure an exit is, a local harness that did not answer usably.
 type auxiliaryUnfinishedError struct {
 	command string
 	// why is [rawResult.unfinished], which repeats nothing the command was
@@ -159,20 +159,20 @@ func (e *auxiliaryUnfinishedError) Error() string {
 
 // scrubMarker replaces what [scrubAuxiliary] takes out, in [redact]'s marker
 // form, so a second redaction pass recognises its work and a reader can tell
-// a removal from the CLI's own words.
+// a removal from the harness's own words.
 const scrubMarker = redact.Marker + "credential]"
 
 // minScrubbedValue is the shortest JSON string value [scrubAuxiliary] takes
 // out: eight characters, below which a value in a login document is an id, a
 // type or a flag — `oauth`, `key`, `cred_1` — rather than a credential, which
-// no vendor issues that short. Taking those out too would leave a CLI's own
+// no vendor issues that short. Taking those out too would leave a harness's own
 // account of what it rejected unreadable for nothing.
 const minScrubbedValue = 8
 
 // minTokenRun is the shortest [tokenRun]: sixteen characters, below which a run
 // is a word or a path segment rather than a key — and every credential a shipped
-// CLI keeps is far longer. It is also the shortest piece of one that
-// [scrubAuxiliary] takes out where a CLI quoted only part of it.
+// harness keeps is far longer. It is also the shortest piece of one that
+// [scrubAuxiliary] takes out where a harness quoted only part of it.
 const minTokenRun = 16
 
 // tokenRun is a run of the characters a credential is spelled in — letters,
@@ -186,12 +186,12 @@ var tokenRun = regexp.MustCompile(fmt.Sprintf(`[A-Za-z0-9_\-.+/=~]{%d,}`, minTok
 //
 // THE MATERIAL THE ENGINE ALREADY KNOWS IS SECRET, rather than shapes it hopes
 // to recognise: an import is handed every credential the shared login holds,
-// and an export prints every one the database does, so what a CLI quoting
+// and an export prints every one the database does, so what a harness quoting
 // either could repeat is exactly what those two texts contain. From each:
 //
-//   - the whole of it, so a CLI echoing a document entire leaves one marker;
+//   - the whole of it, so a harness echoing a document entire leaves one marker;
 //   - where it is JSON, every string value at least [minScrubbedValue] long,
-//     at any depth, and the [tokenRun]s inside each one (a CLI may quote a
+//     at any depth, and the [tokenRun]s inside each one (a harness may quote a
 //     token out of a longer value, `Bearer …`);
 //   - where it is not — a truncated document, a timed-out export's partial
 //     output — the [tokenRun]s in it.

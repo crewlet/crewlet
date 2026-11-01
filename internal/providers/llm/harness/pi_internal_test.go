@@ -14,12 +14,12 @@ import (
 
 // The invariants the built-in pi profile keeps, each measured against pi
 // 0.85.1 and 1.4.0 through this package's own Complete (see the profile's
-// comments): a seat's system prompt and a side pass's each reach the CLI as a
+// comments): a seat's system prompt and a side pass's each reach the harness as a
 // file the engine wrote before it started, and the transcript reaches it on
 // stdin. Driven with the SHIPPED profile, this test binary standing in for the
-// CLI, so what is checked is what a call is handed.
+// harness, so what is checked is what a call is handed.
 
-// shippedPi is the built-in pi profile with this test binary as its CLI.
+// shippedPi is the built-in pi profile with this test binary as its harness.
 func shippedPi(t *testing.T, env map[string]string) *Provider {
 	t.Helper()
 	dir := t.TempDir()

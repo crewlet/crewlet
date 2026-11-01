@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// The CLI runs on the ENGINE host. A provider whose binary is missing there
+// The harness runs on the ENGINE host. A provider whose binary is missing there
 // must say exactly that, because the config looks correct and the failure
 // otherwise surfaces as an unexplained turn failure much later.
 func TestDoctorReportsAMissingBinary(t *testing.T) {
@@ -41,14 +41,14 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	}
 	joined := strings.Join(d.Problems, "\n")
 	if !strings.Contains(joined, "ENGINE host") {
-		t.Errorf("the problem does not say where the CLI must be installed:\n%s", joined)
+		t.Errorf("the problem does not say where the harness must be installed:\n%s", joined)
 	}
 	if d.Smoke != "skipped: no binary to run" {
 		t.Errorf("Smoke = %q, want a skip rather than a second failure", d.Smoke)
 	}
 }
 
-// "No sign-in" on a machine where the CLI plainly works must explain itself, or
+// "No sign-in" on a machine where the harness plainly works must explain itself, or
 // an operator goes looking for a bug that is a missing -from-host.
 func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	dir := t.TempDir()
@@ -67,7 +67,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 			"token_env":             "FAKE_OAUTH_TOKEN",
 			"capture_token_args":    []any{"setup-token"},
 		},
-		// The version probe runs the binary, so it is the fake CLI answering
+		// The version probe runs the binary, so it is the fake harness answering
 		// as a real one would — not this suite re-run with no test selected,
 		// whose testing-package warning was being read as a version.
 		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "fake-cli 1.0.0"}),
@@ -90,12 +90,12 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	}
 }
 
-// THE DOCTOR'S ROUTES FOLLOW THE ENTRY'S AUTH MODE, not only its CLI. On a
+// THE DOCTOR'S ROUTES FOLLOW THE ENTRY'S AUTH MODE, not only its harness. On a
 // machine with a personal Claude login, every entry with no sign-in was told to
 // adopt it with -from-host or — preferred — to mint a headless token with
 // -capture-token. An api-key entry never reads that token (the mode removes it
-// from the CLI's environment) and should not be handed a plan login either,
-// which the CLI would bill beside its key by the vendor's precedence; an
+// from the harness's environment) and should not be handed a plan login either,
+// which the harness would bill beside its key by the vendor's precedence; an
 // inherit-env entry never looks in the secret store the token is stored in.
 // Each is told what its mode reads, worded as the remote run's refusal and
 // `crewlet llm login` word it ([Provider.ModeSignIn]).
@@ -239,7 +239,7 @@ func TestTheDoctorOffersNoRouteThroughAVariableNoStoreCanHold(t *testing.T) {
 			overrides: map[string]any{"api_key_env": "MY=KEY"},
 			field:     `providers.llm.sub.overrides.api_key_env is "MY=KEY"`,
 			want: []string{"auth.mode is api-key",
-				"name the variable your build of the CLI reads in providers.llm.sub.overrides.api_key_env"},
+				"name the variable your build of the harness reads in providers.llm.sub.overrides.api_key_env"},
 			notWant: []string{"crewlet secrets set", "export it", "capture-token"},
 		},
 		{
@@ -379,7 +379,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 			{Name: CheckBinary, OK: true, Detail: "/usr/local/bin/claude"},
 			{Name: CheckVersion, OK: true, Detail: "2.0.31 (Claude Code)"},
 			{Name: CheckSignIn, OK: true, Detail: "credential files in /var/lib"},
-			{Name: CheckUsage, OK: true, Detail: "reported by CLI"},
+			{Name: CheckUsage, OK: true, Detail: "reported by harness"},
 			{Name: CheckSmoke, OK: true, Detail: "ok: 812 in / 34 out"},
 		},
 	}
@@ -388,7 +388,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 	for _, want := range []string{
 		"provider", "harness", "binary        : /usr/local/bin/claude", "version       : 2.0.31",
 		"written for", "state dir", "credentials", "token env", "sign-in       : credential files",
-		"token usage   : reported by CLI", "smoke test    : ok: 812", "problems",
+		"token usage   : reported by harness", "smoke test    : ok: 812", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())
@@ -431,14 +431,14 @@ func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 }
 
 // THE DOCTOR'S PROBES ASK AS A SEAT ASKS. They prove what a seat runs under —
-// that its CLI answers, that the shell is denied, that the web is reached — so
+// that its harness answers, that the shell is denied, that the web is reached — so
 // each is sent as a seat's call is: an agent call with a system prompt, which
 // takes the channel a seat's prompt takes. Sent with none, most profiles
 // passed no channel at all, the vendor's default prompt ran, and the report
 // described a configuration no seat ever had.
 //
 // A profile with no tool route, so the smoke test's own call is the plain
-// one it makes to learn whether the CLI answers — a completion like the two
+// one it makes to learn whether the harness answers — a completion like the two
 // probes (smoke_test.go covers the route).
 //
 // Mutation: drop Agent from probeRequest, or its system message, and the
@@ -483,13 +483,13 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 			t.Errorf("a probe carried %q, want the probe's system prompt under the harness note", system)
 		}
 		if slices.Contains(argv, "--replace-system-prompt") {
-			t.Errorf("argv = %q — a probe replaced the CLI's prompt, which no seat does here", argv)
+			t.Errorf("argv = %q — a probe replaced the harness's prompt, which no seat does here", argv)
 		}
 	}
 }
 
 // THE REPORT SAYS WHICH PROMPT A SEAT RUNS UNDER, and which a side pass does:
-// beside the CLI's own, in place of it, or in the transcript under it, naming
+// beside the harness's own, in place of it, or in the transcript under it, naming
 // the profile field an operator would override — so the vendor prompt a seat
 // answers under is read off the report rather than out of the profile.
 func TestTheReportSaysWhichPromptASeatRunsUnder(t *testing.T) {
@@ -502,18 +502,18 @@ func TestTheReportSaysWhichPromptASeatRunsUnder(t *testing.T) {
 	}{
 		"both channels": {
 			overrides: map[string]any{"system_prompt": replace, "append_system_prompt": appendTo},
-			seats:     []string{"added to the CLI's own", "(append_system_prompt)"},
-			side:      []string{"replaces the CLI's own", "(system_prompt)"},
+			seats:     []string{"added to the harness's own", "(append_system_prompt)"},
+			side:      []string{"replaces the harness's own", "(system_prompt)"},
 		},
 		"only the replacing one": {
 			overrides: map[string]any{"system_prompt": replace},
-			seats:     []string{"replaces the CLI's own", "(system_prompt)"},
-			side:      []string{"replaces the CLI's own", "(system_prompt)"},
+			seats:     []string{"replaces the harness's own", "(system_prompt)"},
+			side:      []string{"replaces the harness's own", "(system_prompt)"},
 		},
 		"neither": {
 			overrides: nil,
-			seats:     []string{"in the transcript, under the CLI's own"},
-			side:      []string{"in the transcript, under the CLI's own"},
+			seats:     []string{"in the transcript, under the harness's own"},
+			side:      []string{"in the transcript, under the harness's own"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -156,7 +156,7 @@ roles:
 
 // harnessCompanyFile is a company whose one entry, "sub", names no credential
 // of its own — so it reads its bundle under the conventional name — and whose
-// CLI is `true` for every command, and the entry as the run builds it.
+// harness is `true` for every command, and the entry as the run builds it.
 func harnessCompanyFile(t *testing.T) (string, *harness.Provider) {
 	t.Helper()
 	dir := t.TempDir()
@@ -178,7 +178,7 @@ providers:
         host_credential_paths: [".fake/creds.json"]
         status_args: ["status"]
 roles:
-  # A person's seat: the custom entry stands in for a CLI this suite
+  # A person's seat: the custom entry stands in for a harness this suite
   # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
@@ -572,7 +572,7 @@ providers:
         status_args: ["-c", "exit 0"]
         login_args: ["-c", 'mkdir -p "$HOME/.fake" && echo {} > "$HOME/.fake/creds.json"']
 roles:
-  # A person's seat: the custom entry stands in for a CLI this suite
+  # A person's seat: the custom entry stands in for a harness this suite
   # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo

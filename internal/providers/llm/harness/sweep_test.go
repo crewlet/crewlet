@@ -166,7 +166,7 @@ func TestAGenerationAnEarlierProcessLeftOpenIsCarriedOutByAnySeat(t *testing.T) 
 
 // A SWEEP NEVER CARRIES OUT A HOME A CALL IS RUNNING IN — in this process,
 // where the seat is in flight, or in another, where only the seat's generation
-// lock says so. Carried out mid-call, a refresh the CLI had not finished
+// lock says so. Carried out mid-call, a refresh the harness had not finished
 // writing would be read as the login, and the record the running generation
 // releases against would be gone.
 func TestASweepNeverCarriesOutAHomeACallIsRunningIn(t *testing.T) {
@@ -240,7 +240,7 @@ func TestASweepNeverCarriesOutAHomeACallIsRunningIn(t *testing.T) {
 // A SEAT'S FIRST CALL NEVER PRUNES A HOME ANOTHER PROCESS IS RUNNING IN. An
 // engine whose lease on the seat moved may still be finishing a call there;
 // the call that finds the seat's generation lock held waits for it, and is
-// refused as a timeout rather than seeding the home under the other CLI.
+// refused as a timeout rather than seeding the home under the other harness.
 func TestASeatsFirstCallWaitsForAnotherProcessesGeneration(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)

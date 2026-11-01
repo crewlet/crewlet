@@ -5,14 +5,14 @@ import (
 	"slices"
 )
 
-// The scoped MCP surface the in-box coding agent gets.
+// The scoped MCP surface the in-box harness gets.
 //
-// The coding agent is itself an MCP client, so the runner hands it a config of
+// The harness is itself an MCP client, so the runner hands it a config of
 // its own: ONLY the servers the seat named in role.sandbox.mcp.servers, each
 // with the seat's own credentials.
 //
 // SCOPING IS AT THE SERVER LEVEL, and that is a platform fact rather than a
-// simplification. Neither supported CLI offers a per-tool allowlist the engine
+// simplification. Neither supported harness offers a per-tool allowlist the engine
 // could enforce — one has no such flag, and the other runs with permissions
 // bypassed because a prompt would hang a headless run — so a curated tool list
 // would be a claim rather than a control. What the engine decides is which
@@ -25,7 +25,7 @@ import (
 // server may start at all, because the two cannot be separated: a key a
 // server may go without is left out of the MERGED values, so a seat's value
 // that resolves to nothing never hands the key back to the server's default.
-// What each CLI's config file looks like belongs to its runner — which is
+// What each harness's config file looks like belongs to its runner — which is
 // where the key names live, because this package once rendered them and then
 // told the reader they belonged elsewhere.
 
@@ -35,8 +35,8 @@ import (
 // the SHAPE and not on the config tree — the same reason the setup step is a
 // translation. A caller assembles these from whatever its config says, with
 // every `${VAR}` reference already RESOLVED and the seat's own credentials
-// already merged in: what lands here is written into the coding CLI's own
-// config as it stands, and neither CLI reads a reference the way the engine
+// already merged in: what lands here is written into the harness's own
+// config as it stands, and neither harness reads a reference the way the engine
 // does.
 type MCPServer struct {
 	Name      string
@@ -89,7 +89,7 @@ func (t Transport) Valid() bool {
 // RenderMCP selects a seat's scoped sandbox surface.
 //
 // It answers in the SAME type it takes — not a generic `map[string]any` of
-// each CLI's own config keys. That shape erased everything a runner needed:
+// each harness's own config keys. That shape erased everything a runner needed:
 // internal/sandbox/executor's OpenCode writer had to assert its way back
 // out of it, and its args branch carried two fallbacks (`[]string` and
 // `[]any`) because nothing but a convention said which one it would find. The
@@ -117,7 +117,7 @@ func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 		if !known {
 			log.Warn("sandbox_mcp_server_unknown", "server", name,
 				"hint", "role.sandbox.mcp.servers names a server that is not "+
-					"in mcp.servers, so the coding agent will not get it")
+					"in mcp.servers, so the harness will not get it")
 			continue
 		}
 		// SKIPPED like an unknown name, for the same reason: handing a
@@ -130,7 +130,7 @@ func RenderMCP(servers []MCPServer, scoped []string) map[string]MCPServer {
 			log.Warn("sandbox_mcp_transport_unknown", "server", name,
 				"transport", string(server.Transport),
 				"hint", "mcp.servers."+name+".transport must be stdio or http, "+
-					"so the coding agent will not get this server")
+					"so the harness will not get this server")
 			continue
 		}
 		out[name] = forTransport(server)

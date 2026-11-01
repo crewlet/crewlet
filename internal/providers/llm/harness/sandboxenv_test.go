@@ -24,7 +24,7 @@ func sandboxEnvOf(t *testing.T, env map[string]string, auth Auth) map[string]str
 
 // A BOX IS HANDED ITS ENTRY'S WHOLE ENV, NOT ONLY ITS SIGN-IN.
 //
-// An entry's env is extra environment for every invocation of its CLI, and a
+// An entry's env is extra environment for every invocation of its harness, and a
 // seat's executor run is one. Cut to the credential names, an entry that
 // reached its model through a gateway ran its box against the vendor with the
 // gateway's key, and one on Bedrock called the Anthropic API signed in to
@@ -110,7 +110,7 @@ func TestAnInheritEnvEntrysBoxCarriesWhatTheModeForwards(t *testing.T) {
 // A VARIABLE THAT ISOLATES A CALL ON THIS HOST NEVER REACHES A BOX, nor does a
 // value that resolved to nothing.
 //
-// An entry's env naming HOME, the CLI's relocation variable or one of its
+// An entry's env naming HOME, the harness's relocation variable or one of its
 // isolation switches is refused on every write and only warned about where it
 // is applied, so a node can run one, and on this host it replaces the seat
 // home's isolation; in a box it would point the run's HOME at the engine

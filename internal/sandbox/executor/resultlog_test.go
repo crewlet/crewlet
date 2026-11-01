@@ -14,7 +14,7 @@ import (
 )
 
 // THE STREAM IS SAID TO STAND IN FOR THE RESULT FILE ONLY WHERE IT DID. The
-// wrapper writes the result file whatever the CLI did, so a CLI that exited at
+// wrapper writes the result file whatever the harness did, so a harness that exited at
 // once — not installed, a bad flag — leaves it empty beside an empty stream,
 // and a warning that "the result file was never written" stood beside every
 // such run's real failure, false twice over. The line is logged where the

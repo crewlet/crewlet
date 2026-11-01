@@ -12,7 +12,7 @@ import (
 // A pause with `stop_running` is a person saying the seat's work in flight must
 // not go on. The turn the seat is on hears it at its next round, through the
 // turn's own fence; a run that turn launched has no rounds the engine sees — it
-// is its coding CLI's own process in a box, minutes or hours long — so the
+// is its harness's own process in a box, minutes or hours long — so the
 // fence alone let it run to its end, and only the turn that came back to
 // collect it was stopped. [Coordinator.StopSeat] ends it instead, at once.
 //
@@ -202,7 +202,7 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 // the ending for this node's retry.
 //
 // THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
-// The run's CLI is still working until its box is reclaimed, and every tool
+// The run's harness is still working until its box is reclaimed, and every tool
 // call it makes through the bridge acts as the seat: closed first, the stop
 // takes effect on the seat's surface at once — no post, no write, no submission
 // after it — rather than after a read of the box that can take as long as the

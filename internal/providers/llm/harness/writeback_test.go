@@ -16,7 +16,7 @@ import (
 )
 
 // The cases here hold the WRITE-BACK RULE: a home's login is carried back to
-// the shared directory only when its CLI changed it, judged against what the
+// the shared directory only when its harness changed it, judged against what the
 // home was seeded from — and, for anything that only refreshes a login, only
 // while the shared directory still holds exactly that. Every case that matters
 // is two writers on one login, which is why each one interleaves a second.
@@ -106,7 +106,7 @@ func sharedLogin(t *testing.T, ws *Workspace) (file, document string) {
 	return read(filepath.Join(ws.CredentialsDir(), "creds.json")), read(ws.documentPath())
 }
 
-// refreshFile is a seat's CLI rewriting its login file in place.
+// refreshFile is a seat's harness rewriting its login file in place.
 func refreshFile(t *testing.T, co *Checkout, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(co.Home, ".fake", "creds.json"), []byte(body), 0o600); err != nil {
@@ -169,7 +169,7 @@ func TestARefreshNeverWritesOverALoginThatMovedPastItsSeed(t *testing.T) {
 	}
 	// Another writer lands first...
 	writeLogin(t, ws, `{"token":"OTHER"}`, `[{"id":"c","refresh":"OTHER"}]`)
-	// ...and this seat's CLI refreshed too.
+	// ...and this seat's harness refreshed too.
 	refreshFile(t, co, `{"token":"MINE"}`)
 	store.exported = []byte(`[{"id":"c","refresh":"MINE"}]`)
 	if err := co.Release(t.Context()); err != nil {
@@ -231,8 +231,8 @@ func TestAnOperatorsLoginMidCallSurvivesTheSeatsRelease(t *testing.T) {
 }
 
 // A STATUS NEVER REVERTS A REFRESH THAT LANDED WHILE IT RAN. `crewlet llm
-// status` runs the CLI in a home seeded from the shared login and carries out
-// what it holds afterwards; its CLI changed nothing, and comparing its export
+// status` runs the harness in a home seeded from the shared login and carries out
+// what it holds afterwards; its harness changed nothing, and comparing its export
 // with the shared login — which a seat refreshed meanwhile — wrote the old
 // login back over the new one.
 func TestAStatusNeverRevertsARefreshThatLandedWhileItRan(t *testing.T) {
@@ -312,7 +312,7 @@ func TestALoginThatChangedNothingNeverRevertsARefresh(t *testing.T) {
 	})
 }
 
-// A LOGIN THAT STORED NOTHING IS A FAILURE. The CLI exited 0 with no login
+// A LOGIN THAT STORED NOTHING IS A FAILURE. The harness exited 0 with no login
 // anywhere this entry reads one — an operator who backed out of the provider
 // picker, a second command that pruned the database under the flow — and the
 // command printed "Login written to …" about a directory holding nothing.
@@ -363,7 +363,7 @@ func TestALoginThatStoredNothingFails(t *testing.T) {
 	}
 }
 
-// LOGIN, LOGOUT, STATUS LEAVES NO LOGIN — on a CLI that keeps its login in a
+// LOGIN, LOGOUT, STATUS LEAVES NO LOGIN — on a harness that keeps its login in a
 // file and has a status command but no logout of its own, which is hermes's
 // shape. The login home kept the login's file after the login; logout removed
 // only the shared one; and status carried the login home's copy back, so the
@@ -405,7 +405,7 @@ func TestTheLoginHomeKeepsNoCopyOfTheLogin(t *testing.T) {
 
 // A STATUS NEVER CREATES A LOGIN. Only a command that makes one may; one that
 // asks who the entry is signed in as, run while nobody is, leaves nobody
-// signed in whatever its CLI wrote.
+// signed in whatever its harness wrote.
 func TestAStatusNeverCreatesALogin(t *testing.T) {
 	t.Parallel()
 	run := "-test.run=TestFakeHarness"
@@ -423,7 +423,7 @@ func TestAStatusNeverCreatesALogin(t *testing.T) {
 
 // A SEAT'S HOME KEEPS NO LOGIN THE SHARED DIRECTORY NO LONGER HOLDS. A
 // credential file is not volatile, so a home keeps an earlier generation's
-// copy — and a seed that only skipped the missing shared file left the CLI
+// copy — and a seed that only skipped the missing shared file left the harness
 // signed in with it, still calling as a login `crewlet llm logout` removed.
 func TestASeatsHomeKeepsNoLoginTheSharedDirectoryNoLongerHolds(t *testing.T) {
 	t.Parallel()
@@ -456,7 +456,7 @@ func TestASeatsHomeKeepsNoLoginTheSharedDirectoryNoLongerHolds(t *testing.T) {
 }
 
 // A FAILED EXPORT KEEPS THE LOGIN, and the next generation carries it out. The
-// call refreshed the login inside the CLI's database — rotating the refresh
+// call refreshed the login inside the harness's database — rotating the refresh
 // token — and the export after it failed: pruning the database then deleted
 // the only copy of the token the vendor still honours.
 func TestALoginWhoseExportFailedIsCarriedOutByTheNextGeneration(t *testing.T) {
@@ -494,7 +494,7 @@ func TestALoginWhoseExportFailedIsCarriedOutByTheNextGeneration(t *testing.T) {
 
 // A SEAT WHOSE OLD LOGIN STILL CANNOT BE CARRIED OUT DOES NOT RUN — not on the
 // stale database, and not by discarding it — and says so in a kind the
-// fallback chain moves past: the login is fine, the CLI did not answer.
+// fallback chain moves past: the login is fine, the harness did not answer.
 func TestASeatWhoseLoginCannotBeCarriedOutIsRefusedRetryably(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, map[string]string{"FAKE_STORE_REFRESH": "k-new", "FAKE_STORE_EXPORT_FAIL": "1"}, nil)
@@ -519,7 +519,7 @@ func TestASeatWhoseLoginCannotBeCarriedOutIsRefusedRetryably(t *testing.T) {
 }
 
 // A GENERATION OUTLIVES ITS PROCESS. A seat whose engine stopped mid-call — a
-// deploy, an OOM kill — left a home holding whatever its CLI refreshed and no
+// deploy, an OOM kill — left a home holding whatever its harness refreshed and no
 // release to carry it out; the next process's first call into the seat
 // carries it out before it prunes.
 func TestAGenerationLeftOpenByAnEarlierProcessIsCarriedOut(t *testing.T) {
@@ -648,7 +648,7 @@ func TestTheSharedLoginsLockExcludesAnotherHolder(t *testing.T) {
 	unlock()
 }
 
-// fileProvider is a provider whose CLI keeps its login in ONE FILE, with a
+// fileProvider is a provider whose harness keeps its login in ONE FILE, with a
 // login command that writes it, a status command that changes nothing, and no
 // logout of its own.
 func fileProvider(t *testing.T, env map[string]string) *Provider {

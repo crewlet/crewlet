@@ -14,7 +14,7 @@ import (
 
 // The invariants the built-in claude-code profile keeps, each measured against
 // Claude Code 2.1.303 and 2.1.310 (see the profile's comments): a call offers
-// the two web tools and nothing else, a seat's phases keep the CLI's own
+// the two web tools and nothing else, a seat's phases keep the harness's own
 // system prompt and a side pass replaces it, nothing per call is put ahead of
 // a seat's text, and nothing a call leaves in the seat's home outlives the
 // calls that share it.
@@ -30,7 +30,7 @@ func claudeCode(t *testing.T) harnessprofile.Profile {
 }
 
 // flagValues returns the values that follow flag in argv, up to the next flag,
-// split on commas the way the CLI reads a tool list.
+// split on commas the way the harness reads a tool list.
 func flagValues(argv []string, flag string) ([]string, bool) {
 	i := slices.Index(argv, flag)
 	if i < 0 {
@@ -61,7 +61,7 @@ func TestClaudeCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 	web := []string{"WebFetch", "WebSearch"}
 	tools, ok := flagValues(p.CompleteArgs, "--tools")
 	if !ok {
-		t.Fatalf("complete_args = %q carries no --tools, so the CLI offers every tool "+
+		t.Fatalf("complete_args = %q carries no --tools, so the harness offers every tool "+
 			"its build ships that the deny list does not name", p.CompleteArgs)
 	}
 	slices.Sort(tools)
@@ -77,7 +77,7 @@ func TestClaudeCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 	}
 }
 
-// A SEAT KEEPS THE CLI'S OWN PROMPT AND A SIDE PASS REPLACES IT, each through a
+// A SEAT KEEPS THE HARNESS'S OWN PROMPT AND A SIDE PASS REPLACES IT, each through a
 // file, and only the seat's call carries the switch that keeps the working
 // directory and the environment out of the system prompt — the replacing
 // prompt ignores it, and a side pass has nothing of the vendor's to keep
@@ -120,7 +120,7 @@ func TestClaudeCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 				t.Fatalf("Complete: %v", err)
 			}
 			if comp.Content != "ok" {
-				t.Errorf("content = %q, want the result the CLI printed", comp.Content)
+				t.Errorf("content = %q, want the result the harness printed", comp.Content)
 			}
 			argv := completionArgv(t, rec)
 			path, ok := valueAfter(argv, tc.take)
@@ -131,7 +131,7 @@ func TestClaudeCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 				t.Errorf("%s carried %q, want the path of the file holding the text", tc.take, path)
 			}
 			if slices.Contains(argv, tc.skip) {
-				t.Errorf("argv = %q also carries %s — the CLI is handed the prompt twice", argv, tc.skip)
+				t.Errorf("argv = %q also carries %s — the harness is handed the prompt twice", argv, tc.skip)
 			}
 			if got := slices.Contains(argv, exclude); got != tc.exclude {
 				t.Errorf("argv = %q: %s present = %v, want %v", argv, exclude, got, tc.exclude)

@@ -53,7 +53,7 @@ import (
 // the work's merits, which is the reviewer's.
 //
 // THE RUN'S OWN WORK IS IN NO LOG, and the header says so for every seat
-// because every executor is a coding CLI's own run: its edits, commands,
+// because every executor is a harness's own run: its edits, commands,
 // tests and commits happen in its box, and the log holds only the calls it
 // made to the seat's tools over the bridge. A reviewer that read the log as
 // everything the agent did took a run that fixed a bug and pushed the branch
@@ -65,7 +65,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
 	"happened, and `→ error` calls did not take effect. `## What the agent " +
 	"produced` is the agent's own account of itself." +
-	"\n**The agent ran as a coding CLI with its own shell.** Its local work " +
+	"\n**The agent ran as a harness with its own shell.** Its local work " +
 	"— editing files, running commands and tests, committing — is not in " +
 	"`## What the agent did`, which lists only the calls it made to your " +
 	"tools. Judge that work on its report and on any branches or pull " +

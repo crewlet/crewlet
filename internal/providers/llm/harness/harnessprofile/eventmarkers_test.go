@@ -24,8 +24,8 @@ func eventScope(extra map[string]any) map[string]any {
 }
 
 // THE EVENTS SCOPE IS ONLY SAFE WHOLE. It compares a sentinel with the class in
-// the CLI's own failure event, and every part of that sentence is a field: a
-// stream to have events in, the discriminator that tells the CLI's failure
+// the harness's own failure event, and every part of that sentence is a field: a
+// stream to have events in, the discriminator that tells the harness's failure
 // event from one carrying the model's words, which events those are, and where
 // the class is in one. A profile missing any of them would match nothing — a
 // spent plan never recognised as one, so the entry never sits out, silently —

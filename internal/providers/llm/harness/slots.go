@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// A SLOT IS ONE LIVE CLI PROCESS, and max_concurrent is how many an entry may
-// have at once: the memory bound an operator sizes a host by (a coding CLI is a
+// A SLOT IS ONE LIVE HARNESS PROCESS, and max_concurrent is how many an entry may
+// have at once: the memory bound an operator sizes a host by (a harness is a
 // Node or Bun runtime of a few hundred megabytes). A run holds its slot for as
 // long as its process lives, through every tool call it makes.
 //
@@ -137,7 +137,7 @@ func (p *Provider) acquire(ctx context.Context) (*slot, error) {
 			// Queued behind other seats and the caller gave up. Reported as
 			// a timeout rather than fatal: nothing about the request was
 			// wrong, and the chain should be free to try another member.
-			return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+			return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a harness slot: %w", ctx.Err()))
 		}
 	}
 }

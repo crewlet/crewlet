@@ -23,7 +23,7 @@ import (
 // idea of what is granted or what gets recorded would drift from the first, and
 // it would drift on the security half.
 type Dispatcher interface {
-	// Offered is what the CLI is offered now, in order.
+	// Offered is what the harness is offered now, in order.
 	Offered() []Tool
 
 	// Revision changes whenever Offered would answer differently, so a server
@@ -31,13 +31,13 @@ type Dispatcher interface {
 	// it deep-clones every active tool's schema.
 	Revision() uint64
 
-	// Call decides and runs one call and answers what the CLI is handed back.
+	// Call decides and runs one call and answers what the harness is handed back.
 	// It never fails as a Go error: a call that could not run is a failed
 	// result the model reads, and a session that can no longer serve is the
-	// dispatcher's state, which it ends the CLI run over itself.
+	// dispatcher's state, which it ends the harness run over itself.
 	//
 	// NO CONTEXT, deliberately. The only one a session could hand over is
-	// the MCP request's, and a call must never run under it: a CLI that
+	// the MCP request's, and a call must never run under it: a harness that
 	// gives up on a call, or dies, cancels its request, and a tool half-way
 	// through a write would stop there. So a call runs under the context of
 	// the run the dispatcher serves, which it holds, and the request's is not
@@ -48,17 +48,17 @@ type Dispatcher interface {
 // Tool is one offered tool: what a model is given, and the behavioural hints
 // an MCP client is given beside it.
 //
-// The hints are for the CLI, not the model. A CLI decides from them whether a
+// The hints are for the harness, not the model. A harness decides from them whether a
 // call may run beside another (measured: Claude Code and Qwen Code run two
 // calls at once only when both are read-only) and whether to ask a person first
 // (Codex runs a read-only tool its approval policy would otherwise refuse) — so
-// a tool advertised with none is one the CLI treats as an unknown write.
+// a tool advertised with none is one the harness treats as an unknown write.
 type Tool struct {
 	Def         llm.ToolDef
 	Annotations crewletmcp.Annotations
 }
 
-// Call is one call as the CLI made it.
+// Call is one call as the harness made it.
 type Call struct {
 	Name      string
 	Arguments map[string]any
@@ -68,13 +68,13 @@ type Call struct {
 	// an empty object, which is a call the model never made.
 	ArgumentsError string
 
-	// Meta is the request's `_meta`, verbatim. Some CLIs put their own id for
+	// Meta is the request's `_meta`, verbatim. Some harnesses put their own id for
 	// the call there (Claude Code's `claudecode/toolUseId`), which is how a call
 	// is joined to the model request that asked for it.
 	Meta map[string]any
 }
 
-// Result is what the CLI is handed back for one call.
+// Result is what the harness is handed back for one call.
 type Result struct {
 	Output string
 	Failed bool
@@ -93,13 +93,13 @@ type Server struct {
 	synced     uint64
 	advertised map[string]struct{}
 
-	// listed is closed the first time a client asks for the tool list: a CLI
+	// listed is closed the first time a client asks for the tool list: a harness
 	// run that never did never had the seat's tools, which is a different
 	// failure from a model that had them and called none.
 	//
 	// THE LIST, NOT THE HANDSHAKE'S LAST STEP. A client on a newer protocol
 	// revision may never send `notifications/initialized` (the SDK's own
-	// client did not, measured on v1.8.0), and every CLI lists the tools
+	// client did not, measured on v1.8.0), and every harness lists the tools
 	// before it can offer one to its model.
 	listed   chan struct{}
 	listOnce sync.Once
@@ -113,15 +113,15 @@ type Server struct {
 }
 
 // relistWait bounds how long a call that changed the tool list holds its
-// answer for the client's re-list: a CLI that re-reads its list when told it
+// answer for the client's re-list: a harness that re-reads its list when told it
 // changed does so within a fraction of a second of the notice (OpenCode's
 // served loop, the slowest measured, about 270 ms after it), and two seconds
 // is far past that while still short against the model request the answer
-// lets the CLI make. A client that has not listed by then is answered anyway.
+// lets the harness make. A client that has not listed by then is answered anyway.
 const relistWait = 2 * time.Second
 
-// NewServer builds the server for one dispatcher, named as the CLI will list
-// it. title is shown in the handshake, for a CLI's own logs.
+// NewServer builds the server for one dispatcher, named as the harness will list
+// it. title is shown in the handshake, for a harness's own logs.
 func NewServer(name, title string, d Dispatcher) *Server {
 	s := &Server{d: d, listed: make(chan struct{}), relisted: make(chan struct{})}
 	s.srv = mcp.NewServer(&mcp.Implementation{Name: name, Title: title, Version: "1"}, nil)
@@ -155,9 +155,9 @@ func (s *Server) Listed() <-chan struct{} { return s.listed }
 // HoldAnswersForRelist is for a client that re-reads the tool list when told
 // it changed: the answer to a call that changed the list waits until the
 // client has listed again, up to [relistWait], so the request the answer lets
-// the CLI make already offers its model the new tools. Answered at once
-// instead, the CLI asked its model again before its re-list landed — Gemini
-// CLI, Copilot and OpenCode were measured offering an activated tool one
+// the harness make already offers its model the new tools. Answered at once
+// instead, the harness asked its model again before its re-list landed — Gemini
+// harness, Copilot and OpenCode were measured offering an activated tool one
 // request late, a request spent on a model that could not yet call it.
 func (s *Server) HoldAnswersForRelist() {
 	s.mu.Lock()
@@ -167,9 +167,9 @@ func (s *Server) HoldAnswersForRelist() {
 
 // Sync brings the advertised list up to what the dispatcher offers.
 //
-// AFTER EVERY CALL, because a call is what moves it: a CLI activates a tool by
+// AFTER EVERY CALL, because a call is what moves it: a harness activates a tool by
 // calling `activate_tool` through this same server. The SDK tells a connected
-// client the list changed, which the CLIs that re-list mid-run act on at once;
+// client the list changed, which the harnesses that re-list mid-run act on at once;
 // for the ones that do not, the dispatcher ends the run and the next one starts
 // with the new list — see the tool loop.
 func (s *Server) Sync() {

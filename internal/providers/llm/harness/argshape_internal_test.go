@@ -13,19 +13,19 @@ import (
 
 // THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so —
 // on both of its system-prompt channels, with the transcript in a file, and
-// with every tool name it passes known to the CLI.
+// with every tool name it passes known to the harness.
 //
 // `-p` takes the prompt as its VALUE. With it in complete_args, the model flag
 // that followed became the prompt and the real prompt became a stray
 // positional, so every call exited on "a value is required for
 // '--single <PROMPT>'". Nothing in this repository could catch that: the fake
-// CLI accepts any argv, and a unit test over the slice only re-states the
+// harness accepts any argv, and a unit test over the slice only re-states the
 // profile back to itself. The tool lists fail the same silent way: a name
-// --tools does not know makes the CLI drop the whole allowlist with a warning,
+// --tools does not know makes the harness drop the whole allowlist with a warning,
 // and only the real binary knows its names.
 //
 // Skipped unless a `grok` is on PATH, and it asserts on ARGUMENT PARSING
-// alone — the CLI stops for want of a credential, which is exactly far enough
+// alone — the harness stops for want of a credential, which is exactly far enough
 // to prove the flags were understood.
 func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	t.Parallel()
@@ -43,7 +43,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	//
 	// ON THE SHAPE OF THE VERSION, never on its MAJOR. This read
 	// `HasPrefix(out, "grok 1.")`, which is a silent time bomb: the day xAI
-	// ships 2.0 the right CLI is on PATH, this case goes quiet, and the skip
+	// ships 2.0 the right harness is on PATH, this case goes quiet, and the skip
 	// message says the opposite of what happened — the one shape "a skip is
 	// not a pass" exists to catch. The impostor is distinguished by its
 	// OUTPUT FORM, which is what was actually meant.
@@ -60,7 +60,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	out, err := probe.Output()
 	version := strings.TrimSpace(string(out))
 	// THE BUILD ID IS THE PROVENANCE, not the major number and not a bare
-	// semver. `grok 1.` was a time bomb — the day xAI ships 2.0 the right CLI
+	// semver. `grok 1.` was a time bomb — the day xAI ships 2.0 the right harness
 	// is on PATH and this goes quiet. But a bare `^grok \d+\.\d+\.\d+`
 	// is worse in the other direction: the npm impostor is grok@0.0.4, which
 	// that shape ADMITS while the old major check excluded it. xAI's own
@@ -81,7 +81,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 			t.Parallel()
 			// ONE directory for both the home and the working directory,
 			// and the working directory matters as much as the
-			// environment: a vendor CLI reads AGENTS.md / CLAUDE.md from
+			// environment: a vendor harness reads AGENTS.md / CLAUDE.md from
 			// its cwd, and this repository has both. Left in the checkout,
 			// the probe answers with whatever the tree happens to contain
 			// rather than about the shipped profile.
@@ -111,7 +111,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 			cmd.Env = vendorHarnessEnv(p, dir, nil)
 			combined, _ := cmd.CombinedOutput()
 			if strings.Contains(string(combined), "names no tool") {
-				t.Fatalf("the CLI does not know a tool name the profile passes — an unknown "+
+				t.Fatalf("the harness does not know a tool name the profile passes — an unknown "+
 					"--tools entry drops the whole allowlist:\nargs: %v\n%s", args, combined)
 			}
 			assertArgvReachedAuth(t, args, string(combined))
@@ -119,7 +119,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	}
 }
 
-// vendorHarnessEnv is the environment a real-CLI case runs a vendor binary in.
+// vendorHarnessEnv is the environment a real-harness case runs a vendor binary in.
 //
 // IT IS buildEnv — production's own, with a Checkout rooted at the case's
 // temporary directory and a ZERO Auth. Not an approximation of it, and that is
@@ -128,7 +128,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 // drift from the real one is the real one.
 //
 // This started as `append(os.Environ(), "HOME="+t.TempDir())`, which was wrong
-// twice — it resembled nothing the engine hands a CLI, and a fresh HOME
+// twice — it resembled nothing the engine hands a harness, and a fresh HOME
 // isolates a credential FILE while doing nothing about an exported one, so on
 // any machine with a vendor key in the environment the case signed in and
 // `say hello` became a real, billed completion. Re-composing the host
@@ -147,7 +147,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 // assertArgvReachedAuth reads as proof, and it is why these cases can be run on
 // a machine that is signed in to the vendor.
 //
-// Callers also set cmd.Dir to that same fresh directory. A vendor CLI reads
+// Callers also set cmd.Dir to that same fresh directory. A vendor harness reads
 // AGENTS.md / CLAUDE.md from its working directory, and this repository has
 // both — so a probe left in the checkout is answering with whatever the tree
 // happens to contain rather than about the shipped profile.
@@ -162,13 +162,13 @@ func vendorHarnessEnv(p harnessprofile.Profile, home string, extra map[string]st
 	return buildEnv(p, c, extra, Auth{})
 }
 
-// assertArgvReachedAuth fails unless a vendor CLI got past argument parsing.
+// assertArgvReachedAuth fails unless a vendor harness got past argument parsing.
 //
-// REACHING AUTHENTICATION IS THE PROOF, and it is checked FIRST. A CLI that
+// REACHING AUTHENTICATION IS THE PROOF, and it is checked FIRST. A harness that
 // asks for a credential has already parsed every flag before it, so nothing
 // else needs deciding — and testing it this way round is what makes the case
-// able to fail at all. Both real-CLI cases were written as a list of argument
-// error strings that must be ABSENT, which is a test that passes when the CLI
+// able to fail at all. Both real-harness cases were written as a list of argument
+// error strings that must be ABSENT, which is a test that passes when the harness
 // prints nothing, when it prints something new, and when the vendor reworded
 // its parser: the muse case's five sentinels are clap's vocabulary, and muse's
 // own `exec` parser is not clap.
@@ -207,7 +207,7 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 			return
 		}
 	}
-	t.Fatalf("the CLI neither asked for a credential nor refused the argv, so "+
+	t.Fatalf("the harness neither asked for a credential nor refused the argv, so "+
 		"this proves nothing about the profile. Either it now runs without "+
 		"one — in which case this case is spending a plan and must stop — or "+
 		"it stopped somewhere new and the profile needs re-reading against "+
@@ -215,10 +215,10 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 }
 
 // EVERY BUILT-IN PROFILE'S ENVIRONMENT REACHES THE CHILD, over the whole
-// table rather than over the profiles that happen to have a real-CLI case.
+// table rather than over the profiles that happen to have a real-harness case.
 //
 // This is the guard the hand-written helper did not have, and its absence is
-// why the drift lasted. The real-CLI cases SKIP wherever the vendor binary is
+// why the drift lasted. The real-harness cases SKIP wherever the vendor binary is
 // not installed, which is every CI runner and nearly every workstation — so
 // the code path that composes their environment was compiled and never run,
 // and a profile gaining a variable nobody copied across produced no failure
@@ -251,7 +251,7 @@ func TestVendorHarnessEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 			}
 
 			// The fixed environment: an auto-update switch, an offline flag,
-			// a retry cap. Each one stops the CLI doing something a test must
+			// a retry cap. Each one stops the harness doing something a test must
 			// not provoke, so a missing one is a test that makes a call the
 			// engine never makes.
 			for k, want := range p.Env {
@@ -268,7 +268,7 @@ func TestVendorHarnessEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 			for k, rel := range p.ConfigEnv {
 				if want := filepath.Join(home, rel); got[k] != want {
 					t.Errorf("%s = %q, want %q — the relocation must point inside the "+
-						"case's own home, or the CLI writes to the real one", k, got[k], want)
+						"case's own home, or the harness writes to the real one", k, got[k], want)
 				}
 			}
 
@@ -277,7 +277,7 @@ func TestVendorHarnessEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 			// cases run on a machine already logged in to the vendor.
 			if p.APIKeyEnv != "" {
 				if _, present := got[p.APIKeyEnv]; present {
-					t.Errorf("%s reached the child; a real-CLI case must reach authentication "+
+					t.Errorf("%s reached the child; a real-harness case must reach authentication "+
 						"and stop, never spend a plan", p.APIKeyEnv)
 				}
 			}

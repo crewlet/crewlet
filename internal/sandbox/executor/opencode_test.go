@@ -70,7 +70,7 @@ func TestUnparseableCodingOutputIsCarriedWholeAsTheFailure(t *testing.T) {
 	t.Parallel()
 	out := strings.Repeat("banner\n", sandbox.MaxRunTextBytes) + "Error: token expired"
 	res := ClaudeCode{}.Parse(out)
-	if !strings.HasPrefix(res.Error, "the coding agent's output could not be parsed") {
+	if !strings.HasPrefix(res.Error, "the harness's output could not be parsed") {
 		t.Errorf("unparseable output did not report itself as unparseable: %.80q", res.Error)
 	}
 	if !strings.HasSuffix(res.Error, "\n"+out) {

@@ -17,7 +17,7 @@ import (
 )
 
 // fakeDeviceLogin plays Codex's `login --device-auth` as measured on the
-// installed CLI: the steps in ANSI colour, the address, the code's lifetime on
+// installed harness: the steps in ANSI colour, the address, the code's lifetime on
 // the line before the code, then a wait for the person's approval, after which
 // it writes its login file and exits 0. It writes its pid to FAKE_DEVICE_PID
 // first, where that names a file.
@@ -77,7 +77,7 @@ func fakeDeviceLogin() {
 	fmt.Fprintln(w, "Successfully logged in")
 }
 
-// deviceProvider is a provider whose CLI keeps its login in one file and signs
+// deviceProvider is a provider whose harness keeps its login in one file and signs
 // in by [fakeDeviceLogin], read with the SHIPPED codex profile's
 // device_code_patterns, so the patterns are held to the output they were
 // measured on.
@@ -137,7 +137,7 @@ func (c *codes) all() []DeviceCode {
 // A DEVICE SIGN-IN RELAYS THE ADDRESS AND THE CODE, ONCE, AND AN APPROVAL
 // SIGNS THE ENTRY IN. The code is read off Codex's own output, colour and all,
 // on whichever stream it is written; its lifetime off the line before it; and
-// once the person approves, the login the CLI wrote is the entry's, under a new
+// once the person approves, the login the harness wrote is the entry's, under a new
 // install record.
 //
 // Mutation: strip no ANSI (the code is read with its colour), read stdout alone
@@ -160,10 +160,10 @@ func TestADeviceSignInRelaysItsCodeOnceAndAnApprovalSignsIn(t *testing.T) {
 				t.Fatalf("relayed %d codes, want exactly one: %+v", len(got), got)
 			}
 			if got[0].URL != "https://auth.openai.com/codex/device" || got[0].Code != "NJR6-SRA6K" {
-				t.Errorf("relayed %+v, want the address and the code the CLI printed", got[0])
+				t.Errorf("relayed %+v, want the address and the code the harness printed", got[0])
 			}
 			if life := got[0].ExpiresAt.Sub(started); life < 14*time.Minute || life > 16*time.Minute {
-				t.Errorf("the code expires %s after the start, want the 15 minutes the CLI printed", life)
+				t.Errorf("the code expires %s after the start, want the 15 minutes the harness printed", life)
 			}
 			if creds := readCreds(t, p); creds != `{"token":"k-device"}` {
 				t.Errorf("the approved login is not the entry's: %q", creds)
@@ -176,7 +176,7 @@ func TestADeviceSignInRelaysItsCodeOnceAndAnApprovalSignsIn(t *testing.T) {
 }
 
 // A CODE THAT LAPSES STOPS THE SIGN-IN, its process group with it, and signs
-// nothing in: the deadline is the lifetime the CLI printed plus the grace.
+// nothing in: the deadline is the lifetime the harness printed plus the grace.
 //
 // Mutation: drop the deadline after the code is read, and this case waits
 // for the fake's own bound and is red.
@@ -206,11 +206,11 @@ func TestADeviceCodeThatLapsesStopsTheSignIn(t *testing.T) {
 	}
 }
 
-// A CANCELLED SIGN-IN KILLS ITS CLI and answers the cancellation, so a person
+// A CANCELLED SIGN-IN KILLS ITS HARNESS and answers the cancellation, so a person
 // who cancels from the dashboard leaves no process polling the vendor.
 //
-// Mutation: start the CLI on a context the cancellation does not reach, and
-// the call waits on the CLI for the fake's whole bound here.
+// Mutation: start the harness on a context the cancellation does not reach, and
+// the call waits on the harness for the fake's whole bound here.
 func TestACancelledDeviceSignInKillsItsHarness(t *testing.T) {
 	t.Parallel()
 	pidFile := filepath.Join(t.TempDir(), "pid")
@@ -224,7 +224,7 @@ func TestACancelledDeviceSignInKillsItsHarness(t *testing.T) {
 		t.Fatalf("DeviceLogin cancelled = %v, want context.Canceled", err)
 	}
 	if took := time.Since(started); took > termGrace+5*time.Second {
-		t.Errorf("the cancelled sign-in returned after %s, want once its CLI was stopped", took)
+		t.Errorf("the cancelled sign-in returned after %s, want once its harness was stopped", took)
 	}
 	assertGone(t, pidFile)
 	if creds := readCreds(t, p); creds != "" {
@@ -245,11 +245,11 @@ func assertGone(t *testing.T, pidFile string) {
 		t.Fatal(err)
 	}
 	if procgroup.Exists(pid) {
-		t.Errorf("the device sign-in's CLI (pid %d) outlived the sign-in", pid)
+		t.Errorf("the device sign-in's harness (pid %d) outlived the sign-in", pid)
 	}
 }
 
-// A CLI THAT PRINTS NO CODE IS A FAILURE THAT SAYS SO, and relays nothing:
+// A HARNESS THAT PRINTS NO CODE IS A FAILURE THAT SAYS SO, and relays nothing:
 // one that exits without one is reported with what it did print, and one that
 // prints nothing at all is stopped once the code's wait is out rather than held
 // for a code's whole lifetime.
@@ -265,10 +265,10 @@ func TestADeviceSignInThatPrintsNoCodeFails(t *testing.T) {
 		err := DeviceLogin(t.Context(), p, relayed.relay(nil))
 		if err == nil || !strings.Contains(err.Error(), "without printing a device code") ||
 			!strings.Contains(err.Error(), "503") {
-			t.Errorf("DeviceLogin = %v, want a failure naming the missing code and what the CLI said", err)
+			t.Errorf("DeviceLogin = %v, want a failure naming the missing code and what the harness said", err)
 		}
 		if got := relayed.all(); len(got) != 0 {
-			t.Errorf("relayed %+v from a CLI that printed no code", got)
+			t.Errorf("relayed %+v from a harness that printed no code", got)
 		}
 	})
 	t.Run("exits 0", func(t *testing.T) {
@@ -277,7 +277,7 @@ func TestADeviceSignInThatPrintsNoCodeFails(t *testing.T) {
 		p := deviceProvider(t, map[string]string{"FAKE_DEVICE_PRINT": "none", "FAKE_EXIT": "0",
 			"FAKE_DEVICE_WRITE": "1", "FAKE_LOGIN_KEY": "k-unshown"})
 		if err := DeviceLogin(t.Context(), p, func(DeviceCode) {}); err == nil {
-			t.Error("a CLI that exited 0 without a code was taken as approved")
+			t.Error("a harness that exited 0 without a code was taken as approved")
 		}
 	})
 	t.Run("hangs", func(t *testing.T) {
@@ -291,12 +291,12 @@ func TestADeviceSignInThatPrintsNoCodeFails(t *testing.T) {
 			t.Errorf("DeviceLogin = %v, want the code's wait reported", err)
 		}
 		if took := time.Since(started); took > 20*time.Second {
-			t.Errorf("a CLI that printed nothing held the sign-in for %s", took)
+			t.Errorf("a harness that printed nothing held the sign-in for %s", took)
 		}
 	})
 }
 
-// A DEVICE SIGN-IN IS REFUSED WHERE IT COULD SIGN NOTHING IN: a CLI with no
+// A DEVICE SIGN-IN IS REFUSED WHERE IT COULD SIGN NOTHING IN: a harness with no
 // device sign-in, and an entry whose calls read no login (api-key, env). The
 // refusal comes before any process starts.
 //
@@ -307,7 +307,7 @@ func TestADeviceSignInIsRefusedWhereNoLoginIsRead(t *testing.T) {
 		t.Parallel()
 		p := fileProvider(t, nil)
 		if err := DeviceLogin(t.Context(), p, func(DeviceCode) {}); !errors.Is(err, ErrNoLoginCommand) {
-			t.Errorf("DeviceLogin on a CLI with none = %v, want ErrNoLoginCommand", err)
+			t.Errorf("DeviceLogin on a harness with none = %v, want ErrNoLoginCommand", err)
 		}
 	})
 	for _, mode := range []AuthMode{AuthAPIKey, AuthEnv} {

@@ -125,8 +125,8 @@ func (r deepRig) started(t *testing.T) sandbox.RunRequest {
 	return sandbox.RunRequest{}
 }
 
-// A RUN IS THE DEEP ENTRY'S CLI'S OWN RUN, REACHING CREWLET ONLY THROUGH THE
-// TURN'S SURFACE: its job is the entry's CLI on the entry's model with the
+// A RUN IS THE DEEP ENTRY'S HARNESS'S OWN RUN, REACHING CREWLET ONLY THROUGH THE
+// TURN'S SURFACE: its job is the entry's harness on the entry's model with the
 // brief and standing instructions it was handed, the bridge its one MCP
 // server; a call over that bridge reaches the surface decided as NOBODY, so
 // the request's identity reaches none of it; the attachments are in its
@@ -327,7 +327,7 @@ func TestAnUnconfinableHostRefusesDeepWork(t *testing.T) {
 }
 
 // THE HOST'S CONFINEMENT DENIES EVERY PATH THE ENGINE KEEPS: its config files,
-// its store and estate, its stream store, its log, every CLI login, every
+// its store and estate, its stream store, its log, every harness login, every
 // seat's boxes and every deep-work box — under the company's box root now and
 // under one an earlier revision named — and the operator's home. Mutation:
 // leave the roots this process built cells under out of the deny list, and

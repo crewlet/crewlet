@@ -335,7 +335,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 //
 // The engine's current company here has no seats at all, standing in for the
 // epoch an apply swapped in after the admission. A resume hands the run's
-// result to the seat's reviewer, whose model is a CLI that is not installed,
+// result to the seat's reviewer, whose model is a harness that is not installed,
 // so the turn stops at the reviewer's first round: reaching that round at all
 // is the proof, since it needs a runner built for the seat, and a runner built
 // from the engine's current company is refused before it exists.

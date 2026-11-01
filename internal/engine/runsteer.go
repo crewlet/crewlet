@@ -69,7 +69,7 @@ import (
 //
 // A note is handed to a model only by the write that records it read: the
 // launch's own for a brief ([sandbox.PendingStore.BeginLaunch]), a take for the
-// run's CLI or the reviewer ([sandbox.PendingStore.TakeNotes]). So the record's
+// run's harness or the reviewer ([sandbox.PendingStore.TakeNotes]). So the record's
 // read notes are exactly the notes the turn has read, and a segment that
 // resumes the turn starts from them ([runSteers.carried]) — whichever node it
 // is on.
@@ -93,7 +93,7 @@ const SteerNoteDomain = "seat.steer.note"
 // SteerSeatDomain is the key domain a run record's seat anchor is sealed in.
 const SteerSeatDomain = "seat.steer.seat"
 
-// steerTakeStatuses are the statuses a run's own CLI takes notes in: from the
+// steerTakeStatuses are the statuses a run's own harness takes notes in: from the
 // launch that opens its job — the job may be working before its turn has
 // parked into the record — to the claim of its completion.
 var steerTakeStatuses = []string{sandbox.StatusLaunching, sandbox.StatusRunning}
@@ -113,7 +113,7 @@ const steerPublishBudget = 5 * time.Second
 
 // runSteers is this node's half of a turn's notes on its run's record: it seals
 // and opens them, files them for a person, takes them for a resumed segment and
-// for a run's own CLI, and records what became of them.
+// for a run's own harness, and records what became of them.
 type runSteers struct {
 	note *sealPair
 	seat *sealPair
@@ -436,7 +436,7 @@ func readingOf(read sandbox.NoteRead) steer.Reading {
 // while they did not tie with each other — and the sort could leave the read
 // notes out of the order they were read in. A record holds such a note
 // whenever one waits while a later one is read: a seal this node cannot open
-// yet, or a later note a CLI took first.
+// yet, or a later note a harness took first.
 func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 	if s == nil {
 		return nil
@@ -681,9 +681,9 @@ func (r *rowSource) Close() {
 	}
 }
 
-// --- a run's own CLI's notes: the run inbox --------------------------------
+// --- a run's own harness's notes: the run inbox --------------------------------
 
-// runInbox is an executor's notes as its bridge session serves them to its CLI
+// runInbox is an executor's notes as its bridge session serves them to its harness
 // between steps ([mcpbridge.SteerInbox]): built for the run's job from its
 // record alone, so the node that takes a run over builds the same one.
 type runInbox struct {
@@ -703,9 +703,9 @@ var _ mcpbridge.SteerInbox = (*runInbox)(nil)
 // inbox is the inbox of a run identified by ident, for the turn iteration round;
 // it serves nothing until it is bound to the run's job.
 //
-// ONE INBOX WHATEVER THE RUN'S CLI: Claude Code's hooks take notes through
+// ONE INBOX WHATEVER THE RUN'S HARNESS: Claude Code's hooks take notes through
 // [runInbox.Take] and OpenCode's plugin through [runInbox.Wait] and
-// [runInbox.Read], and each reaches only the half its own CLI calls, so the
+// [runInbox.Read], and each reaches only the half its own harness calls, so the
 // inbox has nothing to tell apart.
 func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
 	if s == nil {
@@ -744,7 +744,7 @@ func (i *runInbox) bound() (string, *noteWatch) {
 	return i.launch, i.watch
 }
 
-// liveFor reports whether a view of the record is one the job's CLI takes notes
+// liveFor reports whether a view of the record is one the job's harness takes notes
 // from: the job's own, working, its ending not decided.
 func liveFor(view sandbox.NotesView, launch string) bool {
 	return view.Found && !view.EndingDecided && view.LaunchID == launch &&
@@ -754,7 +754,7 @@ func liveFor(view sandbox.NotesView, launch string) bool {
 // Take answers one hook of the run's main agent — see [mcpbridge.SteerInbox].
 //
 // AFTER A BATCH, OFF THE VIEW: a step with nothing waiting is answered from the
-// inbox's view of the record, with no store read — the CLI waits on the answer
+// inbox's view of the record, with no store read — the harness waits on the answer
 // before its next request, at every batch. AT THE FINISH, OFF THE STORE: it is
 // the run's last boundary, and a note filed a moment before must not be missed
 // for a view one write behind.
@@ -859,7 +859,7 @@ func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes
 	}()
 }
 
-// markPulled records, once per job, that the job's CLI has asked for notes —
+// markPulled records, once per job, that the job's harness has asked for notes —
 // off the path that asked, under ctx stripped of its cancellation, so a hook
 // answered from the view never waits on the write.
 func (i *runInbox) markPulled(ctx context.Context, launch string) {

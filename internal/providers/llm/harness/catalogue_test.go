@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// NO REQUEST RENDERS A TOOL CATALOGUE (ADR-0049). A phase's tools reach its CLI
-// as the tools of one MCP server and nowhere else, so the prompt the CLI reads
+// NO REQUEST RENDERS A TOOL CATALOGUE (ADR-0049). A phase's tools reach its harness
+// as the tools of one MCP server and nowhere else, so the prompt the harness reads
 // names none of them, describes none and asks for no reply in which to call
-// one: the CLI calls them the way it calls any tool, and the engine never reads
+// one: the harness calls them the way it calls any tool, and the engine never reads
 // a call out of a model's prose. A catalogue rendered back into the transcript
 // would be a second tool channel the dispatcher's gates do not stand in front
 // of, and a contract the vendor's model was never trained to follow.
@@ -30,7 +30,7 @@ func TestNoRequestRendersAToolCatalogue(t *testing.T) {
 	prompt := string(raw)
 	for _, needle := range []string{"zz_catalogue_probe", "the zz_catalogue_probe tool", "tool_calls", `"arguments"`} {
 		if strings.Contains(prompt, needle) {
-			t.Errorf("the prompt the CLI read carries %q — a catalogue or a reply contract:\n%s", needle, prompt)
+			t.Errorf("the prompt the harness read carries %q — a catalogue or a reply contract:\n%s", needle, prompt)
 		}
 	}
 }

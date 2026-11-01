@@ -58,7 +58,7 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 
 	// AND THE SHIPPED DEFAULTS SPAN THE OUTAGE THEY EXIST FOR: a message's
 	// whole budget must outlast the minute an LLM entry sits out after its
-	// CLI reports a spent plan with no reset instant
+	// harness reports a spent plan with no reset instant
 	// (internal/providers/llm/harness, bench.go) several times over — the
 	// failure flat spacing consumed the budget on in 25 seconds.
 	var total time.Duration

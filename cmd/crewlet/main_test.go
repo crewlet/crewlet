@@ -2288,7 +2288,7 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 	return bridge
 }
 
-// AN ENTRY'S CLI PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE EPOCH
+// AN ENTRY'S HARNESS PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE EPOCH
 // BUILD — so the refusal is located at the field to change. Built-only, an
 // unloadable profile came back with an empty path and an `engine:` prefix, and
 // a key with no variable to go in validated clean.
@@ -2326,10 +2326,10 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	}
 }
 
-// THE RELAY IS DISPATCHED UNDER THE NAME A CLI IS HANDED. The argv the engine
-// writes into a CLI's MCP configuration is built from [mcprelay.Command], and the
+// THE RELAY IS DISPATCHED UNDER THE NAME A HARNESS IS HANDED. The argv the engine
+// writes into a harness's MCP configuration is built from [mcprelay.Command], and the
 // switch names its cases as literals (which is how this suite reads the
-// binary's command list) — so a rename on one side would leave every CLI
+// binary's command list) — so a rename on one side would leave every harness
 // starting a command the binary answers `unknown command` to, and every seat
 // without its tools.
 //
@@ -2338,7 +2338,7 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 func TestTheRelayIsDispatchedUnderItsOwnName(t *testing.T) {
 	t.Parallel()
 	if !slices.Contains(dispatchedCommands(t), mcprelay.Command) {
-		t.Fatalf("runIn() dispatches no %q, the command every CLI is told to start",
+		t.Fatalf("runIn() dispatches no %q, the command every harness is told to start",
 			mcprelay.Command)
 	}
 

@@ -22,42 +22,42 @@ import (
 type DeviceCode struct {
 	URL  string
 	Code string
-	// ExpiresAt is when the code lapses, in UTC: the lifetime the CLI
+	// ExpiresAt is when the code lapses, in UTC: the lifetime the harness
 	// printed, else [deviceLoginTimingDefault]'s, counted from when the code
 	// was read.
 	ExpiresAt time.Time
 }
 
 // ErrDeviceCodeExpired is a device sign-in whose code lapsed before anybody
-// approved it, so the CLI was stopped and nothing was signed in.
+// approved it, so the harness was stopped and nothing was signed in.
 var ErrDeviceCodeExpired = errors.New("harness: the device sign-in's code expired before it was approved")
 
 // deviceTiming is how long a device sign-in waits for each of its steps.
 type deviceTiming struct {
-	// codeWait is how long the CLI has to print its address and code.
+	// codeWait is how long the harness has to print its address and code.
 	codeWait time.Duration
-	// lifetime is a code's lifetime when the CLI prints none.
+	// lifetime is a code's lifetime when the harness prints none.
 	lifetime time.Duration
-	// minute is the unit the CLI prints a lifetime in.
+	// minute is the unit the harness prints a lifetime in.
 	minute time.Duration
-	// grace is how long past the code's lifetime the CLI is left to finish:
-	// an approval made in the code's last second still has to reach the CLI
+	// grace is how long past the code's lifetime the harness is left to finish:
+	// an approval made in the code's last second still has to reach the harness
 	// on its next poll and be written.
 	grace time.Duration
 }
 
 // deviceLoginTimingDefault is every device sign-in's timing.
 //
-//   - codeWait, a minute: printing a code is the CLI starting and making ONE
+//   - codeWait, a minute: printing a code is the harness starting and making ONE
 //     request to the vendor's device-authorization endpoint, which answers in
 //     well under a second; a minute covers a slow proxy and a cold runtime,
-//     and a CLI that has printed nothing by then is not going to, which is
+//     and a harness that has printed nothing by then is not going to, which is
 //     better said than shown as "starting" for the code's whole lifetime.
 //   - lifetime, fifteen minutes: OpenAI's documented device-code lifetime,
-//     for a CLI that does not print one (Codex does, "expires in 15 minutes").
+//     for a harness that does not print one (Codex does, "expires in 15 minutes").
 //   - grace, thirty seconds: a device sign-in polls the vendor every few
 //     seconds (OAuth's device grant defaults the interval to five), so an
-//     approval made at the last moment reaches the CLI within a few polls,
+//     approval made at the last moment reaches the harness within a few polls,
 //     and thirty seconds is that several times over.
 var deviceLoginTimingDefault = deviceTiming{
 	codeWait: time.Minute,
@@ -70,38 +70,38 @@ var deviceLoginTimingDefault = deviceTiming{
 // kept for the message that says why it failed.
 const deviceTailLines = 5
 
-// DeviceLogin signs p's CLI in by its vendor's DEVICE-CODE flow: it runs the
+// DeviceLogin signs p's harness in by its vendor's DEVICE-CODE flow: it runs the
 // profile's device_login_args in the entry's login home, relays the address
-// and the one-time code the CLI prints to out, ONCE, and waits for the person
+// and the one-time code the harness prints to out, ONCE, and waits for the person
 // who opens the address to approve the code.
 //
 // NOTHING IS PASTED BACK THROUGH CREWLET. The person approves at the vendor,
-// the CLI learns of it by polling the vendor, and it writes its own login file;
-// the engine only reads what the CLI printed and carries the file it wrote into
+// the harness learns of it by polling the vendor, and it writes its own login file;
+// the engine only reads what the harness printed and carries the file it wrote into
 // the credential directory. That is the whole reason this flow, and no
 // browser or terminal relay, is how a sign-in starts from the dashboard.
 //
 // NO TERMINAL: stdout and stderr are ONE pipe the engine reads, in the order
-// the CLI wrote them, with ANSI colour stripped ([ansiEscape]) before the
+// the harness wrote them, with ANSI colour stripped ([ansiEscape]) before the
 // profile's device_code_patterns read the address, the code and the lifetime
-// out of each line. So the CLI runs in a process group of its own
+// out of each line. So the harness runs in a process group of its own
 // ([procgroup.Set]), unlike the interactive login, which needs the operator's
 // terminal as its foreground group, and a sign-in stopped by its caller, or by
-// its code lapsing, takes everything the CLI started with it.
+// its code lapsing, takes everything the harness started with it.
 //
-// THE DEADLINE is the code's lifetime as the CLI printed it, else fifteen
-// minutes, plus thirty seconds ([deviceLoginTimingDefault]); a CLI that prints
+// THE DEADLINE is the code's lifetime as the harness printed it, else fifteen
+// minutes, plus thirty seconds ([deviceLoginTimingDefault]); a harness that prints
 // no code within a minute is stopped as one that will not. A lapsed code
 // answers [ErrDeviceCodeExpired], and a cancelled ctx the context's error.
 //
-// APPROVED is the CLI exiting 0 having printed a code, with a login where the
+// APPROVED is the harness exiting 0 having printed a code, with a login where the
 // entry reads one: the login it wrote is carried into the credential directory
 // under the shared login's lock, as every login command's is, with a new
-// install record ([LoginInstall]). A CLI that exited 0 and left no login is
+// install record ([LoginInstall]). A harness that exited 0 and left no login is
 // refused as a login that left nothing ([Provider.BrokerLogin] does the same).
 //
 // REFUSED UP FRONT for a profile with no device sign-in ([ErrNoLoginCommand]),
-// and for an entry whose calls sign the CLI in without a login (api-key, env,
+// and for an entry whose calls sign the harness in without a login (api-key, env,
 // or inherit-env with the key in the engine's environment): a login written
 // for such an entry would be read by none of its calls.
 func DeviceLogin(ctx context.Context, p *Provider, out func(DeviceCode)) error {
@@ -112,7 +112,7 @@ func DeviceLogin(ctx context.Context, p *Provider, out func(DeviceCode)) error {
 // shortens to watch a code lapse.
 func deviceLogin(ctx context.Context, p *Provider, out func(DeviceCode), timing deviceTiming) error {
 	if !p.profile.HasDeviceLogin() {
-		return fmt.Errorf("%w: the %q CLI has no device sign-in, so it cannot be signed in "+
+		return fmt.Errorf("%w: the %q harness has no device sign-in, so it cannot be signed in "+
 			"without a terminal on the engine host: %s", ErrNoLoginCommand, p.harness, p.loginRemedy(nil))
 	}
 	if p.signsInWithKey() {
@@ -173,7 +173,7 @@ func (p *Provider) devicePatterns() (devicePatterns, error) {
 	return out, nil
 }
 
-// deviceReading is what a device sign-in has read of its CLI's output so far.
+// deviceReading is what a device sign-in has read of its harness's output so far.
 type deviceReading struct {
 	rx       devicePatterns
 	timing   deviceTiming
@@ -186,7 +186,7 @@ type deviceReading struct {
 	tail []string
 }
 
-// read takes one line the CLI printed, and answers the code to relay the
+// read takes one line the harness printed, and answers the code to relay the
 // first time both the address and the code have been read.
 func (d *deviceReading) read(line string) (DeviceCode, bool) {
 	// A redraw is a carriage return inside a line: each frame is read.
@@ -228,7 +228,7 @@ func (d *deviceReading) read(line string) (DeviceCode, bool) {
 	return DeviceCode{URL: d.url, Code: d.code, ExpiresAt: time.Now().Add(life).UTC()}, true
 }
 
-// said is the last lines the CLI printed, scrubbed, for a failure's message.
+// said is the last lines the harness printed, scrubbed, for a failure's message.
 func (d *deviceReading) said() string {
 	if len(d.tail) == 0 {
 		return "it printed nothing"
@@ -236,7 +236,7 @@ func (d *deviceReading) said() string {
 	return "it printed: " + redact.Secrets(strings.Join(d.tail, " / "))
 }
 
-// runDeviceLogin runs the device sign-in's CLI in home and reads what it
+// runDeviceLogin runs the device sign-in's harness in home and reads what it
 // prints until it exits: see [DeviceLogin].
 func (p *Provider) runDeviceLogin(
 	ctx context.Context, home string, env []string, rx devicePatterns, timing deviceTiming, out func(DeviceCode),
@@ -251,7 +251,7 @@ func (p *Provider) runDeviceLogin(
 	cmd := exec.CommandContext(runCtx, p.profile.Binary, p.profile.DeviceLoginArgs...) //nolint:gosec // args come from a validated profile
 	cmd.Dir = home
 	cmd.Env = env
-	// ONE PIPE FOR BOTH STREAMS, the same file for each, so the CLI's
+	// ONE PIPE FOR BOTH STREAMS, the same file for each, so the harness's
 	// lines arrive in the order it wrote them whichever stream it chose for
 	// the code; no stdin, since nobody types into a device sign-in.
 	cmd.Stdout, cmd.Stderr = w, w
@@ -300,7 +300,7 @@ func (p *Provider) runDeviceLogin(
 			sent := reading.sent
 			read(line)
 			if !sent && reading.sent {
-				// The code is out: the CLI now has its lifetime, and the
+				// The code is out: the harness now has its lifetime, and the
 				// grace, to be approved.
 				life := reading.lifetime
 				if life == 0 {
@@ -322,7 +322,7 @@ func (p *Provider) runDeviceLogin(
 		}
 	}
 	if runCtx.Err() != nil {
-		// Stopped: Cancel signalled the group and WaitDelay killed the CLI
+		// Stopped: Cancel signalled the group and WaitDelay killed the harness
 		// if it would not go; whatever it started that survived goes now, so
 		// nothing holding the pipe outlives the sign-in.
 		if err := procgroup.Kill(pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
@@ -330,7 +330,7 @@ func (p *Provider) runDeviceLogin(
 				"reason", "device sign-in stopped", "error", err)
 		}
 	}
-	// What the CLI printed before it exited is still in the pipe: read to its
+	// What the harness printed before it exited is still in the pipe: read to its
 	// end, bounded by the grace in case something it left behind holds it.
 	drain := time.NewTimer(p.termGrace)
 	defer drain.Stop()

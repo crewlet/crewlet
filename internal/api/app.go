@@ -596,7 +596,7 @@ type Options struct {
 	// beside its probes, to its own host's boxes alone ([Probes]).
 	OtelReceiver *sandbox.OtelReceiver
 
-	// Bridge serves a running seat's tool surface to a coding agent over
+	// Bridge serves a running seat's tool surface to a harness over
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//

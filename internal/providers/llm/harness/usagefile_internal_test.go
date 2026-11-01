@@ -29,7 +29,7 @@ func usageProfile() map[string]any {
 	}
 }
 
-// A CLI CAN REPORT ITS TOKENS HONESTLY AND STILL NOT PUT THEM IN THE ANSWER.
+// A HARNESS CAN REPORT ITS TOKENS HONESTLY AND STILL NOT PUT THEM IN THE ANSWER.
 //
 // The counts a budget is charged against must come from the vendor wherever
 // the vendor has them. An entry point whose whole contract is "the final
@@ -70,7 +70,7 @@ func TestAUsageFileReportsRealTokensWhereStdoutCannot(t *testing.T) {
 // The vendor writes it "even when the run fails", so its absence says the run
 // did not get that far — and failing a completion the model answered, over a
 // count, would throw away work the operator paid for. The counts fall back to
-// the estimate, which is where a CLI reporting nothing already is.
+// the estimate, which is where a harness reporting nothing already is.
 func TestAMissingUsageFileFallsBackToTheEstimate(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{
@@ -124,7 +124,7 @@ func TestAUsageFileThatSaysNothingThisProfileReadsIsStillEstimated(t *testing.T)
 
 // A `text` profile normally cannot report real tokens — [extract] decodes no
 // document in that mode, so declared paths are walked by nothing — and the
-// usage FILE is the whole exception, because the CLI writes it to a path of
+// usage FILE is the whole exception, because the harness writes it to a path of
 // its own. `crewlet llm doctor` must say so, or the profile that went to the
 // trouble is the one reported as estimating.
 func TestTheDoctorCallsAUsageFileWhatItIs(t *testing.T) {
@@ -138,7 +138,7 @@ func TestTheDoctorCallsAUsageFileWhatItIs(t *testing.T) {
 			"report anyway", hermes.EffectiveOutput())
 	}
 	if !hermes.ReadsUsage() {
-		t.Error("the doctor reports estimated tokens for a profile whose CLI writes " +
+		t.Error("the doctor reports estimated tokens for a profile whose harness writes " +
 			"the real figures to --usage-file")
 	}
 	// And the rule it is an exception to still holds: a text profile with
@@ -219,11 +219,11 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 		t.Error("complete_args carries --yolo, but `-z` already auto-bypasses " +
 			"approvals — this only widens what a run may do")
 	}
-	// `-p` selects a PROFILE on this CLI, not a prompt. `-z` is the
+	// `-p` selects a PROFILE on this harness, not a prompt. `-z` is the
 	// one-shot entry point and takes the prompt as its value, so it has to
 	// be the last thing before it.
 	if got := strings.Join(p.PromptArgs, " "); got != "-z" {
-		t.Errorf("prompt_args = %v, want [-z]: `-p` on this CLI names a profile", p.PromptArgs)
+		t.Errorf("prompt_args = %v, want [-z]: `-p` on this harness names a profile", p.PromptArgs)
 	}
 	if strings.Contains(joined, "-p ") || slices.Contains(p.CompleteArgs, "-p") {
 		t.Error("complete_args carries -p, which selects a profile named after " +
@@ -237,7 +237,7 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 	// THE DENIAL IS ON ARGV. `--toolsets` is a TOP-LEVEL flag whose own help
 	// says "Applies to -z/--oneshot", and passing it REPLACES the enabled set
 	// for the invocation rather than merging with the config file's — the
-	// CLI's own oneshot module states the rule ("Toolsets = explicit
+	// harness's own oneshot module states the rule ("Toolsets = explicit
 	// --toolsets, else the user's `cli` toolsets"). `web` resolves to
 	// web_search and web_extract and nothing else: no file, no terminal, no
 	// code execution, no delegation.
@@ -258,7 +258,7 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 	// output count on every vendor that reports both.
 	if len(p.UsageFileArgs) == 0 {
 		t.Fatal("hermes declares no usage_file_args, so every turn's spend is an " +
-			"estimate although the CLI writes the real figures")
+			"estimate although the harness writes the real figures")
 	}
 	for field, want := range map[string]string{
 		harnessprofile.PathList(p.Usage.Input):      "input_tokens",
@@ -349,7 +349,7 @@ func assertHermesSeedKeepsACallToItself(t *testing.T, p harnessprofile.Profile) 
 // --model X`) while this backend puts every flag BEFORE it, because `-z`
 // takes the prompt as its value and nothing may come between them. Whether
 // that order parses is a fact about the vendor's parser, not about this
-// profile, and only the installed CLI can answer it.
+// profile, and only the installed harness can answer it.
 //
 // Skipped unless a `hermes` is on PATH.
 func TestTheHermesProfileArgvParsesAgainstTheRealHarness(t *testing.T) {

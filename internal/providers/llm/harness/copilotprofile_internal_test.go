@@ -15,7 +15,7 @@ import (
 
 // The invariants the built-in copilot profile keeps, each measured against
 // GitHub Copilot CLI 1.0.103 (see the profile's comments): a call offers the
-// web tools and nothing else, the transcript reaches the CLI on stdin, every
+// web tools and nothing else, the transcript reaches the harness on stdin, every
 // call's system prompt is an AGENTS.md in its own directory under the
 // vendor's prompt, the usage report is charged once, and nothing a call
 // leaves in the seat's home outlives the calls that share it.
@@ -88,7 +88,7 @@ func TestCopilotOffersTheWebToolsAndNothingElse(t *testing.T) {
 	}
 }
 
-// copilotProvider is the shipped profile driven against the fake CLI.
+// copilotProvider is the shipped profile driven against the fake harness.
 func copilotProvider(t *testing.T, env map[string]string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -107,7 +107,7 @@ func copilotProvider(t *testing.T, env map[string]string) *Provider {
 }
 
 // EVERY CALL'S SYSTEM PROMPT IS AN AGENTS.md IN ITS OWN DIRECTORY, under the
-// CLI's own prompt — a seat's and a side pass's alike, since the CLI has no way
+// harness's own prompt — a seat's and a side pass's alike, since the harness has no way
 // to replace its prompt — opened by the note that says which of the two is the
 // role, private, and absent from argv. Asked from inside the child, because the
 // per-call directory is removed on release.
@@ -147,7 +147,7 @@ func TestCopilotReadsEveryCallsSystemPromptFromItsAgentsMd(t *testing.T) {
 	}
 }
 
-// THE TRANSCRIPT REACHES THE CLI ON STDIN, which prompt mode reads to its end
+// THE TRANSCRIPT REACHES THE HARNESS ON STDIN, which prompt mode reads to its end
 // when no -p is given: off argv, where ARG_MAX bounds it and every account on
 // the machine can read it. The system prompt is not in it — it is the AGENTS.md
 // above, and sending it twice would hand the model its role as a user message
@@ -180,11 +180,11 @@ func TestCopilotTakesTheTranscriptOnStdin(t *testing.T) {
 	}
 }
 
-// THE USAGE REPORT IS CHARGED ONCE, ITS CACHED READS REPORTED. The CLI's input
+// THE USAGE REPORT IS CHARGED ONCE, ITS CACHED READS REPORTED. The harness's input
 // count already holds the cached tokens (measured: 1,000 prompt tokens of which
 // 600 cached were recorded as inputTokens 1000 and cacheReadTokens 600), so the
 // 600 are reported as cache reads and not added to the input a second time.
-// The report is the CLI's own --usage-output-file, verbatim in the shape
+// The report is the harness's own --usage-output-file, verbatim in the shape
 // 1.0.103 wrote it.
 func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 	t.Parallel()
@@ -254,7 +254,7 @@ func TestCopilotPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
-// NO CALL UPDATES THE CLI: a standalone install downloads a newer CLI into
+// NO CALL UPDATES THE HARNESS: a standalone install downloads a newer harness into
 // each seat's own cache and runs that instead of the one installed, unless
 // told not to — on every command the profile runs, a login included.
 func TestCopilotCallsDoNotUpdateTheHarness(t *testing.T) {
@@ -265,7 +265,7 @@ func TestCopilotCallsDoNotUpdateTheHarness(t *testing.T) {
 	}
 }
 
-// A CLI THAT CANNOT USE ITS LOGIN NAMES THE LOGIN AS WHAT FAILED, in its own
+// A HARNESS THAT CANNOT USE ITS LOGIN NAMES THE LOGIN AS WHAT FAILED, in its own
 // words — what 1.0.103 printed signed out, and the refusal its bundle carries
 // for a credential the service will not take — so the seat says its login is
 // what failed rather than reporting a server error.

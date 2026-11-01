@@ -14,7 +14,7 @@ import (
 
 // How a run's output is read back: as a STREAM, a line at a time.
 //
-// A coding agent's stdout is an event log that grows with every tool call, and
+// A harness's stdout is an event log that grows with every tool call, and
 // its stderr is whatever it and everything it ran printed. Both used to be
 // read WHOLE, and refused past [sandbox.MaxFileBytes] — so a long run was
 // refused for the size of its own log: the poll returned before its liveness
@@ -24,7 +24,7 @@ import (
 // nothing here needs the whole of one in memory, and nothing is refused for
 // its size.
 
-// Decoder reads one CLI's event stream a line at a time: ONE STREAM per
+// Decoder reads one harness's event stream a line at a time: ONE STREAM per
 // decoder ([Harness.Events]), read either WHOLE — every line, then [Decoder.Result]
 // — or as a LIVE READING across many reads of the growing stream, its entries
 // taken as they come ([Decoder.Entries], what [Runner.Follow] keeps one decoder
@@ -41,7 +41,7 @@ type Decoder interface {
 	// Line is one complete line of the stream, without its line break. The
 	// slice is reused once Line returns. A line that is not an event the
 	// decoder knows is skipped, never an error: a stream read mid-write ends
-	// in a partial object, and a CLI version this build has not met prints
+	// in a partial object, and a harness version this build has not met prints
 	// event types it does not know.
 	Line(line []byte)
 
@@ -51,7 +51,7 @@ type Decoder interface {
 	// bound, so a reader of what it built is not shown a gap as continuity.
 	Skipped(n int64, bound int)
 
-	// Result is what the stream said: for a CLI whose result is its stream,
+	// Result is what the stream said: for a harness whose result is its stream,
 	// the whole of it; for one whose result is read apart, its transcript.
 	Result() sandbox.Result
 
@@ -125,7 +125,7 @@ func eachLine(r io.Reader, dec Decoder, bound int) error {
 	}
 }
 
-// decodeAll runs a whole text through a decoder: what a CLI's Parse is for a
+// decodeAll runs a whole text through a decoder: what a harness's Parse is for a
 // stream already in hand.
 func decodeAll(dec Decoder, text string) sandbox.Result {
 	// A strings.Reader cannot fail, so neither can this.

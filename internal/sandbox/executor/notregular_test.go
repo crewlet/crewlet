@@ -14,7 +14,7 @@ import (
 )
 
 // A PIECE THAT IS NOT A REGULAR FILE DEGRADES ONLY ITSELF, as a piece past the
-// size cap does. What a path names is the box's own doing — a coding agent can
+// size cap does. What a path names is the box's own doing — a harness can
 // make a pipe where its report goes — so a collection that answered it with an
 // error was retried until the run was settled as lost: its spend uncharged and
 // its record unpublished, every attempt refused again. The piece is described
@@ -39,13 +39,13 @@ func TestAPieceThatIsNotARegularFileDegradesOnlyItself(t *testing.T) {
 		at   func(executor.Paths) string
 		what string
 	}{
-		{"report", executor.Paths.Findings, "the report the coding agent wrote"},
+		{"report", executor.Paths.Findings, "the report the harness wrote"},
 		{"error stream", executor.Paths.Err, "the error stream"},
 		{"exit status", executor.Paths.ExitCode, "its exit status"},
 		// The spend is in both of the next two, so each case finds it in
 		// the other: the stream's last line is what the result file holds.
 		{"event stream", executor.Paths.Stream, "the event stream"},
-		{"result", executor.Paths.Result, "the result its CLI printed"},
+		{"result", executor.Paths.Result, "the result its harness printed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

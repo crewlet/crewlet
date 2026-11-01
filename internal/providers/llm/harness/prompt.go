@@ -14,14 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// RenderPrompt flattens one request into the single text a CLI accepts.
+// RenderPrompt flattens one request into the single text a harness accepts.
 //
-// A coding CLI takes a prompt, not a conversation: there is no role channel,
+// A harness takes a prompt, not a conversation: there is no role channel,
 // no tool-call channel, and no way to hand back a provider's own structured
 // reasoning blocks. So the conversation becomes a LABELLED TRANSCRIPT — every
 // message under a heading naming its author.
 //
-// A call with tools gets a FENCED one ([renderTranscript]): its CLI calls the
+// A call with tools gets a FENCED one ([renderTranscript]): its harness calls the
 // tools itself, over MCP, and what it is handed is the conversation so far —
 // the phase's earlier runs, their calls and their results included.
 func RenderPrompt(req llm.Request) (string, error) {
@@ -42,7 +42,7 @@ func RenderPrompt(req llm.Request) (string, error) {
 	return strings.TrimSpace(b.String()) + "\n", nil
 }
 
-// SplitSystem lifts the system messages out of a request, for a call whose CLI
+// SplitSystem lifts the system messages out of a request, for a call whose harness
 // takes them on a channel of their own ([harnessprofile.Profile.RouteFor]).
 //
 // Returned as PLAIN TEXT with no `## system` heading: the heading exists to
@@ -52,7 +52,7 @@ func RenderPrompt(req llm.Request) (string, error) {
 //
 // The request comes back with those messages removed, so the caller renders
 // the rest exactly as before. An empty first result means there was nothing to
-// lift and the caller passes no flag at all — on a replacing channel a CLI
+// lift and the caller passes no flag at all — on a replacing channel a harness
 // handed an empty system prompt would replace its default with nothing.
 func SplitSystem(req llm.Request) (string, llm.Request) {
 	var system []string
@@ -70,12 +70,12 @@ func SplitSystem(req llm.Request) (string, llm.Request) {
 	return strings.Join(system, "\n\n"), req
 }
 
-// harnessNote opens the engine's system prompt on a call whose CLI keeps its
+// harnessNote opens the engine's system prompt on a call whose harness keeps its
 // own ([harnessprofile.Route.KeepsDefault]): the append channel, or no channel at
 // all.
 //
 // It exists because the vendor's prompt says what the model is, and says it
-// FIRST. Claude Code 2.1.310 prepends "You are Claude Code, Anthropic's official CLI
+// FIRST. Claude Code 2.1.310 prepends "You are Claude Code, Anthropic's official harness
 // for Claude" to every request that appends — no flag removes it — and its
 // default goes on to describe a user at a terminal, a software-engineering
 // task and its own file and shell tools. A seat whose prompt only implies its
@@ -86,7 +86,7 @@ func SplitSystem(req llm.Request) (string, llm.Request) {
 // CONSTANT, and owned here rather than by the seat's prompt builders, for two
 // reasons. It is the first thing in the engine's text, so it is part of the
 // prefix a vendor caches. And whether it is needed is a fact about this
-// PROVIDER — a seat's fallback chain can move a call from a CLI that keeps
+// PROVIDER — a seat's fallback chain can move a call from a harness that keeps
 // its own prompt to one that replaces it, and every auxiliary pass shares the
 // provider without ever touching a seat's prompt.
 const harnessNote = "You are running inside a command-line coding tool as one seat of a " +
@@ -102,7 +102,7 @@ const harnessToolsNote = " Act through Crewlet's tools, the `crewlet` MCP server
 	"never through the coding tool's own file, shell or task tools."
 
 // withHarnessNote opens the request's system prompt with [harnessNote], for a
-// call whose CLI keeps its own system prompt in force.
+// call whose harness keeps its own system prompt in force.
 //
 // Into the FIRST system message rather than as a message of its own, so a
 // transcript-borne system prompt is still one `## system` section. A request
@@ -196,7 +196,7 @@ func renderPriorCalls(calls []llm.ToolCall) string {
 // the model reads the transcript as written, not through a JSON decoder, and
 // an HTML-safe encoder hands back the call it made with `\u003c` and `\u0026`
 // in place of what it typed, five bytes each of a prompt charged by its size
-// where a CLI reports no usage.
+// where a harness reports no usage.
 func callArguments(call llm.ToolCall) string {
 	if call.ArgumentsError != "" {
 		return "arguments that could not be read (" + call.ArgumentsError + ")"
@@ -220,7 +220,7 @@ func callArguments(call llm.ToolCall) string {
 //
 // # Why fenced
 //
-// A run after a phase's first is a fresh CLI process handed the whole
+// A run after a phase's first is a fresh harness process handed the whole
 // conversation — its earlier runs' prose, the calls they made and every result
 // those calls returned — as text. A result is whatever the tool returned: a
 // web page, a message somebody wrote, a file. Under plain `## user` headings,
@@ -302,7 +302,7 @@ func transcriptNonce(messages []llm.Message) string {
 	}
 }
 
-// EstimateTokens is the fallback count for a CLI that reports no usage.
+// EstimateTokens is the fallback count for a harness that reports no usage.
 //
 // Four characters per token: the rule of thumb for English prose and code
 // alike, and within about 15% of a real tokeniser on the transcripts this
@@ -321,12 +321,12 @@ func EstimateTokens(text string) int {
 // and for the same reasons — see [harnessprofile.DefaultSystemPromptFile].
 //
 // A SEPARATE FILE rather than the same one under a general name: a phase that
-// has both writes both, and one path serving two arguments would hand the CLI
+// has both writes both, and one path serving two arguments would hand the harness
 // its system prompt as the user turn.
 const promptFileName = "crewlet-prompt.txt"
 
 // usageFileName is where a [harnessprofile.Profile.UsageFileArgs] report lands, beside the
-// other two and for the same reason: it is written by the CLI rather than by
+// other two and for the same reason: it is written by the harness rather than by
 // this package, so it is one more thing a call must not leave behind.
 const usageFileName = "crewlet-usage.json"
 
@@ -373,9 +373,9 @@ func writePromptFile(prompt, dir string) (string, error) {
 // share.
 //
 // A discovered file ([harnessprofile.SystemPromptFile.Found]) is written before the
-// argv is rendered, because nothing in the argv asks for it: the CLI finds it
+// argv is rendered, because nothing in the argv asks for it: the harness finds it
 // by where it is, and the argv only selects what it found — or is empty, for a
-// file the CLI reads on every run.
+// file the harness reads on every run.
 func systemArgs(ch harnessprofile.Channel, system, dir string) ([]string, error) {
 	var path string
 	if ch.File.Found() {
@@ -396,7 +396,7 @@ func systemArgs(ch harnessprofile.Channel, system, dir string) ([]string, error)
 			arg = strings.ReplaceAll(arg, "{file}", path)
 		}
 		// NEVER the spec's rendering: `{system}` here substitutes into
-		// ARGV, and a vendor envelope on argv is frontmatter the CLI
+		// ARGV, and a vendor envelope on argv is frontmatter the harness
 		// reads as part of the prompt. A channel that declares both is
 		// refused at load.
 		out = append(out, strings.ReplaceAll(arg, "{system}", system))
@@ -404,7 +404,7 @@ func systemArgs(ch harnessprofile.Channel, system, dir string) ([]string, error)
 	return out, nil
 }
 
-// systemEnv renders the NAME=path pair for a channel whose CLI reads its
+// systemEnv renders the NAME=path pair for a channel whose harness reads its
 // system prompt from a file named by an environment variable.
 //
 // The same private file [systemArgs] writes for `{file}`, because it is the

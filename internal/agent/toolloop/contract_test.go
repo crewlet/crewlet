@@ -20,8 +20,8 @@ import (
 
 // THE TOOL LOOP'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS — the
 // contract the bridge's runs as well (internal/api/mcpbridge). Each case is a
-// phase run by toolloop.Run, whose CLI run the suite plays: it reaches the
-// run's session over its unix socket, as the relay a CLI starts does.
+// phase run by toolloop.Run, whose harness run the suite plays: it reaches the
+// run's session over its unix socket, as the relay a harness starts does.
 func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -40,7 +40,7 @@ func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 		select {
 		case r = <-cli.served:
 		case <-ended:
-			t.Fatal("the phase ended before its CLI run was served")
+			t.Fatal("the phase ended before its harness run was served")
 		}
 		var once sync.Once
 		return &toolsessiontest.Served{
@@ -69,10 +69,10 @@ func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 	})
 }
 
-// suiteHarness is the CLI the suite plays. Its one run is served as a CLI whose
+// suiteHarness is the harness the suite plays. Its one run is served as a harness whose
 // record the host does not read — so every call is placed the moment it
 // arrives, never held for a record that will not come — and that re-lists its
-// tools when told they changed. It stays out until the suite ends it: a CLI the
+// tools when told they changed. It stays out until the suite ends it: a harness the
 // host decided to stop is one it has not stopped yet, and its calls still
 // arrive. A later run of the phase calls nothing.
 type suiteHarness struct {
@@ -98,7 +98,7 @@ func (c *suiteHarness) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 	if err != nil {
 		return nil, err
 	}
-	// RELEASED AS A BACKEND RELEASES A RUN: once its CLI is gone, which lets
+	// RELEASED AS A BACKEND RELEASES A RUN: once its harness is gone, which lets
 	// every answer the host withheld go, and retires the session.
 	defer served.Release()
 	c.served <- suiteRun{host: req.Tools, socket: served.Args[len(served.Args)-1]}

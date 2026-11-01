@@ -136,7 +136,7 @@ func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 				t.Fatalf("Complete: %v", err)
 			}
 			if comp.Content != "ok" {
-				t.Errorf("content = %q, want the text event the CLI printed", comp.Content)
+				t.Errorf("content = %q, want the text event the harness printed", comp.Content)
 			}
 			var run []string
 			for _, argv := range recordedArgv(t, rec) {

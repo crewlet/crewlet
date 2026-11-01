@@ -59,7 +59,7 @@ func TestASettingsFileIsALoginOnlyOnceItHoldsOne(t *testing.T) {
 	}
 }
 
-// A LOGIN COMMAND THAT LEFT ONLY THE CLI'S SETTINGS SIGNED NOBODY IN. The
+// A LOGIN COMMAND THAT LEFT ONLY THE HARNESS'S SETTINGS SIGNED NOBODY IN. The
 // carry-out answers whether a home holds a login, which is how `crewlet llm
 // login` tells a sign-in from a command that ended with none — and a Copilot
 // login whose token went to a keychain, or whose plaintext storage was
@@ -96,8 +96,8 @@ func TestACarryOutOfSettingsAloneHoldsNoLogin(t *testing.T) {
 // LOGOUT, nor in an import's way. The shared login is read and written as one
 // unit, settings file and all, so each of those reads the unit and has to set
 // such a file apart itself: a bundle that packed it would restore one host's
-// record of the CLI onto every volume, a logout that wrote the empty login
-// would take the CLI's settings with the sign-in, and an import that wrote
+// record of the harness onto every volume, a logout that wrote the empty login
+// would take the harness's settings with the sign-in, and an import that wrote
 // exactly the bundle would do the same.
 //
 // Mutation: export, log out or import over the whole of [Workspace.Login]

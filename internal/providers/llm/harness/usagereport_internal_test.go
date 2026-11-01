@@ -16,10 +16,10 @@ import (
 
 // A USAGE REPORT THAT ARRIVED AND COULD NOT BE READ IS SAID OUT LOUD.
 //
-// A report the CLI produced and this profile cannot read — one that does not
+// A report the harness produced and this profile cannot read — one that does not
 // decode, or in which the input and output counts no longer resolve, which is
 // what a release renaming `data.tokens` leaves — falls back to what stdout
-// reported, an estimate for a CLI that reports none there. It used to fall back
+// reported, an estimate for a harness that reports none there. It used to fall back
 // SILENTLY, so every call was charged a guess and there was no event to search
 // for. A command that succeeded and printed nothing is the same failure from
 // the other side: it reported nothing, and the empty report handed on looked
@@ -128,7 +128,7 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 	}
 }
 
-// A FAILED RUN'S REPORT IS NOT DRIFT. A call the CLI said failed is refused and
+// A FAILED RUN'S REPORT IS NOT DRIFT. A call the harness said failed is refused and
 // charged nothing, so a report holding no counts is no fallback to warn of —
 // and Hermes writes its counts as null for exactly the calls an operator reads
 // the log about, a refused key and a spent plan (measured on 0.21.5). The same
@@ -166,7 +166,7 @@ func TestAFailedRunsEmptyUsageReportIsNotCalledDrift(t *testing.T) {
 }
 
 // WHAT A REPORT WAS MADE OF IS THREE WAYS OF TAKING NOTHING, and only the two
-// that mean the CLI's report arrived count as unreadable: nothing obtained is
+// that mean the harness's report arrived count as unreadable: nothing obtained is
 // already reported where it was obtained, or is a profile that reads none.
 func TestApplyUsageReportSaysWhyItTookNothing(t *testing.T) {
 	t.Parallel()

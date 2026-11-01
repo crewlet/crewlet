@@ -20,11 +20,11 @@ const smokeTool = "crewlet_smoke"
 
 // smokeHost is the doctor's tool host: ONE tool, served on a real toolsession
 // server exactly as a seat's are — the relay, the socket, the MCP server — and
-// a record of what the CLI did with it.
+// a record of what the harness did with it.
 //
 // The doctor's own, rather than the tool loop's: the loop is a phase, with a
 // seat, a fence and a budget the doctor has none of, and what the smoke test
-// certifies is the route — that this CLI, configured by this profile, starts
+// certifies is the route — that this harness, configured by this profile, starts
 // the relay, lists the server's tools and calls one.
 type smokeHost struct {
 	sessions *toolsession.Host
@@ -104,7 +104,7 @@ func (h *smokeHost) Offered() []toolsession.Tool {
 				"required":   []any{"ok"},
 			},
 		},
-		// Read-only, as it is: a CLI that asks before a write would ask
+		// Read-only, as it is: a harness that asks before a write would ask
 		// nobody here and refuse the call.
 		Annotations: mcp.Annotations{ReadOnly: mcp.Yes},
 	}}
@@ -124,7 +124,7 @@ func (h *smokeHost) Call(call toolsession.Call) toolsession.Result {
 	return toolsession.Result{Output: "ok — the tool channel works. Now reply with only: done"}
 }
 
-// verdict reads what the CLI did into the smoke line: whether it called the
+// verdict reads what the harness did into the smoke line: whether it called the
 // tool, how its call was joined to its record, and what its model was offered.
 func (h *smokeHost) verdict(offered []string, comp *llm.Completion, observes bool) (string, bool) {
 	h.mu.Lock()
@@ -134,7 +134,7 @@ func (h *smokeHost) verdict(offered []string, comp *llm.Completion, observes boo
 		return "", false
 	}
 	// THE RECORD HAS TO SHOW THE CALL TOO, where the profile reads one: a
-	// profile whose requests rules no longer match what its CLI writes
+	// profile whose requests rules no longer match what its harness writes
 	// still reaches the tools, and nothing else would say that a phase's
 	// rounds and spend are not being read as the run goes. Asked on a real
 	// sign-in, this is the one check of a record no stand-in can produce
@@ -142,9 +142,9 @@ func (h *smokeHost) verdict(offered []string, comp *llm.Completion, observes boo
 	if observes && !slices.ContainsFunc(h.turns, func(t llm.Turn) bool {
 		return slices.ContainsFunc(t.Calls, func(c llm.TurnCall) bool { return c.Host && c.Name == smokeTool })
 	}) {
-		return fmt.Sprintf("failed — the CLI called %s through the crewlet server, but its record "+
+		return fmt.Sprintf("failed — the harness called %s through the crewlet server, but its record "+
 			"never showed the request that asked for it (%d requests read), so the profile's "+
-			"requests rules no longer match what the CLI writes: a phase's rounds and spend are "+
+			"requests rules no longer match what the harness writes: a phase's rounds and spend are "+
 			"not read as it runs — set overrides.requests", smokeTool, len(h.turns)), true
 	}
 	var parts []string
@@ -159,12 +159,12 @@ func (h *smokeHost) verdict(offered []string, comp *llm.Completion, observes boo
 	return "ok — " + strings.Join(parts, "; "), true
 }
 
-// joinLocked says how the CLI's call was joined to the request that asked for
+// joinLocked says how the harness's call was joined to the request that asked for
 // it: by the call id it sent with the call, matched against its record, or by
 // name and arguments.
 //
-// Read off what the CLI sent rather than off a list of keys: any `_meta` value
-// equal to a call id its record shows is the join, whatever the CLI calls it.
+// Read off what the harness sent rather than off a list of keys: any `_meta` value
+// equal to a call id its record shows is the join, whatever the harness calls it.
 func (h *smokeHost) joinLocked(observes bool) string {
 	if !observes {
 		return "its record shows no requests, so a run counts as one round"
@@ -192,11 +192,11 @@ func (h *smokeHost) joinLocked(observes bool) string {
 	return "its calls are joined to its record by the id it sends in _meta " + strings.Join(keys, ", ")
 }
 
-// offeredKey carries where a run with tools reports what its CLI offered its
+// offeredKey carries where a run with tools reports what its harness offered its
 // model, for the doctor.
 type offeredKey struct{}
 
-// withOffered asks a run with tools to report the tools its CLI's record says
+// withOffered asks a run with tools to report the tools its harness's record says
 // it offered its model.
 func withOffered(ctx context.Context, report func([]string)) context.Context {
 	return context.WithValue(ctx, offeredKey{}, report)

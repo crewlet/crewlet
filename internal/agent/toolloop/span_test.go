@@ -14,9 +14,9 @@ import (
 )
 
 // A RUN'S SPAN CARRIES WHAT THE RUN CAME TO: the model, the whole run's spend,
-// its calls and how it ended. It is the one place a trace backend shows a CLI
+// its calls and how it ended. It is the one place a trace backend shows a harness
 // run's latency beside its cost, and a run drives many requests — a span that
-// closed as the CLI exited, before the run's spend was summed, carried neither.
+// closed as the harness exited, before the run's spend was summed, carried neither.
 //
 // Not parallel: the tracer provider is process-wide, and this case installs a
 // recorder for its own run while every parallel case is still paused.

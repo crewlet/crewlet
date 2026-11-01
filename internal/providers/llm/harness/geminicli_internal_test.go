@@ -19,7 +19,7 @@ import (
 // Gemini CLI 0.58.0 and 0.65.0 (see the profile's comments): a call offers the
 // two web tools and nothing else, trusts its own directory and reads no
 // environment file above it, sends nothing to the vendor but the call, and
-// every call — a seat's phase or a side pass — replaces the CLI's prompt,
+// every call — a seat's phase or a side pass — replaces the harness's prompt,
 // which has no channel that keeps it.
 
 // geminiCLI is the shipped profile, which every case here reads.
@@ -45,7 +45,7 @@ func geminiSeed(t *testing.T, path string) harnessprofile.SeedFile {
 	return harnessprofile.SeedFile{}
 }
 
-// geminiProvider drives the shipped profile against the fake CLI.
+// geminiProvider drives the shipped profile against the fake harness.
 func geminiProvider(t *testing.T, env map[string]string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
@@ -131,7 +131,7 @@ func TestGeminiOffersTheWebToolsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	seed := geminiSeed(t, ".gemini/policies/crewlet.toml")
 	if seed.Scope() != harnessprofile.SeedHome {
-		t.Errorf("the policy is seeded in %q, want the seat's home, where the CLI reads "+
+		t.Errorf("the policy is seeded in %q, want the seat's home, where the harness reads "+
 			"its user policies", seed.Scope())
 	}
 	var deny, allow *policyRule
@@ -150,7 +150,7 @@ func TestGeminiOffersTheWebToolsAndNothingElse(t *testing.T) {
 		}
 	}
 	if deny == nil {
-		t.Fatalf("no rule denies every tool (toolName = \"*\"), so the CLI offers whatever "+
+		t.Fatalf("no rule denies every tool (toolName = \"*\"), so the harness offers whatever "+
 			"its build ships: %+v", rules)
 	}
 	if allow == nil {
@@ -195,7 +195,7 @@ func TestGeminiSettingsSendOnlyTheCall(t *testing.T) {
 
 // EVERY CALL TRUSTS ITS OWN DIRECTORY: untrusted, a headless run exits 55
 // before it sends anything, on both releases. The variable rather than a
-// setting, because the CLI reads it before any settings file.
+// setting, because the harness reads it before any settings file.
 func TestGeminiCallsTrustTheirOwnDirectory(t *testing.T) {
 	t.Parallel()
 	env := childEnv(geminiCLI(t), &Checkout{Home: t.TempDir(), Cache: t.TempDir(), Work: t.TempDir()},
@@ -206,7 +206,7 @@ func TestGeminiCallsTrustTheirOwnDirectory(t *testing.T) {
 }
 
 // A SUBSCRIPTION CALL SIGNS IN WITH THE LOGIN, AN API-KEY CALL WITH ITS KEY. The
-// CLI picks its sign-in from its environment — GOOGLE_GENAI_USE_GCA=true ahead
+// harness picks its sign-in from its environment — GOOGLE_GENAI_USE_GCA=true ahead
 // of GEMINI_API_KEY — and a copied login selects nothing: without the variable
 // every subscription call exited 41, and with it under api-key the key would
 // go unused. Set over the operator's env, as part of the mode; and NO_BROWSER
@@ -239,7 +239,7 @@ func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
 }
 
 // A KEY CALL BEHIND A GATEWAY STAYS ON ITS KEY, AND A LOGIN CALL ON ITS LOGIN.
-// Naming no sign-in in its settings, the CLI takes one from its environment,
+// Naming no sign-in in its settings, the harness takes one from its environment,
 // where GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API —
 // outranks GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41,
 // "Invalid auth method selected", before any request (measured through the
@@ -289,7 +289,7 @@ func TestGeminiKeyHomeNamesTheKeySignIn(t *testing.T) {
 	t.Cleanup(func() { _ = co.Release(t.Context()) })
 	if got, ok := selected(t, co.Home); got != "gemini-api-key" {
 		t.Errorf("the key home names sign-in %q (named: %v), want gemini-api-key: behind a gateway "+
-			"the CLI picks its gateway sign-in and exits 41", got, ok)
+			"the harness picks its gateway sign-in and exits 41", got, ok)
 	}
 
 	login := geminiProvider(t, nil)
@@ -303,12 +303,12 @@ func TestGeminiKeyHomeNamesTheKeySignIn(t *testing.T) {
 	}
 }
 
-// NO ENVIRONMENT FILE ABOVE THE CALL IS READ. The CLI loads the first
+// NO ENVIRONMENT FILE ABOVE THE CALL IS READ. The harness loads the first
 // `.gemini/.env` or `.env` it meets walking up from its working directory to
 // the root — past the engine's `.git` marker — and takes every key its
 // environment lacks: measured, an ancestor's file redirected a call to another
 // base URL and signed a keyless one in with its own key. Both names stand in
-// the call's directory when the CLI starts, so the walk ends there, and they
+// the call's directory when the harness starts, so the walk ends there, and they
 // assign nothing.
 func TestGeminiCallsReadNoEnvironmentFileAboveTheirDirectory(t *testing.T) {
 	t.Parallel()
@@ -332,18 +332,18 @@ func TestGeminiCallsReadNoEnvironmentFileAboveTheirDirectory(t *testing.T) {
 			}
 			parts := strings.SplitN(comp.Content, "|", 3)
 			if len(parts) != 3 {
-				t.Fatalf("the CLI found no %s in its working directory: %s", name, comp.Content)
+				t.Fatalf("the harness found no %s in its working directory: %s", name, comp.Content)
 			}
 			body, err := base64.StdEncoding.DecodeString(parts[2])
 			if err != nil || string(body) != seed.Content {
-				t.Errorf("the CLI read %q from %s, want the seed %q", body, name, seed.Content)
+				t.Errorf("the harness read %q from %s, want the seed %q", body, name, seed.Content)
 			}
 		})
 	}
 }
 
-// A SEAT AND A SIDE PASS BOTH REPLACE THE CLI'S PROMPT, through the file
-// GEMINI_SYSTEM_MD names, and neither carries the harness note: the CLI has no
+// A SEAT AND A SIDE PASS BOTH REPLACE THE HARNESS'S PROMPT, through the file
+// GEMINI_SYSTEM_MD names, and neither carries the harness note: the harness has no
 // channel that keeps its own prompt (none in either release measured), so a
 // seat takes the replacement, and the note is for a call whose vendor prompt
 // stays in force.
@@ -371,7 +371,7 @@ func TestGeminiSeatsAndSidePassesReplaceTheHarnessPrompt(t *testing.T) {
 			}
 			_, body, ok := strings.Cut(comp.Content, "|")
 			if !ok {
-				t.Fatalf("the CLI could not read GEMINI_SYSTEM_MD: %s", comp.Content)
+				t.Fatalf("the harness could not read GEMINI_SYSTEM_MD: %s", comp.Content)
 			}
 			if body != "You are Agent PM at Nimbus." {
 				t.Errorf("GEMINI_SYSTEM_MD held %q, want the engine's text alone", body)
@@ -399,7 +399,7 @@ const geminiAnswer = `{"session_id":"3e6bd605-11d3-49d9-b990-66e67eab4716",
 
 // EVERY MODEL A CALL USED IS CHARGED, AND EVERY TOKEN THE VENDOR BILLS. The
 // counts are keyed by model, so each is summed over the models; the cached
-// part of the prompt and the reasoning are read apart, as the CLI reports
+// part of the prompt and the reasoning are read apart, as the harness reports
 // them; and the page a web fetch put in front of the side model is input. The
 // whole call: 2,334 prompt tokens and 5,000 of the tool's, 86 answered and 7
 // reasoned.
@@ -442,12 +442,12 @@ func TestGeminiPrunesWhatEachCallLeaves(t *testing.T) {
 	}
 }
 
-// THE CLI'S OWN FAILURES ARE NAMED. Measured on both releases: a spent daily
+// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on both releases: a spent daily
 // quota is printed as a TerminalQuotaError, and a per-minute limit is retried
 // and then printed as a RetryableQuotaError, neither carrying the API's
 // RESOURCE_EXHAUSTED; a refused login is the API's UNAUTHENTICATED, and a
 // refused key the API's own sentence, both relayed whole. Each is the first
-// line of what the CLI wrote to stderr, beside a non-zero exit.
+// line of what the harness wrote to stderr, beside a non-zero exit.
 func TestGeminiRecognisesItsOwnQuotaAndSignInFailures(t *testing.T) {
 	t.Parallel()
 	p := geminiCLI(t)

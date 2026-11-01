@@ -25,8 +25,8 @@ import (
 )
 
 // A DEVICE SIGN-IN, the engine's half (M11 of the Models design): a person
-// signs a CLI in from the Models page without a terminal on the node. The node
-// that takes the request runs the CLI's own device-code login
+// signs a harness in from the Models page without a terminal on the node. The node
+// that takes the request runs the harness's own device-code login
 // ([harness.DeviceLogin]), relays its verification address and one-time code
 // through a coordination record ([coord.DeviceSignIn]), and waits for the
 // person to approve it in their browser. Nothing is pasted back through
@@ -41,7 +41,7 @@ import (
 //
 // # On approval the login reaches every node
 //
-// The CLI wrote its login into this node's credential directory. The node
+// The harness wrote its login into this node's credential directory. The node
 // exports it as the entry's credential bundle, seals it in the secret store
 // ([secrets.SourceModels]), and re-activates the revision so every node
 // rebuilds the entry and restores the bundle, the newest login winning over an
@@ -56,13 +56,13 @@ import (
 // node's sweep marks failed a session whose node is gone and removes a record
 // past its lifetime ([coord.DeviceSignIn.Lapsed]).
 
-// deviceCodeWait is how long a start waits for the CLI to print its address and
+// deviceCodeWait is how long a start waits for the harness to print its address and
 // code before it answers that the sign-in is unavailable: TWENTY SECONDS, past a
-// CLI's cold start and its first round trip to the vendor, and the bound the
+// harness's cold start and its first round trip to the vendor, and the bound the
 // API promises a person waiting on the dialog.
 const deviceCodeWait = 20 * time.Second
 
-// deviceCodeLifetime is how long a session is held for before the CLI has said
+// deviceCodeLifetime is how long a session is held for before the harness has said
 // how long its code lives: OpenAI's documented fifteen minutes for a device
 // code, plus the thirty-second grace harness's device login allows past it.
 const deviceCodeLifetime = 15*time.Minute + 30*time.Second
@@ -90,14 +90,14 @@ const deviceApproveBudget = setup.RecordDeadline
 var (
 	// ErrSignInInProgress is a start for an entry whose session is running.
 	ErrSignInInProgress = errors.New("engine: a device sign-in is already running for this model")
-	// ErrNoDeviceSignIn is an entry whose CLI has no device sign-in.
-	ErrNoDeviceSignIn = errors.New("engine: this model's CLI has no device sign-in")
+	// ErrNoDeviceSignIn is an entry whose harness has no device sign-in.
+	ErrNoDeviceSignIn = errors.New("engine: this model's harness has no device sign-in")
 	// ErrSignsInWithoutLogin is an entry whose auth mode reads no login, so
 	// a device sign-in would store one none of its calls reads.
-	ErrSignsInWithoutLogin = errors.New("engine: this model does not sign in with a CLI login")
-	// ErrDeviceSignInUnavailable is a CLI that did not print its code in time,
+	ErrSignsInWithoutLogin = errors.New("engine: this model does not sign in with a harness login")
+	// ErrDeviceSignInUnavailable is a harness that did not print its code in time,
 	// or exited before it did.
-	ErrDeviceSignInUnavailable = errors.New("engine: the CLI did not start a device sign-in")
+	ErrDeviceSignInUnavailable = errors.New("engine: the harness did not start a device sign-in")
 	// ErrNoSuchSignIn is a session id no live record names.
 	ErrNoSuchSignIn = errors.New("engine: no such device sign-in")
 )
@@ -214,11 +214,11 @@ func (e *Engine) stopDeviceSignIns() {
 }
 
 // StartDeviceSignIn starts a device sign-in for an entry on this node and
-// answers its record once the CLI has printed its address and code.
+// answers its record once the harness has printed its address and code.
 //
 // Refused with [ErrNoModel], [ErrNoDeviceSignIn], [ErrSignsInWithoutLogin], a
 // [SignInInProgressError] naming the running session, or
-// [ErrDeviceSignInUnavailable] when the CLI did not print its code within
+// [ErrDeviceSignInUnavailable] when the harness did not print its code within
 // [deviceCodeWait] (its first line said why).
 //
 //nolint:contextcheck // the session runs on the node's lifetime (signIns.base), never the request's: the person approves minutes after the request returns
@@ -290,7 +290,7 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 
 	// endOf is the session's end, once it is cancelled: what its record
 	// says, or, where the person's request ends first, the session as it
-	// was claimed. A CLI slow to exit holds the session, never the request.
+	// was claimed. A harness slow to exit holds the session, never the request.
 	endOf := func() (coord.DeviceSignIn, bool) {
 		select {
 		case final := <-ended:
@@ -314,7 +314,7 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 		}
 		return final, fmt.Errorf("%w: %s", ErrDeviceSignInUnavailable, final.Detail)
 	case <-wait.C:
-		why := fmt.Errorf("the CLI printed no device code within %s", deviceCodeWait)
+		why := fmt.Errorf("the harness printed no device code within %s", deviceCodeWait)
 		cancel(why)
 		final, ok := endOf()
 		if !ok {
@@ -521,7 +521,7 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 		revision, epoch, err = e.sealDeviceLogin(approving, key, agent, by)
 		cancel()
 		if err != nil {
-			// THE CLI SIGNED IN, so the session is approved; where the
+			// THE HARNESS SIGNED IN, so the session is approved; where the
 			// login could not be stored or carried to the fleet, the
 			// record says what is left to do.
 			detail = err.Error()
@@ -590,13 +590,13 @@ func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *harness
 
 	blob, err := agent.ExportBundle(ctx)
 	if err != nil {
-		return "", 0, fmt.Errorf("the CLI signed in, and its login could not be exported: %w", err)
+		return "", 0, fmt.Errorf("the harness signed in, and its login could not be exported: %w", err)
 	}
 	name := e.bundleVariable(key)
 	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
 	if err = store.Set(ctx, name, blob, secrets.Author{Name: by.Name, Kind: string(by.Kind),
 		OperatorID: by.OperatorID}, secrets.SourceModels, e.now()); err != nil {
-		return "", 0, fmt.Errorf("the CLI signed in on %s, and its login could not be stored as %s: %w",
+		return "", 0, fmt.Errorf("the harness signed in on %s, and its login could not be stored as %s: %w",
 			e.selfNode(), name, err)
 	}
 	writer := e.configWriterOrNil()

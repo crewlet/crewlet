@@ -207,7 +207,7 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 		t.Errorf("cache write = %d, want %d", got.CacheWrite, want)
 	}
 	if want := spend.Workers + job.Workers; got.Workers != want {
-		t.Errorf("workers = %d, want %d with the ones the coding agent delegated to", got.Workers, want)
+		t.Errorf("workers = %d, want %d with the ones the harness delegated to", got.Workers, want)
 	}
 	if got.Turns != 0 {
 		t.Errorf("a resumed segment counted %d turns", got.Turns)

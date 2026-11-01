@@ -147,7 +147,7 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	return newCompany(c, env, nil)
 }
 
-// newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
+// newCompany builds an epoch whose harness entries keep their sit-outs on
 // plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
 func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
 	if c == nil {
@@ -291,7 +291,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		Sessions: in.Sessions,
 		Metrics:  in.Metrics,
 		// The onboarding pass's extension policy: the executor's rounds
-		// are its CLI's own, capped by the run's max_turns, and the
+		// are its harness's own, capped by the run's max_turns, and the
 		// reviewer's budget is a structural one — so the pass is the only
 		// engine loop a cap is extended in.
 		Caps: runner.Caps{
@@ -428,10 +428,10 @@ type RunnerInput struct {
 	Publisher queue.Publisher
 	Turn      runner.Turn
 
-	// Sessions is where the turn's phases serve their tools to the CLI that
+	// Sessions is where the turn's phases serve their tools to the harness that
 	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
 	// Both RunnerFor call sites pass it, because a phase that offers tools
-	// reaches its CLI through nothing else — a runner built without it is
+	// reaches its harness through nothing else — a runner built without it is
 	// refused where it is built ([runner.New]).
 	Sessions *toolsession.Host
 
@@ -441,7 +441,7 @@ type RunnerInput struct {
 	// this is wired unconditionally rather than branched on.
 	OnPhase func(phase.Phase)
 
-	// Launcher runs this turn's executor as its coding CLI's own agentic
+	// Launcher runs this turn's executor as its harness's own agentic
 	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
 	// use; nil is a seat with nothing to launch on, which the runner
 	// refuses to be built for.
