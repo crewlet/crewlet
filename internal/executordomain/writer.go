@@ -283,9 +283,9 @@ func (n NewCapture) validate() error {
 		readThrough = n.ReadThrough.Packed()
 	}
 	if _, ok := absorbsOf(n.Absorbs, n.Turn, readThrough); !ok {
-		return invalid("the capture's absorbed turns %v are not what a head read hands "+
+		return invalid("the capture's absorbed turns %s are not what a head read hands "+
 			"out: at most %d canonical turn ids, none twice and never the turn's own, "+
-			"beside the position they were read at", n.Absorbs, MaxAbsorbs)
+			"beside the position they were read at", words.AndMore(n.Absorbs, MaxAbsorbs), MaxAbsorbs)
 	}
 	if err := n.Object.Validate(); err != nil {
 		return fmt.Errorf("%w: the capture's object: %w", ErrInvalid, err)
@@ -335,7 +335,7 @@ type CaptureResult struct {
 
 // captureReadBackStatement is the object one turn's row names.
 const captureReadBackStatement = `
-	SELECT object FROM executor_sessions WHERE agent_handle = ? AND turn_id = ?`
+	SELECT object FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
 // Capture records a new object for a live turn's session.
 //

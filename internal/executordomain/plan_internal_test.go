@@ -153,19 +153,16 @@ type executorIndexed struct {
 	ordered bool
 }
 
-// The indexes the reads are held to.
+// The indexes the reads are held to, beside the four the statements name
+// themselves (sessionKey, conversationIdx, endedIdx, seatIdx).
 const (
-	sessionKey      = "sqlite_autoindex_executor_sessions_1"
-	tombKey         = "sqlite_autoindex_executor_session_tombs_1"
-	removalKey      = "sqlite_autoindex_executor_seat_removals_1"
-	conversationIdx = "executor_sessions_conversation_idx"
-	endedIdx        = "executor_sessions_ended_idx"
-	seatIdx         = "executor_sessions_seat_idx"
-	expiryIdx       = "executor_sessions_expiry_idx"
-	unendedIdx      = "executor_sessions_unended_idx"
-	objectIdx       = "executor_sessions_object_idx"
-	tombsAtIdx      = "executor_session_tombs_at_idx"
-	removalsAtIdx   = "executor_seat_removals_at_idx"
+	tombKey       = "sqlite_autoindex_executor_session_tombs_1"
+	removalKey    = "sqlite_autoindex_executor_seat_removals_1"
+	expiryIdx     = "executor_sessions_expiry_idx"
+	unendedIdx    = "executor_sessions_unended_idx"
+	objectIdx     = "executor_sessions_object_idx"
+	tombsAtIdx    = "executor_session_tombs_at_idx"
+	removalsAtIdx = "executor_seat_removals_at_idx"
 )
 
 // executorReads is every read or write of one row by its key, every read of a

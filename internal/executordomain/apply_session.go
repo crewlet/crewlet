@@ -29,6 +29,33 @@ import (
 // statements this package runs rather than copies of them
 // (TestTheExecutorStatementsArePlanned).
 
+// THE INDEX A STATEMENT WAS WRITTEN FOR, which it names with `INDEXED BY`.
+// Every index on executor_sessions leads with the seat's handle, and the
+// planner, which keeps no statistics, sought these statements unhinted on the
+// handle alone through whichever such index it took — a turn's row through
+// the page's index, a conversation's head through the budget's — reading every
+// row the seat holds to answer a question about one turn or one conversation,
+// and inside an apply that holds the store's one writer. The hint is the
+// statement saying which index it was written for, and a guard: a schema
+// change that drops the index fails the statement loudly rather than slowing
+// it, as chatlet's mention probes do.
+const (
+	// sessionKey is the index executor_sessions' primary key (agent_handle,
+	// turn_id) builds: one turn's row.
+	sessionKey = "sqlite_autoindex_executor_sessions_1"
+
+	// conversationIdx is a conversation's rows in the order they ended: its
+	// head, its endings and an end's dedupe.
+	conversationIdx = "executor_sessions_conversation_idx"
+
+	// endedIdx is a seat's rows in the order they ended: the budget's
+	// release, oldest first.
+	endedIdx = "executor_sessions_ended_idx"
+
+	// seatIdx is a seat's rows in the order they began: its page.
+	seatIdx = "executor_sessions_seat_idx"
+)
+
 // Tombstone reasons: why a turn takes no further record.
 const (
 	// tombEnded is a turn its own `end` closed.
@@ -44,7 +71,7 @@ const (
 	readSessionStatement = `
 		SELECT conversation_key, work_key, launch_seq, capture_seq, read_through,
 		       absorbs, end_seq, object, object_size, last_at
-		FROM executor_sessions WHERE agent_handle = ? AND turn_id = ?`
+		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 
 	// readTombStatement is one turn's tombstone, by its key.
 	readTombStatement = `
@@ -65,7 +92,7 @@ const (
 	// UNIQUE among the rows that hold one, so it alone is a total order, and
 	// the seat's index on it serves the order without a sort.
 	seatReleasableStatement = `
-		SELECT turn_id, object_size FROM executor_sessions
+		SELECT turn_id, object_size FROM executor_sessions INDEXED BY ` + endedIdx + `
 		WHERE agent_handle = ? AND end_seq IS NOT NULL AND object IS NOT NULL
 		  AND turn_id <> ?
 		ORDER BY end_seq`
@@ -76,7 +103,7 @@ const (
 	// releaseStatement takes an ended turn's object off its row, keeping
 	// the row's ending.
 	releaseStatement = `
-		UPDATE executor_sessions SET object = NULL, object_hash = '',
+		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET object = NULL, object_hash = '',
 			object_size = 0, content_key = '', version = ?
 		WHERE agent_handle = ? AND turn_id = ?`
 
@@ -95,7 +122,7 @@ const (
 	// value is the one [applyCapture] decided, the turn's first read and
 	// its work key included, so the statement itself decides nothing.
 	updateCaptureStatement = `
-		UPDATE executor_sessions SET work_key = ?, harness = ?, harness_version = ?,
+		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
 			session_id = ?, object = ?, object_hash = ?, object_size = ?,
 			content_key = ?, archive_format = ?, launch_seq = ?, capture_seq = ?,
 			home = ?, workspace = ?, captured_at = ?, read_through = ?, absorbs = ?,
@@ -104,7 +131,7 @@ const (
 
 	// endRowStatement stamps a captured turn's end on its row.
 	endRowStatement = `
-		UPDATE executor_sessions SET work_key = ?, ended_at = ?, end_seq = ?,
+		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, ended_at = ?, end_seq = ?,
 			outcome = ?, delivered = ?, ending = ?, ask_excerpt = ?, last_at = ?,
 			version = ?
 		WHERE agent_handle = ? AND turn_id = ? AND end_seq IS NULL`
@@ -121,13 +148,13 @@ const (
 	// deliveredAttemptsStatement counts the older ended attempts at one
 	// unit of work in a conversation whose reply went out.
 	deliveredAttemptsStatement = `
-		SELECT COUNT(*) FROM executor_sessions
+		SELECT COUNT(*) FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND work_key = ? AND turn_id <> ? AND delivered = 1`
 
 	// dedupeStatement deletes those older attempts.
 	dedupeStatement = `
-		DELETE FROM executor_sessions
+		DELETE FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND work_key = ? AND turn_id <> ?`
 
@@ -135,7 +162,7 @@ const (
 	// handed out, by its key, and only where it ended at or before that read
 	// (a read can show no turn that ended after it).
 	absorbStatement = `
-		DELETE FROM executor_sessions
+		DELETE FROM executor_sessions INDEXED BY ` + sessionKey + `
 		WHERE agent_handle = ? AND turn_id = ? AND conversation_key = ?
 		  AND end_seq IS NOT NULL AND end_seq <= ?`
 
@@ -150,7 +177,7 @@ const (
 	// deleteSessionStatement and deleteTombStatement remove one turn's row
 	// and its tombstone past the retention.
 	deleteSessionStatement = `
-		DELETE FROM executor_sessions WHERE agent_handle = ? AND turn_id = ?`
+		DELETE FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 	deleteTombStatement = `
 		DELETE FROM executor_session_tombs WHERE agent_handle = ? AND turn_id = ?`
 

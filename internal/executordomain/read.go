@@ -246,7 +246,7 @@ const (
 	// headStatement is a conversation's newest ended turn that names a
 	// session.
 	headStatement = `SELECT ` + sessionColumns + `
-		FROM executor_sessions
+		FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND object IS NOT NULL
 		ORDER BY end_seq DESC LIMIT 1`
@@ -256,7 +256,7 @@ const (
 	// POSITION IS UNIQUE among the rows that hold one, so it alone orders
 	// them, and the conversation's index serves the order.
 	endingsStatement = `SELECT ` + sessionColumns + `
-		FROM executor_sessions
+		FROM executor_sessions INDEXED BY ` + conversationIdx + `
 		WHERE agent_handle = ? AND conversation_key = ? AND end_seq IS NOT NULL
 		  AND turn_id <> ?
 		ORDER BY end_seq DESC LIMIT ?`
@@ -275,12 +275,12 @@ const (
 	// turnConversationStatement is the conversation one turn's row is in,
 	// which a relaunch's read resolves its scope by.
 	turnConversationStatement = `
-		SELECT conversation_key FROM executor_sessions
+		SELECT conversation_key FROM executor_sessions INDEXED BY ` + sessionKey + `
 		WHERE agent_handle = ? AND turn_id = ?`
 
 	// sessionStatement is one turn's row, whole.
 	sessionStatement = `SELECT ` + sessionColumns + `
-		FROM executor_sessions WHERE agent_handle = ? AND turn_id = ?`
+		FROM executor_sessions INDEXED BY ` + sessionKey + ` WHERE agent_handle = ? AND turn_id = ?`
 )
 
 // Head reads a conversation's head, its other ended turns and its siblings, in
@@ -448,7 +448,7 @@ type Page struct {
 
 // pageStatement is a seat's rows after a cursor, the latest begun first.
 const pageStatement = `SELECT ` + sessionColumns + `, first_seq
-	FROM executor_sessions
+	FROM executor_sessions INDEXED BY ` + seatIdx + `
 	WHERE agent_handle = ? AND first_seq < ?
 	ORDER BY first_seq DESC LIMIT ?`
 
