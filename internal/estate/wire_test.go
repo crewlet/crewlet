@@ -285,7 +285,7 @@ var seatCopyOps = map[string]string{
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
-		identityDomain, artifactsDomain, artifactDataDomain}
+		identityDomain, artifactsDomain, artifactDataDomain, chatDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
