@@ -2590,6 +2590,12 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 		return err
 	}
 	out.Repo.Expunge = state.view()
+	// AND WHERE IT STANDS WITH OTHER HOSTS ([remotesShownIn]): a person who
+	// imported it, or set a mirror, reads the import's progress and the
+	// mirror's last sync here.
+	if out.Repo.Remotes, err = remotesShownIn(ctx, tx, id); err != nil {
+		return err
+	}
 	return nil
 }
 

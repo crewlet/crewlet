@@ -385,6 +385,7 @@ func registeredStatements() map[string]statement {
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		"repo row":            {repoRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo remotes":        {remotesSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"repo remote state":   {remotesShownSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},

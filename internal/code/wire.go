@@ -53,7 +53,8 @@ type RepoRef struct {
 	// by its syncs, so a push and a change's every write are refused
 	// repo_mirrored — what the code host's admission and an engine write's
 	// landing read of it before the committer is asked. Never the mirror's
-	// URL or credential, which no row a read serves carries.
+	// URL or credential, which one repository's detail alone serves
+	// ([RepoDetail.Remotes]): every push and fetch reads this row.
 	//
 	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
 	// it is read from the row a record wrote. AS A STATED CONDITION, as the
@@ -2272,6 +2273,50 @@ type RepoDetail struct {
 	// last one committed — the repository's own row, read with the rest of
 	// it, so a person who asked for a purge reads its progress here.
 	Expunge ExpungeState `json:"expunge,omitzero"`
+	// Remotes is where the repository stands with other hosts
+	// ([RemoteState]): its mirrors as its settings name them, its import's
+	// progress and its pull mirror's last sync — on the detail alone, read
+	// with its expunge in one seek of its row, never on the [RepoRef] every
+	// push and fetch reads, which needs only [RepoRef.Mirrored].
+	Remotes RemoteState `json:"remotes,omitzero"`
+}
+
+// RemoteState is a repository's other hosts as its row holds them
+// (code_repos, replicated 0095): zero for a repository with no mirror that was
+// never imported. A read's answer, never a record's field, so none of it takes
+// a versionedFields row; the records that write the columns name theirs
+// (mirror.go).
+//
+// EVERY CREDENTIAL HERE IS A REFERENCE — one whole ${VAR} the domain refuses
+// any other value for — so serving one to a reader of the repository serves a
+// variable's name, as the company document does to whoever reads it, never a
+// token.
+type RemoteState struct {
+	// MirrorFrom and MirrorTo are the repository's pull and push mirrors as
+	// its settings carry them ([RepoSettings.MirrorFrom]), nil for none.
+	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
+	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
+	// Import is the import its create filled it from — its own, or a pull
+	// mirror's first fetch — and how far it went; nil for a repository its
+	// create did not import.
+	Import *ImportState `json:"import,omitempty"`
+	// MirrorSyncedAt is the broker instant of a pull mirror's last sync, zero
+	// for one never synced and for a repository that is no pull mirror.
+	MirrorSyncedAt time.Time `json:"mirror_synced_at,omitzero"`
+}
+
+// ImportState is one repository's import as its row holds it: its source,
+// how many of its chunks have landed, and how it ended.
+type ImportState struct {
+	// Source is what the create imported from, fixed at the create
+	// ([CreateRepo.Import]).
+	Source ImportSource `json:"source"`
+	// Chunks is how many of its chunks have landed ([ImportChunk.Seq]).
+	Chunks int64 `json:"chunks"`
+	// DoneAt is the broker instant of the record that ended it, zero while
+	// it runs; Error is why it ended short, "" for an import that finished.
+	DoneAt time.Time `json:"done_at,omitzero"`
+	Error  string    `json:"error,omitempty"`
 }
 
 // ExpungeState is a repository's expunges as its row holds them (code_repos,
