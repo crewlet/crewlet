@@ -48,7 +48,7 @@ func TestOnlyAFatalStopsTheChain(t *testing.T) {
 // gives the chain.
 func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
 	t.Parallel()
-	classified := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code", Model: "sonnet",
+	classified := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code", Model: "sonnet",
 		Err: errors.New("Usage limit reached")}
 	for _, tc := range []struct {
 		name string
@@ -65,7 +65,7 @@ func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
 		}
 	}
 	if msg := classified.Error(); !strings.Contains(msg, "rate_limit") ||
-		!strings.Contains(msg, "Usage limit reached") || !strings.Contains(msg, "cli-agent/claude-code") {
+		!strings.Contains(msg, "Usage limit reached") || !strings.Contains(msg, "harness/claude-code") {
 		t.Errorf("Error() = %q, want the backend, the kind and what the harness said", msg)
 	}
 }

@@ -579,7 +579,7 @@ func TestAnEmptyReplyIsRefusedAfterTheSeamSawIt(t *testing.T) {
 func TestAFailedAnswerIsRefusedAfterTheSeamSawIt(t *testing.T) {
 	t.Parallel()
 	rig := newAnswerRig()
-	rig.model.err = &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+	rig.model.err = &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 		Model: "aux-small", Err: errors.New("usage limit reached")}
 	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
 	if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable {
@@ -616,7 +616,7 @@ func TestAModelAtItsLimitIsTheWaitItIs(t *testing.T) {
 	} {
 		rig := newAnswerRig()
 		now := time.Now()
-		limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+		limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "aux-small", Agent: "claude-code", Subscription: true,
 			RetryAt: now.Add(c.retryIn), Err: errors.New("usage limit reached")}
 		lifts := ""
@@ -947,7 +947,7 @@ func TestAnAnswerReadsItsSourcesAsTheirWritersWords(t *testing.T) {
 // set up, and what kind of failure the provider met, never the error, which
 // named the provider entry, the model and what the harness said — the whole of the
 // sentence was "The model could not answer (llm
-// cli-agent/claude-code/aux-small: rate_limit: …)". Mutation: put the error
+// harness/claude-code/aux-small: rate_limit: …)". Mutation: put the error
 // back into either sentence and its rows fail.
 func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
 	t.Parallel()
@@ -965,15 +965,15 @@ func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
 		"no model set up": {aux: fmt.Errorf("engine: seat founder's auxiliary chain: %w",
 			errors.New("phase: no providers configured")),
 			says: "No model is set up to answer questions"},
-		"a spent plan": {complete: &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+		"a spent plan": {complete: &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "aux-small", Agent: "claude-code", Subscription: true,
 			RetryAt: time.Now().Add(14 * time.Minute), ResetsAt: time.Now().Add(14 * time.Minute),
 			Err: errors.New("Claude AI usage limit reached|1761600000")},
 			says: "has reached its usage limit", waits: true},
-		"a refused login": {complete: &llm.Error{Kind: llm.KindAuth, Provider: "cli-agent/claude-code",
+		"a refused login": {complete: &llm.Error{Kind: llm.KindAuth, Provider: "harness/claude-code",
 			Model: "aux-small", Err: errors.New("Invalid API key · Please run /login")},
 			says: "An administrator needs to check them."},
-		"a harness that failed": {complete: &llm.Error{Kind: llm.KindServer, Provider: "cli-agent/claude-code",
+		"a harness that failed": {complete: &llm.Error{Kind: llm.KindServer, Provider: "harness/claude-code",
 			Model: "aux-small", Err: errors.New("exit status 1: overloaded_error")},
 			says: "The model's service failed. Try again shortly.", waits: true},
 		"a timeout": {complete: fmt.Errorf("waiting for a harness slot: %w",
@@ -992,7 +992,7 @@ func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
 		if waits := builtin.RetryAfter(res.Cause, time.Second) > 0; waits != c.waits {
 			t.Errorf("%s: invites a retry: %v, want %v", name, waits, c.waits)
 		}
-		for _, theirs := range []string{"engine:", "phase:", "llm ", "cli-agent",
+		for _, theirs := range []string{"engine:", "phase:", "llm ", "harness",
 			"claude-code", "limit reached", "1761600000", "Invalid API key", "/login",
 			"exit status", "overloaded", "harness slot", "EOF", "deadline"} {
 			if strings.Contains(res.Output, theirs) {

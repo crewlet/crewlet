@@ -29,7 +29,7 @@ import (
 
 // A golden company: two seats, one scripted model, one embedded broker.
 //
-// Its model entry is a REAL cli-agent entry whose harness is this test binary
+// Its model entry is a REAL harness entry whose harness is this test binary
 // ([scriptedEntry]), rather than a `mock` provider type, deliberately. A mock
 // type would be test-only machinery in shipped config — a thing an operator
 // could set and a thing this suite could get right while the real backend was

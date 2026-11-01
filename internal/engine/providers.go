@@ -100,7 +100,7 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 // log is the package logger.
 var log = logging.Get("engine")
 
-// restoreBundles restores every cli-agent entry's configured credential bundle
+// restoreBundles restores every harness entry's configured credential bundle
 // into its state directory where that directory holds no login yet
 // ([harness.Provider.RestoreConfiguredBundle]).
 //

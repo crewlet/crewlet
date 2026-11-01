@@ -60,7 +60,7 @@ func (m *limitedModel) Complete(context.Context, llm.Request) (*llm.Completion, 
 		default:
 			retry = now.Add(time.Hour)
 		}
-		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "opus", Key: "default", RetryAt: retry, ResetsAt: m.reset,
 			Agent: "claude-code", Subscription: true,
 			Err: errors.New("You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)")}

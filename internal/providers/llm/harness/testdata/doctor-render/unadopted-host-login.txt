@@ -9,11 +9,11 @@ host login    : <home>/.fake/creds.json (not adopted)
 token env     : unset
 sign-in       : none
 token usage   : estimated (4 characters per token)
-system prompt : seats: in the transcript, under the CLI's own (the profile declares no channel)
-              : side passes: in the transcript, under the CLI's own (the profile declares no channel)
+system prompt : seats: in the transcript, under the harness's own (the profile declares no channel)
+              : side passes: in the transcript, under the harness's own (the profile declares no channel)
 smoke test    : skipped (-no-smoke)
 local tools   : not declared by profile; probe skipped (-no-smoke)
 web           : allowed; probe skipped (-no-smoke)
 problems:
-  - no sign-in for "sub": no credential files in <state>/custom/credentials, and nothing in the environment the CLI is given authenticates it — this machine has a login at <home>/.fake/creds.json: adopt it with `crewlet llm login sub -from-host`, or mint a headless FAKE_OAUTH_TOKEN with `-capture-token` (preferred: no shared refresh token)
+  - no sign-in for "sub": no credential files in <state>/custom/credentials, and nothing in the environment the harness is given authenticates it — this machine has a login at <home>/.fake/creds.json: adopt it with `crewlet llm login sub -from-host`, or mint a headless FAKE_OAUTH_TOKEN with `-capture-token` (preferred: no shared refresh token)
   - the "custom" profile reads no usage figures, so budgets for seats on this provider run on estimates

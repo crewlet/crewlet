@@ -1,4 +1,4 @@
-# Built-in cli-agent profiles.
+# Built-in harness profiles.
 #
 # DATA, not code: every field here is replaceable from
 # providers.llm.<key>.overrides, because these flags and JSON shapes

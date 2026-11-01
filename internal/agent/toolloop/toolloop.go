@@ -948,7 +948,7 @@ type Result struct {
 	// call — a model that spent its output on hidden reasoning and stopped.
 	//
 	// It exists because the loop now CORRECTS that round instead of the
-	// cli-agent backend failing the call, and a condition that used to fire
+	// harness backend failing the call, and a condition that used to fire
 	// llm_unavailable would otherwise become invisible: a seat whose model
 	// answers nothing every round now produces quiet rescues rather than a
 	// failure event. The count rides the phase record, at the layer that

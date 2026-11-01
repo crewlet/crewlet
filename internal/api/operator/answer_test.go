@@ -284,7 +284,7 @@ func (m failingModel) Auxiliary(*org.Role, auxspend.Use) (chain.Member, error) {
 func TestAnAnswerNoWaitGetsIsNotAnsweredComeBack(t *testing.T) {
 	t.Parallel()
 	fail := func(kind llm.ErrorKind) error {
-		return &llm.Error{Kind: kind, Provider: "cli-agent/claude-code", Model: "aux", Err: errors.New("x")}
+		return &llm.Error{Kind: kind, Provider: "harness/claude-code", Model: "aux", Err: errors.New("x")}
 	}
 	for name, c := range map[string]struct {
 		model failingModel
@@ -330,7 +330,7 @@ func TestAnAnswerNoWaitGetsIsNotAnsweredComeBack(t *testing.T) {
 // and the remedy go.
 func TestAModelAtItsLimitAnswersTheWaitAndTheModelsRemedy(t *testing.T) {
 	t.Parallel()
-	limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+	limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 		Model: "aux", Agent: "claude-code", Subscription: true,
 		RetryAt: time.Now().Add(14 * time.Minute), ResetsAt: time.Now().Add(14 * time.Minute),
 		Err: errors.New("x")}

@@ -262,7 +262,7 @@ func TestTheCompletionNamesTheEntryThatServed(t *testing.T) {
 func TestASpentPlanFallsThroughWithNoSpecialCase(t *testing.T) {
 	t.Parallel()
 	spent := &llm.Error{
-		Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code", Model: "head-model",
+		Kind: llm.KindRateLimit, Provider: "harness/claude-code", Model: "head-model",
 		Err: errors.New("Usage limit reached — sitting out until 2026-10-23T10:01:00Z"),
 	}
 	c := build(t, Options{},

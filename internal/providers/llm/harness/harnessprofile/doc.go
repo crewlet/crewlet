@@ -1,5 +1,5 @@
 // Package harnessprofile is what each harness accepts: the profile table the
-// cli-agent backend drives a harness from — its binary, its flags, the JSON shapes
+// harness backend drives a harness from — its binary, its flags, the JSON shapes
 // its answer and usage arrive in, where it keeps its login and which
 // environment variables carry a credential — plus the merge of an operator's
 // `overrides` into it and the rules a merged profile is held to.

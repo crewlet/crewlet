@@ -288,7 +288,7 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	}
 	merged, err := applyOverrides(builtin, overrides)
 	if err != nil {
-		return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
+		return Profile{}, fmt.Errorf("harness %q: %w: %w", name, ErrOverrides, err)
 	}
 	bad := merged.webOverrideConflicts(overrides)
 	if merged.EffectiveWebTools() == WebToolsDenied && merged.WebDenial != nil {

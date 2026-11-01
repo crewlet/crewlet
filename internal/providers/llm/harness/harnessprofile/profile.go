@@ -1704,7 +1704,7 @@ const modelPlaceholder = "{model}"
 // itself when no element carries the placeholder, which config and the
 // backend both refuse beside a model ([Profile.TakesModel]).
 //
-// ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
+// ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a harness entry's
 // `model` is written in its harness's own grammar and every reader of it has to
 // see the same string: the argv of a run on this host, the executor's run of
 // the same harness in a box, and the config rule that judges the value as that
@@ -1975,7 +1975,7 @@ func profileError(name string, bad []string) error {
 	if len(bad) == 0 {
 		return nil
 	}
-	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+	return fmt.Errorf("harness profile %q: %s", name, strings.Join(bad, "; "))
 }
 
 // problems is what [Profile.Validate] reports, one sentence each.
@@ -3084,7 +3084,7 @@ func (p *Profile) ValidateCredentials(name string) error {
 	if len(bad) == 0 {
 		return nil
 	}
-	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+	return fmt.Errorf("harness profile %q: %s", name, strings.Join(bad, "; "))
 }
 
 // HoldsLogin reports whether the credential file named name, holding content,

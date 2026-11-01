@@ -870,7 +870,7 @@ func instantOrNone(at time.Time) string {
 //
 // NEVER THE ERROR ITSELF, which went to the log: it names the provider entry,
 // the model and what the harness said, which was the whole of the sentence ("The
-// model could not answer (llm cli-agent/claude-code/aux-small: rate_limit:
+// model could not answer (llm harness/claude-code/aux-small: rate_limit:
 // usage limit reached …). Try again shortly.") and nothing a person acts on.
 func modelFailed(err error) (string, bool) {
 	if err == nil {

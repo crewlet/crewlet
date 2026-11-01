@@ -84,9 +84,9 @@ import (
 var log = logging.Get("llm.harness")
 
 // providerName is what a classified failure calls this backend.
-const providerName = "cli-agent"
+const providerName = "harness"
 
-// Config is one cli-agent provider entry, fully resolved.
+// Config is one harness provider entry, fully resolved.
 //
 // Resolved, not referenced: Token and APIKey hold values, never "${VAR}".
 // Tier B stores its references verbatim so an exported revision carries no
@@ -190,7 +190,7 @@ type Provider struct {
 
 var _ llm.Provider = (*Provider)(nil)
 
-// New builds a cli-agent provider.
+// New builds a harness provider.
 //
 // Like every other backend, it builds even when no login is present: the call
 // then fails with the vendor's own "not authenticated", which names the harness
@@ -207,12 +207,12 @@ func New(cfg Config) (*Provider, error) {
 	// building the provider from code.
 	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: no model_args element of the %q harness carries {model}, so model %q "+
+			"harness %q: no model_args element of the %q harness carries {model}, so model %q "+
 				"would be ignored — remove it, or declare overrides.model_args with {model}",
 			cfg.Key, cfg.Harness, cfg.Model)
 	}
 	if cfg.StateDir == "" {
-		return nil, fmt.Errorf("cli-agent %q: state_dir is empty — it is derived per "+
+		return nil, fmt.Errorf("harness %q: state_dir is empty — it is derived per "+
 			"provider key at config load, so an empty one means the derivation was skipped", cfg.Key)
 	}
 	ws, err := Shared(cfg.StateDir, cfg.Harness, profile)
@@ -246,7 +246,7 @@ func New(cfg Config) (*Provider, error) {
 		now:              time.Now,
 	}
 	if p.timeout <= 0 {
-		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a harness call with no "+
+		return nil, fmt.Errorf("harness %q: timeout is zero — a harness call with no "+
 			"wall-clock cap holds a seat forever", cfg.Key)
 	}
 	// THE BUNDLE IS NOT RESTORED HERE. Building a provider is what

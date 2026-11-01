@@ -815,7 +815,7 @@ type AgentPhaseCompleted struct {
 	// reasoning and stopped.
 	//
 	// Here rather than as an event of its own because this is the record
-	// that already knows the seat, the phase and the model. The cli-agent
+	// that already knows the seat, the phase and the model. The harness
 	// backend used to raise a transport error on that round, which walked
 	// the fallback chain and could end the turn as llm_unavailable; it now
 	// hands back an empty completion and the tool loop corrects it, so a
