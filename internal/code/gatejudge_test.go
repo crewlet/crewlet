@@ -442,3 +442,78 @@ func TestAGateThatKeepsASeatsBranchWins(t *testing.T) {
 		})
 	}
 }
+
+// A CHECKS FILE CHANGE NEEDS A PERSON (U44): a rule requiring checks holds a
+// change touching code.ChecksDirGlob — the directory its checks file lives in
+// — to a PERSON'S approval, as a human path its record never names: a seat's
+// counted approval leaves the term unmet, naming the glob and waiting on the
+// change's owner to ask a person, and a person's meets it. The combined gate
+// names it among its human paths — what decides that a snapshot reads the
+// change's touched paths at all — though no rule's record lists it.
+// agents_edit_checks opts the rule out; a rule requiring no check names it
+// not at all; a change touching nothing under it is met; and the opt-out is
+// the RULE'S: a second rule requiring checks without it still holds the
+// change.
+//
+// Mutation: drop the default from GateRulesOf — a seat's approval of a
+// checks file change reads met (no human_approval term at all), red.
+func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
+	t.Parallel()
+	if _, ok := strings.CutPrefix(code.ChecksFilePath, strings.TrimSuffix(code.ChecksDirGlob, "**")); !ok {
+		t.Fatalf("the checks file %s lies outside %s, the human path that holds it", code.ChecksFilePath,
+			code.ChecksDirGlob)
+	}
+	checked := bareGate()
+	checked.Checks = []string{"unit"}
+	rules := gated(t, checked)
+	if !slices.ContainsFunc(rules.HumanPaths, func(h code.HumanPath) bool {
+		return h.Glob == code.ChecksDirGlob && len(h.Unless) == 0
+	}) {
+		t.Fatalf("a gate requiring checks names the human paths %+v, want %s among them", rules.HumanPaths,
+			code.ChecksDirGlob)
+	}
+
+	f := gateCase(code.ChecksFilePath, "app.go")
+	f.Checks = []code.GateCheck{{Name: "unit", Attempt: 1, State: code.CheckStatePassed, Reason: code.CheckReasonExit}}
+	bySeat := code.JudgeGate(approving(f, gateWebLead, 2), rules)
+	p := judgedAs(t, bySeat, code.PreconditionHumanApproval, code.PreconditionUnmet, code.ChecksDirGlob)
+	if !slices.Equal(p.WaitsOn, []code.Party{gateDev}) {
+		t.Errorf("a checks file change no person is asked of waits on %+v, want its owner to ask one", p.WaitsOn)
+	}
+	if bySeat.Ready() {
+		t.Fatal("a checks file change a seat alone approved reads ready to merge")
+	}
+	judgedAs(t, code.JudgeGate(approving(f, gateFounder, 2), rules), code.PreconditionHumanApproval,
+		code.PreconditionMet, `person "founder"'s approval counts`)
+	judgedAs(t, code.JudgeGate(gateCase("app.go"), rules), code.PreconditionHumanApproval,
+		code.PreconditionMet, "touches none of")
+
+	// AGENTS_EDIT_CHECKS OPTS THE RULE OUT, and a rule requiring no check
+	// holds nothing: a seat's approval merges the same change.
+	opted := checked
+	opted.AgentsEditChecks = true
+	unchecked := bareGate()
+	for name, gate := range map[string]code.MergeGate{"agents_edit_checks": opted, "no checks": unchecked} {
+		r := code.JudgeGate(approving(f, gateWebLead, 2), gated(t, gate))
+		if slices.ContainsFunc(r.Preconditions, func(p code.Precondition) bool {
+			return p.Kind == code.PreconditionHumanApproval
+		}) {
+			t.Errorf("%s: a checks file change waits for a person: %+v", name, r.Preconditions)
+		}
+		if !r.Ready() {
+			t.Errorf("%s: a seat-approved checks file change is not ready: %q", name, r.First)
+		}
+	}
+
+	// THE OPT-OUT IS THE RULE'S: a second rule matching main that requires
+	// checks without it holds the change, the strictest of the two.
+	rule := func(pattern string, g code.MergeGate) code.Protection {
+		return code.Protection{PushRule: code.PushRule{Pattern: pattern, DirectPush: code.DirectPersons}, Gate: &g}
+	}
+	both, err := code.GateRulesOf([]code.Protection{rule(mainRef, opted), rule("refs/heads/*", checked)}, mainRef, "")
+	if err != nil {
+		t.Fatalf("GateRulesOf: %v", err)
+	}
+	judgedAs(t, code.JudgeGate(approving(f, gateWebLead, 2), both), code.PreconditionHumanApproval,
+		code.PreconditionUnmet, code.ChecksDirGlob)
+}

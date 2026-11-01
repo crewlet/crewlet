@@ -163,8 +163,11 @@ func TestAnEnqueueIsDecidedByTheGate(t *testing.T) {
 	for _, p := range res.Unmet {
 		missed = append(missed, p.Kind)
 	}
+	// HUMAN_APPROVAL TOO: main's gate requires a check, so it holds the
+	// checks' own directory to a person (code.ChecksDirGlob, U44), and which
+	// paths the change touches waits for its facts.
 	if want := []code.PreconditionKind{code.PreconditionFacts, code.PreconditionApproval,
-		code.PreconditionCheck}; !slices.Equal(missed, want) {
+		code.PreconditionHumanApproval, code.PreconditionCheck}; !slices.Equal(missed, want) {
 		t.Fatalf("the refusal names %v, want %v", missed, want)
 	}
 

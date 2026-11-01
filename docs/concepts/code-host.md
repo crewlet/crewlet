@@ -307,7 +307,7 @@ protect:
     approvals: one                   # none (unset) or one counted approval
     approvals_unless: [comment_only] # path classes whose changes need no approval
     human_paths:                     # paths a change touching waits for a person
-      - glob: ".crewlet/**"
+      - glob: "migrations/**"
       - glob: "deploy/**"
         unless: [comment_only, whitespace_only]
     checks: [lint, unit]             # the checks a merge waits for, by name
@@ -5406,7 +5406,7 @@ rules' combination, the strictest of each term:
 |---|---|
 | `merge_by` | The strictest of the rules' — a rule with no gate reading as `writers` — and `code.merge_by_floor`. A branch no rule matches has no floor: whoever may push it merges into it. |
 | `approvals` | `one` where any gate asks one; `approvals_unless` exempts a change only by a class every such gate names. |
-| `human_paths`, `checks` | Every gate's, each entry as its gate wrote it. |
+| `human_paths`, `checks` | Every gate's, each entry as its gate wrote it — and `.crewlet/**` among the human paths for every gate requiring checks that does not set `agents_edit_checks`. |
 | `owners_approve` | On where any gate turns it on. |
 | `landing` | The smallest `depth` and the smallest `batch` of the gates requiring checks: how fast a queue lands, never what it tests. |
 
@@ -5444,6 +5444,18 @@ merged by somebody, and landed by its queue:
   paths again.
   The gate's human paths, at most 32 a rule, are matched against the paths
   the facts list, and a glob this build cannot read holds the change.
+- **A change to the checks waits for a person.** A gate that requires checks
+  holds `.crewlet/**` — the directory the [checks file](#the-checks-file)
+  lives in, and whatever script beside it a check runs — as one of its human
+  paths, though the rule lists it nowhere: a change touching it waits for a
+  **person's** counted approval, `human_approval` naming the glob as it names
+  any human path, so no seat merges a weakened check on another seat's
+  approval. The rule's record is left as it was written, so the default
+  reaches every rule requiring checks without a write. A rule that sets
+  `agents_edit_checks` lets a seat's approval stand for it instead — and only
+  that rule: a second rule matching the branch that requires checks without
+  it still holds the change. Turning it on is a loosening, which a seat may
+  not make ([Who may change a protection](#who-may-change-a-protection)).
 - **A required check with no attempt is `computing`**: one the target's
   [checks file](#the-checks-file) defines waits for the repository's home to
   queue it, and one it does not for a person's CI to report it. So is one

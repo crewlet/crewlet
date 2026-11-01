@@ -30,7 +30,10 @@ import (
 // merge_by the strictest of the rules' — a rule with no gate reading as
 // writers — and of code.merge_by_floor, on a protected target alone; an
 // approval where any gate asks one, exempted only by a class every gate
-// asking one exempts; every gate's human paths and required checks; path
+// asking one exempts; every gate's human paths and required checks — a gate
+// requiring checks naming ChecksDirGlob among its human paths unless it sets
+// agents_edit_checks, so a change to the checks a target is measured with
+// waits for a person (U44), the default added here and never stored; path
 // owners gating where any gate makes them so; the smallest queue depth and
 // batch of the gates requiring checks. A branch no rule matches has no gate:
 // a change into it merges on M4's preconditions and its merger's right to
@@ -109,7 +112,9 @@ type GateRules struct {
 	Approvals       Approvals
 	ApprovalsUnless []ChangeClass
 	// HumanPaths is every gate's human paths, each entry as its gate wrote
-	// it, by glob; Checks every gate's required checks, sorted and each once.
+	// it, by glob — and, for every gate requiring checks that does not set
+	// agents_edit_checks, ChecksDirGlob, which no record stores (U44);
+	// Checks every gate's required checks, sorted and each once.
 	HumanPaths []HumanPath
 	Checks     []string
 	// QueueDepth and QueueBatch are how many candidates the target's queue
@@ -185,7 +190,19 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 			}
 			asked++
 		}
-		for _, h := range g.HumanPaths {
+		humans := g.HumanPaths
+		if len(g.Checks) > 0 && !g.AgentsEditChecks {
+			// A RULE REQUIRING CHECKS HOLDS ITS CHECKS TO A PERSON (U44):
+			// ChecksDirGlob is a human path of its gate unless it sets
+			// agents_edit_checks — added here, where every reader and every
+			// decide takes its gate from, and never stored, so the rule's
+			// record says what its writer wrote and the default reaches
+			// every rule without a record rewriting one. Here rather than in
+			// JudgeGate alone: the gate's human paths are what decide that a
+			// snapshot reads a change's touched paths at all (readsPaths).
+			humans = append(slices.Clone(humans), HumanPath{Glob: ChecksDirGlob})
+		}
+		for _, h := range humans {
 			if !slices.ContainsFunc(out.HumanPaths, h.Equal) {
 				out.HumanPaths = append(out.HumanPaths, h)
 			}

@@ -105,10 +105,12 @@ const (
 
 	// CodeMaxHumanPaths is the most HUMAN PATHS one protection rule's merge
 	// gate names: the parts of a repository's tree a change touching which
-	// waits for a person's approval — `.crewlet/**`, `deploy/**`,
-	// `migrations/**`. A JUDGMENT: a gate keeps a person in front of a few
-	// directories, and thirty-two is past any rule's; it is one of the two
-	// lists a gate's bytes grow with ([CodeMaxGateBytes]).
+	// waits for a person's approval — `deploy/**`, `migrations/**`; a rule
+	// requiring checks holds `.crewlet/**` beside them without naming it
+	// (code.ChecksDirGlob), so it costs no entry. A JUDGMENT: a gate keeps a
+	// person in front of a few directories, and thirty-two is past any
+	// rule's; it is one of the two lists a gate's bytes grow with
+	// ([CodeMaxGateBytes]).
 	CodeMaxHumanPaths = 32
 
 	// CodeMaxRequiredChecks is the most checks one rule's merge gate

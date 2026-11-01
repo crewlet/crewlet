@@ -81,6 +81,17 @@ import (
 // root of its tree, of the file [ParseChecks] reads.
 const ChecksFilePath = ".crewlet/checks.yaml"
 
+// ChecksDirGlob is the part of a repository's tree its checks are made of:
+// the directory [ChecksFilePath] lives in, whole — the file, and whatever
+// script or fixture beside it a check's run executes. It is the human path
+// every merge gate requiring checks holds a change to unless the rule sets
+// agents_edit_checks ([GateRulesOf], U44): a change to the measurement a
+// target is measured with is a person's to approve, so no seat merges a
+// weakened check on another seat's approval. The whole directory rather than
+// the file alone, because a check whose script a change rewrote is changed as
+// surely as one whose definition it rewrote.
+const ChecksDirGlob = ".crewlet/**"
+
 // The file's bounds. Each one is a refusal at its field, so a file that passes
 // is one every reader holds whole: a check's definition rides every queued
 // record of it ([CheckDef]), and a home node reads the file on every change it

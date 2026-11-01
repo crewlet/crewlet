@@ -162,8 +162,11 @@ type MergeGate struct {
 	// record.
 	DeleteSource DeleteSource `json:"delete_source"`
 	// AgentsEditChecks lets a change to `.crewlet/**` — where a repository's
-	// checks are defined — merge on a seat's approval where the rule requires
-	// checks, which otherwise waits for a person's.
+	// checks are defined ([ChecksDirGlob]) — merge on a seat's approval where
+	// the rule requires checks, which otherwise waits for a person's: a rule
+	// with Checks and without it holds that glob as a human path its record
+	// never lists, added where the gate is combined ([GateRulesOf], U44).
+	// Turning it on is a loosening ([MergeGate.LoosenedBy]).
 	AgentsEditChecks bool `json:"agents_edit_checks,omitempty"`
 }
 

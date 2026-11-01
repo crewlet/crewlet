@@ -259,7 +259,9 @@
 // one change by [LoadGateFacts]) and the gate the rules matching the target
 // combine into, the strictest of each term ([GateRulesOf]) — M4's
 // preconditions, the approval only where the gate asks one, and the gate's
-// own: a person's approval of a change touching its human paths, one approval
+// own: a person's approval of a change touching its human paths — among them,
+// on a gate requiring checks, the checks' own directory ([ChecksDirGlob])
+// unless the rule sets agents_edit_checks (U44) — one approval
 // from somebody on every touched path owner's lead chain (the head revision's
 // RECORDED match, no glob matched in a judgment), the checks the gate
 // requires passed on the head commit, and the merger's authority where a
