@@ -834,3 +834,72 @@ func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 		t.Fatalf("a dequeue carrying a drop epoch validates: %v, want drop_epoch refused", err)
 	}
 }
+
+// A QUEUE READ SAYS WHAT ITS QUEUES PUT OUT LATELY: a read of a repository
+// answers, beside its live entries, the entry its queue ejected — the change by
+// its number, who enqueued it, why, and the paths its merge conflicted on —
+// and so does a read of that entry's target; a read of another target, a read
+// of every repository and a read a day after the ejection answer none.
+//
+// Mutations: drop the ejections from the queue listing — the first read
+// answers none, red; drop the target filter from the read — the read of
+// another target answers the ejection, red; drop the horizon — the read a
+// day later answers it, red.
+func TestAQueueReadSaysWhatItsQueuesPutOutLately(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	entryID := enqueue.Enqueue.EntryID
+	res, err = c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
+		p.Eject = &code.Eject{RepoID: repo, Entries: []code.Ejection{{EntryID: entryID,
+			Reason: code.EjectConflict, Paths: []string{"go.mod", "main.go"}}}}
+	}))
+	requireRecorded(t, res, err)
+	var endedMicros int64
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT ended_at FROM code_queue WHERE repo_id = ? AND entry_id = ?`,
+			repo, entryID).Scan(&endedMicros)
+	}); err != nil {
+		t.Fatalf("read the ejection's instant: %v", err)
+	}
+	ejectedAt := time.UnixMicro(endedMicros).UTC()
+	soon := ejectedAt.Add(time.Hour)
+	n.readAt.Store(&soon)
+
+	read := func(q code.ReadQuery) []code.EjectedRow {
+		t.Helper()
+		q.Kind, q.Asker = code.ReadQueue, ada
+		answer, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("read the queue %+v: %v", q, err)
+		}
+		return answer.Ejected
+	}
+	for _, q := range []code.ReadQuery{{Repo: "web"}, {Repo: "web", Target: "refs/heads/main"}} {
+		got := read(q)
+		if len(got) != 1 || got[0].EntryID != entryID || got[0].Number != 1 || got[0].Repo != "web" ||
+			got[0].Reason != code.EjectConflict || !slices.Equal(got[0].Paths, []string{"go.mod", "main.go"}) ||
+			got[0].EnqueuedBy.Handle != "founder" || !got[0].EjectedAt.Equal(ejectedAt) {
+			t.Fatalf("a read of %+v answers the ejections %+v, want web!1's, conflicted on go.mod and main.go",
+				q, got)
+		}
+	}
+	if got := read(code.ReadQuery{Repo: "web", Target: releaseRef}); len(got) != 0 {
+		t.Errorf("a read of %s answers main's ejection: %+v", releaseRef, got)
+	}
+	if got := read(code.ReadQuery{}); len(got) != 0 {
+		t.Errorf("a read of every repository answers ejections %+v, want none: a named repository's alone", got)
+	}
+	later := ejectedAt.Add(code.QueueEjectionsShown + time.Minute)
+	n.readAt.Store(&later)
+	if got := read(code.ReadQuery{Repo: "web"}); len(got) != 0 {
+		t.Errorf("a read a day after the ejection still answers it: %+v", got)
+	}
+}

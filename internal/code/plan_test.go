@@ -787,6 +787,8 @@ func registeredStatements() map[string]statement {
 			MergeRateScan}, []string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
 		"a repository's entries ended since": {enqueuedEndedSQL, []any{"repo-1", 1000, "refs/heads/main", 1000,
 			MergeRateScan}, []string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
+		"a repository's ejections": {ejectedSQL, []any{"repo-1", 1000, "", "", MaxEjectionsShown},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},

@@ -22,8 +22,10 @@ import (
 //   - `queue` ([ReadQueue]) lists the LIVE entries of every queue — of one
 //     repository, of one of its targets, or of every repository the asker
 //     reads — in queue order, each with its place, beside the trains testing a
-//     named repository's (code_queue_live_idx, code_candidates_train_idx),
-//     held to the asker's grant as a listing of changes is.
+//     named repository's (code_queue_live_idx, code_candidates_train_idx) and
+//     the entries its queues put out in the last [QueueEjectionsShown]
+//     (code_queue_ended_idx), held to the asker's grant as a listing of
+//     changes is.
 //   - `queue_due` ([ReadQueueDue]) is the home's: the ACTIVE repositories
 //     holding a live entry, by id — an archived or deleted one's queue is
 //     nobody's work until it is active again — or one repository's queue
@@ -91,6 +93,104 @@ type CandidateRow struct {
 	PackID      string            `json:"pack_id,omitempty"`
 	State       string            `json:"state"`
 	Position    statelog.Position `json:"position"`
+}
+
+// EjectedRow is one entry a queue put out, as a `queue` read of its
+// repository answers it beside the live ones: the change it was and the head
+// it was enqueued at, who enqueued it, why the queue put it out
+// ([QueueEndReason]: check_failed, conflict, gate_unmet, head_moved,
+// not_fast_forward) and what of it a person reads first — the required checks
+// that failed on what it was tested in, or the paths its merge conflicted on —
+// and when.
+//
+// AN ANSWER'S ROW, NOT A RECORD'S, so it takes no versionedFields row. AS A
+// STATED CONDITION (M3-O84 §2 item 5): no build that carries the code domain
+// has run without it — none of the domain is on main — so a build answering a
+// `queue` read with no ejections is one nobody ran; were one ever to run
+// first, its answer would leave the field out and a reader would draw no
+// ejection, which is what such a build knows.
+type EjectedRow struct {
+	RepoID    string `json:"repo_id"`
+	Repo      string `json:"repo"`
+	EntryID   string `json:"entry_id"`
+	TargetRef string `json:"target_ref"`
+	ChangeID  string `json:"change_id"`
+	// Number is its change's number on its repository (web!42's 42).
+	Number     int64          `json:"number"`
+	HeadOID    string         `json:"head_oid"`
+	EnqueuedBy Party          `json:"enqueued_by"`
+	Reason     QueueEndReason `json:"reason"`
+	Checks     []string       `json:"checks,omitempty"`
+	Paths      []string       `json:"paths,omitempty"`
+	EnqueuedAt time.Time      `json:"enqueued_at"`
+	EjectedAt  time.Time      `json:"ejected_at"`
+}
+
+// QueueEjectionsShown is how far back a `queue` read of a repository answers
+// the entries its queues put out: a DAY. An ejection is a person's or a
+// seat's to act on — fix the change and enqueue it again — and its own wake
+// (`dequeued`, `checks_failed`) reaches whoever must; the Queue section shows
+// it beside the queue it left so a reader watching that queue sees why it
+// shrank. A day covers a reader who looks once a working day; older ones are
+// the change's own history, on its page.
+const QueueEjectionsShown = 24 * time.Hour
+
+// MaxEjectionsShown is the most ejections one `queue` read answers, newest
+// first: 50, the queue listing's own page (defaultQueueLimit) — a band of a
+// page's height under a queue's live entries. A queue that ejected more in a
+// day is broken, not busy, and its fifty newest say why as well as all of
+// them.
+const MaxEjectionsShown = defaultQueueLimit
+
+// ejections files into out what repository repo's queues put out in the last
+// [QueueEjectionsShown] — its target's alone, where target names one — newest
+// first, at most [MaxEjectionsShown]: one seek of code_queue_ended_idx from
+// the horizon up, newest first, the ejected state a filter over a day's ended
+// entries of one repository (MaxQueueEntries' day of a queue's capacity), the
+// partial predicate repeated as the index declares it.
+func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target string, out *ReadAnswer) error {
+	since := store.EncodeTime(r.now().Add(-QueueEjectionsShown))
+	rows, err := tx.QueryContext(ctx, ejectedSQL, repo.ID, since, target, target, MaxEjectionsShown)
+	if err != nil {
+		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		entries []queueEntry
+		details []string
+	)
+	for rows.Next() {
+		var detail string
+		e, err := scanEntry(func(dest ...any) error { return rows.Scan(append(dest, &detail)...) })
+		if err != nil {
+			return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+		}
+		entries, details = append(entries, e), append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
+	}
+	numbers, err := numbersOf(ctx, tx, entries)
+	if err != nil {
+		return err
+	}
+	for i, e := range entries {
+		row := EjectedRow{RepoID: e.RepoID, Repo: repo.Name, EntryID: e.EntryID, TargetRef: e.TargetRef,
+			ChangeID: e.ChangeID, Number: numbers[e.ChangeID], HeadOID: e.HeadOID, EnqueuedBy: e.EnqueuedBy,
+			Reason: e.EndReason, EnqueuedAt: store.DecodeTime(e.EnqueuedAt), EjectedAt: store.DecodeTime(e.EndedAt)}
+		if details[i] != "" {
+			var x struct {
+				Checks []string `json:"checks"`
+				Paths  []string `json:"paths"`
+			}
+			if err := json.Unmarshal([]byte(details[i]), &x); err != nil {
+				return fmt.Errorf("code: read entry %s's ejection: %w", e.EntryID, err)
+			}
+			row.Checks, row.Paths = x.Checks, x.Paths
+		}
+		out.Ejected = append(out.Ejected, row)
+	}
+	return nil
 }
 
 // LandingRow is one landing on a protected target: the record that landed it
@@ -246,7 +346,8 @@ func cutQueueCursor(s string) (repoID, target string, seq int64, ok bool) {
 // q names — of its target, where it names one — or, naming none, of every
 // repository the asker reads, in queue order; each with its place and its
 // change's number; and, for a named repository, the candidates of every train
-// of the targets the page reaches.
+// of the targets the page reaches and, on its first page, what its queues —
+// its target's, where it names one — put out lately ([Reader.ejections]).
 func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	limit := min(limitOr(q.Limit, defaultQueueLimit), r.pageRows)
 	repos := map[string]listedRepo{}
@@ -330,6 +431,13 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 	}
 	if q.Repo == "" {
 		return nil
+	}
+	if !resumed {
+		for _, named := range repos {
+			if err := r.ejections(ctx, tx, named.ref, q.Target, out); err != nil {
+				return err
+			}
+		}
 	}
 	// THE TRAINS OF THE TARGETS THE PAGE REACHED, a named repository's: a
 	// target's candidates are its live trains' alone, since a train that ends
@@ -596,6 +704,10 @@ const (
 		WHERE q.state IN ('waiting', 'testing') AND q.repo_id > ?1
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = q.repo_id AND r.status = 'active')
 		GROUP BY q.repo_id ORDER BY q.repo_id LIMIT ?2`
+	ejectedSQL = `SELECT ` + entryColumns + `, ejected FROM code_queue INDEXED BY code_queue_ended_idx
+		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at >= ?
+			AND state = 'ejected' AND (? = '' OR target_ref = ?)
+		ORDER BY ended_at DESC LIMIT ?`
 	trainsSQL = `SELECT candidate_id, train, ordinal, base_oid, tip_oid, pack_id, state, position, entries
 		FROM code_candidates INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ?
 		ORDER BY train, ordinal`

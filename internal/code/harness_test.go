@@ -99,6 +99,10 @@ type node struct {
 	// its lifecycle store decides no request while it is set.
 	behind atomic.Bool
 
+	// readAt is the instant the node's reader reads at, where a test set
+	// one; harnessAt otherwise.
+	readAt atomic.Pointer[time.Time]
+
 	// mu SERIALISES the drain: a write's wait drains on the writing
 	// goroutine, and two writes waiting at once — two repositories
 	// published concurrently — would otherwise apply one record twice.
@@ -253,7 +257,13 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}
-	reader, err := code.NewReader(code.ReaderOptions{Log: authority, Now: func() time.Time { return harnessAt },
+	readAt := func() time.Time {
+		if at := n.readAt.Load(); at != nil {
+			return *at
+		}
+		return harnessAt
+	}
+	reader, err := code.NewReader(code.ReaderOptions{Log: authority, Now: readAt,
 		Roster: func() code.Roster { return n.chart }})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)

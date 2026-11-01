@@ -1430,12 +1430,14 @@ type ReadAnswer struct {
 	// the last.
 	DueQueue *QueueDue `json:"due_queue,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
-	// Trains a `queue` read's candidates of the trains testing
-	// the targets its page reaches; Landings a page of a `landings` read; and
-	// Green the target's green row a `landings` read starts above, or a
-	// `green` read's rows.
+	// Trains a `queue` read's candidates of the trains testing the targets
+	// its page reaches; Ejected, on a named repository's first page, the
+	// entries its queues put out lately ([EjectedRow]), newest first;
+	// Landings a page of a `landings` read; and Green the target's green
+	// row a `landings` read starts above, or a `green` read's rows.
 	Queue    []QueueRow     `json:"queue,omitempty"`
 	Trains   []CandidateRow `json:"trains,omitempty"`
+	Ejected  []EjectedRow   `json:"ejected,omitempty"`
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
