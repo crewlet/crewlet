@@ -190,6 +190,9 @@ const (
 	// M5-D7) — and taken out of that queue again.
 	ActionCodeMergeChange   Action = "code_merge_change"
 	ActionCodeDequeueChange Action = "code_dequeue_change"
+	// And a merged change reverted by a change of its own, opened by the
+	// push of its revert's branch (M5-D25), judged as every engine write is.
+	ActionCodeRevertChange Action = "code_revert_change"
 	// A commit's CHECKS: what a check that failed said — its failures, its
 	// summary, its tail and pages of its log — read by the repository's
 	// grant; an attempt run again, decided by the repository's checks writer
@@ -849,6 +852,9 @@ var rules = map[Action]rule{
 	// proof here: a seat merges a change its gate lets it merge.
 	ActionCodeMergeChange:   {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeDequeueChange: {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND ITS REVERT, a branch the caller may create and the change its push
+	// opens, on the footing of every engine write.
+	ActionCodeRevertChange: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
 	// each decided per repository in the tool and by the checks writer from
 	// its chart, on the same footing — a seat reads what failed and reruns

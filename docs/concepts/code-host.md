@@ -6487,6 +6487,39 @@ seconds** of git (BenchmarkEngineRebase measures it), and a router gives it
 **112 seconds** on one git node — an engine write's 82 with its build term
 replaced by the rebase's.
 
+### A change reverted
+
+`code_revert_change` reverts a merged change as one engine write of kind
+`revert_change`: the change by its number, and the new branch it is reverted
+on — the seat's own `seats/<handle>/revert-<n>`, or `revert-<n>` for a person
+— which must not exist (`exists` from the tool where it does). The build:
+
+1. **Reads the change** in the copy's snapshot: a change that is not merged,
+   or whose target is gone, is refused `not_merged`.
+2. **Places its merge** against the target it was merged onto: a merge
+   commit's first parent, a squash's one parent, and — for a fast-forward,
+   whose `merge_oid` is the change's own head — the base its head revision's
+   facts recorded, since that head's first parent is the change's previous
+   commit. A fast-forward whose head revision's base is not recorded yet is
+   refused `not_merged` until it is.
+3. **Undoes it in one merge**: one `git merge-tree --write-tree` with the
+   `merge_oid` as the base, the target's tip as ours and the target before the
+   merge as theirs — git's `revert -m 1` for a merge commit, a plain revert for
+   a squash, and the whole range as ONE commit for a fast-forward. A conflict
+   stops it with nothing stored, every conflicted path named; a merge already
+   undone is `nothing_to_change`.
+4. **Commits it** on the target's tip, as the caller (`Revert "<title>"`,
+   naming the change, its `merge_oid`, the method and the target restored).
+5. **Lands one push** creating the branch, through the [one
+   landing](#how-a-write-is-built), whose record opens the change "Revert
+   <repo>!<n>" from it into the same target — the push's own change, as a
+   person's `-o change` opens one ([A change a push
+   opens](#a-change-a-push-opens)) — and the write's answer names it.
+
+A revert never moves its target: it is a change, held to the target's gate
+like any other. Asked to, the tool merges it as a second write of the same
+operation's step, from the commit the revert made.
+
 ### The bounds
 
 | Bound | Value | Why |

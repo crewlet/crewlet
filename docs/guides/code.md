@@ -496,6 +496,37 @@ The rebase is built on the repository's [home git
 node](../concepts/code-host.md#the-home-git-node) under forty seconds of git
 ([How a rebase is built](../concepts/code-host.md#a-change-rebased)).
 
+## Reverting a change
+
+A merged change that turns out wrong is undone by **a change of its own**,
+never by moving its target back: `code_revert_change`, naming the change — by
+a seat, or by your own assistant, as you. The code host undoes what the
+change's merge brought into its target, onto the target's current tip, as one
+commit of yours on a **new branch** — `seats/<handle>/revert-<n>` for a seat,
+`revert-<n>` for a person — and the push of that branch opens the change
+**"Revert web!42"** into the same target, in the same record. That change is
+gated, reviewed and merged like any other; pass `merge` and it is merged as
+the call's second write, as far as its target's gate allows — a merge it
+could not make yet is said beside the opened change, and the revert stays
+open for you to merge.
+
+- **Every way it was merged reverts the same way.** A merge commit is
+  reverted against its first parent (git's `revert -m 1`), a squash against
+  its one parent, and a fast-forward over the change's whole range, from the
+  base its head revision was measured against — so the revert is the whole of
+  the change, as one commit, whatever its method.
+- **A conflict stops it.** Where the target has since changed what the change
+  changed, nothing is created: the answer names each conflicted path with its
+  stages' ids and the start of the file as git marked it. Resolve it in a
+  coding box, or revert it yourself with `git revert` and push.
+- **What it refuses:** a change that is not merged (`not_merged`), and a
+  revert branch already there (`exists` — a revert of the change is under
+  way: find its change, or delete the branch to revert again).
+
+The revert is built on the repository's [home git
+node](../concepts/code-host.md#the-home-git-node) as any engine write is
+([How a revert is built](../concepts/code-host.md#a-change-reverted)).
+
 ## Adding checks
 
 A repository's checks — the builds, tests and linters a change is measured
@@ -670,12 +701,12 @@ from the ones `.crewlet/checks.yaml` defines.
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through thirty-two of the [code
+repositories through thirty-five of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
 names — every one but `code_report_check`, which is a person's. A seat holds
 no git credential and needs none. Every seat reads with twelve of the tools;
 a seat whose `role.code.access` is `full_access` also changes the
-repositories with the other twenty; and a seat whose role has a
+repositories with the other twenty-three; and a seat whose role has a
 sandbox works in a clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
@@ -700,7 +731,7 @@ out the URL to clone from, on `api.external_url`.
 
 ### What your seats change
 
-A seat at `full_access` changes the repositories with the other eighteen code
+A seat at `full_access` changes the repositories with the other twenty-three code
 tools, one change a call: a commit of up to 1 000 file operations to a branch
 (`code_commit_files`), a commit reverted or picked onto one (`code_revert`,
 `code_cherry_pick`), a branch created or deleted (`code_create_branch`,
@@ -708,9 +739,9 @@ tools, one change a call: a commit of up to 1 000 file operations to a branch
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
-`read_only` is what a seat that sets none runs at — is offered the eleven
-reads alone, none of the eighteen. Your assistant has the same eighteen, as
-you.
+`read_only` is what a seat that sets none runs at — is offered the twelve
+reads alone, none of the twenty-three. Your assistant has the same twenty-three
+and `code_report_check` besides, which is a person's alone, as you.
 
 **A commit is built on the server and lands as one push** in the seat's name
 ([Engine-built commits](../concepts/code-host.md#engine-built-commits)). The

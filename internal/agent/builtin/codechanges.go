@@ -154,6 +154,10 @@ var changeToolNeeds = map[string]code.Access{
 	// admit the call; neither carries a ceiling its decide reads.
 	CodeMergeChangeTool:   code.AccessRead,
 	CodeDequeueChangeTool: code.AccessRead,
+	// A revert creates a branch — a full_access seat's own namespace — and
+	// opens a change in that push's record, so its rule is the push's, the
+	// git node's and the committer's, as a rebase's: read.
+	CodeRevertChangeTool: code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,

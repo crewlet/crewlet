@@ -199,6 +199,7 @@ var notRefArgs = map[string]string{
 	"delete_branch":      "whether a merge deletes the change's own source, which the merge record moves",
 	"close_task":         "whether a merge closes the change's work item",
 	"override_reason":    "a person's reason to merge past a gate",
+	"merge":              "whether a revert's change is merged as its call's second write",
 }
 
 // refCallDrops is the arguments a tool's holdingCall row carries that the call

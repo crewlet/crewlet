@@ -80,6 +80,11 @@ type landing struct {
 	// none. The change they ask for is read from them here (askChange), and
 	// what becomes of it is never a refusal of the push.
 	PushOptions []string
+	// Change is the change the push opens as its BUILDER formed it, in
+	// place of any its options ask for — a revert_change's "Revert
+	// <repo>!<n>" (write.go) — and nil for every other: made ready,
+	// proposed and answered as an option's change is (askedChange).
+	Change *code.ChangeOption
 	// Principal is who pushes.
 	Principal code.Principal
 	// Via is how the builder built the push's pack — the relay's is
@@ -227,10 +232,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	cmds := slices.Clone(l.Commands)
 	result := pushResult{commands: len(cmds)}
-	// THE CHANGE THE OPTIONS ASK FOR, read once, before anything is decided
-	// — never a refusal of the push — and carried on every answer the
-	// landing gives (done), for the line its pusher reads of it.
-	ask := askChange(l.PushOptions, l.Commands)
+	// THE CHANGE THE OPTIONS — OR THE BUILDER — ASK FOR, read once, before
+	// anything is decided — never a refusal of the push — and carried on
+	// every answer the landing gives (done), for the line its pusher reads
+	// of it, or the engine write's answer.
+	ask := l.askedChange()
 	done := func(out landed) landed {
 		out.Change = ask
 		return out

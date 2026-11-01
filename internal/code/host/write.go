@@ -307,6 +307,9 @@ type writing struct {
 	// its budget of git run time (build.go's budget and charge).
 	metered bool
 	left    time.Duration
+	// opens is the change the write's push opens as its build formed it —
+	// a revert_change's "Revert <repo>!<n>" — and nil for every other kind.
+	opens *code.ChangeOption
 
 	started             time.Time
 	syncTook, buildTook time.Duration
@@ -770,12 +773,15 @@ func (wr *writing) land(ctx context.Context, sc *cache.Scratch) (code.EngineWrit
 	wr.landed = true
 	landStart := s.now()
 	l, err := s.land(ctx, landing{Synced: wr.synced, Scratch: sc, Commands: []code.Command{wr.cmd},
-		Principal: w.Principal, Via: code.ViaEngine, PushID: wr.pushID, ReceivedAt: s.now()})
+		Change: wr.opens, Principal: w.Principal, Via: code.ViaEngine, PushID: wr.pushID, ReceivedAt: s.now()})
 	wr.landTook = s.now().Sub(landStart)
 	if err != nil {
 		return code.EngineWriteResult{}, err
 	}
 	res := code.EngineWriteResult{Command: l.Commands[0], Position: l.Result.position}
+	if wr.opens != nil {
+		res.Change = l.Change.answer
+	}
 	switch l.Result.outcome {
 	case types.AuditApplied:
 		res.Outcome = statelog.OutcomeApplied

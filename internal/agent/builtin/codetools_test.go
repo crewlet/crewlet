@@ -1753,7 +1753,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty-five code tools'
+// codeCatalogueBudget is the most bytes the thirty-six code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld) — but for code_report_check, a person's alone — and
@@ -1813,11 +1813,12 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // full_access seat carries 44 786) — each argument its name and type but
 // where they do not say it, who may rerun what and that a report is a
 // person's said once, in each description; ~6% headroom again. And 49 400 →
-// 53 900 when a change's merge and dequeue joined beside its rebase,
-// deliberately: what a refused merge names said once, in its description, and
-// every argument cut to its name and type, with the room a change's revert
-// takes beside them.
-const codeCatalogueBudget = 53_900
+// 52 900 when a change's merge, dequeue and revert joined beside its rebase,
+// deliberately, with their measured cost: 46 587 → 49 918 (~12 480 tokens),
+// 3 331 bytes (~833 tokens), what a refused merge names and that a revert is a
+// change of its own said once, in each description, and every argument cut
+// to its name and type; ~6% headroom again.
+const codeCatalogueBudget = 52_900
 
 // codeReadsCatalogueBudget is the most bytes the twelve code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
@@ -1841,12 +1842,12 @@ const codeReadsCatalogueBudget = 20_300
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the twelve reads' definitions on every round of every turn, and
-// a seat at full_access twenty-two writes' beside them: a CLI's catalogue
+// a seat at full_access twenty-three writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// thirty-five, each held to a budget, so a later description edit is a
+// thirty-six, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1874,7 +1875,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the twelve code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty-five code tools (a full_access seat's and the operator's)",
+		{"all thirty-six code tools (a full_access seat's and the operator's)",
 			added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {

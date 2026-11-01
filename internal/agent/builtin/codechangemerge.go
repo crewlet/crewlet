@@ -241,10 +241,18 @@ func (t *codeMergeChange) deleteSource(ctx context.Context, cv conversing, args 
 	if _, said := args["delete_branch"]; said {
 		return argBool(args, "delete_branch"), nil
 	}
-	if !strings.HasPrefix(cv.change.SourceRef, gitref.SeatsRoot) {
+	return seatSourceDeleted(ctx, cv.g, cv.change.SourceRef, cv.change.TargetRef)
+}
+
+// seatSourceDeleted is whether a merge of source into target deletes source
+// where its caller said nothing: a seat's branch unless a gate over the
+// target keeps it, and no other (Q4) — read as the git node reads the gates
+// for the merge (code.ReadRepo with its gates), at the caller's floor. A
+// merge's default and a revert's step two take it alike.
+func seatSourceDeleted(ctx context.Context, g changeRead, source, target string) (bool, *tools.Result) {
+	if !strings.HasPrefix(source, gitref.SeatsRoot) {
 		return false, nil
 	}
-	g := cv.g
 	answer, err := g.deps.read(ctx, g.c, code.ReadQuery{Kind: code.ReadRepo, Repo: g.repo.Name, Gates: true,
 		Fresh: seatRead})
 	if err != nil {
@@ -261,7 +269,7 @@ func (t *codeMergeChange) deleteSource(ctx context.Context, cv conversing, args 
 	for i, rg := range answer.Repo.Gates {
 		rules[i] = code.Protection{PushRule: code.PushRule{Pattern: rg.Pattern}, Gate: &rg.Gate}
 	}
-	gate, err := code.GateRulesOf(rules, cv.change.TargetRef, "")
+	gate, err := code.GateRulesOf(rules, target, "")
 	if err != nil {
 		r := faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's merge rules: %s.", g.tool,
 			g.repo.Name, faultSaid))

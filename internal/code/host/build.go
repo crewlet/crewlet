@@ -155,7 +155,8 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	if j.parent == "" {
 		j.parent = w.Base
 	}
-	creates := w.Kind == code.WriteCreateBranch || (w.Kind == code.WriteCommitFiles && w.ExpectedHead == "")
+	creates := w.Kind == code.WriteCreateBranch || w.Kind == code.WriteRevertChange ||
+		(w.Kind == code.WriteCommitFiles && w.ExpectedHead == "")
 	if (creates && head != "") || (!creates && head != w.ExpectedHead) {
 		return j, writeVerdict{reason: code.RefusalStale, detail: wr.headSentence(head), stale: true}, nil
 	}
@@ -516,6 +517,8 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		commit, res, done, err = b.applySuggestions(ctx, j)
 	case code.WriteRebaseChange:
 		commit, res, done, err = b.rebase(ctx)
+	case code.WriteRevertChange:
+		commit, res, done, err = b.revertChange(ctx)
 	default:
 		commit, res, done, err = b.pick(ctx)
 	}

@@ -73,7 +73,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		CodeApplySuggestionsTool: code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
 	}
 	// The change writes a git node decides as a branch move, and nothing else.
-	pushes := []string{CodeRebaseChangeTool}
+	pushes := []string{CodeRebaseChangeTool, CodeRevertChangeTool}
 	// And the writes whose committer judges its asker's merge authority
 	// from its own chart (M5-D2), carrying no ceiling its decide reads.
 	merging := []string{CodeMergeChangeTool, CodeDequeueChangeTool}

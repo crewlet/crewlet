@@ -362,6 +362,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// AND ITS MERGE, which moves its target, and ITS DEQUEUE.
 		builtin.CodeMergeChangeTool:   true,
 		builtin.CodeDequeueChangeTool: true,
+		builtin.CodeRevertChangeTool:  true,
 		// A COMMIT'S CHECKS: what one said is a read a worker may be handed;
 		// a rerun queues an attempt every colleague's change readiness reads,
 		// and a report is a check result on the same rows — neither a

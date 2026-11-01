@@ -58,6 +58,23 @@ func askChange(options []string, cmds []code.Command) changeAsk {
 	return changeAsk{asked: true, option: opt, source: i}
 }
 
+// askedChange is the change a landing opens: the one its builder formed
+// (landing.Change, a revert_change's), or else what its push's options ask
+// for (askChange) — one ask either way, made ready and answered by the same
+// steps, so an engine write's change is opened in its push's record exactly
+// as a person's `-o change` is.
+func (l *landing) askedChange() changeAsk {
+	if l.Change == nil {
+		return askChange(l.PushOptions, l.Commands)
+	}
+	i, r, why := code.ChangeSource(l.Commands)
+	if r != "" {
+		return changeAsk{asked: true, source: -1, answer: &code.ChangeAnswer{Refusal: r, Detail: why}}
+	}
+	opt := *l.Change
+	return changeAsk{asked: true, option: &opt, source: i}
+}
+
 // readyChange makes the change a push asks for ready for its proposal, once
 // the push is to be proposed — cmds its commands as the landing has decided
 // them so far, proposed the same as its proposal carries them — and answers

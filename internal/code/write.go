@@ -86,12 +86,28 @@ const (
 	// holds its old head. At most [MaxRebaseCommits] commits, none a merge;
 	// the first that conflicts stops it, nothing stored.
 	WriteRebaseChange EngineWriteKind = "rebase_change"
+	// WriteRevertChange reverts a MERGED change ([EngineWrite.Change]) on a
+	// NEW branch ([EngineWrite.Ref], which must not exist) started at its
+	// target's tip: ONE commit undoing what the change's merge brought into
+	// its target — its merge_oid against the target it was merged onto,
+	// which is that commit's first parent for a merge commit (git's mainline
+	// 1) and for a squash, and the change's own range for a fast-forward,
+	// from the base its head revision recorded — landed as ONE PUSH whose
+	// record opens the change "Revert <repo>!<n>" into the same target
+	// (M5-D25: the push's own change, PushEntry.Change). A revert that does
+	// not apply cleanly stops it, nothing stored, every conflicting path
+	// named. A write is no record (this file's doc), so the kind takes no
+	// versionedFields row; it crosses the estate's wire to the git node
+	// under the code domain's stated condition (M3-O84 §2 item 5: no build
+	// carrying the domain has run without it), and the push it lands opens
+	// its change through PushEntry.Change, under the condition its doc states.
+	WriteRevertChange EngineWriteKind = "revert_change"
 )
 
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange}
+		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange, WriteRevertChange}
 }
 
 // Valid reports a kind this build knows.
@@ -104,7 +120,7 @@ func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(
 // (internal/code/host's merge.go).
 func (k EngineWriteKind) Commits() bool {
 	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions ||
-		k == WriteRebaseChange
+		k == WriteRebaseChange || k == WriteRevertChange
 }
 
 // BuildDeadline is the git run time a write of the kind is given for its
@@ -327,6 +343,10 @@ type EngineWriteResult struct {
 	// change's build (a conflict, not_fast_forward, too_large) is Refusal's,
 	// as any write's is.
 	Merge *MergeAnswer `json:"merge,omitempty"`
+	// Change is the change a revert_change's push opened — or, beside an
+	// outcome, why it opened none ([PushChangeRefusals]) — and nil for every
+	// other kind, and for a revert refused before its push.
+	Change *ChangeAnswer `json:"change,omitempty"`
 }
 
 // MergeAnswer is what a merge_change came to beside an engine write's own
@@ -434,6 +454,11 @@ const (
 	// [MaxRebaseCommits] commits its target does not hold: a history that
 	// long is rebased in a coding box.
 	WriteTooManyCommits WriteRefusal = "too_many_commits"
+	// WriteNotMerged is a revert_change of a change that is not merged, or
+	// whose merge the rows cannot place yet — a fast-forward whose head
+	// revision's base its home has not recorded, or a target gone since — so
+	// there is nothing, or nothing yet, to revert.
+	WriteNotMerged WriteRefusal = "not_merged"
 )
 
 // WriteRefusals is the closed set.
@@ -441,7 +466,7 @@ func WriteRefusals() []WriteRefusal {
 	return []WriteRefusal{WriteConflict, WriteNothingChanged, WriteEditNotFound, WriteEditAmbiguous,
 		WriteEditBinary, WriteEditLineEndings, WritePathConflict, WriteNotFound, WriteNotAFile, WriteMergeCommit,
 		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap, WriteNotFastForward,
-		WriteTooManyCommits}
+		WriteTooManyCommits, WriteNotMerged}
 }
 
 // Valid reports a refusal this build knows.
@@ -850,6 +875,17 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		if err := none(append([]field{commit, files, base, message, suggestions}, merging[1:]...)...); err != nil {
+			return err
+		}
+		if w.Change < 1 {
+			return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+		}
+		return nil
+	case WriteRevertChange:
+		// A NEW BRANCH AT ITS TARGET'S TIP, which the git node reads: the
+		// caller names the change and the branch, and at most a message of
+		// its own in place of the engine's.
+		if err := none(append([]field{head, commit, files, base, suggestions}, merging[1:]...)...); err != nil {
 			return err
 		}
 		if w.Change < 1 {

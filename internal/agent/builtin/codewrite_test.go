@@ -1203,6 +1203,7 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeRebaseChangeTool:  {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7},
+		builtin.CodeRevertChangeTool:  {"repo": repo, "change": 7},
 	}
 	args, ok := rows[name]
 	return args, ok
