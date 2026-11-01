@@ -400,6 +400,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 				run.Launch.CollectFailingSince = at.UTC()
 			}
 		}
+		if at := release.ResumeFailedAt; !at.IsZero() {
+			run.Launch.ResumeFailures++
+			if run.Launch.ResumeFailingSince.IsZero() {
+				run.Launch.ResumeFailingSince = at.UTC()
+			}
+		}
 		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX, and
 		// the job is its turn's from then on ([LaunchRecord.Collected]).
 		if release.Collected {
