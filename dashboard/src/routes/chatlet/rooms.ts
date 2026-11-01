@@ -137,6 +137,28 @@ export function roomWhere(kind: ChatKind, title: string): string {
 }
 
 /**
+ * Whether a room is a conversation between the reader and `actor` alone.
+ *
+ * A SENTENCE ABOUT WHAT THE ACTOR DID THERE NAMES NO ROOM: a one-to-one
+ * conversation is titled by the other person, so "Product Manager replied to
+ * a thread in Product Manager" only repeated the name it began with. A group
+ * conversation and every named room are still named. Where the room's people
+ * are not in hand, a one-to-one conversation (`dm`) holds the reader and one
+ * other, and whoever acted in it who is not the reader is that other.
+ */
+export function isConversationWith(
+  kind: ChatKind,
+  actor: string,
+  viewer: string,
+  participants?: readonly string[],
+): boolean {
+  if (kind !== "dm" || !actor || actor === viewer) return false;
+  if (participants === undefined) return true;
+  const others = participants.filter((handle) => handle && handle !== viewer);
+  return others.length === 1 && others[0] === actor;
+}
+
+/**
  * What an unread badge says.
  *
  * THE CAP IS THE ENGINE'S, NOT A NUMBER CHOSEN HERE. It counts to
