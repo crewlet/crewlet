@@ -88,12 +88,6 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing searches a repository's code yet.** Every repository names how it
-  is to be searched — `search: indexed` or `grep`
-  ([Declaring repositories](#declaring-repositories)) — and the mode is
-  recorded, answered on every read of the repository and changed like any
-  other setting; no git node keeps an index or answers a search in this
-  release.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
