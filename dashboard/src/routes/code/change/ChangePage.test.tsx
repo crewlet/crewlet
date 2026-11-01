@@ -56,6 +56,8 @@ const VIEWER = {
     "code_request_review",
     "code_close_change",
     "code_apply_suggestions",
+    "code_merge_change",
+    "code_rerun_checks",
   ],
 };
 
@@ -410,4 +412,136 @@ test.each([
   const reply = await screen.findByRole("button", { name: "Reply" });
   await waitFor(() => expect(reply.getAttribute("title")).toBe(reason));
   expect(acted).toHaveLength(0);
+});
+
+// ---- The merge controls (`Merge.tsx`) ----------------------------------- //
+
+/** A readiness whose every condition is met, for a target whose gate requires `check` or not. */
+function ready(withCheck = false) {
+  const preconditions = [
+    { kind: "approval", state: "met", detail: "Approved by cto." },
+    ...(withCheck ? [{ kind: "check", state: "met", detail: "unit passed." }] : []),
+    { kind: "merge_authority", state: "met", detail: "jane merges into refs/heads/main." },
+  ];
+  return {
+    readiness: { met: preconditions.length, total: preconditions.length, first: "", preconditions },
+  };
+}
+
+// HELD WITH THE GATE'S OWN SENTENCE while the gate is unmet, and sent nowhere
+// on a press; once the gate holds, ONE code_merge_change of the head ON
+// SCREEN (`expected_head`), with the method chosen and nothing the person
+// did not choose. Mutation: send another head, drop expected_head, send
+// delete_branch unasked, or let an unmet gate's press through, and this fails.
+test("Merge is held by the gate's sentence, and sends the head on screen once it holds", async () => {
+  let acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  const held = await screen.findByRole("button", { name: "Merge" });
+  await waitFor(() => expect(held.getAttribute("title")).toBe("Waits on an approval."));
+  fireEvent.click(held);
+  expect(acted).toHaveLength(0);
+  cleanup();
+
+  acted = stubEngine(detail(ready()), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("radio", { name: "Squash" }));
+  const merge = await screen.findByRole("button", { name: "Merge" });
+  await waitFor(() => expect(merge.getAttribute("title")).toBeNull());
+  fireEvent.click(merge);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_merge_change",
+    args: { change: "web!42", expected_head: HEAD, method: "squash" },
+  });
+});
+
+// A GATE REQUIRING A CHECK LANDS THROUGH ITS QUEUE, so the control says what
+// the press does: Add to queue. Mutation: label it Merge whatever the gate,
+// and this fails.
+test("a target whose gate requires a check is merged by adding the change to its queue", async () => {
+  const acted = stubEngine(detail(ready(true)), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Add to queue" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]?.tool).toBe("code_merge_change");
+  expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
+});
+
+// A REFUSAL IN THE CONTROLS' OWN WORDS, keyed on the code host's word beside
+// the class: a head that moved is said as a push since the page was read,
+// never as the class's "changed by somebody else"; and the gate's every
+// unmet precondition (`not_ready`) is the engine's own sentence. Mutation:
+// draw the class's sentence for head_moved, or ours for not_ready, and this
+// fails.
+test.each([
+  [
+    "head_moved",
+    { error: "stale_version", refusal: "head_moved", detail: "code_merge_change: moved." },
+    409,
+    /Somebody pushed to it since you loaded it/,
+  ],
+  [
+    "gate_unmet",
+    {
+      error: "not_ready",
+      refusal: "gate_unmet",
+      detail: "web!42 does not yet meet main's merge gate. Unmet: approval — waits on cto;",
+    },
+    409,
+    /Unmet: approval — waits on cto/,
+  ],
+])("a %s refusal is drawn in its own words", async (_word, body, status, said) => {
+  stubEngine(detail(ready()), () => json(body, status));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
+  expect(await screen.findByText(said)).toBeTruthy();
+});
+
+// OVERRIDE IS A PERSON'S, WITH A REASON: held for anybody else; held in its
+// dialog until a reason is given; and then one code_merge_change carrying it.
+// Mutation: offer it to a seat, send it without a reason, or drop
+// override_reason, and this fails.
+test("Override is a person's alone, and carries the reason they give", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/code/repos/web/changes/42", { ...VIEWER, kind: "agent" });
+  const seat = await screen.findByRole("button", { name: "Override" });
+  await waitFor(() =>
+    expect(seat.getAttribute("title")).toBe("Only a person overrides a merge gate."),
+  );
+  cleanup();
+
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Override" }));
+  const dialog = await screen.findByRole("dialog");
+  const send = within(dialog).getByRole("button", { name: "Merge past the gate" });
+  expect(send.getAttribute("title")).toBe("Say why it merges past its gate.");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), {
+    target: { value: "Hotfix for the outage" },
+  });
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_merge_change",
+    args: {
+      change: "web!42",
+      expected_head: HEAD,
+      method: "merge",
+      override_reason: "Hotfix for the outage",
+    },
+  });
+});
+
+// RE-RUN CHECKS is one code_rerun_checks of every check of the change's head
+// that did not pass. Mutation: name the change otherwise, or drop all_failed,
+// and this fails.
+test("Re-run checks runs every failed check of the change's head again", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Re-run checks" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_rerun_checks",
+    args: { change: "web!42", all_failed: true },
+  });
 });

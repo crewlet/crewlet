@@ -100,6 +100,13 @@ export type ActResult =
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
+       * The CODE HOST's own word for a refusal of one of its writes
+       * (`refusal` on the answer: `head_moved`, `target_moving`, …), or `""`.
+       * Several share one class, so a screen that answers each in its own
+       * words — the merge controls — reads this, never the sentence.
+       */
+      hostRefusal: string;
+      /**
        * On a refusal on AUTHORITY, the grants any ONE of which would have
        * admitted the caller — read from the answer, never named by a screen.
        * Empty everywhere else.
@@ -261,6 +268,7 @@ function refusalOf(
     code,
     sentence,
     hint: err.hint,
+    hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
     grants: err.grants,
     // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a
     // `Retry-After` where it does and none where it does not (a full log, a

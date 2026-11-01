@@ -328,4 +328,33 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  code_merge_change: {
+    // MERGE, ADD TO QUEUE AND OVERRIDE (`routes/code/change/Merge.tsx`): the
+    // head on screen (`expected_head`), how it merges, whether its branch
+    // goes and its work item closes, and — Override's — a person's reason to
+    // merge past the gate. Its record lands on the code log; a work item it
+    // closes is a second write on the tracker's, which the change page does
+    // not read.
+    args: [
+      "repo",
+      "change",
+      "expected_head",
+      "method",
+      "delete_branch",
+      "close_task",
+      "override_reason",
+    ],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  code_rerun_checks: {
+    // RE-RUN CHECKS: every check of the change's head whose latest attempt
+    // did not pass, each at its next attempt (`all_failed`), on the checks
+    // log the change's checks tab reads.
+    args: ["repo", "change", "all_failed"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
 } as const;

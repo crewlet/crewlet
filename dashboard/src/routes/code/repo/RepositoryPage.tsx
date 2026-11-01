@@ -48,7 +48,8 @@ import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
-import type { CodeOwner, CodeRepoDetail, CodeRuleGate } from "~/protocol/index.ts";
+import { gateLine, pushRuleLine } from "~/lib/protection.ts";
+import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
@@ -307,31 +308,6 @@ function Overview({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
-/** What a merge gate asks, in a line. */
-function gateLine(gate: CodeRuleGate["gate"]): string {
-  const parts = [
-    gate.merge_by === "persons"
-      ? "merged by a person"
-      : gate.merge_by === "maintainers"
-        ? "merged by its maintainers"
-        : "merged by its writers",
-    gate.approvals === "one" ? "one approval" : "no approval",
-  ];
-  if (gate.human_paths?.length)
-    parts.push(`a person approves ${plural(gate.human_paths.length, "path")}`);
-  if (gate.checks?.length) {
-    parts.push(`${plural(gate.checks.length, "check")} pass`);
-    // A GATE REQUIRING A CHECK LANDS THROUGH ITS QUEUE (the engine's rule:
-    // the queue applies to a gated branch with a required check), so that
-    // the queue tests each change before it lands is part of what the gate
-    // asks. The engine has one way a queue lands, so the line names it
-    // rather than reading a policy off the gate.
-    parts.push("landed by its queue, each change tested merged on the branch before it lands");
-  }
-  if (gate.owners_approve) parts.push("its path owners approve");
-  return parts.join(", ");
-}
-
 /**
  * The repository's settings, as its row and its detail carry them — shown,
  * never edited here: see the file's doc.
@@ -402,13 +378,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                 <li key={rule.pattern}>
                   <span className="mono">{rule.pattern}</span>
                   <span className="muted">
-                    {rule.direct_push === "none"
-                      ? "nobody pushes to it directly"
-                      : rule.direct_push === "persons"
-                        ? "only a person pushes to it directly"
-                        : rule.direct_push}
-                    {rule.allow_force ? ", forced pushes allowed" : ""}
-                    {rule.allow_delete ? ", deletion allowed" : ""}
+                    {pushRuleLine(rule)}
                     {gate ? `; a merge into it is ${gateLine(gate)}` : ""}
                   </span>
                 </li>

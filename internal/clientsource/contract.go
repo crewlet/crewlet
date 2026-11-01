@@ -273,6 +273,11 @@ var contract = []Entry{
 	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 
+	// merge.ts
+	{"MERGE_METHODS", ReadLiteral, "internal/code.TestTheDashboardOffersEveryMergeMethod"},
+	{"MERGE_REFUSALS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
+	{"MERGE_CONFLICT", ReadScalar, "internal/code.TestTheDashboardKnowsEveryMergeRefusal"},
+
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

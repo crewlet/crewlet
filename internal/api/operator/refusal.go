@@ -126,6 +126,13 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		detail[k] = v
 	}
 	detail["detail"] = sentence
+	// THE CODE HOST'S OWN WORD, beside the class: several of its refusals
+	// share one class, and a surface that answers each in its own words
+	// reads which one this was here ([builtin.HostRefusal]).
+	var host *builtin.HostRefusal
+	if errors.As(cause, &host) {
+		detail["refusal"] = host.Refusal
+	}
 	var unknown *builtin.UnknownOutcome
 	var refused *builtin.DecisionRefused
 	switch {

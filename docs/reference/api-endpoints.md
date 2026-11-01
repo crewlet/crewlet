@@ -5807,10 +5807,21 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `paused`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `not_ready`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `paused`, `steer_unsupported`, `budget_exhausted` | `409` |
 | `store_full` | `507` — the object store has no room for what the tool would store: nothing was stored or recorded, and **no** `Retry-After`, since the same call is refused the same until an operator makes room |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
+
+A refusal of one of the [code host's](../concepts/code-host.md) writes also
+names the host's own word for it in **`refusal`** — `head_moved`,
+`target_moving`, `queue_full`, `gate_unmet`, the write's `conflict` and the
+rest of each family (`code.MergeRefusals`, the write and change refusals) —
+beside the class in `error`. Several share one class: a change whose head
+moved and a train whose base moved are both `stale_version`, a target still
+moving and a full queue both `conflict`. So a client that answers each in its
+own words reads `refusal` rather than parsing `detail`, which is written for a
+model: the change page's merge controls do. A refusal that is not the code
+host's carries no `refusal`.
 
 Every `503` carries a `Retry-After` where waiting can clear it and **none**
 where it cannot — an evicted node, a full log, a record this node cannot

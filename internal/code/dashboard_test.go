@@ -417,3 +417,54 @@ func TestTheDashboardKnowsEveryStateOfAQueue(t *testing.T) {
 		t.Errorf("the dashboard's QUEUE_STATES is %v, want the engine's, in order: %v", got, want)
 	}
 }
+
+// THE DASHBOARD KNOWS EVERY MERGE REFUSAL, in the engine's order, and no
+// other.
+//
+// A change page's merge controls answer a refused merge, enqueue or override
+// in words of their own, keyed on the code host's word the act route names
+// beside the class (`refusal`, builtin.HostRefusal) and listed in
+// `MERGE_REFUSALS` (`contract/merge.ts`), whose sentences the compiler holds
+// complete over that list. A refusal the engine grew that the list lacks is
+// one the controls answer only in its class's general words — "changed by
+// somebody else" for a target that is still moving — and one the list keeps
+// that the engine dropped is a sentence nobody will ever read. Both ways, in
+// order.
+//
+// Mutation: drop a refusal from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryMergeRefusal(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "MERGE_REFUSALS"), spelledOut(code.MergeRefusals())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's MERGE_REFUSALS is %v, want the engine's, in order: %v", got, want)
+	}
+	// A MERGE'S BUILD answers a change that does not merge cleanly in the
+	// write's own word, which the controls name too.
+	conflict, err := clientsource.Scalar(clientsource.Tree(t), "MERGE_CONFLICT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict != string(code.WriteConflict) {
+		t.Errorf("the dashboard's MERGE_CONFLICT is %q, want the engine's %q", conflict, code.WriteConflict)
+	}
+}
+
+// THE DASHBOARD OFFERS EVERY WAY A CHANGE MERGES, in the engine's order, and
+// no other.
+//
+// The merge controls' method choice is `MERGE_METHODS` (`contract/merge.ts`),
+// sent as code_merge_change's `method`: a method the engine grew that the
+// list lacks is one no person can choose, and one the list keeps that the
+// engine dropped is a merge refused `invalid` on every press. Both ways, in
+// order — the first is the engine's default, which the controls open on.
+//
+// Mutation: drop a method from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardOffersEveryMergeMethod(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "MERGE_METHODS"), spelledOut(code.MergeMethods())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's MERGE_METHODS is %v, want the engine's, in order: %v", got, want)
+	}
+}
