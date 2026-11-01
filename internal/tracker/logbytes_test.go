@@ -82,18 +82,21 @@ const (
 // two figures are the most the reference company's pushes cost the log, and
 // the day prices both terms at them, at its least as at its most. They are a
 // MERGE's figures and nothing else's: the steady arm's compactor publishes no
-// layer, so no compaction it makes carries one, and a PUBLICATION — the
+// layer, so no compaction it makes carries one. A PUBLICATION — the
 // compaction a repository's maintainer appends to publish a multi-pack-index
-// layer, naming every pack the layer covers — is a shape of that op the day
-// has no figure for, which no node of this build appends
-// (codeLogUnwrittenShapes). The barriers are its git clients' linearizable
-// reads: a seat's push asks the log three times (its advertisement, its
-// receive's sync and the fetch before it), thirty people fetch every three
-// minutes of an eight-hour day, and a CI polls ten repositories a minute
-// where one runs.
+// layer, naming every pack the layer covers — is a term of its own, at
+// internal/code's measured figures (codeChange… below). The barriers are its
+// git clients' linearizable reads: a seat's push asks the log three times
+// (its advertisement, its receive's sync and the fetch before it), thirty
+// people fetch every three minutes of an eight-hour day, and a CI polls ten
+// repositories a minute where one runs.
+//
+// A push's box names the work item its run was launched for by its identity
+// (code.RunProvenance.WorkID, a native task's UUID), which the push=box arm
+// carries: 224 bytes beside a person's push, 49 of them that identity.
 const (
 	referencePushesADay = 3_000
-	codePushRecordBytes = 1_555
+	codePushRecordBytes = 1_604
 	// codeEnginePushRecordBytes is a seat's push the engine builds for a
 	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
 	// no term of the day, which prices every push at the box's, and printed
@@ -104,6 +107,69 @@ const (
 	referencePushReads        = 3 * referencePushesADay
 	referencePeopleReads      = 30 * 8 * 60 / 3
 	referenceCIReads          = 10 * 60 * 24
+)
+
+// A CHANGE'S RECORDS, each what internal/code's
+// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt holds it to
+// (its changeRecordBytes, which states the same figures): every record of a
+// change's life as this build's writers form it at the reference company's
+// text — a 2 KiB description, a 1 KiB summary, comment and finding body —
+// alone in its record, by the log's growth. A publication is a compaction,
+// measured there beside them because the committer's compact path forms it.
+const (
+	codeChangeOpenBytes      = 3_430
+	codeChangeEditBytes      = 3_100
+	codeReviewersBytes       = 1_190
+	codeReviseBytes          = 1_640
+	codeMergeabilityBytes    = 1_340
+	codeReviewFindingsBytes  = 5_030
+	codeReviewBytes          = 2_340
+	codeAnswerBytes          = 1_290
+	codeCommentBytes         = 2_280
+	codeThreadResolveBytes   = 1_160
+	codeMergeBytes           = 1_640
+	codeEnqueueBytes         = 980
+	codeCheckQueuedBytes     = 970
+	codeCheckDispatchedBytes = 970
+	codeCheckStartedBytes    = 780
+	codeCheckNamedBytes      = 840
+	codeCheckFinishedBytes   = 840
+	codePublicationTailBytes = 3_830
+	codePublicationOneBytes  = 1_110
+)
+
+// THE REFERENCE COMPANY'S CHANGES, a STATED JUDGEMENT rather than a
+// measurement, since no deployment has reported a day of them: every push is
+// a revision of the change its coding run works on, ten pushes a change, so
+// its 3 000 pushes a day are 300 changes. Each change is opened by a seat's
+// code_open_change, asks one reviewer, takes a review asking for changes with
+// two findings, an answer resolving them, two comments and a thread resolved,
+// then an approving review, and is merged deleting its source — and its home
+// records every revision's facts and its merge into the target, and the
+// readiness it stores again after the ask, the two reviews and the answer
+// (code.Mergeability.Refresh). That is the day at its least: no checks file,
+// no queue, and a target that never moves under a live change. At its most,
+// every change is queued first, its home rechecks it at every pass while its
+// target moves (internal/code/home's MergeabilityRefresh, ten minutes, over a
+// working day of eight hours), and its target's checks file defines three
+// checks, each of every revision queued, claimed, its box named and ended,
+// beside the head's dispatch. A queued change's landing is priced as its
+// merge: this build appends no land record (codeLogUnwritten).
+//
+// A PUBLICATION names every pack its layer covers. At the least the
+// reference company's packs are each named once, in a busy repository's tail
+// of compact.PublishPacks (64); at the most, beside that, every push is
+// published on its own, as a young repository's tail is once it holds a
+// share of its objects — a repository published at most every
+// compact.PublishMinInterval (ten minutes), which its pushes, a few an hour,
+// never outrun.
+const (
+	referenceChangesADay      = referencePushesADay / 10
+	referenceRevisionsADay    = referencePushesADay
+	referenceRefreshesAChange = 4
+	referenceRechecksAChange  = 8 * 60 / 10
+	referenceChecksAHead      = 3
+	referencePublishPacks     = 64
 )
 
 // codeLogTerm is one term of the code log's day: the bytes a day one SHAPE of
@@ -126,27 +192,78 @@ type codeLogTerm struct {
 
 // codeLogDay is the code log's day, a term for each shape of record it
 // prices: a seat's push, priced as its coding box's, a merge of the pushes'
-// packs — a plain merge and no publication, since the steady arm its figure
-// is measured on publishes nothing — the sweep of what the merges retired,
-// and its git clients' barriers at code.BarrierRecordBytes. What the day is summed from, so a term
-// priced here is a term of every figure TestTheDocsPrintTheMeasuredDay holds.
+// packs — a plain merge, since the steady arm its figure is measured on
+// publishes nothing — and a publication of their layers, the sweep of what
+// the merges retired, its git clients' barriers at code.BarrierRecordBytes,
+// and every record of the reference company's changes: their lifecycle,
+// their conversation, their home's facts, merges and readiness, their merges,
+// and at the most their queue and their checks. What the day is summed from,
+// so a term priced here is a term of every figure
+// TestTheDocsPrintTheMeasuredDay holds.
 func codeLogDay() []codeLogTerm {
-	pushes := float64(referencePushesADay * codePushRecordBytes)
-	compactions := float64(referencePushesADay * codeCompactionBytes)
-	sweeps := float64(referencePushesADay * codeSweepBytes)
+	changes, revisions := float64(referenceChangesADay), float64(referenceRevisionsADay)
+	checks := revisions * referenceChecksAHead
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
-	return []codeLogTerm{
-		{op: code.OpPush, shape: "a seat's coding box's push alone in its record, received by git " +
-			"and naming its coding run beside the turn — the most a seat's push takes, at which the " +
-			"day prices every one of the reference company's — as BenchmarkPushLogBytes's push=box " +
-			"arm measures it", least: pushes, most: pushes},
-		{op: code.OpCompact, shape: "a merge: a compaction carrying no layer, as every one " +
-			"BenchmarkCompact's steady arm makes", least: compactions, most: compactions},
-		{op: code.OpRetireSweep, shape: "a sweep of the pack rows the merges retired, a day later",
-			least: sweeps, most: sweeps},
-		{op: code.OpBarrier, shape: "a git client's linearizable read",
-			least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
+	day := []codeLogTerm{{op: code.OpBarrier, shape: "a git client's linearizable read",
+		least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)}}
+	// Every other term is a count of records a day at a measured size: at
+	// the least and the most alike, or (onlyMost) at the most alone.
+	for _, t := range []struct {
+		op       code.OpKind
+		shape    string
+		records  float64
+		bytes    float64
+		onlyMost bool
+	}{
+		{code.OpPush, "a seat's coding box's push alone in its record, received by git and naming its " +
+			"coding run and its work item's identity beside the turn — the most a seat's push takes, at " +
+			"which the day prices every one of the reference company's — as BenchmarkPushLogBytes's " +
+			"push=box arm measures it", referencePushesADay, codePushRecordBytes, false},
+		{code.OpCompact, "a merge: a compaction carrying no layer, as every one BenchmarkCompact's " +
+			"steady arm makes", referencePushesADay, codeCompactionBytes, false},
+		{code.OpCompact, "a publication of a busy repository's tail, its layer naming " +
+			"compact.PublishPacks packs: every pack the pushes add named once",
+			referencePushesADay / float64(referencePublishPacks), codePublicationTailBytes, false},
+		{code.OpCompact, "a publication of a young repository's one pack, one a push",
+			referencePushesADay, codePublicationOneBytes, true},
+		{code.OpRetireSweep, "a sweep of the pack rows the merges retired, a day later",
+			referencePushesADay, codeSweepBytes, false},
+		{code.OpChangeOpen, "a seat's code_open_change at a 2 KiB description, one a change", changes,
+			codeChangeOpenBytes, false},
+		{code.OpReviewers, "an ask of one reviewer, one a change", changes, codeReviewersBytes, false},
+		{code.OpReview, "a seat's review asking for changes with two findings, one a change", changes,
+			codeReviewFindingsBytes, false},
+		{code.OpReview, "a seat's review approving, one a change", changes, codeReviewBytes, false},
+		{code.OpFindingResolve, "the owner's answer resolving a review's findings, one a change", changes,
+			codeAnswerBytes, false},
+		{code.OpComment, "a seat's 1 KiB comment, two a change", 2 * changes, codeCommentBytes, false},
+		{code.OpThreadResolve, "a thread resolved, one a change", changes, codeThreadResolveBytes, false},
+		{code.OpMerge, "a merge of the change deleting its source, one a change — a queued change's " +
+			"landing priced as its merge", changes, codeMergeBytes, false},
+		{code.OpRevise, "a revision's facts, one a push", revisions, codeReviseBytes, false},
+		{code.OpMergeability, "a revision's merge into its target, one a push", revisions,
+			codeMergeabilityBytes, false},
+		{code.OpMergeability, "the stored readiness refreshed after an ask, a review or an answer, four a " +
+			"change", referenceRefreshesAChange * changes, codeMergeabilityBytes, false},
+		{code.OpMergeability, "a recheck of a moved target at every pass of its home over a working day",
+			referenceRechecksAChange * changes, codeMergeabilityBytes, true},
+		{code.OpEnqueue, "a change queued into its target, one a change", changes, codeEnqueueBytes, true},
+		{code.OpCheckQueued, "a check of a revision queued, three a push", checks, codeCheckQueuedBytes, true},
+		{code.OpCheckDispatched, "a head's dispatch, one a push", revisions, codeCheckDispatchedBytes, true},
+		{code.OpCheckStarted, "a check claimed by its runner, three a push", checks, codeCheckStartedBytes,
+			true},
+		{code.OpCheckStarted, "a check's box named by its runner, three a push", checks,
+			codeCheckNamedBytes, true},
+		{code.OpCheckFinished, "a check ended, three a push", checks, codeCheckFinishedBytes, true},
+	} {
+		bytes := t.records * t.bytes
+		least := bytes
+		if t.onlyMost {
+			least = 0
+		}
+		day = append(day, codeLogTerm{op: t.op, shape: t.shape, least: least, most: bytes})
 	}
+	return day
 }
 
 // codeLogOp is the day's terms of op summed: what op's records take a day,
@@ -205,7 +322,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 36 % of the day's least of 7.5 MB — a company whose seats work so reads it in " +
+		"MB a day, 11 % of the day's least of 24.6 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -249,6 +366,36 @@ var codeLogNegligible = map[code.OpKind]string{
 		"an Inbox button or an assistant's call, persons only: a person marking their day's " +
 		"notices one at a time writes tens of them, each a gesture and the positions of the " +
 		"notices it names, a few hundred bytes for the one or two a press names",
+	// A GESTURE ON A CHANGE beside its open, its reviews and its merge: the
+	// reference company's changes are opened ready, on the target they merge
+	// into, and merged, so its day makes none of them. Each is one record
+	// of code_update_change or code_close_change, the largest an edit that
+	// rewrites the whole description (codeChangeEditBytes, measured beside
+	// the change's other records), and a change edited once a day would
+	// append under a twentieth of the day's least
+	// (TestTheCodeLogsDayPricesEveryRecordItTakes holds that bound).
+	code.OpChangeEdit: "a change's title, description or work item set by code_update_change: a few " +
+		"times a change at most, each at most an edit rewriting the description (codeChangeEditBytes, " +
+		"measured) — under a twentieth of the day's least were every change edited once",
+	code.OpChangeDraft: "a change made a draft or ready by code_update_change: a few times a change at " +
+		"most, each a record naming the change and the flag, smaller than an edit",
+	code.OpChangeRetarget: "a change retargeted by code_update_change: once a change at most, a " +
+		"record naming the change and its new target, smaller than an edit",
+	code.OpChangeClose: "a change closed by code_close_change, in place of the merge a change merged " +
+		"takes: once a change at most, a record naming the change and a reason, smaller than an edit",
+	code.OpChangeReopen: "a closed change reopened by code_close_change: once a close at most, a " +
+		"record naming the change, smaller than an edit",
+	code.OpChangeLanded: "a change whose target came to hold its head outside a merge record — a " +
+		"person's own push of it — landed by its repository's home git node: once a change at most, " +
+		"in place of the merge record such a change never takes, and smaller than it (no pack and no " +
+		"principal); the reference company's changes are merged",
+	code.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
+		"code.CheckHistory once they have outlived it by code.CheckSweepGrace: a record an idle " +
+		"repository holding them, a day at most, as a pack sweep's",
+	code.OpQueueSweep: "the code-retention pass's sweep of an idle repository's ended queue entries " +
+		"and its landings below their green rows past code.QueueHistory once they have outlived it by " +
+		"code.QueueSweepGrace: a record an idle repository holding them, a day at most, as a pack " +
+		"sweep's",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
@@ -282,41 +429,12 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	payload reflect.Type
 	how     string
 }{
-	// A CHANGE'S LIFECYCLE, decided by its repository's committer since the
-	// committer's change path landed, is appended by no node while nothing
-	// asks for one: the change tools a seat and a person open, edit and close
-	// a change with are its first writer, through the estate's code.change,
-	// and a change's records come at the rate its pushes do — what the day
-	// must price once they exist, which that writer is the one to measure.
-	code.OpChangeOpen: {payload: reflect.TypeFor[code.ChangeOpen](), how: "a change is opened " +
-		"by a seat's or a person's code_open_change, through the estate's code.change"},
-	code.OpChangeEdit: {payload: reflect.TypeFor[code.ChangeEdit](), how: "a change's title, " +
-		"body and work item are set by code_update_change, through the estate's code.change"},
-	code.OpChangeDraft: {payload: reflect.TypeFor[code.ChangeDraft](), how: "a change is made " +
-		"a draft, or ready, by code_update_change, through the estate's code.change"},
-	code.OpChangeRetarget: {payload: reflect.TypeFor[code.ChangeRetarget](), how: "a change is " +
-		"retargeted by code_update_change, through the estate's code.change"},
-	code.OpChangeClose: {payload: reflect.TypeFor[code.ChangeClose](), how: "a change is closed " +
-		"by code_close_change, through the estate's code.change"},
-	code.OpChangeReopen: {payload: reflect.TypeFor[code.ChangeReopen](), how: "a change is " +
-		"reopened by code_close_change, through the estate's code.change"},
-	// A TARGET'S MERGE QUEUE, decided by its repository's committer since the
-	// committer's queue path landed, is appended by no node while nothing asks
-	// for it: code_merge_change, which queues a change into a target with a
-	// queue, and code_dequeue_change are its first writers, through the
-	// estate's code.queue — a record a change merged through a queue, and one
-	// more for each it leaves before landing, which those writers are the ones
-	// to price.
-	// A CHANGE'S MERGE, decided by its repository's committer since the
-	// committer's merge path landed, is appended by no node while nothing asks
-	// for it: code_merge_change, which merges a change into a target with no
-	// queue, is its first writer, through the estate's code.merge — a record a
-	// change merged, its push row and its pack's row among its rows, which
-	// that writer is the one to price.
-	code.OpMerge: {payload: reflect.TypeFor[code.Merge](), how: "a change is merged into its target by " +
-		"code_merge_change, through the estate's code.merge"},
-	code.OpEnqueue: {payload: reflect.TypeFor[code.Enqueue](), how: "a change is queued for its " +
-		"target's landing by code_merge_change, through the estate's code.queue"},
+	// AN ENTRY'S LEAVING by a gesture, decided by its repository's committer
+	// since the committer's queue path landed, is appended by no node while
+	// nothing asks for it: code_dequeue_change is its first writer, through
+	// the estate's code.queue — a record for each entry a person or a seat
+	// takes out of a queue before it lands, which that writer is the one to
+	// price.
 	code.OpDequeue: {payload: reflect.TypeFor[code.Dequeue](), how: "an entry leaves its queue by " +
 		"code_dequeue_change, through the estate's code.queue"},
 	// A QUEUE'S OWN RECORDS, decided by its repository's committer since the
@@ -325,7 +443,10 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	// and lands what it tested, and its tip checks, which green or break what
 	// landed, are their first writers, through the estate's code.queue — a
 	// few records a change landed through a queue, which those writers are
-	// the ones to price.
+	// the ones to price. Until they run, a change queued by code_merge_change
+	// (an enqueue, which the day prices at its most) waits in its queue and
+	// lands by no record of this build; the day prices its landing as its
+	// merge.
 	code.OpCandidate: {payload: reflect.TypeFor[code.Candidate](), how: "a train of a queue's waiting " +
 		"changes is recorded by its repository's home git node, through the estate's code.queue"},
 	code.OpEject: {payload: reflect.TypeFor[code.Eject](), how: "entries a check, a conflict or a gate " +
@@ -337,155 +458,6 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"code.queue"},
 	code.OpBroken: {payload: reflect.TypeFor[code.Broken](), how: "a landing its tip checks failed is " +
 		"marked broken by its repository's home git node, through the estate's code.queue"},
-	// A CHANGE'S CONVERSATION, written by the change writer beside each
-	// committer since its subject landed, is appended by no node while
-	// nothing asks for it: the review and comment tools a seat and a person
-	// discuss a change with are its first writer, through the estate's
-	// code.conversation, and a conversation's records come at the rate its
-	// reviewers and commenters write — what the day must price once they
-	// exist, which that writer is the one to measure.
-	code.OpReviewers: {payload: reflect.TypeFor[code.ReviewerRequest](), how: "reviewers are asked " +
-		"by code_request_review, and by code_open_change's reviewers, through the estate's " +
-		"code.conversation"},
-	code.OpComment: {payload: reflect.TypeFor[code.Comment](), how: "a change is commented on by " +
-		"code_comment_on_change, through the estate's code.conversation"},
-	code.OpThreadResolve: {payload: reflect.TypeFor[code.ThreadResolve](), how: "a thread is " +
-		"resolved by code_comment_on_change's resolve, through the estate's code.conversation"},
-	code.OpReview: {payload: reflect.TypeFor[code.Review](), how: "a change is reviewed — its " +
-		"verdict, its summary and every finding it raises in one record — by code_review_change, " +
-		"through the estate's code.conversation"},
-	code.OpFindingResolve: {payload: reflect.TypeFor[code.FindingResolve](), how: "findings are " +
-		"answered or dismissed by code_resolve_finding, through the estate's code.conversation"},
-}
-
-// codeLogRiders is every op of the code domain a node of this build appends
-// ONLY ABOUT AN OBJECT OTHER RECORDS MAKE, with the op that makes one — on —
-// every key of a priced op's payload whose records make one too (makers), and
-// how: its writer runs, and its records come at the rate its object is made and
-// moved, which the day prices exactly as far as it prices the object's making.
-// So the day leaves it out exactly while it leaves that making out: while on
-// is unwritten (codeLogUnwritten), and while every maker is a key the records
-// its op's term was measured on never carry, listed absent from them with why
-// (codeLogFields) — and TestTheCodeLogsDayPricesEveryRecordItTakes fails
-// naming the rider the day either changes: whoever prices the records that
-// make the object prices the records about it beside them.
-//
-// A CHANGE IS THE OBJECT TODAY: the home git node's change work (internal/code/
-// home) records a revision's facts, records whether a change merges into its
-// target and lands a change, all only about a LIVE change, which a change_open
-// — or a reopen of a change one opened — makes, and so does a push whose
-// options ask for one (PushEntry.Change). No file this build is made from
-// writes the first, and the push term was measured on a coding box's push,
-// which opens none: codeLogFields leaves pushes.change out of it, the
-// reference company having no figure for how many of its pushes open a
-// change, so its day holds no live change and no rider appends a record in
-// it. A company whose pushes open changes appends all three beside them — a
-// revision's facts once a revision, up to code.MaxTouchedBytes of touched
-// paths each; its mergeability once a revision and again at every recheck its
-// target's moving asks, up to code.MaxConflictBytes of conflicted paths each,
-// and again, naming no path, at every refresh of the readiness it stores
-// (code.Mergeability.Refresh) — at most once a pass of its home and once a
-// move of what that readiness was judged at: a review, an ask for one, an
-// answer to findings, a revision's facts or a write of the change's own row;
-// and a landing once a change — and reads them in its code log's
-// crewlet.statelog.log.bytes_per_day, which counts every record the log takes.
-var codeLogRiders = map[code.OpKind]struct {
-	on     code.OpKind
-	makers []codeLogMaker
-	how    string
-}{
-	code.OpRevise: {on: code.OpChangeOpen, makers: changeMakers, how: "a revision's facts are read by its " +
-		"repository's home git node and recorded through the estate's code.conversation, once a revision " +
-		"of a live change and once more a retarget — a push's rate where every push revises a change"},
-	code.OpChangeLanded: {on: code.OpChangeOpen, makers: changeMakers, how: "a change whose target came to " +
-		"hold its head is landed by its repository's home git node through the estate's code.change, once " +
-		"a change at the most"},
-	code.OpMergeability: {on: code.OpChangeOpen, makers: changeMakers, how: "whether a change's head " +
-		"revision merges into its target's tip is read by its repository's home git node and recorded " +
-		"through the estate's code.conversation, once a revision of a live change and again at every " +
-		"recheck its target's moving asks — a push to the target's rate for each live change behind it — " +
-		"and the readiness it stores is recorded again, merging nothing, once its home's pass finds a " +
-		"review, an ask, an answer to findings, a revision's facts or a write of the change's row moved it"},
-	// A REPOSITORY'S CHECKS are about a LIVE CHANGE'S HEAD: its home queues
-	// them — the home's dispatch, internal/code/home's checks worker — and
-	// records the dispatch, only for a live change, so they come at the rate
-	// a live change's head moves, as its facts and its mergeability do. A
-	// check's claim, its ending and its sweep are about an attempt that
-	// queue made, at its rate: two claims' records and an ending an
-	// attempt, and a sweep only where an idle repository's attempts outlive
-	// the history by code.CheckSweepGrace, once a grace at most.
-	code.OpCheckQueued: {on: code.OpChangeOpen, makers: changeMakers, how: "a live change head's checks " +
-		"are queued — or recorded skipped, or errored for a checks file that does not run — by its " +
-		"repository's home git node, one record a check its target's checks file defines or its gate " +
-		"requires, and an attempt its infrastructure ended queued again, through the estate's code.checks"},
-	code.OpCheckDispatched: {on: code.OpChangeOpen, makers: changeMakers, how: "a live change head's " +
-		"dispatch — its target's checks file read at the tip, and the heads whose checks were queued under " +
-		"it — is recorded by its repository's home git node once it queued what the heads owe, through the " +
-		"estate's code.checks: one record a target's due heads a turn, at most code.MaxDispatchHeads of " +
-		"them, and one a target's reading refreshed at the home's pace"},
-	code.OpCheckStarted: {on: code.OpChangeOpen, makers: changeMakers, how: "an attempt is claimed by the " +
-		"git node that runs it, and its box named by that node, through the estate's code.checks: two " +
-		"records an attempt"},
-	code.OpCheckFinished: {on: code.OpChangeOpen, makers: changeMakers, how: "an attempt is ended by its " +
-		"runner — or by its repository's home, cancelled for a head its change moved on from or errored " +
-		"for a runner it lost — through the estate's code.checks: one record an attempt"},
-	code.OpChecksSweep: {on: code.OpChangeOpen, makers: changeMakers, how: "the code-retention pass " +
-		"sweeps an idle repository's attempts past code.CheckHistory, which its own endings no longer " +
-		"remove, once one has outlived it by code.CheckSweepGrace: a record an idle repository holding " +
-		"them, a day at most"},
-	// A REPOSITORY'S QUEUE HISTORY is its ended entries, which only an
-	// enqueue makes, and its protected branches' landings below their green
-	// rows, which a merge, a queue's landing and a person's push onto a
-	// protected branch make: its sweep comes at the rate an idle repository
-	// holds them past code.QueueHistory by code.QueueSweepGrace, once a grace
-	// at most.
-	code.OpQueueSweep: {on: code.OpEnqueue, makers: []codeLogMaker{{op: code.OpPush, key: "pushes.landings"}},
-		how: "the code-retention pass sweeps an idle repository's ended queue entries and its landings " +
-			"below their green rows past code.QueueHistory, which its own queue's records no longer remove, " +
-			"once they have outlived it by code.QueueSweepGrace: a record an idle repository holding them, " +
-			"a day at most"},
-}
-
-// codeLogMaker is a key of a priced op's payload whose records make the object
-// a rider is about — every key it declares under it.
-type codeLogMaker struct {
-	op  code.OpKind
-	key string
-}
-
-// changeMakers is every key of a priced op's payload that opens a change: a
-// push's options asking for one (PushEntry.Change).
-var changeMakers = []codeLogMaker{{op: code.OpPush, key: "pushes.change"}}
-
-// codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
-// that no node of this build appends, and that nothing but its writer tells
-// apart — records no term of the op was measured on, at a size or a rate its
-// term does not cover — with the listing the loop that would append them
-// polls, as codeLogUnwritten names a loop's, and how.
-//
-// The op gate cannot see one: its op is classified already, so when its loop
-// lands the code log's day stays short and nothing fails — a publication
-// taken for a merge's 108 bytes a push. A shape the code's own closed sets
-// tell apart is held by them (codeLogPushVias, codeLogManagers), and one a
-// payload's keys tell apart by those (codeLogFields); this list is for the
-// rest.
-var codeLogUnwrittenShapes = []struct {
-	op      code.OpKind
-	listing code.ReadKind
-	shape   string
-	how     string
-}{
-	{
-		op: code.OpCompact, listing: code.ReadPublicationDue,
-		shape: "a PUBLICATION: a compaction carrying the multi-pack-index layer it publishes " +
-			"(code.Compaction's Layer), which names every pack the layer covers, 43 bytes a pack " +
-			"and up to code.MaxPacksPerRepo of them, beside its parts and the repack of the packs " +
-			"it gathers — none of the merges BenchmarkCompact's steady arm measured, whose " +
-			"compactor publishes nothing",
-		how: "a repository's maintainer proposes a layer through the estate's code.compact once " +
-			"the packs outside its published chain are worth one — for a small repository, a " +
-			"share of its objects — so a young repository publishes often",
-	},
 }
 
 // codeLogPushVias is every way a push's pack is built (code.PushVias), and
@@ -497,25 +469,25 @@ var codeLogUnwrittenShapes = []struct {
 // priced into the day or argued out of it here.
 var codeLogPushVias = map[code.PushVia]string{
 	code.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
-		"coding box's push (1 481 bytes alone in its record against 1 555, BenchmarkPushLogBytes), " +
+		"coding box's push (1 481 bytes alone in its record against 1 604, BenchmarkPushLogBytes), " +
 		"at which the day prices every one of the reference company's 3 000 a day, and a " +
 		"person's takes it less still, naming no run and no day",
 	code.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
-		"(code.Proposal.Validate), naming the coding run that pushed and its coding agent beside " +
-		"the turn — the push term's records (codeLogDay), at which the day prices every one of " +
-		"the reference company's 3 000; a person's push, which takes the log less (1 380 bytes " +
-		"alone in its record against a box's 1 555), and none of the reference company's 3 000 " +
-		"is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush refs " +
-		"a record, once a repository when a person imports it",
+		"(code.Proposal.Validate), naming the coding run that pushed, its coding agent and its work " +
+		"item's identity beside the turn — the push term's records (codeLogDay), at which the day " +
+		"prices every one of the reference company's 3 000; a person's push, which takes the log less " +
+		"(1 380 bytes alone in its record against a box's 1 604), and none of the reference company's " +
+		"3 000 is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush " +
+		"refs a record, once a repository when a person imports it",
 	code.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past code.RefExpiry, on the " +
 		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +
 		"more, and up to code.MaxCommandsPerPush of them a record with no pack, no run and no day — a " +
 		"deletion command takes its record under a tenth of a seat's push (a ref and two ids against " +
-		"1 555 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
+		"1 604 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
 		"fortnight earlier did, which the push term already prices",
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
-		"record: its bytes are the merge record's (code.OpMerge), which no node appends while " +
-		"nothing asks for one (codeLogUnwritten)",
+		"record: its bytes are the merge record's (code.OpMerge), which the day prices one a change " +
+		"(codeLogDay)",
 	code.ViaQueue: "the pushes a land record lands, one a change, written by the landing's own apply and " +
 		"never a push record: their bytes are the land record's (code.OpLand), which no node appends " +
 		"while nothing asks for one (codeLogUnwritten)",
@@ -541,20 +513,93 @@ var codeLogManagers = map[code.ManagedBy]string{
 		"fast: a seat holds at most code.scratch.max_per_seat (50) scratch repositories, each " +
 		"counted until its purge a week after its deletion, so one making and deleting them at " +
 		"the cap makes about seven a day, and every one of the reference company's hundred " +
-		"seats doing so would append under 0.73 MB of creates a day, a tenth of the day's " +
-		"least (7.5 MB), before their deletions and purges",
+		"seats doing so would append under 0.73 MB of creates a day, under a twentieth of the " +
+		"day's least, before their deletions and purges",
+}
+
+// routingReasons is why a record of the day's leaves out each key of a
+// change's routing (code.ChangeRouting) it does not carry: every one is a
+// list of handles, or a flag, that only some records' reasons reach, each a
+// few dozen bytes a handle where one does.
+var routingReasons = map[string]string{
+	"change_id": "the change's id, which every routed record names", "change_ref": "the change's name",
+	"repo_name": "the repository's name", "title": "the change's title",
+	"actor": "who wrote the record, where a person or a seat did: a home's own records name nobody",
+	"owner": "the change's owner", "owner_kind": "whether its owner is a person",
+	"work_item": "the change's work item",
+	"mentions":  "the handles a text mentions (at most code.MaxMentions, 32), and the reference text mentions nobody",
+	"requested": "the reviewers an ask names, which only an ask's record routes",
+	"path_owners": "the owners of the paths a revision touches, and the reference company's repositories " +
+		"declare none",
+	"authors": "the change's authors, which a merge, a review or its findings' answer routes; the reference " +
+		"change's author is its owner",
+	"verdict":    "a review's verdict, which only a review's record routes",
+	"conflicted": "who hears that a change conflicts with its target, and the reference change merges clean",
+	"merged":     "who hears that a change merged, routed on the record that lands it",
+	"raisers":    "the reviewers whose findings an answer resolves, routed on the answer's record",
+	"ready_for":  "who hears that a change became ready, once its readiness moves to ready",
+	"re_review": "the reviewers a revision after a review asks again — a handle each on the revisions that " +
+		"follow a review",
+	"thread_participants": "who a reply or a resolve reaches beyond its author, and the reference thread is " +
+		"its author's alone",
+	"watchers":      "the change's watchers, and the reference change has none",
+	"lead_fallback": "the lead an unreviewed change falls back to, and the reference change asks its reviewer",
+	"persons":       "which handles reached are persons, and the reference company's changes are its seats'",
+}
+
+// routingAbsent is every key of a change's routing under prefix that a term's
+// records do not carry — carried named without the prefix — with why.
+func routingAbsent(prefix string, carried ...string) map[string]string {
+	absent := map[string]string{}
+	for key, why := range routingReasons {
+		if !slices.Contains(carried, key) {
+			absent[prefix+"."+key] = why
+		}
+	}
+	return absent
+}
+
+// principalAbsent is every key of a principal under prefix that a term's
+// records do not carry — carried named without the prefix — with why: a
+// seat's records name no person's credential, and a run is named whole,
+// in part or not at all.
+func principalAbsent(prefix string, carried ...string) map[string]string {
+	absent := map[string]string{prefix + ".operator_id": "a person's credential, and the measured record is a seat's"}
+	if !slices.ContainsFunc(carried, func(key string) bool { return under(key, "run") }) {
+		absent[prefix+".run"] = "the run behind a seat's push or merge, which this record's writer never " +
+			"names on its principal: a seat's turn, where the record has one, is a field of its own"
+		return absent
+	}
+	for key, why := range map[string]string{
+		"run.run_id":       "the coding run that pushed, and the measured record is a tool's",
+		"run.coding_agent": "the coding agent a box ran, and the measured record is a tool's",
+		"run.work_id":      "the work item's identity, which a box's admission alone stamps",
+	} {
+		if !slices.Contains(carried, key) {
+			absent[prefix+"."+key] = why
+		}
+	}
+	return absent
+}
+
+// absent is the union of reasons.
+func absent(reasons ...map[string]string) map[string]string {
+	all := map[string]string{}
+	for _, r := range reasons {
+		maps.Copy(all, r)
+	}
+	return all
 }
 
 // codeLogFields is every key the payload of an op the day prices declares, as
-// the day's term for its records was measured: the keys the measured records
-// CARRY, and every other one with why the term's records never carry it — an
-// absent key naming a whole subtree where they carry none of it (a merge's
-// records, no layer at all). A KEY IS A SHAPE OF RECORD the payload tells
-// apart: one declared since the term was measured — a push opening a change,
-// as a box's push naming its coding run and agent was until the push term was
-// measured on a box's — is a record of that op the term was not measured on,
-// larger by what the key spells in every record that carries it, so
-// TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until the term is
+// the day's terms for its records were measured: the keys the measured records
+// CARRY, and every other one with why the terms' records never carry it — an
+// absent key naming a whole subtree where they carry none of it. A KEY IS A
+// SHAPE OF RECORD the payload tells apart: one declared since the term was
+// measured — a box's push naming its work item's identity, as it was until the
+// push term was measured with it — is a record of that op the term was not
+// measured on, larger by what the key spells in every record that carries it,
+// so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until the term is
 // measured again and restated, or the key is listed here with why the term's
 // records never carry it.
 //
@@ -570,7 +615,7 @@ var codeLogFields = map[code.OpKind]struct {
 		carried: []string{"repo_id", "pushes.push_id", "pushes.principal.kind",
 			"pushes.principal.seat", "pushes.principal.run.turn_id",
 			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
-			"pushes.principal.run.model", "pushes.principal.run.run_id",
+			"pushes.principal.run.work_id", "pushes.principal.run.model", "pushes.principal.run.run_id",
 			"pushes.principal.run.coding_agent", "pushes.via", "pushes.node", "pushes.commands.ref",
 			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
@@ -587,14 +632,11 @@ var codeLogFields = map[code.OpKind]struct {
 			"pushes.commands.detail": "an answer's sentence, which no record carries",
 			"pushes.change": "the change a push opens from its options (git push -o change): only a push git " +
 				"received carries one — never the engine's writes — and only the push that OPENS a change, " +
-				"once a change, a branch heading one live change at a time; the measured push, a coding " +
-				"box's moving its branch on, opens none. A push that opens one takes the log what its " +
-				"options spell beyond it — a target, a title of at most code.MaxChangeTitleBytes (256) and " +
-				"a description of at most code.MaxChangeBodyBytes (32 KiB) — once a change, and the " +
-				"reference company has no figure for how many of its 3 000 a day open one: a change is no " +
-				"term of the day, its opening as its other records (codeLogUnwritten), and neither are the " +
-				"records its repository's home appends about it once it is live, its revisions' facts and " +
-				"its landing, which ride its making (codeLogRiders)",
+				"once a change; the measured push, a coding box's moving its branch on, opens none. A push " +
+				"that opens one carries what its options spell — a target, a title and a description — in " +
+				"place of the code_open_change record the day prices every one of the reference company's " +
+				"changes at (codeChangeOpenBytes), and its home then records the change's revisions, " +
+				"mergeability and checks as it does an opened one's, which the day prices too",
 			"pushes.routing": "whom a push concerns (code.PushEntry.Routing): an entry carries a routing " +
 				"only for a change its commands MERGE, by setting the change's target to its head, and for " +
 				"the one it OPENS from its options — each the change's id, name, repository, title, work " +
@@ -602,29 +644,236 @@ var codeLogFields = map[code.OpKind]struct {
 				"authors for a merge (at most code.MaxRoutedParticipants, 64) and the open's mentions (at " +
 				"most code.MaxMentions, 32), with which of them are persons — and none where it merges and " +
 				"opens nothing, since a head move concerns nobody; the measured push, a coding box's moving " +
-				"its branch on, does neither. A change is opened once and merged once, so a push carries " +
-				"its routing once a change, beside the opening and the landing it announces, which the day " +
-				"leaves out (codeLogUnwritten, codeLogRiders), held with the record's bytes by the push's " +
-				"decide (internal/code's routingRoom)",
+				"its branch on, does neither. The reference company's changes are opened by a tool and " +
+				"merged by a merge record, which carry their own routings (codeLogDay), held with the " +
+				"record's bytes by the push's decide (internal/code's routingRoom)",
 			"pushes.landings": "the landings a push makes on a protected branch (code.PushEntry.Landings): " +
 				"only a person's own push under direct_push persons moves one — no protection takes a " +
 				"seat's direct push — each its command's place and whether it lands green; the measured " +
 				"push, a coding box's moving its branch on, moves none. The queue's history it makes is " +
-				"swept with an idle repository's queue (codeLogRiders)",
+				"swept with an idle repository's queue (codeLogNegligible)",
 		},
 	},
 	code.OpCompact: {
 		payload: reflect.TypeFor[code.Compaction](),
 		carried: []string{"repo_id", "compaction_id", "node", "seen", "retire", "add.pack_id",
 			"add.object", "add.hash", "add.size", "add.index_bytes", "add.reverse_bytes",
-			"add.git_checksum", "add.objects"},
+			"add.git_checksum", "add.objects", "layer.layer_id", "layer.packs", "layer.parts.object",
+			"layer.parts.hash", "layer.parts.size", "layer.midx_bytes", "layer.bitmap_bytes",
+			"layer.objects", "layer.commits", "layer.graph_bytes", "layer.git", "layer.took_ms"},
 		absent: map[string]string{
-			"layer": "a publication's layer, and a merge carries none (codeLogUnwrittenShapes)",
+			"layer.base_id": "the layer a tail is published over, an object id, and the measured layers " +
+				"are their repositories' first: about fifty bytes on a later one",
+			"layer.replaces": "the layers a consolidation replaces, which the maintainer folds once a " +
+				"chain grows past its bound: an object id each, beside the packs it already names",
+			"layer.graph_id": "a commit-graph layer published beside the index, where a repository's " +
+				"history asks for one: an object id",
 		},
 	},
 	code.OpRetireSweep: {
 		payload: reflect.TypeFor[code.RetireSweep](),
 		carried: []string{"repo_id", "through"},
+	},
+	code.OpChangeOpen: {
+		payload: reflect.TypeFor[code.ChangeOpen](),
+		carried: []string{"repo_id", "change_id", "source_ref", "target_ref", "head", "title", "body",
+			"owner.kind", "owner.seat", "work_item", "turn_id", "routing.change_id", "routing.change_ref",
+			"routing.repo_name", "routing.title", "routing.actor", "routing.owner", "routing.owner_kind",
+			"routing.work_item"},
+		absent: absent(principalAbsent("owner", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item"),
+			map[string]string{
+				"draft": "a draft's open, and the reference change opens ready",
+				"run_id": "the coding run a change is opened for by the engine (internal/engine's run " +
+					"changes) rather than by a tool: one UUID more",
+				"mentions": "the handles a description mentions (at most code.MaxMentions, 32), and the " +
+					"reference text mentions nobody",
+			}),
+	},
+	code.OpReviewers: {
+		payload: reflect.TypeFor[code.ReviewerRequest](),
+		carried: []string{"repo_id", "change_id", "by.kind", "by.seat", "request.handle", "request.kind",
+			"note", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
+			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item", "routing.requested"},
+		absent: absent(principalAbsent("by", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item", "requested"),
+			map[string]string{"withdraw": "an ask withdrawn, and the reference ask stands"}),
+	},
+	code.OpRevise: {
+		payload: reflect.TypeFor[code.Revise](),
+		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
+			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
+			"owners_digest", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
+			"routing.owner", "routing.owner_kind", "routing.work_item"},
+		absent: absent(routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "owner",
+			"owner_kind", "work_item"),
+			map[string]string{
+				"patch_id_omitted": "a patch too large to identify, and the reference revision's is small",
+				"touches_all": "a revision touching more paths than code.MaxTouchedBytes holds, which " +
+					"names none, and the reference revision touches five",
+				"classes": "what kind of change a revision is — whitespace or comments only — set only " +
+					"where it is one, and the reference revision changes code",
+				"requested_owners": "the path owners a revision asks, and the reference company's " +
+					"repositories declare none",
+				"asked":          "the reviewers a revision's owners ask, likewise",
+				"skipped_owners": "the path owners a revision could not ask, likewise",
+				"re_review": "the reviewers a revision after a review asks again — a handle each on the " +
+					"revisions that follow a review",
+				"lead_fallback": "the lead an unreviewed change falls back to, and the reference change " +
+					"asks its reviewer",
+			}),
+	},
+	code.OpMergeability: {
+		payload: reflect.TypeFor[code.Mergeability](),
+		carried: []string{"repo_id", "change_id", "revision", "head_oid", "target_ref", "target_oid",
+			"target_position", "state", "node", "change_version", "readiness_version", "routing.change_id",
+			"routing.change_ref", "routing.repo_name", "routing.title", "routing.owner", "routing.owner_kind",
+			"routing.work_item"},
+		absent: absent(routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "owner",
+			"owner_kind", "work_item"),
+			map[string]string{
+				"conflicts": "the conflicted paths of a merge that conflicts (at most code.MaxConflictBytes), " +
+					"and the reference change merges clean",
+				"conflicts_omitted": "a conflict past that bound, likewise",
+				"refresh": "a refresh of the stored readiness, a flag on a record that names no merge — " +
+					"the same frame less a merge's facts, which the day prices at a merge's",
+				"ready":        "the readiness flag, set once a change is ready: a few bytes",
+				"waits_person": "a readiness that waits on a person, a flag, and the reference reviews are seats'",
+				"checks_position": "the position of the checks a readiness waits on, where a checks file " +
+					"defines some: a few dozen bytes on the day's most",
+			}),
+	},
+	code.OpReview: {
+		payload: reflect.TypeFor[code.Review](),
+		carried: []string{"repo_id", "change_id", "review_id", "by.kind", "by.seat", "revision", "verdict",
+			"summary", "findings.id", "findings.path", "findings.side", "findings.line_start",
+			"findings.line_end", "findings.commit_oid", "findings.blob_oid", "findings.severity",
+			"findings.category", "findings.title", "findings.body", "turn_id", "model", "routing.change_id",
+			"routing.change_ref", "routing.repo_name", "routing.title", "routing.actor", "routing.owner",
+			"routing.owner_kind", "routing.work_item", "routing.authors", "routing.verdict"},
+		absent: absent(principalAbsent("by", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item", "authors", "verdict"),
+			map[string]string{
+				"findings.suggestion": "a finding's suggested replacement, and the reference findings " +
+					"suggest none: at most its finding's own lines again",
+				"carries": "the earlier findings a review carries forward, an id each, and the reference " +
+					"reviews raise their own",
+				"mentions": "the handles a summary mentions, and the reference text mentions nobody",
+			}),
+	},
+	code.OpFindingResolve: {
+		payload: reflect.TypeFor[code.FindingResolve](),
+		carried: []string{"repo_id", "change_id", "by.kind", "by.seat", "findings.finding_id",
+			"findings.resolution", "routing.change_id", "routing.change_ref", "routing.repo_name",
+			"routing.title", "routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item",
+			"routing.raisers"},
+		absent: absent(principalAbsent("by", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item", "raisers"),
+			map[string]string{
+				"findings.note":   "an answer's note, and the reference answer resolves without one",
+				"findings.commit": "the commit an answer names as its fix, an object id where it names one",
+			}),
+	},
+	code.OpComment: {
+		payload: reflect.TypeFor[code.Comment](),
+		carried: []string{"repo_id", "change_id", "comment_id", "thread_id", "by.kind", "by.seat", "body",
+			"turn_id", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
+			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item"},
+		absent: absent(principalAbsent("by", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item"),
+			map[string]string{
+				"parent_id":  "a reply's parent, and the reference comments open their threads",
+				"finding_id": "the finding a comment discusses, an id where it does",
+				"anchor": "a comment on a line of a revision — its revision, path, side, line and blob, " +
+					"about a hundred bytes — and the reference comments are on the change",
+				"mentions": "the handles a comment mentions, and the reference text mentions nobody",
+			}),
+	},
+	code.OpThreadResolve: {
+		payload: reflect.TypeFor[code.ThreadResolve](),
+		carried: []string{"repo_id", "change_id", "thread_id", "resolved", "by.kind", "by.seat",
+			"routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title", "routing.actor",
+			"routing.owner", "routing.owner_kind", "routing.work_item"},
+		absent: absent(principalAbsent("by", "kind", "seat"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item")),
+	},
+	code.OpMerge: {
+		payload: reflect.TypeFor[code.Merge](),
+		carried: []string{"repo_id", "merge_id", "change_id", "method", "target_ref", "base_oid", "head_oid",
+			"commit_oid", "pack.pack_id", "pack.object", "pack.hash", "pack.size", "pack.index_bytes",
+			"pack.reverse_bytes", "pack.git_checksum", "pack.objects", "delete_source", "source_ref", "node",
+			"received_at", "principal.kind", "principal.seat", "principal.run.turn_id",
+			"principal.run.work_backend", "principal.run.work_key", "principal.run.model", "protected", "green"},
+		absent: absent(principalAbsent("principal", "kind", "seat", "run.turn_id", "run.work_backend",
+			"run.work_key", "run.model"),
+			map[string]string{"override": "an administrator's override of the gate, and the reference " +
+				"merge meets its gate"}),
+	},
+	code.OpEnqueue: {
+		payload: reflect.TypeFor[code.Enqueue](),
+		carried: []string{"repo_id", "entry_id", "change_id", "target_ref", "head_oid", "method",
+			"delete_source", "principal.kind", "principal.seat"},
+		absent: absent(principalAbsent("principal", "kind", "seat"),
+			map[string]string{
+				"close_task":  "a queued change closing its work item as it lands, a flag",
+				"auto_revert": "a queued change reverted should its landing break its target, a flag",
+			}),
+	},
+	code.OpCheckQueued: {
+		payload: reflect.TypeFor[code.CheckQueued](),
+		carried: []string{"repo_id", "oid", "target", "name", "attempt", "purpose", "change_id", "revision",
+			"defs_oid", "def.name", "def.run", "def.timeout_seconds", "required", "reason", "queued_at"},
+		absent: absent(
+			map[string]string{
+				"by": "who queued an attempt again by hand, and the reference checks are queued by " +
+					"their home",
+				"candidate_id": "a train's check, which only the queue worker's candidates queue, and no " +
+					"node of this build builds a train (codeLogUnwritten)",
+				"entry_id": "likewise",
+				"base":     "likewise",
+				"def.paths": "the paths a check runs for, where its definition names some: a few dozen " +
+					"bytes a pattern",
+				"def.report":   "the reports a check writes, where its definition names some",
+				"def.run_in":   "where a check runs, where its definition says",
+				"def.checkout": "how a check checks out its commit, where its definition says",
+				"def.env":      "a check's environment, where its definition sets one",
+				"skipped":      "a check its paths skip, a flag",
+				"invalid":      "a checks file that does not run, its sentence",
+			}),
+	},
+	code.OpCheckDispatched: {
+		payload: reflect.TypeFor[code.CheckDispatched](),
+		carried: []string{"repo_id", "target", "tip", "tip_position", "defs_oid", "heads.oid",
+			"heads.change_id", "heads.revision", "dispatched_at"},
+	},
+	code.OpCheckStarted: {
+		payload: reflect.TypeFor[code.CheckStarted](),
+		carried: []string{"repo_id", "oid", "target", "name", "attempt", "runner", "placement", "box",
+			"started_at"},
+		absent: map[string]string{
+			"borrowed": "a check run on a borrowed cache (D-BORROW), a flag",
+		},
+	},
+	code.OpCheckFinished: {
+		payload: reflect.TypeFor[code.CheckFinished](),
+		carried: []string{"repo_id", "oid", "target", "name", "attempt", "state", "reason", "exit_code",
+			"duration_ms", "summary", "finished_at"},
+		absent: absent(
+			map[string]string{
+				"reporter": "who reported an attempt's ending from outside its runner, and the reference " +
+					"checks are ended by the runner that ran them",
+				"tail":             "the end of a failing check's output, and the reference checks pass",
+				"failures":         "the failures a failing check's report names, likewise",
+				"failures_omitted": "likewise",
+				"log":              "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
+				"url":              "a link to a check's run outside the engine, where its reporter gave one",
+			}),
 	},
 }
 
@@ -632,13 +881,13 @@ var codeLogFields = map[code.OpKind]struct {
 // its day counts the records on it.
 var codeLogKinds = map[code.ObjectKind]string{
 	code.KindRepo: "a push (codeLogDay, by the way its pack was built: codeLogPushVias), a " +
-		"merge of the pushes' packs and the sweep of the rows a merge retired (codeLogDay) are " +
-		"on their repository; so are its settings, deletion, restore and purge " +
+		"merge of the pushes' packs, a publication of their layers and the sweep of the rows a merge " +
+		"retired (codeLogDay) are on their repository; so are its settings, deletion, restore and purge " +
 		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it, a " +
 		"person's purge of its unreachable objects and the expunge's begin and commit that serve " +
-		"it (codeLogNegligible), a change's lifecycle (codeLogUnwritten), a change's landing, " +
-		"which rides the change's making (codeLogRiders), and a publication of its layers " +
-		"(codeLogUnwrittenShapes)",
+		"it (codeLogNegligible), a change's open and its merge (codeLogDay), its other gestures and " +
+		"its landing outside a merge (codeLogNegligible), its queue entry (codeLogDay at the most) and " +
+		"what the queue worker records (codeLogUnwritten)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
 		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
@@ -648,11 +897,11 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
-		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten), " +
-		"and its revisions' facts and its mergeability, which ride the change's making (codeLogRiders)",
-	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim, its " +
-		"ending and the sweep of an idle repository's past the history, which ride a live change's making " +
-		"(codeLogRiders)",
+		"resolutions, its reviews and the answers to their findings — and its revisions' facts and its " +
+		"mergeability, on the change (codeLogDay)",
+	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim and " +
+		"its box named, and its ending (codeLogDay at the most), and the sweep of an idle repository's " +
+		"past the history (codeLogNegligible)",
 	code.KindPerson: "a person's marks over their own code notices (codeLogNegligible)",
 }
 
@@ -1092,39 +1341,53 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	years := func(capacity, rate float64) float64 { return capacity / rate / 365 }
 	keyBytes := referenceKeyGrowth * referenceKeysADay
 
-	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI) and its most:
-	// every term it prices, summed.
+	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI, no checks, no
+	// queue and no moving target) and its most: every term it prices, summed,
+	// and its parts — the pushes and what compacts and sweeps them, the git
+	// clients' barriers, and the changes' records.
 	terms := codeLogDay()
 	pushes := codeLogOp(terms, code.OpPush).most
-	compactions := codeLogOp(terms, code.OpCompact).most
+	compactions := float64(referencePushesADay * codeCompactionBytes)
 	sweeps := codeLogOp(terms, code.OpRetireSweep).most
 	merges := compactions + sweeps
+	publications := codeLogOp(terms, code.OpCompact)
+	publications.least -= compactions
+	publications.most -= compactions
 	readBarriers := codeLogOp(terms, code.OpBarrier)
 	gitLeast, gitMost := readBarriers.least, readBarriers.most
-	var codeLeastBytes, codeMostBytes, besideBarriers float64
+	var codeLeastBytes, codeMostBytes, changeLeast, changeMost float64
 	for _, term := range terms {
 		codeLeastBytes += term.least
 		codeMostBytes += term.most
-		if term.op != code.OpBarrier {
-			besideBarriers += term.most
+		switch term.op {
+		case code.OpPush, code.OpCompact, code.OpRetireSweep, code.OpBarrier:
+		default:
+			changeLeast += term.least
+			changeMost += term.most
 		}
 	}
 	codeLeast, codeMost := codeLeastBytes/day, codeMostBytes/day
-	middle := (codeLeast + codeMost) / 2
+	// THE DAY OF A COMPANY WHOSE SEATS ONLY PUSH: every term but the
+	// changes', which is the day the share was sized at before the
+	// publications and the changes were priced, and where the pages say two
+	// thirds still sits.
+	pushOnlyLeast := (codeLeastBytes - changeLeast) / day
+	pushOnlyMost := (codeMostBytes - changeMost) / day
 	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
-	// THE BARRIERS UNDER WHICH HALF SUFFICES, for a code log that takes them
-	// beside its other terms at their most: the count a day that makes the
-	// code log's day half this one's, so a code log at half the mutation log's
-	// ceiling fills no sooner under a blocked trim. The line itself is the two
-	// logs' bytes a day; this is the reference company's count for it, which
-	// the pages print to the nearest hundred, beside the reads the reference
-	// company's git clients make with no CI at all.
-	halfBarriers := day/2 - besideBarriers
-	halfCount := halfBarriers / code.BarrierRecordBytes
-	leastReads := int64(referencePushReads + referencePeopleReads)
 	// A TENTH OF THE CODE LOG'S CEILING is what its census lets git's barriers
 	// hold over min_age ([code.GitReadsShare]).
 	tenth := func(ceiling float64) float64 { return ceiling / code.GitReadsShare }
+	// A CHANGE'S RECORDS, at the reference company's text, as the pages list
+	// them: each one's bytes alone in its record.
+	changeFigures := strings.Join([]string{
+		fmt.Sprintf("an open %s bytes", spaced(codeChangeOpenBytes)),
+		fmt.Sprintf("a review asking for changes with two findings %s", spaced(codeReviewFindingsBytes)),
+		fmt.Sprintf("an approving review %s", spaced(codeReviewBytes)),
+		fmt.Sprintf("a comment %s", spaced(codeCommentBytes)),
+		fmt.Sprintf("a merge %s", spaced(codeMergeBytes)),
+		fmt.Sprintf("a revision's facts %s", spaced(codeReviseBytes)),
+		fmt.Sprintf("its mergeability %s", spaced(codeMergeabilityBytes)),
+	}, ", ")
 
 	// THE BARRIER THE DAY IS PRICED AT IS THE ONE THIS LOG MEASURES: the pages
 	// print one figure for both, saying a mutation-log barrier costs
@@ -1149,19 +1412,20 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
-		{"the code log takes about five eighths of this log's day at its least", codeLeast, 0.61, 0.64},
-		{"and about five sixths at its most", codeMost, 0.82, 0.85},
-		{"two thirds is under the middle of that range, about a fifth of the way up it",
-			(share - codeLeast) / (codeMost - codeLeast), 0.15, 0.25},
-		{"so a code log at two thirds of this log's ceiling fills after this log with no CI",
-			share / codeLeast, 1, math.Inf(1)},
-		{"and in about four fifths of this log's time with one", share / codeMost, 0.77, 0.83},
-		{"the compactions and their sweeps moved the middle up by about four hundredths",
-			merges / day, 0.035, 0.045},
-		{"pricing every seat's push as its coding box's moved it up by about two hundredths more",
-			float64(referencePushesADay*(codePushRecordBytes-codeEnginePushRecordBytes)) / day, 0.015, 0.025},
-		{"half suffices under fewer barriers than the reference company's git clients " +
-			"append with no CI, and under some", halfCount / float64(leastReads), 0, 1},
+		{"the code log takes about twice this log's day at its least", codeLeast, 1.9, 2.2},
+		{"and about seven times it at its most", codeMost, 6.75, 7.1},
+		{"two thirds is below that range", share / codeLeast, 0, 1},
+		{"so a code log at two thirds of this log's ceiling fills in about a third of this log's " +
+			"time at its least", share / codeLeast, 0.29, 0.36},
+		{"and in about a tenth of it at its most", share / codeMost, 0.09, 0.11},
+		{"two thirds is at the least of what a company whose seats only push takes", share / pushOnlyLeast,
+			0.95, 1.1},
+		{"and under the most of it, where a CI polls and every push is published", share / pushOnlyMost,
+			0, 1},
+		{"the change records alone take more than this log's whole day", changeLeast / day, 1,
+			math.Inf(1)},
+		{"so a half never suffices for a company whose seats open changes", changeLeast / (day / 2), 1,
+			math.Inf(1)},
 		{"git's barriers over min_age are under a thirtieth of the tenth of the derived ceiling",
 			window * gitMost / tenth(code.CodeLogMaxBytes), 0, 1.0 / 30},
 		{"and about a third of the tenth of the 1 GiB floor",
@@ -1175,7 +1439,6 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 
 	mb := func(bytes float64, places int) string { return fmt.Sprintf("%.*f", places, bytes/1e6) }
 	count := func(rate float64) string { return spaced(int64(math.Round(rate))) }
-	hundreds := func(rate float64) string { return spaced(int64(math.Round(rate/100) * 100)) }
 	kib := func(n int) string { return fmt.Sprintf("%d KiB", n>>10) }
 	tasks, comments := referenceTasksADay*whole.create, referenceCommentsADay*whole.comment
 	edits, turns := referenceEditsADay*whole.edit, referenceTurnsADay*whole.turn
@@ -1270,21 +1533,33 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("%s MB; the compactions that merge those pushes' packs, %s MB at %d bytes a push, "+
 				"and the code-retention duty's sweeps of what they retired, %s MB at %d", mb(pushes, 1),
 				mb(compactions, 2), codeCompactionBytes, mb(sweeps, 2), codeSweepBytes),
-			fmt.Sprintf("; and the barriers of its git clients, %s–%s MB", mb(gitLeast, 1),
-				mb(gitMost, 1)),
+			fmt.Sprintf("the publications of their layers, %s–%s MB", mb(publications.least, 2),
+				mb(publications.most, 2)),
+			fmt.Sprintf("the barriers of its git clients, %s–%s MB", mb(gitLeast, 1), mb(gitMost, 1)),
 			fmt.Sprintf("so a seat's push three times, %s a day, beside thirty people fetching every "+
 				"three minutes of a working day (%s) and, where one runs, a CI polling ten "+
 				"repositories a minute (%s)", spaced(referencePushReads),
 				spaced(referencePeopleReads), spaced(referenceCIReads)),
+			fmt.Sprintf("and the records of its %s changes a day, %s–%s MB", spaced(referenceChangesADay),
+				mb(changeLeast, 1), mb(changeMost, 1)),
 			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
 				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
 				pushes/records),
-			fmt.Sprintf("TWO THIRDS is under the middle of that range (%.2f), about a fifth of the "+
-				"way up it", middle),
-			fmt.Sprintf("beside the reference company's %s MB of pushes and %s MB of their compactions "+
-				"and sweeps, ABOUT %s BARRIERS A DAY, %s MB, make half the mutation log's %s MB day",
-				mb(pushes, 1), mb(merges, 1), hundreds(halfCount), mb(halfBarriers, 1), mb(day, 1)),
-			fmt.Sprintf("with no CI at all (%s)", spaced(leastReads)),
+			fmt.Sprintf("fills in %.2f of the mutation log's time at the least and %.2f at the most",
+				share/codeLeast, share/codeMost),
+			fmt.Sprintf("Even a company whose seats only push takes %.2f–%.2f of the mutation log's day "+
+				"here", pushOnlyLeast, pushOnlyMost),
+			fmt.Sprintf("two thirds is at the least of that range: such a code log fills in %.2f of the "+
+				"mutation log's time at the least and %.2f at the most", share/pushOnlyLeast,
+				share/pushOnlyMost),
+			fmt.Sprintf("the changes' records alone, %s MB a day at their least, are more than the "+
+				"mutation log's whole day", mb(changeLeast, 1)),
+		},
+		"internal/config/bootstrap.go": {
+			"two thirds is the least of what a company whose seats only push writes here, and BELOW " +
+				"what a company whose seats work through changes writes",
+			"take about twice to about seven times what its tracker writes and its seats' " +
+				"reads take a day",
 		},
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
@@ -1292,10 +1567,12 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("%s pushes at the MEASURED %s bytes a seat's coding box's push alone in its "+
 				"record (BenchmarkPushLogBytes), %s MB, the compactions that merge their packs and the "+
 				"sweeps of what those retired at the MEASURED %d and %d bytes a push "+
-				"(internal/code/compact's steady arm at the floor), %s MB, and its git clients' "+
-				"barriers at BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
-				spaced(codePushRecordBytes), mb(pushes, 1), codeCompactionBytes, codeSweepBytes,
-				mb(merges, 1), mb(gitLeast, 1), mb(gitMost, 1)),
+				"(internal/code/compact's steady arm at the floor), %s MB, the publications of their "+
+				"layers, %s–%s MB, its git clients' barriers at BarrierRecordBytes, %s–%s MB, and its "+
+				"changes' records, %s–%s MB", spaced(referencePushesADay), spaced(codePushRecordBytes),
+				mb(pushes, 1), codeCompactionBytes, codeSweepBytes, mb(merges, 1),
+				mb(publications.least, 2), mb(publications.most, 2), mb(gitLeast, 1), mb(gitMost, 1),
+				mb(changeLeast, 1), mb(changeMost, 1)),
 			fmt.Sprintf("git barriers beside its pushes: %s–%s MB a day, %.0f–%.0f MB over the default "+
 				"seven days — under a thirtieth of the tenth of a derived 10⅔ GiB ceiling, and "+
 				"about a third of the tenth of even the 1 GiB floor", mb(gitLeast, 1), mb(gitMost, 1),
@@ -1304,28 +1581,35 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"docs/guides/replication.md": {
 			fmt.Sprintf("a company's push records (%s bytes a seat's push from its coding box, measured), "+
 				"the records that compact their packs and sweep what each compaction retired (%d bytes "+
-				"a push, measured) and the barriers its git clients' reads append (%d bytes a read) take "+
-				"about five eighths to about five sixths of what its tracker writes and its seats' reads "+
-				"take a day, and the ratio is taken under the middle of that range",
-				spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes, code.BarrierRecordBytes),
-			fmt.Sprintf("Beside the reference company's %s pushes a day, that is **about %s barriers a "+
-				"day**: its pushes' %s MB — every one a seat's, priced as its coding box's, %s bytes "+
-				"alone in its record — the %s MB of the records that", spaced(referencePushesADay),
-				hundreds(halfCount), mb(pushes, 1), spaced(codePushRecordBytes), mb(merges, 1)),
-			fmt.Sprintf("their packs and sweep what each compaction retired a day later, %d bytes a "+
-				"push, and those barriers' %s MB are half the %s MB a day its tracker writes and its "+
-				"seats' reads take", codeCompactionBytes+codeSweepBytes, mb(halfBarriers, 1),
-				mb(day, 1)),
-			fmt.Sprintf("with no CI at all — %s, three reads a push and thirty people fetching every "+
-				"three minutes of a working day", spaced(leastReads)),
+				"a push, measured) and publish their layers, the barriers its git clients' reads append "+
+				"(%d bytes a read)", spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes,
+				code.BarrierRecordBytes),
+			"take about twice to about seven times what its tracker writes and its seats' " +
+				"reads take a day",
+			fmt.Sprintf("priced as its coding box's, %s bytes alone in its record, and %s", spaced(
+				codePushRecordBytes), spaced(referenceChangesADay)),
+			fmt.Sprintf("the code log takes %s–%s MB a day against the %s MB its tracker writes and its "+
+				"seats' reads take", mb(codeLeastBytes, 1), mb(codeMostBytes, 1), mb(day, 1)),
+			fmt.Sprintf("Its pushes are %s MB of that, the records that "+
+				"[compact](../concepts/code-host.md#compaction) their packs, publish their layers and "+
+				"sweep what each compaction retired %s–%s MB, its git clients' barriers %s–%s MB, and its "+
+				"changes' records %s–%s MB", mb(pushes, 1), mb(merges+publications.least, 1),
+				mb(merges+publications.most, 1), mb(gitLeast, 1), mb(gitMost, 1), mb(changeLeast, 1),
+				mb(changeMost, 1)),
+			fmt.Sprintf("at their measured sizes (%s)", changeFigures),
+			"in about a third of the mutation log's time where its seats open changes, and in about a " +
+				"tenth where its checks run and its targets move",
+			fmt.Sprintf("the changes' records alone, %s MB a day at their least, are more than the "+
+				"mutation log's whole day", mb(changeLeast, 1)),
 		},
 		"internal/code/doc.go": {
+			fmt.Sprintf("so %s bytes alone in its record", spaced(codePushRecordBytes)),
 			fmt.Sprintf("%d bytes where a merge takes the floor's sixteen", codeCompactionBytes),
 			fmt.Sprintf("%d bytes a push where every merge's rows are swept apart", codeSweepBytes),
 			fmt.Sprintf("hold about %.0f MB of it over the default seven-day min_age, and the records "+
 				"that merge their packs and sweep what those merges retired at most about %.1f MB "+
 				"beside them — about %.0f MB", window*pushes/1e6, window*merges/1e6,
-				window*besideBarriers/1e6),
+				window*(pushes+merges)/1e6),
 		},
 		"docs/concepts/scaling.md": {
 			fmt.Sprintf("takes %s bytes for a seat's coding box's push in a record of its own (%s where "+
@@ -1334,7 +1618,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("43 to %d bytes a push more", codeCompactionBytes),
 			fmt.Sprintf("and the sweeps that remove the rows a merge retired, a day later, up to %d more",
 				codeSweepBytes),
-			fmt.Sprintf("| about %.0f MB |", window*besideBarriers/1e6),
+			fmt.Sprintf("| about %.0f MB |", window*(pushes+merges)/1e6),
 		},
 	} {
 		page := prose(t, file)
@@ -1349,26 +1633,21 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why one is not
 // in it.
 //
-// The day sizes the code log's share (config's DerivedCodeLogNumerator), and
-// the pages count, beside it, the barriers under which a code log at half the
-// mutation log's ceiling suffices. A kind of record the log takes and the day
-// leaves out makes both quietly short, and no figure
-// TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: a
-// publication's, a change's or a check's record would come on top of a day
-// that has no room for it, and a company that lowered its code log to a half
-// on the barrier count would fill it first.
+// The day sizes the code log's share (config's DerivedCodeLogNumerator) and
+// says where that share sits against what the log takes. A kind of record
+// the log takes and the day leaves out makes it quietly short, and no figure
+// TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: the
+// change, review, merge, queue and check records this build's tools, its home
+// git nodes and its check runners append would come on top of a day that has
+// no room for them — as they did until they were priced here.
 //
-// So every op the code domain declares is exactly one of four: priced by the
+// So every op the code domain declares is exactly one of three: priced by the
 // day (codeLogDay, a term for each shape of its records it prices),
-// negligible beside it for the reason given (codeLogNegligible), appended by
-// no node of this build (codeLogUnwritten) — and that only while no file the
-// crewlet binary is built from names the listing its loop would poll or the
-// payload its asker would build — or appended only about objects whose making
-// the day leaves out (codeLogRiders), and that only while the op that makes
-// one is unwritten and every key of a priced op's payload that makes one is
-// absent from the records its term was measured on.
-// Every kind of object the log's records are on says how the day counts them
-// (codeLogKinds).
+// negligible beside it for the reason given (codeLogNegligible), or appended
+// by no node of this build (codeLogUnwritten) — and that only while no file
+// the crewlet binary is built from names the listing its loop would poll or
+// the payload its asker would build. Every kind of object the log's records
+// are on says how the day counts them (codeLogKinds).
 //
 // AN OP IS CLASSIFIED ONCE, AND ITS RECORDS CHANGE SHAPE UNDER IT: a later
 // writer appends the same op's records at a size or a rate its term was not
@@ -1376,33 +1655,66 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // the shapes are held too, each by what the code itself tells it apart by:
 // every way a push's pack is built and everything that may manage a
 // repository, each closed set classified whole (codeLogPushVias,
-// codeLogManagers); every key a priced op's payload declares, against the
-// keys its term was measured on (codeLogFields); and a shape only its writer
-// tells apart — a publication among compactions — by the listing its loop
-// would poll (codeLogUnwrittenShapes).
+// codeLogManagers); and every key a priced op's payload declares, against the
+// keys its terms were measured on (codeLogFields).
 //
-// A new op, kind, way, manager or payload key, or the writer of an unwritten op
-// or shape, fails here until its records are priced into the day — and the
-// share and when a half suffices restated on the pages
-// TestTheDocsPrintTheMeasuredDay holds — or argued out of it.
+// A new op, kind, way, manager or payload key, or the writer of an unwritten
+// op, fails here until its records are priced into the day — and the share's
+// place restated on the pages TestTheDocsPrintTheMeasuredDay holds — or argued
+// out of it. The one negligible reason that prints a bound on a measured
+// figure, a change's edits, is held to it here.
 //
 // Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, name code.ReadPublicationDue in a non-test
-// file of internal/code/compact, or build a code.ChangeOpen in a non-test file
-// of internal/agent/builtin, and this fails naming it — and naming the revise
-// and the landing that ride it, as it does where the push term's records carry
-// a key of pushes.change; take the compactor's poll off code.ReadCompactionDue
-// and it fails saying the walk found no writer.
+// a key to a priced op's payload, or build a code.Candidate in a non-test file
+// of internal/code/home, and this fails naming it; take the compactor's poll
+// off code.ReadCompactionDue and it fails saying the walk found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
-	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
-		"when a half suffices on the pages TestTheDocsPrintTheMeasuredDay holds — or say in " +
-		"codeLogNegligible why they are no rate beside the day"
+	const remedy = "price its records into codeLogDay — and restate the code log's share on the " +
+		"pages TestTheDocsPrintTheMeasuredDay holds — or say in codeLogNegligible why they are no " +
+		"rate beside the day"
 	const shapeRemedy = "price them into codeLogDay as a term of their own beside their op's, " +
-		"measured — and restate the code log's share and when a half suffices on the pages " +
-		"TestTheDocsPrintTheMeasuredDay holds — or argue them out of the day with the measured " +
-		"figure that keeps them out; then say so where this test reads it"
+		"measured — and restate the code log's share on the pages TestTheDocsPrintTheMeasuredDay " +
+		"holds — or argue them out of the day with the measured figure that keeps them out; then say " +
+		"so where this test reads it"
 	day := codeLogDay()
+	// A CHANGE'S EDITS stay out of the day on a bound: every one of the
+	// reference company's changes edited once, its whole description
+	// rewritten, appends under a twentieth of the day's least.
+	var least float64
+	for _, term := range day {
+		least += term.least
+	}
+	if edits := float64(referenceChangesADay * codeChangeEditBytes); edits >= least/20 {
+		t.Errorf("codeLogNegligible leaves a change's edits out of the day on a bound of a twentieth of "+
+			"its least, and an edit a change at %d bytes (codeChangeEditBytes) appends %.2f MB a day "+
+			"against a least of %.1f MB: price them into codeLogDay, or restate the bound",
+			codeChangeEditBytes, edits/1e6, least/1e6)
+	}
+	// A CHANGE'S RECORDS ARE PRICED AT WHAT internal/code MEASURES THEM AT:
+	// its changeRecordBytes is the figure each record is held to there, and
+	// this package cannot import a test file's map, so it reads the map's
+	// lines. A record restated there and not here is a day the measurement no
+	// longer backs.
+	measured := prose(t, "internal/code/changelog_test.go")
+	for name, bytes := range map[string]int64{
+		"open": codeChangeOpenBytes, "edit": codeChangeEditBytes, "reviewers": codeReviewersBytes,
+		"revise": codeReviseBytes, "mergeability": codeMergeabilityBytes,
+		"review_findings": codeReviewFindingsBytes, "review": codeReviewBytes, "answer": codeAnswerBytes,
+		"comment": codeCommentBytes, "thread_resolve": codeThreadResolveBytes, "merge": codeMergeBytes,
+		"enqueue": codeEnqueueBytes, "check_queued": codeCheckQueuedBytes,
+		"check_dispatched": codeCheckDispatchedBytes, "check_started": codeCheckStartedBytes,
+		"check_named": codeCheckNamedBytes, "check_finished": codeCheckFinishedBytes,
+		"publication_tail": codePublicationTailBytes, "publication_one": codePublicationOneBytes,
+	} {
+		line := fmt.Sprintf("%q: %s,", name, strings.ReplaceAll(spaced(bytes), " ", "_"))
+		if !strings.Contains(measured, line) {
+			t.Errorf("the day prices a change's %s at %d bytes, and internal/code's changeRecordBytes, "+
+				"which holds that record to what the log takes, has no line %q: state the figure it "+
+				"measures in both, and restate the pages TestTheDocsPrintTheMeasuredDay holds",
+				name, bytes, line)
+		}
+	}
 	// AN OP IS PRICED BY ITS SHAPES' TERMS, each one shape of its records, once.
 	priced := map[code.OpKind]bool{}
 	shapes := map[[2]string]bool{}
@@ -1429,22 +1741,15 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		if _, found := codeLogUnwritten[op]; found {
 			in = append(in, "codeLogUnwritten")
 		}
-		if _, found := codeLogRiders[op]; found {
-			in = append(in, "codeLogRiders")
-		}
 		switch len(in) {
 		case 0:
 			t.Errorf("the code log takes %q records, which its day neither prices nor leaves out "+
 				"for a reason: %s", op, remedy)
 		case 1:
 		default:
-			t.Errorf("%q is in %s: an op is priced, negligible, unwritten or a rider, one of the four",
+			t.Errorf("%q is in %s: an op is priced, negligible or unwritten, one of the three",
 				op, strings.Join(in, " and "))
 		}
-	}
-	var shapeOps []code.OpKind
-	for _, unwritten := range codeLogUnwrittenShapes {
-		shapeOps = append(shapeOps, unwritten.op)
 	}
 	for _, listed := range []struct {
 		name string
@@ -1453,9 +1758,7 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		{"codeLogDay", slices.Collect(maps.Keys(priced))},
 		{"codeLogNegligible", slices.Collect(maps.Keys(codeLogNegligible))},
 		{"codeLogUnwritten", slices.Collect(maps.Keys(codeLogUnwritten))},
-		{"codeLogUnwrittenShapes", shapeOps},
 		{"codeLogFields", slices.Collect(maps.Keys(codeLogFields))},
-		{"codeLogRiders", slices.Collect(maps.Keys(codeLogRiders))},
 	} {
 		for _, op := range listed.ops {
 			if !op.Valid() {
@@ -1516,76 +1819,6 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 				unwritten.payload, op, unwritten.how, remedy)
 		}
 	}
-	// THE RIDERS, each out of the day exactly while the day leaves its object's
-	// making out: the op that makes one unwritten, and every key of a priced
-	// op's payload that makes one absent from the records its term was
-	// measured on, with why.
-	for op, rider := range codeLogRiders {
-		maker, unwritten := codeLogUnwritten[rider.on]
-		switch {
-		case strings.TrimSpace(rider.how) == "" || !rider.on.Valid():
-			t.Errorf("codeLogRiders holds %q records unwritten while %q is, which is no op the code domain "+
-				"declares, or does not say how its records would be appended", op, rider.on)
-		case !unwritten:
-			t.Errorf("%q records are about objects only %q records make, which the day no longer holds "+
-				"unwritten, so a node makes them, and appends these about them — %s: %s", op, rider.on,
-				rider.how, remedy)
-		case polled[maker.listing] || built[maker.payload]:
-			t.Errorf("a file the crewlet binary is built from appends %q records, which make the objects %q "+
-				"records are about, so a node appends these too — %s: %s", rider.on, op, rider.how, remedy)
-		}
-		for _, m := range rider.makers {
-			fields, priced := codeLogFields[m.op]
-			if !priced {
-				t.Errorf("codeLogRiders reads the keys of %q records for what would make %q's objects, and "+
-					"the day prices no such records", m.op, op)
-				continue
-			}
-			if !slices.ContainsFunc(payloadKeys(t, fields.payload), func(key string) bool {
-				return under(key, m.key)
-			}) {
-				t.Errorf("codeLogRiders names the key %q of %q records as what makes the objects %q records "+
-					"are about, and their payload declares no such key", m.key, m.op, op)
-				continue
-			}
-			for _, key := range fields.carried {
-				if under(key, m.key) {
-					t.Errorf("the day's term for %q records was measured on records carrying the key %q, "+
-						"which makes the objects %q records are about, so the day prices their making and "+
-						"these come beside it — %s: %s", m.op, key, op, rider.how, remedy)
-				}
-			}
-			if !slices.ContainsFunc(slices.Collect(maps.Keys(fields.absent)), func(absent string) bool {
-				return under(m.key, absent)
-			}) {
-				t.Errorf("%q records declare the key %q, which makes the objects %q records are about, and "+
-					"codeLogFields does not leave it out of the records their term was measured on, with "+
-					"why — so the day may price their making and not these beside it — %s: %s", m.op, m.key,
-					op, rider.how, remedy)
-			}
-		}
-	}
-	for _, unwritten := range codeLogUnwrittenShapes {
-		_, negligible := codeLogNegligible[unwritten.op]
-		switch {
-		case !unwritten.listing.Valid() || strings.TrimSpace(unwritten.shape) == "" ||
-			strings.TrimSpace(unwritten.how) == "":
-			t.Errorf("codeLogUnwrittenShapes holds a shape of %q records unwritten on the listing "+
-				"%q, which is no listing the code domain declares, or does not say what the "+
-				"records are or how they would be appended", unwritten.op, unwritten.listing)
-		case !priced[unwritten.op] && !negligible:
-			t.Errorf("codeLogUnwrittenShapes holds a shape of %q records, which the day neither "+
-				"prices nor leaves out for a reason: a shape is one of an op the day classifies, "+
-				"and every record of an op no node appends is unwritten with it (codeLogUnwritten)",
-				unwritten.op)
-		case polled[unwritten.listing]:
-			t.Errorf("a file the crewlet binary is built from names the listing %q, which the "+
-				"loop that appends them polls, so a node appends %q records of a shape the day "+
-				"does not price — %s — %s: %s", unwritten.listing, unwritten.op, unwritten.shape,
-				unwritten.how, shapeRemedy)
-		}
-	}
-
 	// THE WAYS AND THE MANAGERS, each closed set classified whole.
 	classifiedWhole(t, "codeLogPushVias", "way of building a push's pack", code.PushVias(),
 		codeLogPushVias, shapeRemedy)

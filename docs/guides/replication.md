@@ -914,7 +914,7 @@ ceilings the fleet keeps:
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Five eighths of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same share the first boot did. Where the broker states no limit, three quarters of the stream volume's free space stands in for it — the cap a NATS server running its defaults gives itself, which the engine cannot read, and which the whole free space overstated by a third: the bucket's quarter and the logs' share of what it left came within a thirty-second of that cap, short of the gibibyte the mailboxes and coordination are owed on any volume under 32 GiB — and the share is five eighths of that stand-in less what the broker has already reserved for other streams (the `nats` object bucket's reservation, say), and nothing is added for the logs: a reservation never spends free space, so that figure already contains what the logs hold. Where the broker's budget cannot be read at all, the share is five eighths of the same three quarters. The other three eighths are for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. Five eighths because a re-embedding of the reference company's fifth-year corpus has to fit the vector changelog beside the other seven logs' asks on a 64 GiB volume with nothing else reserved, which half did not once the code log was registered; and no more than two thirds, which would leave the mailboxes and coordination less than the `nats` bucket's quarter. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the artifact datastore's log (`stream.artifact_data_log_max_bytes`, 1..512 GiB) for the same quarter (1..16 GiB from a volume alone), the largest share the pool can give it beside a vector changelog that holds a model change, although its records carry the rows themselves, every cell an artifact page or a seat writes, and a busy sheet writes at the tracker's rate or above it: a company whose pages write heavily sets the field, which accepts twice the artifacts log's bound for that reason; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the code log (`stream.code_log_max_bytes`) for two thirds of the mutation log's ceiling, set or derived, because it too holds a trailing window of records: once seats push, a company's push records (1 555 bytes a seat's push from its coding box, measured), the records that compact their packs and sweep what each compaction retired (152 bytes a push, measured) and the barriers its git clients' reads append (176 bytes a read) take about five eighths to about five sixths of what its tracker writes and its seats' reads take a day, and the ratio is taken under the middle of that range: no lower, because the changes, reviews and checks of later releases join the same log and a log keeps the ceiling it was created with, and no higher, because those barriers are the softest term in the day (2⅔..42⅔ GiB from a volume alone) — a push record never carries its pack, so how large the repositories grow is the object store's to hold, not this log's; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. The code log asks whether or not the company hosts any code, and below about 626 GiB free its ask is room the others give up in the fit below (the figures are under [What the code log's reservation costs](#what-the-code-logs-reservation-costs)); a company that hosts no code and is short of broker room sets `stream.code_log_max_bytes: 1073741824`, its floor, **before the first boot**. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the artifact datastore's log (`stream.artifact_data_log_max_bytes`, 1..512 GiB) for the same quarter (1..16 GiB from a volume alone), the largest share the pool can give it beside a vector changelog that holds a model change, although its records carry the rows themselves, every cell an artifact page or a seat writes, and a busy sheet writes at the tracker's rate or above it: a company whose pages write heavily sets the field, which accepts twice the artifacts log's bound for that reason; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the code log (`stream.code_log_max_bytes`) for two thirds of the mutation log's ceiling, set or derived (2⅔..42⅔ GiB from a volume alone), because it too holds a trailing window of records — and that is below what a company whose seats work through changes writes to it: a company's push records (1 604 bytes a seat's push from its coding box, measured), the records that compact their packs and sweep what each compaction retired (152 bytes a push, measured) and publish their layers, the barriers its git clients' reads append (176 bytes a read) and the records of its changes — each change's open, reviews, comments and merge, every revision's facts and mergeability its home records, and its queue's and its checks' records where they run, all measured — take about twice to about seven times what its tracker writes and its seats' reads take a day, so a company whose seats open changes gives the code log the ratio its two logs' `bytes_per_day` show — a push record never carries its pack, so how large the repositories grow is the object store's to hold, not this log's; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. The code log asks whether or not the company hosts any code, and below about 626 GiB free its ask is room the others give up in the fit below (the figures are under [What the code log's reservation costs](#what-the-code-logs-reservation-costs)); a company that hosts no code and is short of broker room sets `stream.code_log_max_bytes: 1073741824`, its floor, **before the first boot**. |
 | **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' share first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 #### What the code log's reservation costs
@@ -961,32 +961,44 @@ same trade is two
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling) calls:
 the code log's lowered, then the log you want longer raised.
 
-The code log's share, two thirds of the mutation log's ceiling, is a judgement
-on the softest term in its day — the barriers its git clients' reads append —
-which no deployment had reported when it was made, and it holds until yours
-has. **A half suffices while the code log takes at most half of what the
-mutation log takes a day**:
+The code log's share, two thirds of the mutation log's ceiling, is **below
+what a company whose seats work through changes writes to it**. At the
+reference company — 3 000 pushes a day, every one a seat's, priced as its
+coding box's, 1 604 bytes alone in its record, and 300
+[changes](../concepts/code-host.md#changes) a day, ten pushes each — the code
+log takes 24.6–83.9 MB a day against the 12.1 MB its tracker writes and its
+seats' reads take: about twice to about seven times what its tracker
+writes and its seats' reads take a day. Its pushes are 4.8 MB of that, the
+records that [compact](../concepts/code-host.md#compaction) their packs, publish
+their layers and sweep what each compaction retired 0.6–4.0 MB, its git
+clients' barriers 2.4–5.0 MB, and its changes' records 16.7–70.1 MB: each
+change's open, its ask of a reviewer, a review asking for changes with two
+findings and the answer to them, two comments and a thread resolved, an
+approving review and its merge, and every revision's facts and mergeability
+its home records, at their measured sizes (an open 3 430 bytes, a review
+asking for changes with two findings 5 030, an approving review 2 340, a
+comment 2 280, a merge 1 640, a revision's facts 1 640, its mergeability
+1 340) — the most adding a queue entry a change, a recheck of every change at
+each of its home's ten-minute passes over a working day while its target
+moves, and three checks of every revision, each queued, claimed, its box named
+and ended. So under a blocked trim a code log at two thirds of the mutation
+log's ceiling fills **in about a third of the mutation log's time where its
+seats open changes, and in about a tenth where its checks run and its targets
+move**. A company whose seats work through changes reads the two logs'
+`bytes_per_day` in `crewlet retention status` —
 [`crewlet.statelog.log.bytes_per_day`](../reference/metrics.md) whose `domain`
-is `code` at most half the one whose `domain` is `tracker` — the two logs'
-`bytes_per_day` in `crewlet retention status` — which count every record each
-log takes, so a code log at half the mutation log's ceiling fills no sooner
-while a trim is blocked. For a code log that takes nothing but pushes, the
-compactions that merge their packs, the sweeps of what those retired and its
-git clients' barriers, the same line is a count of the barriers:
-[`crewlet.statelog.barrier.applied`](../reference/metrics.md) whose `stream` is
-`CREWLET_CODE_LOG`, a day's increase of it on any one data node, which counts
-every barrier because every data node applies every record, so the nodes'
-counts are not added together. Beside the reference company's 3 000 pushes a
-day, that is **about 5 300 barriers a day**: its pushes' 4.7 MB — every one a
-seat's, priced as its coding box's, 1 555 bytes alone in its record — the
-0.5 MB of the records that
-[compact](../concepts/code-host.md#compaction) their packs and sweep what each
-compaction retired a day later, 152 bytes a push, and those barriers' 0.9 MB
-are half the 12.1 MB a day its tracker writes and its seats' reads take. That
-is fewer than the reference company's own git clients append
-with no CI at all — 13 800, three reads a push and thirty people fetching every
-three minutes of a working day — so a half is for a company whose people and
-CI fetch less.
+is `code` against the one whose `domain` is `tracker`, which count every
+record each log takes — and gives the code log that ratio of the mutation
+log's ceiling: `stream.code_log_max_bytes` before the first boot, or
+[`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling)
+once the streams exist.
+
+**A half suffices while the code log takes at most half of what the mutation
+log takes a day**, the same two `bytes_per_day` side by side, so a code log
+at half the mutation log's ceiling fills no sooner while a trim is blocked.
+That is only ever a company whose seats open no changes: at the reference
+company the changes' records alone, 16.7 MB a day at their least, are more
+than the mutation log's whole day.
 
 **The half is of the ceiling the mutation log is created with, never of what
 it asks for.** A ceiling you set comes off the logs' share whole and is never

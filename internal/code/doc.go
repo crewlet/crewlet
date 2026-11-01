@@ -608,11 +608,13 @@
 // carries the company day its quota counted it on ([PushEntry.Day]),
 // nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
 // and about 893 in a burst. A seat's CODING BOX's push of the commit takes
-// 175.0 bytes more than a person's (push=box): its principal names, beside
+// 224.0 bytes more than a person's (push=box): its principal names, beside
 // the run the engine's write names, the coding run that pushed — the
-// launch's id, a UUID — and the coding agent the box ran (`claude-code`),
-// and its way is `git`; so 1 555 bytes alone in its record and about 967 in
-// a burst, the most a seat's push takes of the log, at which the code log's
+// launch's id, a UUID — the coding agent the box ran (`claude-code`) and
+// the identity of the work item its run was launched for (a native task's
+// UUID, [RunProvenance.WorkID], 49 of those bytes), and its way is `git`;
+// so 1 604 bytes alone in its record and about 1 016 in a burst (the
+// person's 792 and the same 224), the most a seat's push takes of the log, at which the code log's
 // day prices every one of the reference company's (internal/tracker's
 // codeLogDay). The compactions that merge the pushes' packs add
 // their own records, MEASURED a push (internal/code/compact's steady arms,
@@ -629,11 +631,13 @@
 // merges is swept together, a record for every [RetireSweepRows] of its rows
 // whatever pushes they came from. The log keeps the trim's window of records
 // rather than the history, so the reference company's 3 000 pushes a day,
-// every one a seat's and priced as its coding box's, hold about 33 MB of it
+// every one a seat's and priced as its coding box's, hold about 34 MB of it
 // over the default seven-day min_age, and the records that merge their packs
 // and sweep what those merges retired at most about 3.2 MB beside them —
-// about 36 MB, about a thirtieth of the log's 1 GiB floor — and the bytes of
-// a push's pack are never on it: a record names its bundle.
+// about 37 MB, under a twenty-fifth of the log's 1 GiB floor — and the bytes
+// of a push's pack are never on it: a record names its bundle. The records
+// of the changes those pushes revise come beside them, several times their
+// bytes (config's DerivedCodeLogNumerator has the day).
 //
 // # The activation fence
 //

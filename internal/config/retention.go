@@ -229,8 +229,7 @@ const (
 	// ratio of what each takes a day a blocked trim fills both in the same
 	// time. What each takes is its records and the barriers its
 	// linearizable reads append (176 bytes each in their signed frames,
-	// code.BarrierRecordBytes), at the reference company once its seats
-	// push:
+	// code.BarrierRecordBytes), at the reference company:
 	//
 	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
 	//     MEASURED for the reference company's tasks, comments, edits and
@@ -238,75 +237,74 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 7.5–10.1 MB a day: 3 000 pushes at 1 555 bytes,
+	//   - the code log 24.6–83.9 MB a day: 3 000 pushes at 1 604 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
 	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
 	//     push=box arm beside a person's; 1 481 where the engine builds the
 	//     push for a tool, its push=agent arm, and which of its seats push
-	//     from their boxes is no figure the reference company has; about 967
-	//     a push in a burst group commit holds together), 4.7 MB; the
+	//     from their boxes is no figure the reference company has; about
+	//     1 016 a push in a burst group commit holds together), 4.8 MB; the
 	//     compactions that merge those pushes' packs, 0.32 MB at 108 bytes a
 	//     push, and the code-retention duty's sweeps of what they retired,
-	//     0.13 MB at 44, both MEASURED on
-	//     a repository pushed once a minute, whose every merge takes the
-	//     floor's sixteen packs and is swept by a record of its own a day
-	//     later (internal/code/compact's BenchmarkCompact, its steady arm at
-	//     that floor) — the most the reference company's pushes cost, since a
-	//     few a minute across its repositories never leave a merge more than
-	//     the floor, while a merge of a minute's hundreds costs 43 bytes a
-	//     push and a quarter hour's merges are one sweep; and the barriers of
-	//     its git clients, 2.4–5.0 MB — a push asks the log twice (its
-	//     advertisement and its receive's sync) and the fetch before it once
-	//     (its ls-refs, whose sync brings every want), so a seat's push three
-	//     times, 9 000 a day, beside thirty people fetching every three
-	//     minutes of a working day (4 800) and, where one runs, a CI polling
-	//     ten repositories a minute (14 400).
+	//     0.13 MB at 44, both MEASURED on a repository pushed once a minute,
+	//     whose every merge takes the floor's sixteen packs and is swept by a
+	//     record of its own a day later (internal/code/compact's
+	//     BenchmarkCompact, its steady arm at that floor) — the most the
+	//     reference company's pushes cost, since a few a minute across its
+	//     repositories never leave a merge more than the floor; the
+	//     publications of their layers, 0.18–3.51 MB, every pack named once
+	//     in a busy repository's tail of sixty-four and at the most every
+	//     push published on its own, as a young repository's is; the
+	//     barriers of its git clients, 2.4–5.0 MB — a push asks the log
+	//     twice (its advertisement and its receive's sync) and the fetch
+	//     before it once (its ls-refs, whose sync brings every want), so a
+	//     seat's push three times, 9 000 a day, beside thirty people fetching
+	//     every three minutes of a working day (4 800) and, where one runs, a
+	//     CI polling ten repositories a minute (14 400); and the records of
+	//     its 300 changes a day, 16.7–70.1 MB — every push a revision of its
+	//     coding run's change, ten a change, each change opened by a seat's
+	//     tool, asked of one reviewer, reviewed asking for changes with two
+	//     findings, answered, commented on twice, a thread resolved, approved
+	//     and merged, and its home recording every revision's facts and
+	//     mergeability and its readiness again after the ask, the reviews and
+	//     the answer, each record MEASURED as its writer forms it at the
+	//     reference company's text (internal/code's
+	//     TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt); at the
+	//     most beside them a queue entry a change, a recheck at every
+	//     ten-minute pass of its home over a working day while its target
+	//     moves, and three checks of every revision, each queued, claimed,
+	//     its box named and ended.
 	//
-	// Every figure is of SIGNED records (ADR-0031), each about forty bytes
-	// longer than the records the ratio was first set from: the frame grows
-	// a barrier by about three tenths and a push or a gesture by a few
-	// percent, so it moved the code log, whose day is half barriers, more
-	// than the mutation log.
+	// Every figure is of SIGNED records (ADR-0031).
 	//
-	// So the code log takes 0.62–0.83 of the mutation log's day — 0.38 on
-	// its push records alone (0.47 of the tracker's records), which is what
-	// the 1.5–2 KiB a record this ratio was first set from overstated — and
-	// TWO THIRDS is under the middle of that range (0.73), about a fifth of the
-	// way up it: under a blocked trim a code log at two thirds of the
-	// mutation log's ceiling fills after the mutation log while the company's
-	// git clients are its seats and its people, and in about four fifths of
-	// the mutation log's time where a CI polls beside them. It was the
-	// middle until the compactions and their sweeps were priced into the
-	// day, which moved the middle up by about four hundredths, and pricing
-	// every seat's push as its coding box's moved it up by about two
-	// hundredths more. Not raised to
-	// the middle again, because the git barriers are the softest term in the
-	// day — the CI's polls alone are the whole width of the range — a
-	// JUDGEMENT on an ESTIMATE of git traffic no deployment has reported yet,
-	// while every byte of ratio above two thirds is taken from the other logs
-	// on every volume whose logs are scaled into their share. Not lowered,
-	// because the changes, reviews and checks that later releases put on this
-	// same log come on top, as the compactions did, and a log keeps the
-	// ceiling it was created with: an operator who wants more room later pays
-	// for it with `crewlet retention set-capacity`.
+	// So the code log takes 2.03–6.92 of the mutation log's day — 0.40 on
+	// its push records alone (0.49 of the tracker's records) — and TWO
+	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
+	// thirds of the mutation log's ceiling fills in 0.33 of the mutation
+	// log's time at the least and 0.10 at the most. The ratio is the one
+	// the code log was sized at while its day was a seat's pushes, their
+	// compactions and its git clients' barriers, before the publications
+	// and the changes' records were priced into it. Even a company whose
+	// seats only push takes 0.65–1.13 of the mutation log's day here — the
+	// publications of a young repository's every push and a CI's polls are
+	// the width of it — and two thirds is at the least of that range: such
+	// a code log fills in 1.03 of the mutation log's time at the least and
+	// 0.59 at the most. A company whose seats work through changes, or
+	// whose repositories publish every push or a CI polls, READS THE RATIO
+	// IT NEEDS from the two logs'
+	// crewlet.statelog.log.bytes_per_day, domain code against domain
+	// tracker, which count every record each log takes, and gives the code
+	// log that share of the mutation log's ceiling: stream.code_log_max_bytes
+	// before the first boot, or `crewlet retention set-capacity` once the
+	// streams exist, since a log keeps the ceiling it was created with.
 	//
-	// SO TWO THIRDS HOLDS UNTIL PRODUCTION COUNTS EXIST, and A HALF SUFFICES
-	// WHILE THE CODE LOG TAKES AT MOST HALF OF WHAT THE MUTATION LOG TAKES A
-	// DAY: the two logs' crewlet.statelog.log.bytes_per_day, domain code
-	// against domain tracker, which count every record each log takes, so a
-	// code log at half the mutation log's ceiling fills no sooner under a
-	// blocked trim. For a code log that takes nothing but pushes, the
-	// compactions that merge their packs, the sweeps of what those retired
-	// and its git clients' barriers, the same line is a count of the
-	// barriers, its crewlet.statelog.barrier.applied (stream
-	// CREWLET_CODE_LOG), which any one data node counts whole, since every
-	// data node applies every barrier: beside the reference company's 4.7 MB
-	// of pushes and 0.5 MB of their compactions and sweeps, ABOUT 5 300
-	// BARRIERS A DAY, 0.9 MB, make half the mutation log's 12.1 MB day. The
-	// reference company's own git clients append more than that with no CI
-	// at all (13 800), so a half is for a company whose people and CI fetch
-	// less.
+	// A HALF SUFFICES WHILE THE CODE LOG TAKES AT MOST HALF OF WHAT THE
+	// MUTATION LOG TAKES A DAY, the same two bytes_per_day side by side, so
+	// a code log at half the mutation log's ceiling fills no sooner under a
+	// blocked trim. That is only ever a company whose seats open no changes:
+	// at the reference company the changes' records alone, 16.7 MB a day at
+	// their least, are more than the mutation log's whole day.
 	//
 	// HALF IS OF THE CEILING THE MUTATION LOG IS CREATED WITH, never of its
 	// ask. A ceiling set in stream.code_log_max_bytes comes off the logs'

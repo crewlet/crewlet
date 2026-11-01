@@ -1806,13 +1806,20 @@ type Stream struct {
 	//
 	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
 	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
-	// the byte rate: once seats push, a company's push records, the records
-	// that compact their packs and sweep what each compaction retired, and
-	// the barriers its git clients' reads append take about five eighths to
-	// about five sixths of what its tracker writes and its seats' reads take
-	// a day, and the ratio is taken a little under the middle of that range
-	// ([DerivedCodeLogNumerator] has the arithmetic and the reason), so a
-	// blocked trim reaches either ceiling in about the same time.
+	// meant to be the byte rate, at which a blocked trim reaches either
+	// ceiling in the same time; two thirds is the least of what a company
+	// whose seats only push writes here, and BELOW what a company whose
+	// seats work through changes writes: its push records, the records that
+	// compact their packs, publish their layers and sweep what each
+	// compaction retired, the barriers its git clients' reads append, and
+	// its changes' records — opens, reviews, comments, merges, every
+	// revision's facts and mergeability, and its queue's and checks' where
+	// they run — take about twice to about seven times what its
+	// tracker writes and its seats' reads take a day
+	// ([DerivedCodeLogNumerator] has the arithmetic). Such a company sets
+	// this field to the ratio its two logs' crewlet.statelog.log.bytes_per_day
+	// show before the first boot, or raises the log with `crewlet retention
+	// set-capacity` once it exists.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the

@@ -1021,22 +1021,28 @@ stream:
                                     #   UNSET DERIVES two thirds of the
                                     #   mutation log's ceiling, set or derived
                                     #   (so 2⅔..42⅔ GiB from a volume alone):
-                                    #   once seats push, a company's push
+                                    #   the least of the byte rate of a
+                                    #   company whose seats only push, at
+                                    #   which a blocked trim fills either log
+                                    #   in the same time. Once they work
+                                    #   through changes, its push
                                     #   records, the records that compact
-                                    #   their packs and sweep what each
-                                    #   compaction retired, and its git
-                                    #   clients' read barriers take about
-                                    #   five eighths to five sixths of the
+                                    #   their packs, its git clients' read
+                                    #   barriers and its changes' records —
+                                    #   opens, reviews, comments, merges, each
+                                    #   revision's facts and mergeability, and
+                                    #   its queue's and checks' — take about
+                                    #   twice to seven times the
                                     #   bytes a day its tracker writes and its
-                                    #   seats' reads do, and the ratio sits a
-                                    #   little under the middle, no higher
-                                    #   because those barriers are the
-                                    #   softest term and no lower because
-                                    #   later releases add changes, reviews
-                                    #   and checks to this log, so a blocked
-                                    #   trim fills either one in about the
-                                    #   same time. A push record names its pack
-                                    #   and never carries it — the bytes are the
+                                    #   seats' reads do: set this to the ratio
+                                    #   the two logs' bytes_per_day show in
+                                    #   `crewlet retention status` before the
+                                    #   first boot, or raise it later with
+                                    #   `crewlet retention set-capacity`
+                                    #   (guides/replication.md, "What the code
+                                    #   log's reservation costs"). A push
+                                    #   record names its pack and never
+                                    #   carries it — the bytes are the
                                     #   object store's — so how large the
                                     #   repositories grow does not reach this
                                     #   ceiling. Crossing it refuses the append,
