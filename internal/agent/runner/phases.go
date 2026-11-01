@@ -523,11 +523,12 @@ func New(cfg Config) (*Runner, error) {
 // it — launched as the seat's harness's own run, detached in its box, and
 // collected later through [Runner.Resume].
 //
-// It is given the whole first-party surface, and its MCP servers by name only
-// — rather than every tool definition a real server publishes, which on a
-// large stack is a wall of text in every prompt. Discovery is a tool call,
-// which also keeps the prompt prefix stable while a server's catalogue changes
-// underneath.
+// It is given every tool its seat holds — the first-party ones and every MCP
+// server's, but those of a server that runs in its box ([executorActive]) —
+// none of them in its prompt: each reaches its harness over the bridge under
+// the server it comes from, and the harness keeps a large server's tools out of
+// the requests that do not need them by its own deferral, as it does for a
+// person (internal/api/mcpbridge, servers.go).
 //
 // One phase rather than two is the whole redesign. Planning in one
 // conversation and acting in another cost the actor everything the planner
@@ -570,26 +571,18 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // a record made anywhere else would describe a catalogue matched a second
 // time against a live registry rather than the one sent.
 //
-// TWO VIEWS OF THE TOOLS, and each section reads the one it describes.
-// snapshot is the universe the surface was built FROM
-// ([Runner.executorUniverse]): the tools to discover are what it holds that
-// the surface does not offer yet — on the executor, its MCP servers, since
-// every first-party tool is offered from the launch and its definition
-// reaches the run over the bridge. built is the surface itself, which also
-// holds what [Runner.surfaceWith] adds to its own copy — submit_work, the
-// discovery pair and `delegate` — so every section gated on a tool being
-// offered, and the tool-skill matching, read built's names. Read off the
-// snapshot, they never saw `delegate`, and `## Your workers` was rendered for
-// no seat at all.
+// THE BUILT SURFACE, not the snapshot it was built from: it also holds what
+// [Runner.surfaceWith] adds to its own copy — submit_work and `delegate` — so
+// every section gated on a tool being offered, and the tool-skill matching,
+// read built's names. Read off the snapshot, they never saw `delegate`, and
+// `## Your workers` was rendered for no seat at all. No tool the surface holds
+// is listed: each one's definition reaches the run over the bridge, under the
+// server it comes from, which also says what the server is for.
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
-	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface, fresh []steer.Note,
+	history []ledger.Iteration, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
-		// What the universe the surface was built from holds and the
-		// surface does not offer yet: nothing this executor cannot
-		// activate, and nothing it already holds.
-		Discoverable:   snapshot.Discoverable(built.Active()),
 		AvailableTools: built.Universe().Names(),
 		MCPServers:     built.Universe().MCPServers(),
 
@@ -645,10 +638,9 @@ func (r *Runner) priorWork(ctx context.Context, history []ledger.Iteration) stri
 
 // work is one collected executor run, assembled for reporting.
 type work struct {
-	submit   *structured.Tool[workPayload]
-	res      phaseResult
-	surface  *tools.Surface
-	snapshot tools.Snapshot
+	submit  *structured.Tool[workPayload]
+	res     phaseResult
+	surface *tools.Surface
 
 	// run names the run and the box it ran in.
 	run RunRecord
@@ -693,14 +685,11 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Decision: payload.Outcome, Rescued: !submitted,
 		Run:       w.run,
 		RunSteers: w.res.RunSteers,
+		// EVERYTHING IT HELD, and no catalogue beside it: an executor holds
+		// every tool it can reach from its launch, so nothing was left for
+		// it to discover. Its MCP servers that run in its box are not on the
+		// list — they are the box's, reached there.
 		Available: w.surface.Active(),
-		// What the executor could still have discovered, with no schemas:
-		// the universe it was built from less what it held by the end.
-		// Sending every MCP server's tool definitions is what made a turn
-		// expensive, and discovery is what replaced it. Disjoint from
-		// Available, so the two together are the whole reachable surface
-		// and a reader counts no tool twice.
-		Catalogue: undiscovered(w.snapshot, w.surface.Active()),
 	})
 
 	return turn.Work{
@@ -717,15 +706,14 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	}, describe(w.surface)
 }
 
-// undiscovered is the names of a universe a surface does not offer.
-func undiscovered(universe tools.Snapshot, active []string) []string {
-	var out []string
-	for _, name := range universe.Names() {
-		if !slices.Contains(active, name) {
-			out = append(out, name)
-		}
+// discoverable is every MCP-served tool of a surface's universe where the
+// surface can discover one (it holds `activate_tool`), and nothing where it
+// cannot.
+func discoverable(s *tools.Surface) []string {
+	if !slices.Contains(s.Active(), toolname.Activate) {
+		return nil
 	}
-	return out
+	return s.Universe().MCPNames()
 }
 
 // Review judges the round.
@@ -1603,17 +1591,22 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 // discovers reports whether a phase is offered the discovery pair,
 // list_mcp_server_tools and activate_tool.
 //
-// The executor (launched or collected) and onboarding are, because their
-// prompts list the tools they can still discover — each MCP server by name,
-// and on onboarding its knowledge-base tools — and tell the model how. The reviewer
-// is not, and must not be: it judges the round from the evidence in front of
+// The onboarding pass is, because its prompt lists the tools it can still
+// discover — its knowledge-base tools among them — and tells the model how.
+// The executor is not: it holds every tool its seat does from its launch, each
+// MCP server's served under the server's own name, and its harness keeps them
+// out of the requests that do not need them by its own deferral — Claude
+// Code's tool search, OpenCode's Code Mode (internal/api/mcpbridge,
+// servers.go). The pair was the engine doing by hand, two rounds at a time,
+// what both executor harnesses do natively. The reviewer is not, and must not
+// be: it judges the round from the evidence in front of
 // it, and its prompt promises it no domain tools. activate_tool reaches every
 // tool in the registry snapshot, MCP writes included, so a reviewer offered
 // the pair could post to a thread or edit a ticket in the middle of grading
 // whether the executor should have. Until this gate, surfaceWith added the
 // pair to every phase, the reviewer's included.
 func discovers(ph phase.Phase) bool {
-	return ph == phase.Execute || ph == phase.Onboarding
+	return ph == phase.Onboarding
 }
 
 // armedGuard is one built gate: the concrete guard for the runner's own
@@ -1700,32 +1693,48 @@ func catalogueSurface(surface *tools.Surface) prompts.Surface {
 // executorUniverse is the snapshot an executor's surface is built from: the
 // registry, less the phase-scoped tools this executor must never reach.
 //
-// THE UNIVERSE, NOT ONLY THE ACTIVE LIST. A surface activates anything in its
-// snapshot by name (`activate_tool`), and the tools to discover the prompt
-// lists are read off that same snapshot — so a tool kept off the active list
-// alone was still listed to the executor, one call from active: mark_onboarded,
-// the one tool phaseScoped exists to keep away from it.
+// THE UNIVERSE, NOT ONLY THE ACTIVE LIST. A surface's universe is what its
+// skill triggers are matched over, what its worker's grant is cut from and
+// what the delivery check names tools from, so a tool kept off the active list
+// alone was still in front of the executor: mark_onboarded, the one tool
+// phaseScoped exists to keep away from it.
 func (r *Runner) executorUniverse(snapshot tools.Snapshot) tools.Snapshot {
 	return snapshot.Without(phaseScoped...)
 }
 
-// executorActive is what the executor is offered: every first-party tool in
-// its universe ([Runner.executorUniverse]). MCP tools are reachable through
-// discovery.
+// executorActive is what the executor is offered: every tool in its universe
+// ([Runner.executorUniverse]) — the first-party ones and every MCP server's the
+// seat holds — but the tools of a server that runs in its box (inBox,
+// [Runner.boxServers]), which its harness reaches there, under the same name,
+// rather than over the bridge.
 //
-// The whole first-party surface, not a slice of it chosen in advance. Choosing
-// in advance is what the planner used to do — against a catalogue it was never
-// shown — and every wrong guess became a tool the actor did not have when it
-// turned out to need it.
-func executorActive(universe tools.Snapshot) []string {
+// THE WHOLE SURFACE, not a slice of it chosen in advance. Choosing in advance is
+// what the planner used to do — against a catalogue it was never shown — and
+// every wrong guess became a tool the actor did not have when it turned out to
+// need it. A seat's MCP tools were held back until the run discovered and
+// activated them, which kept a hundred vendor definitions out of each request;
+// its harness does that by itself now, a server at a time
+// (internal/api/mcpbridge, servers.go).
+func executorActive(universe tools.Snapshot, inBox []string) []string {
 	var out []string
 	for _, e := range universe.Entries() {
-		if _, fromMCP := e.FromMCP(); fromMCP {
+		if server, fromMCP := e.FromMCP(); fromMCP && slices.Contains(inBox, server) {
 			continue
 		}
 		out = append(out, e.Name())
 	}
 	return out
+}
+
+// boxServers names the seat's MCP servers that run in its executor's box
+// (role.sandbox.mcp.servers), none of whose tools the bridge offers: a run never
+// holds one server twice, once in its box and once over the bridge, under the
+// same name.
+func (r *Runner) boxServers() []string {
+	if role := r.cfg.Seat.Role; role != nil && role.Sandbox != nil {
+		return role.Sandbox.MCP.Servers
+	}
+	return nil
 }
 
 // phaseScoped names the first-party tools that belong to ONE phase and must
@@ -1775,10 +1784,12 @@ func describe(s *tools.Surface) turn.Surface {
 		Deliveries:     u.Deliveries(),
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
-		// Every MCP-served tool, which a phase reaches only by discovering
-		// it — so a refusal can tell the tools a seat already holds from
-		// the ones it has to go and find. See [turn.Surface.Discoverable].
-		Discoverable: u.MCPNames(),
+		// Every MCP-served tool, on a phase that reaches one only by
+		// discovering it — so a refusal can tell the tools a seat already
+		// holds from the ones it has to go and find. See
+		// [turn.Surface.Discoverable]. NONE on a phase with no way to discover
+		// one: the executor, which holds every tool it can reach.
+		Discoverable: discoverable(s),
 	}
 }
 

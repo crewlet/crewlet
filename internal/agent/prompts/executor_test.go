@@ -45,20 +45,23 @@ func order(t *testing.T, got string, phrases ...string) {
 	}
 }
 
-func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
+// THE EXECUTOR LISTS NO TOOL AND NO SERVER TO DISCOVER. Every tool its seat
+// holds is on its surface from its launch, each one's definition reaching its
+// harness over the bridge under the server it comes from, with what that
+// server is for as the server's own MCP instructions; and its harness keeps a
+// large server's tools out of the requests that do not need them itself. A
+// section naming them would be the prompt paying for what each request
+// already carries, and a section to discover them would send the model to
+// tools no executor holds.
+func TestExecutorPromptListsNoToolAndCarriesItsIdentity(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
-		Discoverable: "- MCP server `github`\n- MCP server `atlassian`",
+		AvailableTools: []string{"submit_work", "post_message", "create_issue"},
+		MCPServers:     []string{"github"},
 	}).Text
-	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
-		"Engineer", "Acme")
-	// NOT "Available tools": the tools the seat holds reach its harness as its
-	// MCP server's, and a section headed as though it listed them tells the
-	// model it may call what it first has to discover.
-	excludes(t, p, "## Available tools")
-	// Nothing to discover is no section at all, not a heading over nothing.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{Discoverable: " \n"}).Text,
-		"## Tools to discover")
+	contains(t, p, "## Your turn", "Engineer", "Acme")
+	excludes(t, p, "## Tools to discover", "## Available tools", "MCP server `github`",
+		"create_issue")
 }
 
 // THE ACT RULE. A turn that ended with a composed reply nobody was sent is
@@ -73,17 +76,20 @@ func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 	)
 }
 
-// Discovery is what stops an executor giving up when the tool it needs is not
-// already on its surface. ONE SENTENCE: the two tools' own descriptions say
-// how each works, and what the header adds is the turn's rule — discover
-// before reporting that you cannot act.
-func TestExecutorPromptTeachesDiscovery(t *testing.T) {
+// THE SEARCH SENTENCE is what stops an executor giving up when the tool it
+// needs is not already in front of it: every tool its seat holds is its own,
+// but its harness shows a large server's tools only once its model looks for
+// them. ONE SENTENCE, naming no engine tool — how to look is the harness's own
+// to teach (its tool search, Code Mode's `search()`), and the discovery pair
+// the engine used to name is on no executor's surface.
+func TestExecutorPromptSaysToSearchBeforeGivingUp(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
 	contains(t, p,
-		"`list_mcp_server_tools`, then `activate_tool`",
+		"search your tools for it",
 		"before reporting that you cannot act",
 	)
+	excludes(t, p, "list_mcp_server_tools", "activate_tool")
 	// Nothing survives of the reconciliation the two-phase engine needed — no
 	// declared tool list, no phantom warning about one — nor of the
 	// API-era wording that described a vendor's tool channel this engine no
@@ -307,7 +313,7 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 //
 // Measured with EVERY GATE ON in both, the way production sends them to a
 // seat that holds every gated tool: the review's `a2a_ask`, and the
-// executor's escalation, workers and tools to discover (referenceExecutor). An ungated review is the smallest one there is, and a
+// executor's escalation and workers (referenceExecutor). An ungated review is the smallest one there is, and a
 // comparison made on it held for a review that had grown every rule it can
 // render.
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {

@@ -1,14 +1,11 @@
 package prompts
 
 import (
-	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The measure is part of the contract: someone "simplifying" it to len(s)/4
@@ -90,7 +87,7 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "workers", KeyDiscoverableTools} {
+	for _, key := range []string{"escalation", "workers"} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -142,23 +139,21 @@ func sectionText(sections ...[]string) string {
 }
 
 // referenceExecutor is the executor input the budgets measure: a lead's
-// surface with every tool that gates a section on it, the workers the
-// shipped example company configures, and the tools to discover a production
-// snapshot renders.
+// surface with every tool that gates a section on it, and the workers the
+// shipped example company configures.
 //
 // The surface is NAMES, because that is all a gate reads — what each tool
-// says reaches the model with the request, never through this prompt. The
+// says reaches the model with the request, never through this prompt, and
+// that holds for every MCP server's tool as much as a first-party one: the
+// executor lists none, and its harness defers a server's tools itself. The
 // names are the ones production's surface carries: `comment_on_work_item`
 // and `create_work_item` from the default work tracker, `delegate` for a
-// seat with workers, and the tools every executor adds (`submit_work` and
-// the discovery pair).
+// seat with workers, and `submit_work`, which every executor adds.
 func referenceExecutor(t *testing.T) ExecutorInput {
 	t.Helper()
 	return ExecutorInput{
-		Discoverable: referenceDiscoverable(t),
 		AvailableTools: []string{
-			"activate_tool", escalationTool, "create_work_item", "delegate",
-			"list_mcp_server_tools", "submit_work",
+			escalationTool, "create_work_item", "delegate", "submit_work",
 		},
 		Workers: referenceWorkers(),
 	}
@@ -191,56 +186,6 @@ func referenceWorkers() string {
 		lines = append(lines, config.DescribeWorker(name, workers[name]))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// referenceDiscoverable is the reference executor's tools to discover,
-// rendered by the renderer production uses over a snapshot shaped like
-// production's: first-party tools with real-length descriptions, every one of
-// them ACTIVE, as the executor holds them from its first round — and the
-// three MCP servers an engineering lead typically carries (a tracker, a code
-// host, a chat), several tools each.
-//
-// What renders is one line per server, and the case checks that it is: a
-// first-party description in this text would mean the prompt is paying for a
-// definition the request already carries, which is the regression this
-// fixture exists to catch.
-func referenceDiscoverable(t *testing.T) string {
-	t.Helper()
-	reg := tools.NewRegistry()
-	var active []string
-	for i := range 45 {
-		name := fmt.Sprintf("first_party_%02d", i)
-		desc := strings.Repeat("What this first-party tool does and when to call it. ", 8)
-		if err := reg.Register(stubTool{name, desc}, tools.OriginBuiltin); err != nil {
-			t.Fatal(err)
-		}
-		active = append(active, name)
-	}
-	for _, server := range []string{"atlassian", "github", "slack"} {
-		for i := range 30 {
-			name := fmt.Sprintf("%s_tool_%02d", server, i)
-			if err := reg.Register(stubTool{name, "A vendor's tool."}, tools.Origin(server)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	out := reg.Snapshot().Discoverable(active)
-	if strings.Contains(out, "first_party_") || strings.Count(out, "\n") != 2 {
-		t.Fatalf("the reference executor's tools to discover are not its three "+
-			"servers alone:\n%s", out)
-	}
-	return out
-}
-
-// stubTool is a name and a description and nothing else: what a budget
-// measures is what a catalogue renders, never what a tool does.
-type stubTool struct{ name, desc string }
-
-func (s stubTool) Name() string               { return s.name }
-func (s stubTool) Description() string        { return s.desc }
-func (s stubTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
-	return tools.Result{}, nil
 }
 
 // THE WHOLE TURN, which is the number that actually bills.

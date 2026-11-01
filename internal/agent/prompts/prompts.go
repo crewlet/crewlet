@@ -12,8 +12,8 @@
 //     reports as the ONE roster allowance pays for; then names; then a line
 //     naming the tool that finds the rest — see rosterAllowanceTokens, the
 //     only budget in this package the prompt itself enforces) + the
-//     executor's contract + prefetch blocks + tool-skills catalogue + the
-//     tools it can still discover.
+//     executor's contract + prefetch blocks + tool-skills catalogue. No tool
+//     list: every tool it holds reaches its harness over the bridge.
 //   - Review — one-line identity + the rules that decide its decision + the
 //     round's evidence. No policies, no roster, no catalogue: the reviewer
 //     judges one round's record and needs nothing else.

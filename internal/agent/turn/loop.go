@@ -125,8 +125,9 @@ type Surface struct {
 	KnownOpenWorld []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
-	// `activate_tool` promotes onto the next round — as against a
-	// first-party tool, which the executor holds from its launch.
+	// `activate_tool` promotes onto the next round — and nothing on a phase
+	// that holds every tool it can reach: the executor, whose MCP tools
+	// are its harness's to keep out of its requests.
 	//
 	// It exists for one sentence: the one a delivery refusal ends with,
 	// saying how to reach the surface the asker is waiting on (see

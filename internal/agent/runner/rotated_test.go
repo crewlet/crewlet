@@ -47,8 +47,7 @@ func rotatedRound(t *testing.T, before run, rotated runner.Rotated) (*playLaunch
 // leave the launch unmarked, and this fails.
 func TestARoundAReplacedSignInCutOffIsCarriedOnInItsSession(t *testing.T) {
 	t.Parallel()
-	before := run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"starting on it"}`)}}
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"starting on it"}`)}}
 	relauncher, _, err := rotatedRound(t, before, runner.Rotated{SessionID: "sess-1", BoxKept: true})
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -77,8 +76,7 @@ func TestARoundAReplacedSignInCutOffIsCarriedOnInItsSession(t *testing.T) {
 // its work, and relaunching it would deliver twice.
 func TestARoundSubmittedBeforeTheRefusalIsCollected(t *testing.T) {
 	t.Parallel()
-	before := run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"fixed the flake"}`),
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"fixed the flake"}`),
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"fixed the flake","deliveries":["slack_post"]}`)}}
 	relauncher, _, err := rotatedRound(t, before, runner.Rotated{SessionID: "sess-1", BoxKept: true})

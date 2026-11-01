@@ -150,7 +150,7 @@ func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (*Ses
 	ln.SetUnlinkOnClose(true)
 	s := &Session{
 		path:   path,
-		server: NewServer(name, title, d),
+		server: NewServer(name, title, "", d),
 		ln:     ln,
 		ctx:    context.WithoutCancel(ctx),
 	}

@@ -70,7 +70,6 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ExecutorInput{
-		Discoverable: "- MCP server `github`",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
 		// it gates is inside the bytes held stable across rounds.
 		AvailableTools:    []string{"post_message", "refresh_memory", "comment_on_work_item"},
@@ -87,9 +86,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 			PriorWork:       ledgerAfter(round),
 		}).Text)
 		return BuildExecutor(seat, frozen).Text
-	}, BuildExecutor(seat, ExecutorInput{
-		Discoverable: "- MCP server `github`", AvailableTools: frozen.AvailableTools,
-	}).Text)
+	}, BuildExecutor(seat, ExecutorInput{AvailableTools: frozen.AvailableTools}).Text)
 
 	// Guard the guard: if the per-round state never moved, the stability
 	// assertion above tested nothing at all.
@@ -147,7 +144,6 @@ func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	exec := ExecutorInput{
-		Discoverable:   "- MCP server `github`",
 		AvailableTools: []string{"post_message"},
 		Skills:         allSkills(),
 	}
@@ -172,7 +168,7 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
 		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
 	}}
-	in := ExecutorInput{Skills: cat, Discoverable: "- x: does x", MCPServers: []string{
+	in := ExecutorInput{Skills: cat, MCPServers: []string{
 		"slack", "custom-b", "github", "mattermost", "gitlab", "custom-a", "atlassian",
 	}}
 

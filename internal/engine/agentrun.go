@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -457,7 +458,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
 	inbox.Bind(ctx, job.LaunchID)
-	opening := sandbox.Opening{Servers: bridgeServer(endpoint)}
+	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface)}
 	if inbox != nil {
 		// THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
 		// disagree about where the notes are.
@@ -609,18 +610,32 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int
 	return nil
 }
 
-// bridgeServer is the engine-side surface as one entry of a box's MCP server
+// bridgeServers is the engine-side surface as entries of a box's MCP server
 // list, which the launch adds beside the seat's own servers in a map of the
 // job's own: an endpoint written into the seat's rendered map, whose values
 // the epoch owns, would follow the seat into its next run, where the token
 // names a job that is over.
-func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
-	// Under the reserved name, which config refuses to any mcp_servers
-	// entry — so this entry can never shadow a server the seat scoped into
-	// its box. See [config.ToolServerName] for why it is not the handle.
-	return map[string]sandbox.MCPServer{config.ToolServerName: {
+//
+// THE ENGINE'S OWN TOOLS under the reserved name, which config refuses to any
+// mcp_servers entry — so it can never shadow a server the seat scoped into its
+// box (see [config.ToolServerName] for why it is not the handle) — and ALWAYS
+// LOADED ([sandbox.MCPServer.AlwaysLoaded]): what the run reports through and
+// asks a person through is on every request. AND EACH OF THE SEAT'S MCP SERVERS
+// the surface offers a tool of, under its own name, at the route the bridge
+// serves it on ([mcpbridge.ServerURL]), left to the harness's own way of
+// keeping a large tool list out of each request. The names are the bridge's own
+// reading of the surface ([mcpbridge.Servers]), so a box is handed exactly the
+// servers its opening serves.
+func bridgeServers(endpoint string, surface *tools.Surface) map[string]sandbox.MCPServer {
+	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+		AlwaysLoaded: true,
 	}}
+	for _, name := range mcpbridge.Servers(surface) {
+		out[name] = sandbox.MCPServer{Name: name, Transport: sandbox.TransportHTTP,
+			URL: mcpbridge.ServerURL(endpoint, name)}
+	}
+	return out
 }
 
 // agentRunFor is THE construction path for a turn's executor launcher, used by

@@ -112,7 +112,6 @@ func richSkills() *fakeCatalogue {
 // heading of its own the way real retrieved content does.
 func richExecutorInput() ExecutorInput {
 	return ExecutorInput{
-		Discoverable: "- MCP server `atlassian`\n- MCP server `github`",
 		AvailableTools: []string{
 			"read_file", "delegate", "comment_on_work_item",
 		},

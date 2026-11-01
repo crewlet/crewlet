@@ -54,6 +54,11 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// reports as a transport that does not support streaming rather than as
 	// a route that is registered wrong.
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	// AND EACH OF THE SEAT'S MCP SERVERS beneath it, under its own name and
+	// behind the same token and the same routing (internal/api/mcpbridge,
+	// servers.go): a harness keeps a server's tools out of its requests by
+	// the server, so the engine's own tools and the seat's are served apart.
+	mux.Handle(mcpbridge.ServerPattern, bridge.Handler())
 	// AND THE RUN'S NOTES ROUTE beneath it, behind the same token and the
 	// same routing: a harness's plugin polls it for its turn's notes
 	// between steps (internal/api/mcpbridge, steer.go). Under the bridge's
@@ -61,7 +66,7 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// log's redaction that cover the bridge cover it.
 	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
 	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}",
-		"notes", mcpbridge.SteerPattern)
+		"servers", mcpbridge.ServerPattern, "notes", mcpbridge.SteerPattern)
 }
 
 // mountOperator registers the operator surface's two transports — MCP for an

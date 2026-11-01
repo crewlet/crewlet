@@ -717,9 +717,12 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			// The request that CALLS something. Recorded as execute like
 			// the submitting one, because it is the same phase — what
 			// differs is that this turn leaves an observable trace, which
-			// is the condition every learning worker is gated on.
+			// is the condition every learning worker is gated on. A tool
+			// every seat holds: an executor holds every tool its seat does
+			// and no discovery pair, so a call to one would be refused as
+			// a tool the run was never offered.
 			saw("execute")
-			reply = toolUse("list_mcp_server_tools", map[string]any{})
+			reply = toolUse("lookup_colleague", map[string]any{"query": "ceo"})
 			break
 		}
 		saw("execute")

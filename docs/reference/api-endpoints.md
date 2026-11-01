@@ -9319,7 +9319,7 @@ words are in
 [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
 It is the built-ins of the registry this node applied, which every node
 applies alike, plus `list_mcp_server_tools` and `activate_tool`, which the
-engine hands every executor and onboarding pass and no registry holds. A group
+engine hands the onboarding pass and a worker and no registry holds. A group
 the company offers nothing of is left out: a company on Jira gets no `work`
 group, and one on Slack no `chat` group. A node with no active revision sends
 an empty list.

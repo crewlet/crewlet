@@ -194,8 +194,7 @@ func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
-	before := play(t, req, run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"looking into it"}`)}})
+	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
 	parked, ok := launched.Suspended()
 	if !ok {
 		t.Fatal("the launch recorded no state")
@@ -240,31 +239,26 @@ func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 	}
 }
 
-// A CARRIED-ON RUN IS SERVED THE SURFACE THE ASKING RUN LEFT, and may cite
-// what it delivered. The run that asked activated tools and made deliveries
-// over the bridge after its launch recorded the park, and the run carrying it
-// on — the same round, often the same harness session — goes on calling those
-// tools and reports those deliveries. Rebuilt from the launch's record alone,
-// a tool it activated was refused as inactive; judged against the relaunch's
-// own calls alone, its submission citing a delivery made before the question
-// was refused as it was made, though the collection accepts it.
+// A CARRIED-ON RUN IS SERVED THE SURFACE THE ASKING RUN HELD, and may cite
+// what it delivered. The run that asked made deliveries over the bridge after
+// its launch recorded the park, and the run carrying it on — the same round,
+// often the same harness session — goes on calling those tools and reports
+// those deliveries. Judged against the relaunch's own calls alone, its
+// submission citing a delivery made before the question was refused as it was
+// made, though the collection accepts it.
 //
-// Mutation: rebuild the relaunch's surface from the park's active list alone,
-// or leave the asking run's calls out of the submission's record, and this
+// Mutation: leave the asking run's calls out of the submission's record, or
+// rebuild the relaunch's surface without the tools its launch held, and this
 // goes red.
 func TestACarriedOnRunKeepsWhatTheAskingRunDid(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
-	before := play(t, req, run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"posted the summary"}`)}})
-	// THE PARK AS THE LAUNCH WROTE IT: before the run activated anything.
+	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"posted the summary"}`)}})
+	// THE PARK AS THE LAUNCH WROTE IT, before the run's delivery.
 	parked, ok := launched.Suspended()
 	if !ok {
 		t.Fatal("the launch recorded no state")
-	}
-	if slices.Contains(parked.State.ActiveTools, "slack_post") {
-		t.Fatal("the park already holds the activation, so this case proves nothing")
 	}
 
 	relauncher := &playLauncher{}
@@ -279,7 +273,7 @@ func TestACarriedOnRunKeepsWhatTheAskingRunDid(t *testing.T) {
 	}
 	again := relauncher.last(t)
 	if !slices.Contains(again.Surface.Active(), "slack_post") {
-		t.Errorf("the carried-on run is offered %v, want the tool the asking run activated",
+		t.Errorf("the carried-on run is offered %v, want the tool the asking run held",
 			again.Surface.Active())
 	}
 	cited := play(t, again, run{calls: []llm.ToolCall{call(t, runner.SubmitWorkTool,
