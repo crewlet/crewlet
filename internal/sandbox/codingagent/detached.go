@@ -425,11 +425,11 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// The artefacts are cleared unconditionally rather than only on a reuse
 	// path: the runner cannot tell a fresh box from a reused one, and
 	// clearing a fresh box's absent files costs one exec.
-	if err := r.ClearArtifacts(ctx, box); err != nil {
+	if err = r.ClearArtifacts(ctx, box); err != nil {
 		return sandbox.RunHandle{}, err
 	}
 	if base != "" {
-		if err := box.WriteFile(ctx, paths.BaseResult(), []byte(base)); err != nil {
+		if err = box.WriteFile(ctx, paths.BaseResult(), []byte(base)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("codingagent: keeping the session's spend so far: %w", err)
 		}
 	}
