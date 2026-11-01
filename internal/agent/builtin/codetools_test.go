@@ -1814,8 +1814,8 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // where they do not say it, who may rerun what and that a report is a
 // person's said once, in each description; ~6% headroom again. And 49 400 →
 // 52 900 when a change's merge, dequeue and revert joined beside its rebase,
-// deliberately, with their measured cost: 46 587 → 49 918 (~12 480 tokens),
-// 3 331 bytes (~833 tokens), what a refused merge names and that a revert is a
+// deliberately, with their measured cost: 46 587 → 49 963 (~12 491 tokens),
+// 3 376 bytes (~844 tokens), what a refused merge names and that a revert is a
 // change of its own said once, in each description, and every argument cut
 // to its name and type; ~6% headroom again.
 const codeCatalogueBudget = 52_900
