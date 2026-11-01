@@ -160,7 +160,7 @@ func (e *SignInInProgressError) Error() string {
 
 // SignInModeError is a device sign-in for an entry whose auth mode reads no
 // login (api-key, env).
-type SignInModeError struct{ Mode config.CLIAgentAuthMode }
+type SignInModeError struct{ Mode config.HarnessAuthMode }
 
 func (e *SignInModeError) Error() string {
 	return "llmapi: the model signs in with auth.mode " + string(e.Mode) + ", which reads no login"

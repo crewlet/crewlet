@@ -2295,12 +2295,12 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, entry, path string }{
-		{"an unloadable profile", "      agent: custom\n", "providers.llm.sub.overrides"},
+		{"an unloadable profile", "      harness: custom\n", "providers.llm.sub.overrides"},
 		{"an api key with nowhere to go",
-			"      agent: hermes\n      auth: {mode: api-key, api_key: \"${OPENROUTER_API_KEY}\"}\n",
+			"      harness: hermes\n      auth: {mode: api-key, api_key: \"${OPENROUTER_API_KEY}\"}\n",
 			"providers.llm.sub.auth.mode"},
 		{"a profile with no model flag",
-			"      agent: codex\n      overrides: {model_args: []}\n",
+			"      harness: codex\n      overrides: {model_args: []}\n",
 			"providers.llm.sub.overrides.model_args"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

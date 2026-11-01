@@ -33,7 +33,7 @@ for why). So the CLI each `providers.llm` entry names has to be installed on
 the engine host, executable by the engine's user and on its `PATH` (or named by
 path with `overrides.binary`):
 
-| Models | `agent` | Binary | Install |
+| Models | `harness` | Binary | Install |
 |---|---|---|---|
 | Anthropic's | `claude-code` (the default) | `claude` | Claude Code — `@anthropic-ai/claude-code` on npm, or the vendor's own installer |
 | OpenAI's | `codex` | `codex` | Codex — `@openai/codex` on npm, or the vendor's own installer |
@@ -57,7 +57,7 @@ Install the release line the engine's built-in profile was written for:
 and a profile that no longer matches its CLI fails there rather than at a
 seat's first turn. Each CLI keeps its login and its per-seat homes under the
 entry's `state_dir`, in a subdirectory named for the CLI — by default
-`~/.crewlet/llm-cli/<key>/<agent>`, or under `CREWLET_LLM_CLI_HOME` — so that
+`~/.crewlet/llm-harness/<key>/<harness>`, or under `CREWLET_LLM_HARNESS_HOME` — so that
 directory belongs on storage that outlives the process.
 
 **The container image ships no coding CLI.** It is the engine and the userland
@@ -81,7 +81,7 @@ person's notes through need Claude Code 2.1.163 or later (an older release runs
 without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` profile's flags, output paths and
 limit sentences on 2.1.303 and 2.1.310; take a newer one when
 `crewlet llm doctor` passes against it. Give the container a volume for the state directory
-(`CREWLET_LLM_CLI_HOME=/var/lib/crewlet/llm-cli`, say), so a login survives a
+(`CREWLET_LLM_HARNESS_HOME=/var/lib/crewlet/llm-harness`, say), so a login survives a
 restart. A login made on another machine reaches the container as a
 credential bundle or a headless token in the secret store — see
 [Authentication](../concepts/llm-backends.md#authentication).

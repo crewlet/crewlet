@@ -357,7 +357,7 @@ function Models() {
                   )
                 }
               >
-                {`${entry.key}: ${product(entry.agent)}, ${entry.model}`}
+                {`${entry.key}: ${product(entry.harness)}, ${entry.model}`}
               </ListItem>
             );
           })}

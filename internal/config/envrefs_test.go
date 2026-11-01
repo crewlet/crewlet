@@ -106,7 +106,7 @@ func TestAnEmptyDocumentReferencesNothing(t *testing.T) {
 }
 
 // A VARIABLE THE COMPANY READS WITHOUT NAMING IT IS STILL READ. An entry that
-// writes no credential signs in from its CLI's own variable — the token
+// writes no credential signs in from its harness's own variable — the token
 // `crewlet llm login -capture-token` stored, the key already exported — and
 // from the bundle `crewlet llm export -secret-store` stored, and the Secrets
 // screen calls a row nothing reads safe to delete. So each is reported at the
@@ -131,7 +131,7 @@ providers:
       model: sonnet
       auth: {token: "${MY_TOKEN}", credential_bundle: "${MY_BUNDLE}"}
     host:
-      agent: codex
+      harness: codex
       model: gpt-5
       auth: {mode: inherit-env}
   embeddings:
@@ -209,11 +209,11 @@ providers:
   sandbox: {fake: true}
   llm:
     gpt-5:
-      agent: codex
+      harness: codex
       model: gpt-5
       env: {HTTPS_PROXY: "${PROXY_URL}"}
     gpt-5.1:
-      agent: codex
+      harness: codex
       model: "${NEWER_MODEL}"
       auth: {mode: api-key, api_key: "${NEWER_KEY}"}
 `))

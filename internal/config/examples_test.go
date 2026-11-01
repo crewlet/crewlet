@@ -56,7 +56,7 @@ func readRepoFile(t *testing.T, parts ...string) []byte {
 var shippedCompanies = []string{
 	// The reference: the full stack, on a metered key.
 	"nimbus.company.yaml",
-	// The short path: Mattermost alone, on a coding-CLI subscription.
+	// The short path: Mattermost alone, on a harness subscription.
 	"nimbus-claude-cli.company.yaml",
 }
 

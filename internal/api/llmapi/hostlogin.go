@@ -65,7 +65,7 @@ func sharesLogin(company *config.Company, key string, entry *config.LLMProvider)
 			continue
 		}
 		candidate := company.Providers.LLM[other]
-		if candidate.Agent != entry.Agent {
+		if candidate.Harness != entry.Harness {
 			continue
 		}
 		if theirs, err := candidate.ResolvedStateDir(other); err == nil && theirs == dir {

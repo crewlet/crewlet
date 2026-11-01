@@ -354,7 +354,7 @@ func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Ch
 	default:
 		// THE CLI ITSELF, not the credential: no binary, a profile it
 		// cannot run. Placed at the entry's CLI, with the doctor's remedy.
-		path := config.Path{"providers", "llm", key, "agent"}
+		path := config.Path{"providers", "llm", key, "harness"}
 		message, remedy := c.Said, ""
 		for _, line := range c.Lines {
 			if !line.OK {
@@ -593,7 +593,7 @@ func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, 
 
 // agentName is an entry's CLI in a sentence.
 func agentName(entry *config.LLMProvider) string {
-	switch entry.Agent {
+	switch entry.Harness {
 	case "", "claude-code":
 		return "Claude Code"
 	case "codex":
@@ -601,7 +601,7 @@ func agentName(entry *config.LLMProvider) string {
 	case "opencode":
 		return "OpenCode"
 	}
-	return string(entry.Agent)
+	return string(entry.Harness)
 }
 
 func plural(n int, one, many string) string {

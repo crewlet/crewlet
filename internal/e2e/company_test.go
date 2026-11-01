@@ -456,7 +456,7 @@ type scriptedModel struct {
 	// stateDir is where the entry driving this model's CLI keeps its seats'
 	// homes ([scriptedEntry]) — this model's own, so no two nodes' entries
 	// share one unless they share the model. The coder entry keeps its own
-	// beside them ([codingEntry]; each CLI under <state_dir>/<agent>), and
+	// beside them ([codingEntry]; each CLI under <state_dir>/<harness>), and
 	// the boxes its runs happen in and the shim they run live under it too.
 	stateDir string
 

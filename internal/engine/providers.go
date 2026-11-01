@@ -221,7 +221,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	// (LLMProvider.validateProfile), so a failure here is a document that
 	// never went through validation — refused here rather than built on
 	// whatever CredentialSources made of a profile it could not load.
-	if _, err := cliprofile.Load(spec.AgentName(), spec.Overrides); err != nil {
+	if _, err := cliprofile.Load(spec.HarnessName(), spec.Overrides); err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
 
@@ -253,7 +253,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	return cliagent.New(cliagent.Config{
 		Key:                        key,
 		Model:                      model,
-		Agent:                      spec.AgentName(),
+		Agent:                      spec.HarnessName(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,
 		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),

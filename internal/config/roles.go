@@ -117,9 +117,9 @@ type Role struct {
 	// executor's chain. The turn's work happens in one run, so a second
 	// field naming the model that run is on would be two spellings of one
 	// setting — and the phases that remain here are the SATELLITES an
-	// operator points somewhere cheaper. They are also where a CLI with no
+	// operator points somewhere cheaper. They are also where a harness with no
 	// in-box runner serves a seat: only claude-code and opencode can be its
-	// executor ([CodingAgents]), and any CLI can be its reviewer.
+	// executor ([ExecutorHarnesses]), and any harness can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
@@ -260,9 +260,9 @@ func (p *RolePlacement) validate(path Path) error {
 // reads beyond the engine-wide catalogue.
 //
 // NOT A GATE, and nothing here places the box. Every agent seat's executor is
-// its coding CLI's own run, in the cell the providers.llm entry it launches on
+// its harness's own run, in the cell the providers.llm entry it launches on
 // names (that entry's `run_in`, else providers.sandbox.default_run_in), on
-// that entry's own CLI — so neither the cell nor the runner is a seat's to
+// that entry's own harness — so neither the cell nor the runner is a seat's to
 // say. What is left is what differs from one seat's work to another's: its
 // own provisioning and environment, the tool servers its box is given, how
 // long a box blocked on a person stays paused, and how many rounds one run
@@ -300,7 +300,7 @@ type RoleSandbox struct {
 	// seat's own tool bridge, which every executor box is given.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
-	// rather than a simplification: the coding CLIs offer no per-tool
+	// rather than a simplification: the harnesses offer no per-tool
 	// allowlist that could be enforced uniformly, so each gets the servers
 	// it is given.
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`

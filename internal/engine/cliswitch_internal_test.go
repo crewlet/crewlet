@@ -21,7 +21,7 @@ import (
 // (`state_dir ... is already driving "claude-code"`), while a node that
 // restarted applied it: the fleet split across two revisions until every node
 // had restarted. Each CLI now keeps its own share of the directory
-// (<state dir>/<agent>), so the new CLI opens a login directory of its own
+// (<state dir>/<harness>), so the new CLI opens a login directory of its own
 // and moving back finds the old one.
 //
 // NOT PARALLEL: the derived case points the CLI home at a directory of its own.
@@ -37,7 +37,7 @@ func TestAnEntryMovedToAnotherCLIAppliesLive(t *testing.T) {
 			name: "a derived state_dir",
 			stateDir: func(t *testing.T) (string, string) {
 				root := t.TempDir()
-				t.Setenv(config.CLIHomeEnv, root)
+				t.Setenv(config.HarnessHomeEnv, root)
 				return "", filepath.Join(root, "k")
 			},
 		},
@@ -58,7 +58,7 @@ providers:
   sandbox: {fake: true}
   llm:
     k:
-      agent: %s
+      harness: %s
       model: %s
       %s
 roles:

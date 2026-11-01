@@ -211,7 +211,7 @@ func codingSandbox(boxes, shim string) string {
 // decides is what the runner is handed — its CLI, its model, its cell.
 func codingEntry(key, stateDir string) string {
 	return fmt.Sprintf(`    %s:
-      agent: claude-code
+      harness: claude-code
       model: %s
       state_dir: %q
 `, key, codingModel, stateDir)

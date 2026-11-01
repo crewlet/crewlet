@@ -23,7 +23,7 @@ import (
 )
 
 // Workspace owns one CLI's share of a state directory: the shared login, and a
-// home per seat, all under <state dir>/<agent>.
+// home per seat, all under <state dir>/<harness>.
 //
 // One per (RESOLVED state directory, CLI), from a package-level registry,
 // because entries that point at the same directory AND drive the same CLI are
@@ -45,7 +45,7 @@ import (
 // signed in, and switching back finds the old login where it was left.
 type Workspace struct {
 	// stateDir is the resolved state directory, as the entry names it, and
-	// root is this CLI's share of it, <stateDir>/<agent>, under which every
+	// root is this CLI's share of it, <stateDir>/<harness>, under which every
 	// file the workspace keeps lives.
 	stateDir string
 	root     string
@@ -90,7 +90,7 @@ var registry = struct {
 }{m: make(map[workspaceKey]*Workspace)}
 
 // Shared returns the workspace of one CLI in a state directory, creating it
-// once: <stateDir>/<agent>, so two CLIs on one directory never share a file.
+// once: <stateDir>/<harness>, so two CLIs on one directory never share a file.
 //
 // The agent names a directory, so it must be one path element — the profile
 // table's names all are, and a name that could climb out of the state
@@ -157,7 +157,7 @@ func forgetWorkspace(stateDir string) {
 // share of — what the entry's state_dir names, or the one derived for its key.
 func (w *Workspace) StateDir() string { return w.stateDir }
 
-// Root is this CLI's share of the state directory, <state dir>/<agent>: the
+// Root is this CLI's share of the state directory, <state dir>/<harness>: the
 // directory every file the workspace keeps lives under.
 func (w *Workspace) Root() string { return w.root }
 
@@ -1215,7 +1215,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // seat's broken export into every seat's outage.
 //
 // THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
-// path (state_dir, CREWLET_LLM_CLI_HOME or HOME), and a pattern built from it
+// path (state_dir, CREWLET_LLM_HARNESS_HOME or HOME), and a pattern built from it
 // reads a `[`, `*` or `?` in it as syntax — `crewlet[prod]` matched nothing,
 // and an unclosed `[` was a malformed pattern whose error was dropped — so
 // every seat was seeded with the token a kept refresh had rotated away. A

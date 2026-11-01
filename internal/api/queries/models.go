@@ -142,7 +142,7 @@ type ModelsAlarm = statelog.Alarm
 // ModelEntry is one entry, the admin's reading.
 type ModelEntry struct {
 	Key          string            `json:"key"`
-	Agent        string            `json:"agent"`
+	Harness      string            `json:"harness"`
 	Model        string            `json:"model"`
 	Health       ModelHealth       `json:"health"`
 	Plan         string            `json:"plan"`
@@ -282,7 +282,7 @@ type MemberEntriesAnswer struct {
 // MemberEntry is one entry, a member's reading.
 type MemberEntry struct {
 	Key         string           `json:"key"`
-	Agent       string           `json:"agent"`
+	Harness     string           `json:"harness"`
 	Model       string           `json:"model"`
 	Health      ModelHealth      `json:"health"`
 	SignIn      MemberSignIn     `json:"sign_in"`
@@ -415,7 +415,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 // dropped: the plan, every sign-in field but the route and whether it
 // resolves, the vendor's sentence, the last failure and the usage.
 func memberEntry(e ModelEntry) MemberEntry {
-	out := MemberEntry{Key: e.Key, Agent: e.Agent, Model: e.Model, Health: e.Health,
+	out := MemberEntry{Key: e.Key, Harness: e.Harness, Model: e.Model, Health: e.Health,
 		SignIn:      MemberSignIn{Route: e.SignIn.Route, Resolves: e.SignIn.Resolves},
 		LastSuccess: e.LastSuccess, Waiting: e.Waiting, UsedBy: e.UsedBy}
 	if e.SittingOut != nil {
@@ -491,7 +491,7 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 	entry *config.LLMProvider, local LocalModel, reports []nodeModels,
 	stored map[string]secrets.Record, usage ModelUsage, now time.Time) ModelEntry {
 
-	e := ModelEntry{Key: key, Agent: string(cmp.Or(entry.Agent, config.CLIAgentName("claude-code"))),
+	e := ModelEntry{Key: key, Harness: string(cmp.Or(entry.Harness, config.Harness("claude-code"))),
 		Model: entry.Model, UsedBy: usedBy(company, key),
 		Usage: usage}
 	if e.Usage.Days == 0 {
@@ -792,13 +792,13 @@ var catalogueProviders = map[string]string{"claude-code": "anthropic", "codex": 
 // page. No credential is read or sent (decision D1): the list is the public
 // catalogue's, and the test call is what says whether a plan reaches a model.
 func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
-	agent := p.String("agent")
-	profile, known := cliprofile.Builtin(agent)
-	if agent == "" || !known || !slices.Contains([]string{"claude-code", "codex", "opencode"}, agent) {
-		return nil, fmt.Errorf("%w: agent must be claude-code, codex or opencode", ErrBadParams)
+	harness := p.String("harness")
+	profile, known := cliprofile.Builtin(harness)
+	if harness == "" || !known || !slices.Contains([]string{"claude-code", "codex", "opencode"}, harness) {
+		return nil, fmt.Errorf("%w: harness must be claude-code, codex or opencode", ErrBadParams)
 	}
-	provider := catalogueProviders[agent]
-	if agent == "opencode" {
+	provider := catalogueProviders[harness]
+	if harness == "opencode" {
 		provider = p.String("provider")
 		if provider == "" {
 			return nil, fmt.Errorf("%w: opencode names its provider in the model argument, so "+
@@ -821,7 +821,7 @@ func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 	for _, a := range profile.ModelAliases {
 		out.Aliases = append(out.Aliases, ModelAliasRow{ID: a.ID, Name: a.Name, Detail: a.Detail})
 	}
-	if agent == "opencode" {
+	if harness == "opencode" {
 		// OPENCODE TAKES <provider>/<model>, so that is the id it is offered.
 		models := make([]modelcatalog.Model, 0, len(out.Models))
 		for _, m := range out.Models {

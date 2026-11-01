@@ -1259,7 +1259,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
 		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
-			opening + "agent: claude-code\nmodel: claude-sonnet-5\nrun_in: direct\nmodell: haiku\n", true, 7},
+			opening + "harness: claude-code\nmodel: claude-sonnet-5\nrun_in: direct\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

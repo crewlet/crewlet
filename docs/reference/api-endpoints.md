@@ -2581,7 +2581,7 @@ each. Every answer that depends on the node names it (`node`).
 |--------|------|-------|-------------|
 | `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
-| `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
+| `GET` | `/llm/models?harness=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
 | `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
 | `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
@@ -2630,7 +2630,7 @@ node knows".
   "node": "node-1",
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": false}],
   "entries": [{
-    "key": "default", "agent": "claude-code", "model": "claude-opus-5-5",
+    "key": "default", "harness": "claude-code", "model": "claude-opus-5-5",
     "health": "expiring", "plan": "3f9a1c0e22b1",
     "sign_in": {"route": "token", "mode": "subscription", "variable": "CLAUDE_CODE_OAUTH_TOKEN",
       "source": "store", "resolves": true, "hint": "sk-ant-oat01-…Qm4x",
@@ -2671,7 +2671,7 @@ node knows".
 - `alarms` is this node's latest evaluation of the five model alarms.
 
 **A member's reading** (`"reading": "member"`) keeps each entry's `key`,
-`agent`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
+`harness`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
 `sitting_out` without `said` and `nodes`, `last_success`, `waiting` and
 `used_by`, and answers `alarms: null`: nothing in it names a credential, an
 account, a vendor's sentence or a cost.
@@ -2707,14 +2707,14 @@ one is what the test call says. Claude Code reads provider `anthropic` and Codex
 is kept for a day and revalidated; a catalogue that cannot be read keeps the
 last copy and says how old it is in `reason`, and with no copy the answer is
 `"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an
-unknown `agent` or OpenCode without `provider`; `422 unknown_provider` for a
+unknown `harness` or OpenCode without `provider`; `422 unknown_provider` for a
 provider the catalogue does not list.
 
 #### `PUT /llm/providers/{key}/credential`
 
 ```json
 {"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…"},
- "entity": {"agent": "claude-code", "model": "sonnet",
+ "entity": {"harness": "claude-code", "model": "sonnet",
    "auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}
 ```
 
@@ -2761,7 +2761,7 @@ provider the catalogue does not list.
    The CLI's own words stay on the check's lines, and a failing line carries
    `meaning` (`refused` or `unread`) beside its `kind`; a vendor that did not answer is
    `502 credential_untested`; a CLI that cannot run (no binary) is
-   `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
+   `422 validation_error` at `providers.llm.<key>.harness` with the doctor's
    remedy. A `429` passes: it proves the credential authenticated, and the
    answer's `limited` says so, `{"until", "resets_at", "window", "said"}`, with
    `until` null, since a test sits nothing out, and `resets_at` the vendor's

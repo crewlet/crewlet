@@ -354,7 +354,7 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
+	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
 		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
 	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"r0"}}`); err != nil {
 		t.Fatalf("the live login: %v", err)
 	}
-	newer, err := BuildCLIAgent("plan", config.LLMProvider{Agent: "claude-code", Model: "opus",
+	newer, err := BuildCLIAgent("plan", config.LLMProvider{Harness: "claude-code", Model: "opus",
 		StateDir: t.TempDir(), Overrides: missing}, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -454,7 +454,7 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
+	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
 		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
 	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
@@ -502,11 +502,11 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 func TestADraftWithNoStateDirectoryIsSaid(t *testing.T) {
 	// Not parallel: it clears the process's home.
 	t.Setenv("HOME", "")
-	t.Setenv(config.CLIHomeEnv, "")
+	t.Setenv(config.HarnessHomeEnv, "")
 	e := epochEngine(&Company{Config: &config.Company{Providers: config.Providers{
 		LLM: map[string]config.LLMProvider{}, Sandbox: &config.SandboxProvider{Fake: true}}}})
 	e.checkHomes = t.TempDir()
-	draft := config.LLMProvider{Agent: "claude-code", Model: "opus",
+	draft := config.LLMProvider{Harness: "claude-code", Model: "opus",
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}}
 	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, false); err == nil ||
 		!strings.Contains(err.Error(), "state_dir") {

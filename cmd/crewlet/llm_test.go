@@ -114,7 +114,7 @@ func TestAStoredLLMCredentialSaysWhereItWentAndWhatHappensNext(t *testing.T) {
 providers:
   llm:
     sub:
-      agent: custom
+      harness: custom
       model: m
       state_dir: %q
       overrides:
@@ -321,7 +321,7 @@ func doctorCompany(t *testing.T, providers string) []string {
 func healthyDoctorEntry(t *testing.T, key, model string) string {
 	t.Helper()
 	return fmt.Sprintf(`    %s:
-      agent: custom
+      harness: custom
       model: %s
       state_dir: %q
       auth: {token: fake-headless-token}
@@ -373,7 +373,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	coder := fmt.Sprintf("    coder:\n      agent: claude-code\n      model: sonnet\n      state_dir: %q\n"+
+	coder := fmt.Sprintf("    coder:\n      harness: claude-code\n      model: sonnet\n      state_dir: %q\n"+
 		"      overrides: {binary: %q}\n", t.TempDir(), filepath.Join(dir, "no-cli-here"))
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+
 		healthyDoctorEntry(t, "plain", "m")+coder+healthyDoctorEntry(t, "spare", "m")+
@@ -635,7 +635,7 @@ providers:
   sandbox: {fake: true}
   llm:
     claude:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       state_dir: %q
       overrides:

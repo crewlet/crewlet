@@ -345,7 +345,7 @@ func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 			}
 		}
 	}
-	add(os.Getenv(config.CLIHomeEnv))
+	add(os.Getenv(config.HarnessHomeEnv))
 	slices.Sort(deny)
 	// THE CLI ITSELF, wherever it is installed: a workstation keeps it in
 	// the operator's home, which is denied above.

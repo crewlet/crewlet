@@ -373,7 +373,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 	// The measured lines are the checks' details.
 	d := Diagnosis{
 		Provider: "subscription", Agent: "claude-code", Binary: "/usr/local/bin/claude",
-		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
+		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-harness/subscription",
 		Credentials: "present", TokenEnv: "set",
 		Checks: []Check{
 			{Name: CheckBinary, OK: true, Detail: "/usr/local/bin/claude"},

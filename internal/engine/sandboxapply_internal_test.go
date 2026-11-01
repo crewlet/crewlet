@@ -406,7 +406,7 @@ name: Nimbus
 providers:
   llm:
     cc:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       run_in: e2b
       state_dir: %q

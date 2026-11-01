@@ -59,19 +59,19 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
-		auth    config.CLIAgentAuth
+		auth    config.HarnessAuth
 		varName string
 		want    string
 		absent  string
 	}{{
 		name:    "a subscription token",
-		auth:    config.CLIAgentAuth{},
+		auth:    config.HarnessAuth{},
 		varName: "CLAUDE_CODE_OAUTH_TOKEN",
 		want:    "tok-from-the-store",
 		absent:  "ANTHROPIC_API_KEY",
 	}, {
 		name:    "an api key",
-		auth:    config.CLIAgentAuth{Mode: config.AuthAPIKey},
+		auth:    config.HarnessAuth{Mode: config.AuthAPIKey},
 		varName: "ANTHROPIC_API_KEY",
 		want:    "sk-ant-from-the-store",
 		absent:  "CLAUDE_CODE_OAUTH_TOKEN",
@@ -149,7 +149,7 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := BuildCLIAgent("default", config.LLMProvider{
-				Agent:    config.CLIOpenCode,
+				Harness:  config.HarnessOpenCode,
 				Model:    tc.model,
 				StateDir: t.TempDir(),
 			}, tierB(tc.values), nil)
@@ -192,7 +192,7 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 	if _, err := BuildCLIAgent("default", config.LLMProvider{
 		Model:    "sonnet",
 		StateDir: t.TempDir(),
-		Auth: config.CLIAgentAuth{
+		Auth: config.HarnessAuth{
 			Mode:   config.AuthAPIKey,
 			APIKey: "${NOBODY_SET_THIS}",
 		},

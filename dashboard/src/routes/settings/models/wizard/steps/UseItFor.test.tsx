@@ -185,7 +185,7 @@ test("a category the document split by hand reads back half-checked", () => {
 test("a CLI that cannot code refuses a seat's coding box, says why once, and lets a ticked one off", () => {
   const uses = noUses();
   for (const job of CATEGORY_JOBS.coding) uses.jobs[job] = ["qa"];
-  render(<Harness company={split} start={{ agent: "codex", intent: "custom", uses }} />);
+  render(<Harness company={split} start={{ harness: "codex", intent: "custom", uses }} />);
   const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
   const coding = CATEGORY_WORDS.coding.label;
   expect(box(`Product Manager ${coding}`).disabled).toBe(true);

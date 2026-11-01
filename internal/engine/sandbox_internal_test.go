@@ -113,7 +113,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 // token the engine's own environment happens to hold stays out of an api-key
 // entry's box, or the run would be signed in two ways at once.
 func TestAnAPIKeyEntrysBoxCarriesItsResolvedKey(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("LLM_MODEL", "claude-sonnet-5")
 	t.Setenv("ENTRY_KEY", "sk-ant-entry")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-not-this-entrys")
@@ -150,7 +150,7 @@ roles:
 // credentials carries a company key into a box that never reads it. When the
 // seat's environment signs Claude Code in, the entry adds nothing.
 func TestASeatsOwnClaudeCodeSignInKeepsTheEntrysOut(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company")
 	c := companyFor(t, `
 name: Acme
@@ -202,7 +202,7 @@ roles:
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("OC_MODEL", "openrouter/anthropic/claude-sonnet-5")
 	c := companyFor(t, `
 name: Acme
@@ -210,7 +210,7 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: ${OC_MODEL}
 roles:
   - name: Engineer
@@ -245,14 +245,14 @@ roles:
 // then. A map of what was there when the run was resolved named a login the
 // shared directory may have moved past by the time the box was seeded.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: anthropic/claude-sonnet-5
 roles:
   - name: Engineer
@@ -288,7 +288,7 @@ roles:
 // because they carry a refresh token whose rotation is shared fleet state.
 func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-travelling")
 
 	credentials := filepath.Join(state, "subscription", "claude-code", "credentials")
@@ -306,7 +306,7 @@ providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer
@@ -335,14 +335,14 @@ roles:
 // resolved named a login the shared directory may have moved past by the
 // time the box was seeded, and a box given half of a newer sign-in.
 func TestEveryLoginFileIsOfferedWhetherOrNotItIsHeld(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer

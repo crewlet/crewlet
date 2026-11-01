@@ -278,7 +278,7 @@ units:
 The `providers.llm` map takes named entries (roles select one via `role.llm`;
 `default` is the fallback). **Every entry is a coding CLI** the engine drives —
 the vendor's own harness, signed in with your plan or your key — and its fields
-are that CLI's settings: which CLI (`agent`), which model in its grammar, and
+are that CLI's settings: which CLI (`harness`), which model in its grammar, and
 how it signs in (`auth`):
 
 ```yaml
@@ -297,13 +297,13 @@ providers:
     #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
     #   a seat's executor
     gpt:
-      agent: codex
+      harness: codex
       model: gpt-5
       auth: { mode: api-key }           # CODEX_API_KEY; leave it out for a ChatGPT login
 
     # Open models through OpenCode — on OpenRouter here, or any provider it speaks to
     open:
-      agent: opencode
+      harness: opencode
       model: openrouter/qwen/qwen3-coder  # <provider>/<model>
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"

@@ -46,7 +46,7 @@ import (
 //
 // # Only a model that can reach nothing else
 //
-// Every member of `llm` must be an entry whose profile denies the CLI's own
+// Every member of `llm` must be an entry whose profile denies the harness's own
 // local tools AND its own web tools, so the one tool source its run on the
 // engine host has is the engine's `crewlet` server, serving the person's own
 // requests (ADR-0049). The assistant's guarantee (ADR-0050) is that it reads
@@ -61,7 +61,7 @@ type Assistant struct {
 
 	// LLM is the assistant's provider chain, the first key tried first, in
 	// the shape a seat's llm_auxiliary takes.
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."`
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."`
 
 	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30."`
 	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900."`
@@ -72,18 +72,18 @@ type Assistant struct {
 	// a seat's budget takes, charged on top of the company's own.
 	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
 
-	// DeepWork is the assistant's escalation into a coding CLI's own
+	// DeepWork is the assistant's escalation into a harness's own
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
-	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
+	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
 }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
 //
-// # A coding CLI with its own tools, never on the engine unconfined
+// # A harness with its own tools, never on the engine unconfined
 //
-// The entry it names runs as its CLI's own run in a box, as a seat's
-// executor does: the CLI's shell, files, web search and image reading are the
+// The entry it names runs as its harness's own run in a box, as a seat's
+// executor does: the harness's shell, files, web search and image reading are the
 // point. Its one way into Crewlet is the person's
 // own assistant tools, bridged, so every read is still the person's request
 // and every write still a proposal they approve. Where it runs is the entry's
@@ -123,7 +123,7 @@ type assistantBound struct {
 //     are about 160,000 tokens, which with the prompt still fits a 200,000
 //     token context, where sixty would not. The budget meters, the person's
 //     and the company's, still stop a turn at its spend whatever its count.
-//   - turn_timeout_seconds: every round is a CLI launch of fifteen to
+//   - turn_timeout_seconds: every round is a harness launch of fifteen to
 //     twenty-five seconds, so thirty rounds need up to twelve and a half
 //     minutes: fifteen is the default, and twenty minutes carries the forty
 //     step ceiling at the same latency. Thirty seconds is one slow round.
@@ -139,10 +139,10 @@ type assistantBound struct {
 //     the default and the ceiling: a run past it would call out on a grant
 //     that has ended. A run that needs longer parks on a proposal and is
 //     continued on the fresh grant its approval derives. One minute is a run
-//     that installs the CLI and reads one page.
+//     that installs the harness and reads one page.
 //   - max_steps: a redesign that reads a brand, writes assets, renders and
 //     checks them takes a hundred-odd agentic rounds; four hundred is the
-//     most a twenty-minute run can make at the CLI's three-second round.
+//     most a twenty-minute run can make at the harness's three-second round.
 //   - max_tokens: a hundred and fifty rounds re-reading a growing context
 //     are about three million tokens, most of them cache reads; twenty
 //     million bounds a run nobody meant.
@@ -274,7 +274,7 @@ func (c *Company) DeepWorkPlacement() (Placement, bool) {
 }
 
 // deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, a CLI other than Claude Code, or a run_in this
+// entry, an unknown one, a harness other than Claude Code, or a run_in this
 // company configures no backend for.
 func (c *Company) deepWorkProblems(path Path) error {
 	var p problems
@@ -295,7 +295,7 @@ func (c *Company) deepWorkProblems(path Path) error {
 	llmPath := at(path, "llm")
 	if d.LLM == "" {
 		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
-			"key whose entry has agent: claude-code")
+			"key whose entry has harness: claude-code")
 		return p.err()
 	}
 	entry, ok := c.Providers.LLM[d.LLM]
@@ -306,16 +306,16 @@ func (c *Company) deepWorkProblems(path Path) error {
 	}
 	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
 	// CLAUDE CODE ALONE. Both in-box runners continue a parked run in its
-	// CLI's own session after the approval, but deep work's run on the
-	// engine host is confined around one CLI's install and temp roots
+	// harness's own session after the approval, but deep work's run on the
+	// engine host is confined around one harness's install and temp roots
 	// (internal/sandbox's confinement, measured against Claude Code's), and
-	// the engine drives it with that CLI's runner: another CLI there would
+	// the engine drives it with that harness's runner: another harness there would
 	// meet a confinement nobody measured it against.
-	if CLIAgentName(entry.AgentName()) != CLIClaudeCode {
+	if Harness(entry.HarnessName()) != HarnessClaudeCode {
 		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, and deep work runs on %s "+
-			"alone: its run is confined around that CLI's own install and temp "+
-			"directories, which no other CLI has been measured against. Set %s: %s",
-			d.LLM, entry.AgentName(), CLIClaudeCode, entryField("agent"), CLIClaudeCode)
+			"alone: its run is confined around that harness's own install and temp "+
+			"directories, which no other harness has been measured against. Set %s: %s",
+			d.LLM, entry.HarnessName(), HarnessClaudeCode, entryField("harness"), HarnessClaudeCode)
 	}
 	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
 		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+
@@ -382,7 +382,7 @@ func (c *Company) validateAssistant() error {
 
 // assistantChainProblems reports every way `assistant.llm` cannot carry the
 // assistant: empty while enabled, a key providers.llm does not configure, or
-// an entry whose merged profile leaves the CLI's local or web tools
+// an entry whose merged profile leaves the harness's local or web tools
 // reachable. Each problem names the field to change.
 func (c *Company) assistantChainProblems(path Path) error {
 	var p problems
@@ -390,7 +390,7 @@ func (c *Company) assistantChainProblems(path Path) error {
 	if len(c.Assistant.LLM) == 0 {
 		p.add(llmPath, ErrMissing,
 			"Ask Crewlet is enabled but names no model: list a providers.llm "+
-				"key, e.g. llm: [assistant], whose CLI's local tools are denied and "+
+				"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
 				"whose entry has overrides: {web_tools: denied}")
 		return p.err()
 	}
@@ -430,10 +430,10 @@ func (c *Company) AssistantEntryProblems(key string) error {
 func assistantMemberProblems(member Path, key string, entry *LLMProvider) error {
 	var p problems
 	entryField := func(f string) Path { return at(entryPath(key), f) }
-	if entry.Agent != "" && !entry.Agent.Valid() {
+	if entry.Harness != "" && !entry.Harness.Valid() {
 		return p.err() // the entry's own rule names the agent; there is no profile
 	}
-	profile, err := cliprofile.Load(entry.AgentName(), entry.Overrides)
+	profile, err := cliprofile.Load(entry.HarnessName(), entry.Overrides)
 	if err != nil {
 		// The entry's own validation reports why its profile does not
 		// load; an assistant member nobody can judge is refused here too,
@@ -453,33 +453,33 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 	switch {
 	case profile.LocalTools != cliprofile.LocalToolsDenied:
 		p.add(member, ErrConflict,
-			"providers.llm.%s runs the %s CLI with its own local tools %s (%s), so a shell "+
+			"providers.llm.%s runs the %s harness with its own local tools %s (%s), so a shell "+
 				"or a file reader on the engine host could read what no request of the "+
-				"person's returned: Ask Crewlet needs a CLI whose profile has local_tools: "+
+				"person's returned: Ask Crewlet needs a harness whose profile has local_tools: "+
 				"denied and whose run has no tool of its own, which of the built-in profiles "+
-				"is %s", key, entry.AgentName(), localToolsWord(profile.LocalTools),
+				"is %s", key, entry.HarnessName(), localToolsWord(profile.LocalTools),
 			strings.TrimSpace(profile.LocalToolsNote), eligible)
 	default:
 		if problem := profile.ToolsOffProblem(); problem != "" {
 			p.add(member, ErrConflict,
-				"providers.llm.%s says the %s CLI's local tools are denied, but %s, so its "+
+				"providers.llm.%s says the %s harness's local tools are denied, but %s, so its "+
 					"run is not shown to leave the model without a tool of its own: a shell or "+
 					"a file reader on the engine host could read what no request of the "+
-					"person's returned. Ask Crewlet runs only on a CLI whose argv removes "+
+					"person's returned. Ask Crewlet runs only on a harness whose argv removes "+
 					"every tool (tools_off), which of the built-in profiles is %s; check %s",
-				key, entry.AgentName(), problem, eligible, entryField("overrides"))
+				key, entry.HarnessName(), problem, eligible, entryField("overrides"))
 		}
 	}
 	if profile.EffectiveWebTools() != cliprofile.WebToolsDenied {
 		remedy := fmt.Sprintf("set %s: {web_tools: denied}", entryField("overrides"))
 		if !profile.CanDenyWeb() {
 			remedy = fmt.Sprintf("the %s profile has no measured web denial (%s), so "+
-				"use a CLI that has one: %s",
-				entry.AgentName(), strings.TrimSpace(profile.WebToolsNote),
+				"use a harness that has one: %s",
+				entry.HarnessName(), strings.TrimSpace(profile.WebToolsNote),
 				strings.Join(cliprofile.WebDeniable(), ", "))
 		}
 		p.add(member, ErrConflict,
-			"providers.llm.%s keeps the CLI's own web tools on, so the model could "+
+			"providers.llm.%s keeps the harness's own web tools on, so the model could "+
 				"read pages no authority decision saw and send the person's data "+
 				"out: %s", key, remedy)
 	}

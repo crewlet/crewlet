@@ -56,7 +56,7 @@ const llmUsage = `crewlet llm: the coding CLIs every model runs through, their l
 health and tokens
 
 Usage:
-  crewlet llm list                        Providers, agent, model and how each is signed in
+  crewlet llm list                        Providers, harness, model and how each is signed in
   crewlet llm doctor [KEY]                Verify providers.llm entries end to end
                                           (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
@@ -424,7 +424,7 @@ func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout,
 		restoreConfiguredBundle(ctx, p.provider, stderr)
 	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
+	fmt.Fprintln(w, "PROVIDER\tHARNESS\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {

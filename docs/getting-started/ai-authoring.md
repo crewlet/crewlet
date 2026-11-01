@@ -191,7 +191,7 @@ schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
 - wrong shapes — a list where a map belongs, text where a number belongs —
-  and bad enums (`kind: robot`, `agent: claud-code`)
+  and bad enums (`kind: robot`, `harness: claud-code`)
 - malformed handles and unit ids, and numbers out of range
 
 It also says where a credential goes: every field, list member or map
