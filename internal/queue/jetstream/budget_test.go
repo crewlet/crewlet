@@ -146,7 +146,8 @@ func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
 // through StreamBudget, as a node reads it.
 func TestTheTestSuitesExternalBrokerStatesItsAccountLimit(t *testing.T) {
 	t.Parallel()
-	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL()})
+	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL(),
+		Token: externaltest.Token})
 	budget, err := q.StreamBudget(t.Context())
 	if err != nil {
 		t.Fatalf("StreamBudget: %v", err)
