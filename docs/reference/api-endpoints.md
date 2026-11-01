@@ -4385,7 +4385,7 @@ round that launched it (`iteration`) — with its tokens, its harness's own turn
 (`harness_turns`), its `launch_id` (a round can launch twice, so the launch is part
 of that row's identity), its report as `response` and its
 `activity_transcript` — see
-[each launch is published as its own record](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record).
+[each launch is published as its own record](../concepts/code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record).
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.

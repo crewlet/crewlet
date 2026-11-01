@@ -499,15 +499,15 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // MaxWritten is how many distinct work items [Written] lists before it stops
 // listing them and records only that there were more.
 //
-// PAST THE DEFAULT RUN CAP (96 harness turns, providers.sandbox's
-// default_max_turns), which is the bound on how many steps one executor run
-// takes: a turn whose run wrote a different item on every one of its turns is
-// still listed in full, with room left for what the onboarding pass wrote
-// before it. A turn past 128 is a bulk operation — a relabel, a sweep — whose
-// list nobody reads item by item, and the bound is what keeps a runaway
-// fan-out from growing one turn's record, and the parked run's row that
-// carries it, without limit. The answer the set exists for survives the cap
-// untouched: "exactly one" is a question about the first two.
+// 128 IS A BULK OPERATION'S THRESHOLD: a run that wrote a different item on
+// each of a hundred harness turns is still listed in full, with room left for
+// what the onboarding pass wrote before it, and a turn past 128 is a relabel
+// or a sweep whose list nobody reads item by item. The bound is what keeps
+// such a fan-out from growing one turn's record, and the parked run's row that
+// carries it, without limit — which matters the more because a run takes as
+// many turns as its harness judges it needs unless its company sets a cap.
+// The answer the set exists for survives the cap untouched: "exactly one" is
+// a question about the first two.
 const MaxWritten = 128
 
 // Written is the set of work items a turn's writes committed to, in the order

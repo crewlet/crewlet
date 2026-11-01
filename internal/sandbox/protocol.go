@@ -169,8 +169,10 @@ type ExecResult struct {
 // a TimeoutSec here, read by nobody, contradicting the paragraph above it.
 //
 // MaxTurns comes from the resolved [Spec] — providers.sandbox.default_max_turns
-// overlaid with role.sandbox.max_turns — and is the only engine-side bound on
-// a runaway harness, since a job is deliberately never stopped on a clock.
+// overlaid with role.sandbox.max_turns — and is zero, uncapped, unless the
+// company or the seat sets a cap: a job is deliberately never stopped on a
+// clock, so this is the one bound on its rounds, and it is the operator's to
+// choose.
 //
 // MAXBUDGETUSD IS SET BY NOBODY, deliberately. The fleet's own token meter
 // already post-charges a collected run against the seat's budget, and a second

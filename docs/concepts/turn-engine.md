@@ -422,9 +422,10 @@ to done — the cap is a static guess, not a progress check.
 
 The executor is not judged. It is its harness's own run, whose rounds the
 harness counts against `role.sandbox.max_turns` /
-`providers.sandbox.default_max_turns` ([Code Sandbox](code-sandbox.md)), so
-there is no engine loop for a judge to extend. A run that stops without
-submitting — on that cap or any other way — is rescued: the engine writes an
+`providers.sandbox.default_max_turns` where either sets a cap, and runs
+uncapped otherwise ([Code Sandbox](code-sandbox.md)), so there is no engine
+loop for a judge to extend. A run that stops without submitting — on such a
+cap or any other way — is rescued: the engine writes an
 `incomplete` outcome and the reviewer judges the record.
 
 The **extension judge** interposes between exhaustion and rescue: a
@@ -1440,7 +1441,7 @@ it — and no tokens of the run: the run's own turns and tokens are on each
 launch's own `executor_collected` record, which is **no phase** but the
 round's work. Every spend reader files it under `execute`, and the dashboard
 draws a round's launches inside its card ([each launch is published as its own
-record](code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record)).
+record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)).
 
 ### What a turn records about its time
 
@@ -1474,7 +1475,7 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | | `running_calls` | The calls in flight, in the order they arrived, each `{id, round, name, arguments, started_at}`: listed by the frame published immediately before a call runs and gone from the frame after it returns. Absent whenever no call is running |
 | | `invocations[]` | As on the record: the runs that have ended so far |
 | `agent_phase_started` | `work_item` | As on the record |
-| `executor_collected` | `started_at` / `duration_ms` | One launch of the executor's run, from its launch — dated by the store when it named the job — to its collection on the node that read the result, so the completion poll's interval is inside it. **Not a phase**: the round's work, published once per launch when it is collected ([each launch is published as its own record](code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record)) |
+| `executor_collected` | `started_at` / `duration_ms` | One launch of the executor's run, from its launch — dated by the store when it named the job — to its collection on the node that read the result, so the completion poll's interval is inside it. **Not a phase**: the round's work, published once per launch when it is collected ([each launch is published as its own record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)) |
 | | `iteration` / `launch_id` | The executor round that launched it and the job: a round can launch more than once, so a launch is `(turn_id, iteration, launch_id)` |
 | | `activity_transcript` | The launch's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 192 KiB in whole lines, with a note line where its middle was. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole) |
 | | `harness_turns` | The model turns the launch's harness reported its own loop took — its provider calls, which the engine neither made nor timed, and what every spend figure's `calls` counts the record as. Claude Code reports them; OpenCode's stream carries no count a reader can trust, so its launches report none and count as one call. The executor's own record counts none |

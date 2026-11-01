@@ -76,9 +76,9 @@ type ManagerOptions struct {
 	DefaultPauseTTL *time.Duration
 
 	// DefaultMaxTurns caps the agentic rounds of a run on a seat that names
-	// none: providers.sandbox.default_max_turns, whose default and its reason
-	// are the config's. Zero is uncapped — an explicit setting this layer
-	// passes through rather than a value it fills in.
+	// none: providers.sandbox.default_max_turns, zero for uncapped as the
+	// config's own zero is (the reason is the config's). This layer passes it
+	// through and fills nothing in.
 	DefaultMaxTurns int
 
 	// AttributeCommits is whether every run's own commits credit Crewlet

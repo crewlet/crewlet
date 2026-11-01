@@ -80,9 +80,10 @@ assistant: {...}                        # optional, Ask Crewlet; off unless enab
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
-                                        #   (an executor run's own rounds are capped by
-                                        #   role.sandbox.max_turns / providers.sandbox.
-                                        #   default_max_turns: the run is its harness's loop)
+                                        #   (an executor run's own rounds are capped only
+                                        #   where role.sandbox.max_turns / providers.sandbox.
+                                        #   default_max_turns sets a cap: the run is its
+                                        #   harness's loop)
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
   delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
     max_parallel: 3                     # workers running at once within one call
@@ -235,8 +236,8 @@ want a fast model rather than the seat's own — see
 `llm_judge` is invoked when the first-turn onboarding pass exhausts its tool-round cap;
 it decides whether the pass is making progress (extend) or thrashing
 (fall through to rescue).  Falls back to `llm` -> `"default"` if unset. An
-executor run is its harness's own loop, bounded by `role.sandbox.max_turns`
-(else `providers.sandbox.default_max_turns`), which no judge extends.
+executor run is its harness's own loop, uncapped unless `role.sandbox.max_turns`
+(else `providers.sandbox.default_max_turns`) sets a cap, which no judge extends.
 See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge)
 section for details.
 
@@ -486,8 +487,8 @@ providers:
                                         #   end of the tool call it last waited on, to its next
                                         #   call or its exit — the seat's tools are never on it. A
                                         #   breach is a retryable `timeout`. An executor run is
-                                        #   bounded by its round cap instead
-                                        #   (providers.sandbox.default_max_turns)
+                                        #   not on this clock: its rounds are capped only where
+                                        #   providers.sandbox.default_max_turns sets a cap
       max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
@@ -577,8 +578,9 @@ providers:
                                         #   Required unless the catalogue names exactly one
                                         #   cell, or every entry an executor launches on
                                         #   names its own run_in
-    # default_max_turns: 96             # agentic-round cap for one executor run on seats
-                                        #   naming no role.sandbox.max_turns; 0 = uncapped
+    # default_max_turns: 0              # agentic-round cap for one executor run on seats
+                                        #   naming no role.sandbox.max_turns; unset or 0 =
+                                        #   uncapped
     # default_timeout_seconds: 900      # box TTL / keepalive: not a run cap
     # default_pause_ttl_seconds: 1800   # how long a box blocked on a person stays paused;
                                         #   0 = never pause

@@ -1406,7 +1406,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
+          "description": "Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are not on this clock.",
           "minimum": 0,
           "type": [
             "number",
@@ -3124,7 +3124,7 @@
           ]
         },
         "default_max_turns": {
-          "description": "Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped.",
+          "description": "Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",

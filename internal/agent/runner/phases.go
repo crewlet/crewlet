@@ -43,11 +43,11 @@ var log = logging.Get("agent.runner")
 // budget ([Onboarding.Ceiling]).
 //
 // The executor has no round knob here at all: it is its harness's own run,
-// bounded by the run's own turn cap (role.sandbox.max_turns, else
-// providers.sandbox.default_max_turns) rather than by rounds of an engine
-// loop. The reviewer has none either: it holds one submission tool, so its
-// budget is one round plus the tool loop's own corrective retries — a
-// structural fact rather than an operator preference.
+// bounded by the run's own turn cap where its seat or company sets one
+// (role.sandbox.max_turns, else providers.sandbox.default_max_turns) rather
+// than by rounds of an engine loop. The reviewer has none either: it holds
+// one submission tool, so its budget is one round plus the tool loop's own
+// corrective retries — a structural fact rather than an operator preference.
 type Caps struct {
 	ExtensionStep int
 	ExtensionOn   bool

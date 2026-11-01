@@ -56,8 +56,9 @@ type TurnEngine struct {
 	//
 	// Onboarding only, because it is the one pass with a round budget the
 	// engine sets and a loop the engine runs: the executor is its harness's own
-	// run, capped by providers.sandbox.default_max_turns, and the reviewer
-	// holds a single submission tool.
+	// run, capped only where the company or the seat sets a turn cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns), and the
+	// reviewer holds a single submission tool.
 	ExtensionEnabled Toggle `yaml:"extension_enabled,omitempty" json:"extension_enabled,omitzero" desc:"Round-cap extension judge for the onboarding pass (default on)."`
 
 	// OnboardingMaxToolRoundsCeiling is what the judge may grant the
