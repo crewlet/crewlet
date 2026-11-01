@@ -29,8 +29,9 @@ import (
 // domain or none ([register]), and every data node serves the sides built here
 // to the estate router ([Engine.estateBackend]), whose estate.ExecutorReads and
 // estate.ExecutorWrites are how a node without `data` reaches the log — the
-// writes the engine's alone. Nothing in this build writes a session yet; the
-// capture and the restore are the executor's, and they call those.
+// writes the engine's alone. The sandbox runtime records every capture of a
+// launch's session and every turn's end through those writes
+// (executorsession.go), wherever the seat runs.
 
 // executorRegistrations is the executor domain's entry in the register: the
 // TENTH domain and the EIGHTH strict, identity-claiming one. Its declaration,
@@ -182,27 +183,6 @@ func (e *Engine) ExecutorSessions() (*executordomain.SessionStore, error) {
 		return nil, fmt.Errorf("engine: executor sessions: %w", err)
 	}
 	return executordomain.NewSessionStore(objects, sealer)
-}
-
-// ExecutorSessionBudget is the per-seat byte budget a capture carries:
-// `turn_engine.conversation_session.max_bytes_per_seat` of the revision the
-// fleet's activation pointer names ([Engine.fleetCompany]), or why this node
-// cannot know it.
-//
-// THE FLEET'S REVISION, NEVER THIS NODE'S OWN, for [Engine.executorRetention]'s
-// reason: the budget decides which ended sessions every node releases, so a
-// node serving a revision the fleet did not take must not decide it. A capture
-// that cannot read it is not recorded, and its turn's next launch starts from
-// the session the row already names.
-func (e *Engine) ExecutorSessionBudget(ctx context.Context) (int64, error) {
-	company, err := e.fleetCompany(ctx, e.Company())
-	if err != nil {
-		return 0, err
-	}
-	if company.Config == nil {
-		return config.DefaultSessionBytesPerSeat, nil
-	}
-	return company.Config.TurnEngine.ConversationSession.SessionBudget(), nil
 }
 
 // executorRetention is how long a seat's executor session is kept after its

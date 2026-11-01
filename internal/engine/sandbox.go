@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1100,18 +1101,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// the ask answers nothing for a turn that parked (a2a.go). After the
 	// completion above, as on that frame, and only on a way out that ends
 	// the turn: a retry, a hold and a park again leave it to a later segment.
-	answer := func(res turn.Result, err error) {
-		e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
+	answer := func(res turn.Result, err error) colleagueAnswer {
+		return e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
 	}
 	// stopped settles the resumed turn as a person's stop ended it: said
 	// (agent_turn_stopped, under the pause that stopped it), its colleague
-	// answered, and the run settled rather than reverted (below).
+	// answered, its end recorded on the executor log, and the run settled
+	// rather than reverted (below).
 	stopped := func(stop error, why string) error {
 		pause, _ := stopOf(stop)
 		role, agentID := seatIdentity(company, in.Turn.Handle())
 		e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 			in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
-		answer(res, stop)
+		answered := answer(res, stop)
+		e.endExecutorTurn(ctx, runTurnEnd(in.Run, stoppedEnding(res, resumedReply, stop, answered)))
 		return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, why, stop)
 	}
 	if err != nil {
@@ -1180,8 +1183,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
 			// coming back for this turn — and the colleague is told it
-			// could not be answered.
-			answer(res, err)
+			// could not be answered, and the executor log how it ended.
+			ending := endingOf(res, resumedReply, answer(res, err))
+			ending.Outcome = executordomain.OutcomeFailed
+			ending.Failure = fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err)
+			e.endExecutorTurn(ctx, runTurnEnd(in.Run, ending))
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
 		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
@@ -1239,9 +1245,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
 			// Not parked after all: the run it relaunched is ended, and so
-			// is the turn.
+			// is the turn — on the executor log too.
 			res.Suspended = false
-			answer(res, parkErr)
+			answered := answer(res, parkErr)
+			e.endExecutorTurn(ctx, runTurnEnd(in.Run, stoppedEnding(res, resumedReply, parkErr, answered)))
 			return fmt.Errorf("%w (a person stopped the run the resumed turn relaunched): %w",
 				sandbox.ErrResumeAbandoned, parkErr)
 		}
@@ -1249,8 +1256,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	// A SEGMENT THAT PARKED AGAIN answers nothing here: answerColleague
 	// leaves a suspended result to the segment that ends the turn.
-	answer(res, nil)
-	e.recordResume(ctx, in, res)
+	e.recordResume(ctx, in, res, resumedReply, answer(res, nil))
 	return nil
 }
 
@@ -1487,7 +1493,18 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // declines it, for both paths and for the same reason: it has not finished,
 // so there is no reply to file. The completion that eventually lands comes
 // back through this same frame and records then.
-func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
+//
+// AND ON THE EXECUTOR LOG, the turn's END: how it ended — its decision and
+// breach (never the reviewer's last word, which reads `done` after the loop
+// overrode it), whether its reply reached the party waiting and on what, what
+// the reviewer said landed, what stopped a blocked round, and answered, the
+// engine's own answer to a colleague's ask — which the next turn on the
+// conversation is told beside the session it continues ([endingOf]).
+func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
+	answered colleagueAnswer) {
+	if !res.Suspended {
+		e.endExecutorTurn(ctx, runTurnEnd(in.Run, endingOf(res, reply, answered)))
+	}
 	// THE RUN THE ROW NAMES, and the work key it rode in on: a resume
 	// re-enters the run that suspended, so the entry names that one rather
 	// than a fresh id, and it dedupes against the same trigger the dispatch
@@ -2196,15 +2213,22 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
 		// A turn parked on a run a person stopped is closed on the record
-		// as stopped, by whichever node finishes the run's ending — see
-		// runstop.go.
+		// as stopped, and its end recorded on the executor log, by
+		// whichever node finishes the run's ending — see runstop.go.
 		CloseStopped: e.closeStoppedTurn,
 		// AND A TURN LOST WITH ITS RUN — the run's box gone, its
 		// suspension never recorded, its tail abandoned — tells the
-		// colleague whose ask it took up that it was lost, by whichever
-		// node finishes the run's ending: no frame of that turn is left to
-		// answer. See a2a.go.
+		// colleague whose ask it took up that it was lost, and the
+		// executor log how it ended, by whichever node finishes the run's
+		// ending: no frame of that turn is left to. See a2a.go.
 		TurnLost: e.answerLostTurn,
+		// EVERY LAUNCH'S HARNESS SESSION IS KEPT, and every turn's end
+		// recorded, through the ESTATE ROUTER's executor writes — a seat's
+		// box is wherever its seat runs, a seats-only node included, which
+		// holds no log of its own — with the engine's policy, secrets,
+		// minting and sealed upload beside them. See executorsession.go.
+		Sessions: e.executorLog,
+		Keep:     executorKeep{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].

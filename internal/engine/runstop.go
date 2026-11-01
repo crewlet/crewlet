@@ -191,7 +191,11 @@ func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) e
 	// nothing for a turn that parked (a2a.go). Best effort, never this
 	// step's error — the turn is closed — and a repeat of the step after a
 	// crash finds the channel its first attempt closed.
-	e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
+	answered := e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
+	// AND THE EXECUTOR LOG, told how the turn ended — stopped, by whom and
+	// why, and whether its reply had reached anybody by then, as the run's
+	// own calls say — since no frame of the turn is left to tell it.
+	e.endExecutorTurn(ctx, runTurnEnd(run, e.runEnding(company, run, answered)))
 	return nil
 }
 

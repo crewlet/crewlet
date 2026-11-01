@@ -613,6 +613,14 @@ type Engine struct {
 	router *estate.Router
 	local  *localEstate
 
+	// executorLog is the executor log's writes the sandbox runtime records
+	// every capture of a launch's session and every turn's end through: the
+	// router's (estate.ExecutorWrites), set in [New] beside it; nil on an
+	// engine built without one, whose runtime records neither. A field
+	// rather than a read of the router at each launch, so the coordinator
+	// is built over one answer.
+	executorLog sandbox.SessionWrites
+
 	// envelopes sign every estate request this node sends and every reply
 	// it answers a peer with, and verify both directions — one value for
 	// the router and the server alike; see [estateEnvelopes].
@@ -1581,6 +1589,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		}
 		return nil, err
 	}
+	// AND THE EXECUTOR LOG'S WRITES THE SANDBOX RUNTIME RECORDS THROUGH: the
+	// router's, so a seat's capture and its turn's end reach the log from a
+	// node without `data` as from one with it (executorsession.go).
+	e.executorLog = e.router.ExecutorWrites()
 	// AND A READ OF A BOX ON ANOTHER NODE'S HOST, which that node carries
 	// out — it pauses the box a collection reads — so it is signed like
 	// every other such channel (sandboxhost.go). None without a broker: a
@@ -3403,6 +3415,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// The runner holds the parked state until the frame unwinds, which this
 	// does not.
 	e.endSegment(ctx, tel, spend, res, err, charge)
+	stoppedAtPark := false
 	if res.Suspended {
 		// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` —
 		// the intent to park and a run that can actually be resumed are
@@ -3416,7 +3429,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 			// ends as a turn stopped at its next round does — the
 			// dispatcher's own record of who stopped it and that the
 			// trigger is worked ([Dispatcher.stopped]).
-			res.Suspended, err = false, parkErr
+			res.Suspended, err, stoppedAtPark = false, parkErr, true
 		} else {
 			working = stillWorking(parked, parkErr)
 		}
@@ -3426,7 +3439,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// frame that ends it, off its run's record. After the completion event
 	// because the reply wakes another seat and the record of this turn
 	// should exist first.
-	e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
+	answered := e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
+	if stoppedAtPark {
+		// A TURN THAT LAUNCHED ITS EXECUTOR AND WAS STOPPED BEFORE IT PARKED
+		// ends here, and nowhere else: the run's own ending closed no turn,
+		// since none had parked on it. So this frame records the end on the
+		// executor log, after the colleague's answer, which it carries.
+		e.endExecutorTurn(ctx, telTurnEnd(tel, stoppedEnding(res, reply, err, answered)))
+	}
 	return res, err
 }
 

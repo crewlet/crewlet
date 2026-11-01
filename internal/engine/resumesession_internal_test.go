@@ -80,7 +80,7 @@ func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 		Delivered:  true,
 		Artifact:   "shipped the branch and opened the MR",
 		LastReview: &turn.Review{CompletedWork: "MR !42 is up"},
-	})
+	}, turn.Reply{}, colleagueAnswer{})
 
 	got, err := conversations.History(ctx, "swe", theDM, 0)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestAResumeThatSuspendsAgainRecordsNothing(t *testing.T) {
 
 	e.recordResume(ctx, resumed(theDM, theDMThread), turn.Result{
 		Suspended: true, Decision: phase.SelfIterate, Artifact: "half a thought",
-	})
+	}, turn.Reply{}, colleagueAnswer{})
 
 	got, err := conversations.History(ctx, "swe", theDM, 0)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestAResumedTurnWithNoConversationRecordsNothing(t *testing.T) {
 	e, conversations := resumingEngine(t)
 	ctx := context.Background()
 
-	e.recordResume(ctx, resumed("", ""), turn.Result{Decision: phase.Done, Artifact: "x"})
+	e.recordResume(ctx, resumed("", ""), turn.Result{Decision: phase.Done, Artifact: "x"}, turn.Reply{}, colleagueAnswer{})
 
 	got, err := conversations.History(ctx, "swe", "", 0)
 	if err != nil {
@@ -260,12 +260,12 @@ func TestRecordingAResumeNeverFailsTheRun(t *testing.T) {
 	done := turn.Result{Decision: phase.Done, Artifact: "x"}
 
 	// No ledger wired.
-	(&Engine{dispatch: &Dispatcher{}}).recordResume(ctx, resumed(theDM, theDMThread), done)
+	(&Engine{dispatch: &Dispatcher{}}).recordResume(ctx, resumed(theDM, theDMThread), done, turn.Reply{}, colleagueAnswer{})
 	// No dispatcher at all — a test or a partially built engine.
-	(&Engine{}).recordResume(ctx, resumed(theDM, theDMThread), done)
+	(&Engine{}).recordResume(ctx, resumed(theDM, theDMThread), done, turn.Reply{}, colleagueAnswer{})
 	// A ledger that refuses the write.
 	(&Engine{dispatch: &Dispatcher{Conversations: failingResumeConversations{}}}).
-		recordResume(ctx, resumed(theDM, theDMThread), done)
+		recordResume(ctx, resumed(theDM, theDMThread), done, turn.Reply{}, colleagueAnswer{})
 }
 
 type failingResumeConversations struct{}

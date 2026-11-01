@@ -335,7 +335,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Record and replay per-conversation history (default on).",
+          "description": "Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",

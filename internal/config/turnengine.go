@@ -207,13 +207,17 @@ func (t *TurnEngine) validate(path Path) error {
 // The cross-turn counterpart of the within-turn prior-work ledger, and
 // deliberately STRUCTURED rather than a transcript replay.
 type ConversationSession struct {
-	// Enabled records and replays completed turns.
+	// Enabled records and replays completed turns, and keeps each executor
+	// launch's harness session in the object store (internal/executordomain).
 	//
 	// On by default: the block is deterministic, bounded, and is the only
-	// context a thin-trigger turn gets. Turning it off restores the
-	// pre-ledger prompt exactly, which is what makes it a safe live kill
-	// switch.
-	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history (default on)."`
+	// context a thin-trigger turn gets, and a kept session is what a later
+	// launch continues. Turning it off restores the pre-ledger prompt exactly
+	// and keeps no session — none is captured or stamped — which is what
+	// makes it a safe live kill switch. How each turn ended is still recorded
+	// on the executor log either way: that is the account of the turn, not
+	// its session.
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended)."`
 
 	// MaxEntries is what is KEPT per conversation, trimmed at write time.
 	//
@@ -308,6 +312,11 @@ func (c *ConversationSession) SessionBudget() int64 {
 
 // Records reports whether the ledger is on, applying the true default.
 func (c *ConversationSession) Records() bool { return c.Enabled.Or(true) }
+
+// KeepsSessions reports whether each executor launch's harness session is
+// kept, applying the true default: the same switch the ledger reads, so one
+// gesture turns off everything a conversation carries between turns.
+func (c *ConversationSession) KeepsSessions() bool { return c.Enabled.Or(true) }
 
 func (c *ConversationSession) validate(path Path) error {
 	var p problems
