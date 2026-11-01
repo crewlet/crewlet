@@ -2436,8 +2436,9 @@ type RoutedPage struct {
 	// none is, `nobody` for a change opened since RetainedFrom, every one of
 	// whose notices would still be kept, and `swept` for one opened before
 	// it, whose notices a sweep was entitled to take and the applier never
-	// to write. Every record about a change carries its routing, so its
-	// records always announced: `quiet` and `unknown` are never this read's.
+	// to write. Every record about a change says whom it concerns — its
+	// routing, or none for nobody — so its records always announced:
+	// `quiet` and `unknown` are never this read's.
 	Delivery routing.Delivery `json:"delivery"`
 	// RetainedFrom is the instant from which every notice is kept, a seat's
 	// and a person's alike: the read's instant less [SeatNoticeHorizon], the

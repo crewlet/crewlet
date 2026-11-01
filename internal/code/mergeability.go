@@ -296,6 +296,69 @@ type Mergeability struct {
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
+// MergeabilityKept is a re-evaluation of a change's mergeability whose OUTCOME
+// the row holds already — the same merge state, the same conflicted paths and
+// the same count of the rest, the same readiness and the same "waits on a
+// person" — recorded by what it MOVED and nothing else: the tip a recheck
+// merged into, where its home merged again into a moved target, and the
+// versions and the checks position a readiness was judged at, where any of
+// them moved. The writer forms it in place of the [Mergeability] the home
+// sent (decideMergeability): a recheck of a target that moves every few
+// minutes, or a refresh after a review that changed nothing about whether the
+// change may merge, would otherwise rewrite the whole record — its tip, its
+// state, its conflicted paths up to [MaxConflictBytes] — to say what the row
+// says already. A TRANSITION — a new revision or target, a state, a conflict
+// list or a readiness that differs — is always the full record, since it is
+// what somebody is told of.
+//
+// It concerns nobody, by construction: a mergeability tells the authors of a
+// merge it turned into a conflict, and whoever may merge a change it turned
+// ready, and a record that keeps the row's outcome turns neither. So it
+// carries no routing, and [RoutingsOf] names none for it.
+//
+// BASE FORMAT, AS A STATED CONDITION, as [OpMergeability] states it: once a
+// build without it has run, it takes {Name: "RecordEnvelope.Op
+// mergeability_kept", Since: 2, Path: []string{"op"}, Equals:
+// string(OpMergeabilityKept)}, with the same companions — which an older
+// build defers the record by rather than leave the row's tip and versions
+// behind it.
+type MergeabilityKept struct {
+	// RepoID stays on the record because the deletion gate reads a change's
+	// repository off its record once a purge has removed the change's row
+	// (apply_conversation.go's conversationNotApplied).
+	RepoID   string `json:"repo_id"`
+	ChangeID string `json:"change_id"`
+	// Revision is the revision the row's merge is of, which the record
+	// re-evaluated.
+	Revision int64 `json:"revision"`
+	// TargetOID and TargetPosition are the tip a RECHECK merged into and the
+	// position of the record that moved the target there — both set where the
+	// home merged again, both empty where the record is a refresh's alone.
+	TargetOID      string            `json:"target_oid,omitempty"`
+	TargetPosition statelog.Position `json:"target_position,omitzero"`
+	// ChangeVersion, ReadinessVersion and ChecksPosition are what the
+	// readiness was judged at ([Mergeability.ChangeVersion]) — all three set
+	// where any of them moved past the row's, and ChangeVersion zero where
+	// none did: a change's row is at version 1 from its open, so a zero names
+	// no judgement, where a zero readiness version or checks position is one.
+	ChangeVersion    int64             `json:"change_version,omitempty"`
+	ReadinessVersion int64             `json:"readiness_version,omitempty"`
+	ChecksPosition   statelog.Position `json:"checks_position,omitzero"`
+}
+
+// keptOutcome reports whether m, stamped with its readiness, says what prior
+// says: the merge's state, its conflicted paths and how many more, and the
+// readiness and whether it waits on a person — the outcome a
+// [MergeabilityKept] keeps. A refresh's merge is the row's by construction,
+// so only its readiness is compared.
+func keptOutcome(m Mergeability, prior mergeRow) bool {
+	if m.Ready != prior.ready || m.WaitsPerson != prior.waitsPerson {
+		return false
+	}
+	return m.Refresh || (m.State == prior.state && m.ConflictsOmitted == prior.conflictsOmitted &&
+		slices.Equal(m.Conflicts, prior.conflicts))
+}
+
 // validFields holds a mergeability to [ConversationWrite.Validate]'s rules: a
 // revision from 1; a whole object id for the head; the target a branch a
 // change may name; for a merge, a whole object id for the target's tip and
@@ -429,18 +492,23 @@ type mergeRow struct {
 	checksPosition   int64
 	// ready is the stored answer, which the record's own is announced
 	// against: from not ready to ready is the one transition that tells
-	// anybody ([ReasonReadyToMerge]).
-	ready bool
+	// anybody ([ReasonReadyToMerge]); waitsPerson, conflictsOmitted and
+	// conflicts the rest of the stored outcome, which a re-evaluation that
+	// keeps it records by what it moved alone ([MergeabilityKept]).
+	ready, waitsPerson bool
+	conflictsOmitted   int64
+	conflicts          []string
 }
 
 // mergeabilityIn reads changeID's mergeability, and false where it holds none.
 func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow, bool, error) {
 	var (
-		m     mergeRow
-		state string
+		m                mergeRow
+		state, conflicts string
 	)
 	err := tx.QueryRowContext(ctx, mergeabilitySQL, changeID).Scan(&m.revision, &m.targetRef, &m.targetOID,
-		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion, &m.checksPosition, &m.ready)
+		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion, &m.checksPosition, &m.ready,
+		&m.waitsPerson, &m.conflictsOmitted, &conflicts)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return mergeRow{}, false, nil
@@ -448,6 +516,9 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 		return mergeRow{}, false, fmt.Errorf("code: read %s's mergeability: %w", changeID, err)
 	}
 	m.state = MergeState(state)
+	if conflicts != "" {
+		m.conflicts = strings.Split(conflicts, "\x00")
+	}
 	return m, true, nil
 }
 
@@ -537,6 +608,26 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 		m.ChecksPosition = unpacked(checksAt)
 	}
 	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
+	if of && keptOutcome(m, prior) {
+		// THE OUTCOME THE ROW HOLDS ALREADY: recorded by what moved — the tip
+		// a recheck merged into, and the versions and the checks position
+		// the readiness was judged at where any of them moved — never the
+		// whole record again. It turns nothing, so it concerns nobody, and
+		// routeConversation stamps it no routing.
+		kept := MergeabilityKept{RepoID: m.RepoID, ChangeID: m.ChangeID, Revision: m.Revision}
+		if !m.Refresh {
+			kept.TargetOID, kept.TargetPosition = m.TargetOID, m.TargetPosition
+		}
+		if m.ChangeVersion != prior.changeVersion || m.ReadinessVersion != prior.readinessVersion ||
+			checksAt != prior.checksPosition {
+			kept.ChangeVersion, kept.ReadinessVersion, kept.ChecksPosition = m.ChangeVersion,
+				m.ReadinessVersion, m.ChecksPosition
+		}
+		d.op, d.payload = OpMergeabilityKept, kept
+		// THE MERGEABILITY'S ROW, and the conversation's own.
+		d.rows = 2
+		return d, nil
+	}
 	// WHOM THE RECORD CONCERNS, by what it turns on the row it replaces: a
 	// merge that becomes a conflict tells the authors, once — not every
 	// recheck that finds it one still — and a stored answer that goes from
@@ -714,7 +805,7 @@ func headChecksPositionIn(ctx context.Context, tx *sql.Tx, repoID, oid, target s
 // applier's (apply_mergeability.go).
 const (
 	mergeabilitySQL = `SELECT revision, target_ref, target_oid, target_position, state, bytes, change_version,
-			readiness_version, checks_position, ready
+			readiness_version, checks_position, ready, waits_person, conflicts_omitted, conflicts
 		FROM code_mergeability WHERE change_id = ?`
 	mergeabilityRowSQL = `SELECT revision, target_ref, target_oid, target_position, state, conflicts_omitted, node,
 			position, at, change_version, readiness_version, checks_position, ready, waits_person, conflicts

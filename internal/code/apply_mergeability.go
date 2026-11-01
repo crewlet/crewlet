@@ -65,9 +65,45 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 	return 1, counts, nil
 }
 
+// applyMergeabilityKept moves what a re-evaluation that kept the row's outcome
+// moved ([MergeabilityKept]): a recheck's tip, its position and the row's
+// instant — the one the home's next recheck is paced from — and the versions
+// and the checks position a readiness was judged at, each part only where the
+// record carries it, and nothing else: the state, the conflicted paths, the
+// stored answer, the node and the position of the record that recorded them
+// stay the row's. A refresh alone leaves the instant, as a refresh's full
+// record does, so a review never postpones a moved target's recheck.
+//
+// It writes the row only while it is of the record's revision and the record
+// moves it FORWARD — a tip no earlier than the row's, versions and a checks
+// position no lower — the guard the merge's own record is decided by, which
+// the arbitration on the change's subject keeps true since no other record
+// writes the row; and applies as nothing otherwise.
+//
+// PURE IN THE RECORD, its position, its broker instant and the prior row.
+func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k MergeabilityKept) (int, error) {
+	retarget, rejudge := k.TargetOID != "", k.ChangeVersion != 0
+	if !retarget && !rejudge {
+		return 0, fmt.Errorf("code: the kept mergeability at %s moves neither a tip nor a judgement, which no "+
+			"writer forms", at.position)
+	}
+	res, err := tx.ExecContext(ctx, keptMergeabilitySQL, retarget, k.TargetOID, k.TargetPosition.Packed(), at.at(),
+		rejudge, k.ChangeVersion, k.ReadinessVersion, k.ChecksPosition.Packed(), k.ChangeID, k.Revision)
+	if err != nil {
+		return 0, fmt.Errorf("code: move %s's mergeability at %s: %w", k.ChangeID, at.position, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return conversationNotApplied(ctx, at, k.RepoID, k.ChangeID, "the mergeability it keeps is not the "+
+			"change's, or has moved past it")
+	}
+	return 1, nil
+}
+
 // A mergeability's writes: the row by the change's key, replaced whole by
-// every merge the decide took; and a refresh's readiness, written by the same
-// key only while the row is the merge the record names.
+// every merge the decide took; a refresh's readiness, written by the same
+// key only while the row is the merge the record names; and a kept
+// re-evaluation's moves, by the same key only while they move the row
+// forward.
 const (
 	writeMergeabilitySQL = `INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid,
 			target_position, state, conflicts_count, conflicts_omitted, node, bytes, position, at, change_version,
@@ -83,4 +119,13 @@ const (
 	refreshMergeabilitySQL = `UPDATE code_mergeability SET change_version = ?, readiness_version = ?,
 			checks_position = ?, ready = ?, waits_person = ?
 		WHERE change_id = ? AND revision = ? AND target_ref = ? AND target_position = ?`
+	keptMergeabilitySQL = `UPDATE code_mergeability SET
+			target_oid = CASE WHEN ?1 THEN ?2 ELSE target_oid END,
+			target_position = CASE WHEN ?1 THEN ?3 ELSE target_position END,
+			at = CASE WHEN ?1 THEN ?4 ELSE at END,
+			change_version = CASE WHEN ?5 THEN ?6 ELSE change_version END,
+			readiness_version = CASE WHEN ?5 THEN ?7 ELSE readiness_version END,
+			checks_position = CASE WHEN ?5 THEN ?8 ELSE checks_position END
+		WHERE change_id = ?9 AND revision = ?10 AND (NOT ?1 OR target_position <= ?3)
+			AND (NOT ?5 OR (change_version <= ?6 AND readiness_version <= ?7 AND checks_position <= ?8))`
 )

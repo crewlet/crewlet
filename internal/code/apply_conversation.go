@@ -61,6 +61,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID, changeID = p.RepoID, p.ChangeID
 	case Mergeability:
 		repoID, changeID = p.RepoID, p.ChangeID
+	case MergeabilityKept:
+		repoID, changeID = p.RepoID, p.ChangeID
 	case AskSettle:
 		repoID, changeID = p.RepoID, p.ChangeID
 	default:
@@ -113,6 +115,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyRevise(ctx, tx, at, p)
 	case Mergeability:
 		rows, counts, err = applyMergeability(ctx, tx, at, p)
+	case MergeabilityKept:
+		rows, err = applyMergeabilityKept(ctx, tx, at, p)
 	case AskSettle:
 		rows, err = applyAsks(ctx, tx, at, p)
 	}

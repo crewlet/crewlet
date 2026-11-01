@@ -176,7 +176,8 @@ const (
 	// ReviewerReviewed is a reviewer whose review answered the ask — settled
 	// by the review's own record. Asked again by a request naming them, and
 	// by a later revision's first facts where their standing verdict asks
-	// for changes ([Revise.ReReview]): the change is theirs to look at again.
+	// for changes ([ChangeRouting.ReReview]): the change is theirs to look at
+	// again.
 	//
 	// BASE FORMAT, under the condition [KindChange] states: a value only an
 	// apply writes, from the records' own ops, so a build that knows the ops
@@ -316,7 +317,9 @@ type Comment struct {
 	// Mentions is the handles its body names, as its asker resolved them
 	// against the chart it acts in, at most [MaxMentions]; the writer holds
 	// them to its own chart, and each is told ([ReasonMention]) and joins
-	// the change's participants.
+	// the change's participants. THE ASKER'S, never the record's: the
+	// writer holds them into the routing's mentions, their one copy, and
+	// takes them off the record it appends (withRouting).
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// WRITER from its snapshot and chart; an asker sends none.

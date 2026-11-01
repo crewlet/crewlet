@@ -736,6 +736,8 @@ func registeredStatements() map[string]statement {
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
+			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
 		// attempt at the commit for the change's target, a range of
 		// code_checks' key.

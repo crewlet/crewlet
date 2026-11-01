@@ -144,8 +144,11 @@ func TestAMergeabilityRecordIsMonotone(t *testing.T) {
 	}
 	res, err = w.Converse(ctx, n.merging(repo, change, 2, oidOf("B2"), mainRef, code.MergeUnknown))
 	requireConversed(t, res, err)
-	if again := n.mergeability(change); again.position <= undecided.position || again.at < undecided.at {
-		t.Fatalf("the same tip tried again left %+v, want its record's position and instant past %+v", again,
+	// STILL UNDECIDED, the outcome the row holds: kept, so the row's instant
+	// moves with the try and its position stays the record that decided it
+	// (TestAReEvaluationThatKeepsTheOutcomeRecordsWhatItMoved).
+	if again := n.mergeability(change); again.position != undecided.position || again.at <= undecided.at {
+		t.Fatalf("the same tip tried again left %+v, want the instant past %+v's and its position", again,
 			undecided)
 	}
 	res, err = w.Converse(ctx, n.merging(repo, change, 2, oidOf("B2"), mainRef, code.MergeConflict,
@@ -369,5 +372,133 @@ func TestAMovedTargetsMergesAreDueOldestFirst(t *testing.T) {
 	}) || len(again) != 0 {
 		t.Fatalf("the retargeted change is due as %+v beside rechecks %+v, want its merge into release owed at "+
 			"once", due, again)
+	}
+}
+
+// A RE-EVALUATION THAT KEEPS THE OUTCOME RECORDS WHAT IT MOVED: a recheck of a
+// moved target that merges as the row says, and a refresh whose readiness is
+// the row's, each append a mergeability_kept naming only what moved — the tip
+// and its position, or the versions the readiness was judged at — which moves
+// those columns and nothing else: the recheck the row's instant too, the
+// refresh never. Every transition is the full record: the first merge, a merge
+// that turns into a conflict, and a conflict whose paths changed; a conflict
+// rechecked with the same paths is kept, its paths never written again. A
+// stale recheck — of a tip before the row's — is refused superseded, as the
+// merge it replaces is. And a record that concerns nobody carries no routing
+// and writes no notice, where one that turns a merge into a conflict carries
+// its routing and tells the change's authors.
+//
+// Mutations: write the full record whatever the row holds → the recheck
+// appends a mergeability, red; leave the conflicts out of the outcome compared
+// → the changed conflict list is kept and the row keeps the old path, red;
+// drop the tip from the kept apply → the row stays at A, red; drop the
+// versions from it → the refresh moves no version, red; move the instant on a
+// refresh → the row's instant moves, red; stamp a routing whatever the
+// audience → the first merge carries one, red.
+func TestAReEvaluationThatKeepsTheOutcomeRecordsWhatItMoved(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	recorded := func(p statelog.Position) (code.OpKind, string) {
+		t.Helper()
+		rec := n.recordAt(p)
+		return rec.Op, string(rec.Mutation)
+	}
+	moved := func(from, to string) {
+		t.Helper()
+		n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf(from), oidOf(to))))
+	}
+
+	// THE FIRST MERGE: the full record, and one that concerns nobody — clean,
+	// and not ready, since nobody approved — so it carries no routing and
+	// writes no notice.
+	res := converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	if op, body := recorded(res.Position); op != code.OpMergeability || strings.Contains(body, `"routing"`) {
+		t.Fatalf("the first merge recorded %s %s; want a mergeability carrying no routing", op, body)
+	}
+	if got := noticesOf(t, n, res.Position); len(got) != 0 {
+		t.Fatalf("the first merge, which concerns nobody, wrote the notices %v", got)
+	}
+	first := n.mergeability(change)
+	staleTip, staleAt := n.tip(repo, mainRef)
+
+	// A RECHECK OF A MOVED TARGET THAT MERGES CLEAN AGAIN: kept, by its tip.
+	moved("A", "A2")
+	res = converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	tip, tipAt := n.tip(repo, mainRef)
+	if op, body := recorded(res.Position); op != code.OpMergeabilityKept || !strings.Contains(body, tip) ||
+		strings.Contains(body, `"state"`) || strings.Contains(body, `"routing"`) ||
+		strings.Contains(body, `"change_version"`) {
+		t.Fatalf("the recheck recorded %s %s; want a mergeability_kept naming the tip %s alone", op, body, tip)
+	}
+	rechecked := n.mergeability(change)
+	if rechecked.tip != tip || rechecked.targetAt != tipAt.Packed() || rechecked.at <= first.at ||
+		rechecked.position != first.position || rechecked.state != code.MergeClean {
+		t.Fatalf("the kept recheck left the row %+v; want the tip %s at %s and a later instant, the rest the "+
+			"first merge's %+v", rechecked, tip, tipAt, first)
+	}
+
+	// A STALE RECHECK, of the tip before the row's: superseded.
+	before := n.end()
+	res, err := w.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""),
+		Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+			TargetRef: mainRef, TargetOID: staleTip, TargetPosition: staleAt, State: code.MergeClean, Node: n.id}})
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "a later tip")
+
+	// A REFRESH WHOSE READINESS IS THE ROW'S, after an ask: kept, by its
+	// versions, the merge's instant left alone.
+	judged := n.storedReadiness(change)
+	converse(t, w, asking(repo, change, dev, "plat-lead"))
+	res = converse(t, w, code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""),
+		Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+			TargetRef: mainRef, Refresh: true, Node: n.id}})
+	if op, body := recorded(res.Position); op != code.OpMergeabilityKept || strings.Contains(body, `"target_oid"`) ||
+		!strings.Contains(body, `"readiness_version"`) || strings.Contains(body, `"routing"`) {
+		t.Fatalf("the refresh recorded %s %s; want a mergeability_kept naming its versions alone", op, body)
+	}
+	refreshed := n.storedReadiness(change)
+	if refreshed.readinessVersion <= judged.readinessVersion || refreshed.ready {
+		t.Fatalf("the kept refresh stored %+v after %+v; want a later readiness version, still not ready",
+			refreshed, judged)
+	}
+	if after := n.mergeability(change); after.at != rechecked.at || after.tip != tip {
+		t.Fatalf("the kept refresh moved the merge to %+v; want the recheck's instant and tip %+v", after,
+			rechecked)
+	}
+
+	// A MERGE THAT TURNS INTO A CONFLICT: the full record, routed to the
+	// change's authors.
+	moved("A2", "A3")
+	res = converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeConflict, "upload/retry.go"))
+	if op, body := recorded(res.Position); op != code.OpMergeability || !strings.Contains(body, `"routing"`) {
+		t.Fatalf("the merge that turned into a conflict recorded %s %s; want a routed mergeability", op, body)
+	}
+	if got := heard(code.Concerns(routingAt(t, n, res.Position))); len(got) == 0 ||
+		!strings.HasSuffix(got[0], ":conflicted") {
+		t.Fatalf("the merge that turned into a conflict tells %v; want the change's authors, conflicted", got)
+	}
+
+	// THE SAME CONFLICT RECHECKED: kept, its paths not written again.
+	moved("A3", "A4")
+	res = converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeConflict, "upload/retry.go"))
+	if op, body := recorded(res.Position); op != code.OpMergeabilityKept || strings.Contains(body, "upload/") {
+		t.Fatalf("the same conflict rechecked recorded %s %s; want a mergeability_kept naming no path", op, body)
+	}
+	if m := n.mergeability(change); !slices.Equal(m.conflicts, []string{"upload/retry.go"}) {
+		t.Fatalf("the kept conflict left the row's paths %v", m.conflicts)
+	}
+
+	// A CONFLICT WHOSE PATHS CHANGED: the full record, which turns nothing a
+	// routing names, so it carries none.
+	moved("A4", "A5")
+	res = converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeConflict, "upload/store.go"))
+	if op, body := recorded(res.Position); op != code.OpMergeability || strings.Contains(body, `"routing"`) {
+		t.Fatalf("the changed conflict recorded %s %s; want a mergeability carrying no routing", op, body)
+	}
+	if m := n.mergeability(change); !slices.Equal(m.conflicts, []string{"upload/store.go"}) {
+		t.Fatalf("the changed conflict left the row's paths %v, want upload/store.go", m.conflicts)
 	}
 }

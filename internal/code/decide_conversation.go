@@ -618,6 +618,10 @@ type conversationDecision struct {
 	version   int64
 	position  int64
 	readiness int64
+	// op is the op of the record the decide forms where it is not the one
+	// the write carries — a mergeability whose outcome its row holds
+	// already, recorded as [OpMergeabilityKept] — and "" where it is.
+	op OpKind
 	// concern is what the record's own op says of whom it concerns, which
 	// [routeConversation] completes and stamps ([routingFor]).
 	concern concerning
@@ -640,6 +644,17 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	r, err := routingFor(ctx, tx, c)
 	if err != nil {
 		return conversationDecision{}, err
+	}
+	if r == nil {
+		// A RECORD WITH NO AUDIENCE carries no routing (routingFor): it
+		// writes no notice and wakes nobody, so it adds no row either — and
+		// none of the mentions its asker named, which the chart holds none
+		// of (withRouting).
+		switch d.payload.(type) {
+		case Comment, Review:
+			d.payload = withRouting(d.payload, nil)
+		}
+		return d, nil
 	}
 	switch {
 	case w.Comment != nil, w.Review != nil:

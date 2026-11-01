@@ -76,14 +76,16 @@ import (
 //
 // # Whom the facts concern, for the wakes
 //
-// A revise records whom its revision concerns beside the asks it makes, each
-// stamped by the writer from the snapshot and the chart, for the wakes a later
-// record's routing derives from it: the reviewers whose standing verdict asks
-// for changes on an earlier revision — asked to look again (re_review) — on
-// the revision's first facts; and, on the change's first facts, where nobody
-// who may review it is asked, the lead of the repository's owner — its unit's
-// effective lead, or the lead of the unit an owning seat sits in — so a change
-// nobody is asked to review still reaches somebody (lead_fallback).
+// A revise's ROUTING says whom its revision concerns beside the asks it makes,
+// stamped by the writer from the snapshot and the chart: the reviewers whose
+// standing verdict asks for changes on an earlier revision — asked to look
+// again (re_review) — on the revision's first facts; and, on the change's
+// first facts, where nobody who may review it is asked, the lead of the
+// repository's owner — its unit's effective lead, or the lead of the unit an
+// owning seat sits in — so a change nobody is asked to review still reaches
+// somebody (lead_fallback). The routing is their ONE copy: the apply asks the
+// reviewers it names under re_review to look again, and nothing reads a
+// lead_fallback but the wakes, so the payload restates neither.
 //
 // # A revision's classes ride its facts
 //
@@ -217,14 +219,12 @@ type Revise struct {
 	// and its chart; the home sends neither.
 	Asked         []Reviewer     `json:"asked,omitempty"`
 	SkippedOwners []SkippedOwner `json:"skipped_owners,omitempty"`
-	// ReReview is the reviewers whose standing verdict asks for changes on an
-	// earlier revision, asked to look again; LeadFallback the lead of the
-	// repository's owner a change nobody who may review it is asked reaches.
-	// STAMPED BY THE WRITER, for the wakes a record's routing derives.
-	ReReview     []Reviewer `json:"re_review,omitempty"`
-	LeadFallback *Reviewer  `json:"lead_fallback,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER from its snapshot and chart; an asker sends none. Its re_review
+	// is the reviewers the apply asks to look again, and its lead_fallback
+	// the lead a change nobody who may review it is asked reaches — each
+	// held there alone (this file's head); nil where the facts concern
+	// nobody, and then nobody is asked to look again.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -437,7 +437,7 @@ func (r *Revise) validFields() error {
 	if len(r.OwnersDigest) != sha256.Size*2 || strings.Trim(r.OwnersDigest, "0123456789abcdef") != "" {
 		return badField("revise.owners_digest", "%q is not a SHA-256 in lowercase hex", r.OwnersDigest)
 	}
-	if len(r.Asked) > 0 || len(r.SkippedOwners) > 0 || len(r.ReReview) > 0 || r.LeadFallback != nil {
+	if len(r.Asked) > 0 || len(r.SkippedOwners) > 0 {
 		return badField("revise", "the writer stamps whom the facts ask, skip and wake from its snapshot and its "+
 			"chart, and the home sends none of them")
 	}
@@ -480,19 +480,18 @@ func compareOwners(a, b Owner) int {
 // stampedReviseBytes is what the writer may add to a revise's record beside
 // what the home sent, at its widest: an ask or a skip for every matched owner —
 // a skip naming the owner, the widest handle and the widest reason, which is
-// wider than an ask — MaxReReviewers reviewers to look again and a lead, each
-// at the widest handle a seat may have and a person's kind.
+// wider than an ask. Whom it asks to look again and the lead it falls back to
+// ride its routing alone, which [MaxRoutingBytes] bounds.
 func stampedReviseBytes(r Revise) int {
 	const (
-		handle   = iam.MaxLogin // a seat's handle is no longer than a login (iam.ValidSeatHandle)
-		reviewer = len(`{"handle":"","kind":"person"},`) + handle
-		lists    = len(`,"asked":[],"skipped_owners":[],"re_review":[],"lead_fallback":`)
+		handle = iam.MaxLogin // a seat's handle is no longer than a login (iam.ValidSeatHandle)
+		lists  = len(`,"asked":[],"skipped_owners":[]`)
 	)
 	widest := 0
 	for _, why := range SkipReasons() {
 		widest = max(widest, len(why))
 	}
-	n := lists + MaxReReviewers*reviewer + reviewer
+	n := lists
 	for _, o := range r.RequestedOwners {
 		encoded, err := json.Marshal(SkippedOwner{Owner: o, Handle: strings.Repeat("h", handle),
 			Why: SkipReason(strings.Repeat("w", widest))})
@@ -586,7 +585,7 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	r.Asked, r.SkippedOwners, r.ReReview, r.LeadFallback = j.asked, j.skipped, j.reReview, j.fallback
+	r.Asked, r.SkippedOwners = j.asked, j.skipped
 	// WHOM THE FACTS CONCERN: the path owners they ask, the reviewers they
 	// ask to look again, and the lead a change nobody may review reaches.
 	d.concern = concerning{pathOwners: j.asked, reReview: j.reReview}
@@ -596,7 +595,7 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	d.payload = r
 	// THE FACTS, A ROW EACH REVIEWER ASKED AND A PARTICIPANT ROW EACH, the
 	// ask of each reviewer it asks to look again, and the conversation's own.
-	d.rows = 2*len(r.Asked) + len(r.ReReview) + 2
+	d.rows = 2*len(r.Asked) + len(j.reReview) + 2
 	return d, nil
 }
 

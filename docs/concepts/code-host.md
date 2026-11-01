@@ -5476,6 +5476,19 @@ it names no asker.
   waits behind the same first ones every refresh. On a change's page the
   mergeability says which tip it is of — "as of" that tip — until then. An
   `unknown` merge is tried again on the same pace.
+- **What a re-evaluation moved, and nothing more.** A recheck of a moved
+  target whose merge says what the row says — the same state, the same
+  conflicted paths and the same count of the rest — and a
+  [refresh](#merge-readiness) whose readiness is the row's, ready or not and
+  waiting on a person or not as before, are recorded as a
+  `mergeability_kept`: the change, its revision, and only what moved — the
+  recheck's tip and the position that moved the branch there, the versions
+  and the checks position a refresh judged the readiness at. Its apply moves
+  those columns, and a recheck's instant, under the guard the full record's
+  is decided by, and nothing else, so a conflicted change is not carried
+  again, paths and all, every ten minutes its target moves. Whatever turns
+  — a new revision or target, a state, a conflict list, a readiness — is the
+  whole `mergeability` record, since it is what somebody may be told of.
 
 | Table | A row for | What it holds |
 |---|---|---|
@@ -6060,8 +6073,9 @@ heads' whole diff.
 
 ## Who a change wakes
 
-Every record about a change carries **whom it concerns**: who made it, and the
-people and seats each reason it routes under reaches, as the deciding node's
+Every record about a change that concerns anybody carries **whom it
+concerns**: who made it, and the people and seats each reason it routes under
+reaches, as the deciding node's
 rows and chart held them when it decided the record. The node that decides
 the record stamps it — the repository's committer for an open, an edit, a
 close, a landing, a push and the merge gate's records (a merge, a dequeue, a
@@ -6073,6 +6087,16 @@ reads that snapshot and nothing else. The rows move on — a reviewer is
 withdrawn, an author pushes, a thread grows — and an audience derived from
 them minutes later on another node would tell different people about the same
 record.
+
+A record whose audience is nobody — a comment that mentions nobody the chart
+holds, said outside any thread; a thread resolved; a revision's facts that ask
+nobody; a merge or a readiness that turns nothing — carries no snapshot at all,
+and is read exactly as one whose audience is empty: no notice, and no wake.
+Where somebody hears, the snapshot is whole, the change's name, title, owner
+and work item with it, since the node that wakes a seat routes the record
+without reading rows it may not have applied yet. What the asker named in a
+write — its mentions — is the request: the record carries the mentions the
+chart holds, in the snapshot, and not the asker's list beside them.
 
 | Reason | Who hears it | On |
 |---|---|---|

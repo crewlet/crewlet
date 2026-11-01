@@ -163,7 +163,9 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 		if err != nil {
 			return queueDecision{}, err
 		}
-		routings = append(routings, *routed)
+		if routed != nil {
+			routings = append(routings, *routed)
+		}
 	}
 	room, err := routingRoomBeside(e)
 	if err != nil {
@@ -380,7 +382,9 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		if err != nil {
 			return queueDecision{}, err
 		}
-		routings = append(routings, *routed)
+		if routed != nil {
+			routings = append(routings, *routed)
+		}
 	}
 	room, err := routingRoomBeside(stamped)
 	if err != nil {

@@ -22,8 +22,9 @@ import (
 // what the facts' wide columns weigh, less what the row they replace weighed,
 // so a purge weighs the change's subject's wide rows by its one narrow row.
 //
-// And it asks each reviewer the record asks to look again ([Revise.ReReview])
-// for a review once more, where their review answered their ask.
+// And it asks each reviewer the record's routing asks to look again
+// ([ChangeRouting.ReReview]) for a review once more, where their review
+// answered their ask.
 //
 // PURE IN THE RECORD, its position and the prior rows, as every apply here:
 // whom the facts ask, skip and wake rides the record, stamped by the writer
@@ -74,11 +75,13 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 	// THE REVIEWERS ASKED TO LOOK AGAIN are waited on again: a reviewer whose
 	// review answered their ask, and whose standing verdict asks for changes
 	// on an earlier revision, owes the change a review of this one — the
-	// re_review the record carries for the wakes. A reviewer nobody asked
-	// gains no ask, and one whose ask was withdrawn keeps that word.
-	again := make([]string, len(r.ReReview))
-	for i, rv := range r.ReReview {
-		again[i] = rv.Handle
+	// re_review its routing carries, the one copy of whom it names. A
+	// reviewer nobody asked gains no ask, and one whose ask was withdrawn
+	// keeps that word; a record with no routing concerns nobody, so it asks
+	// nobody again.
+	var again []string
+	if r.Routing != nil {
+		again = r.Routing.ReReview
 	}
 	reopened, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerReviewed, ReviewerRequested, again)
 	if err != nil {

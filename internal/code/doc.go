@@ -299,8 +299,9 @@
 //
 // # A change wakes the seats its records concern
 //
-// Every record about a change carries whom it concerns, stamped by its writer
-// (concerns.go); the applier writes a notice row for each (apply_notices.go),
+// Every record about a change that concerns anybody carries whom it concerns,
+// stamped by its writer (concerns.go), and one that concerns nobody carries no
+// routing at all; the applier writes a notice row for each (apply_notices.go),
 // which a person's code inbox reads, and the code log's own fleet-wide
 // consumer, [FeedGroup], derives a WAKE for each seat among them (feed.go,
 // wake.go) — never the writer's goroutine (ADR-0012). The log's trim waits on

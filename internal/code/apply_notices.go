@@ -12,7 +12,8 @@ import (
 )
 
 // WHOM A CHANGE RECORD REACHED, PER RECIPIENT: the applier writes the answer
-// every record about a change carries ([ChangeRouting], concerns.go) down as
+// a record about a change carries ([ChangeRouting], concerns.go; none where it
+// concerns nobody, which writes no row) down as
 // ONE ROW PER (record, recipient) it reached — every handle its routing's
 // precedence keeps ([Concerns]) but the record's own actor — in
 // code_notifications (replicated 0081), as the tracker writes
