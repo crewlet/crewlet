@@ -4,6 +4,8 @@ package queries
 
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -99,27 +101,12 @@ type ToolHints struct {
 // its per-origin counts, the published reference) silently read a company
 // running MCP servers as one running none.
 func CatalogueRow(entry tools.Entry, delivers string) ToolRow {
-	row := ToolRow{
-		Name:        entry.Name(),
-		Description: entry.Tool.Description(),
-		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
-		// re-spelled: `builtin`, or `mcp:` and the bare server name.
-		Source: entry.Origin,
-		Title:  entry.Annotations.Title,
-		Annotations: ToolHints{
-			ReadOnly:    entry.Annotations.ReadOnly.String(),
-			Destructive: entry.Annotations.Destructive.String(),
-			Idempotent:  entry.Annotations.Idempotent.String(),
-			OpenWorld:   entry.Annotations.OpenWorld.String(),
-		},
-		Delivers: delivers,
-		// The schema the MODEL is offered, read rather than rebuilt. The
-		// map is the tool's own and this path only serialises it; an MCP
-		// server restarting replaces the whole Tool rather than writing
-		// into its schema, so there is nothing here for a running turn to
-		// race with.
-		InputSchema: entry.Tool.Parameters(),
-	}
+	// The schema the MODEL is offered, read rather than rebuilt. The map is
+	// the tool's own and this path only serialises it; an MCP server
+	// restarting replaces the whole Tool rather than writing into its
+	// schema, so there is nothing here for a running turn to race with.
+	row := toolRow(entry.Name(), entry.Tool.Description(), entry.Origin, entry.Annotations,
+		delivers, entry.Tool.Parameters())
 	// FILED ONLY FROM THE ENGINE'S OWN ORIGIN: an MCP server may publish a
 	// tool under a built-in's name, and the registry refuses the second
 	// registrant, but a row is built from whatever entry it is handed.
@@ -129,4 +116,65 @@ func CatalogueRow(entry tools.Entry, delivers string) ToolRow {
 		}
 	}
 	return row
+}
+
+// ListedRows is the catalogue rows of the tools the fleet's listings name
+// that no row in taken already names, in the listings' order: what a node's
+// catalogue adds to its own registry's rows so a per-agent server's tools,
+// whose children run on other nodes, are in it. schemas are the stored
+// schemas by digest; a tool whose schema is not among them is listed without
+// one.
+//
+// BY NAME, as a model is offered one tool per name: a registry row holding the
+// name (a built-in, or another server's tool that wins it) is what a seat
+// calls, and a listed tool under it is not offered. And a name is listed once,
+// by the first listing naming it, the listings being ordered by server as a
+// bridge orders its winners.
+func ListedRows(taken []ToolRow, listings []coord.MCPListing,
+	schemas map[string]coord.MCPToolSchema) []ToolRow {
+
+	held := make(map[string]struct{}, len(taken))
+	for _, row := range taken {
+		held[row.Name] = struct{}{}
+	}
+	var out []ToolRow
+	for _, l := range listings {
+		for _, t := range l.Tools {
+			if _, ok := held[t.Name]; ok {
+				continue
+			}
+			held[t.Name] = struct{}{}
+			ann := annotationsOf(t.Hints)
+			ann.Title = t.Title
+			var input map[string]any
+			if schema, ok := schemas[t.Digest]; ok {
+				input = schemaObject(schema.Input)
+			}
+			out = append(out, toolRow(t.Name, t.Description, mcp.Origin(l.Server), ann,
+				tools.MCPDelivery(l.Server, ann), input))
+		}
+	}
+	return out
+}
+
+// toolRow is the ONE builder of a row, whichever source its tool came from.
+func toolRow(name, description, origin string, ann tools.Annotations, delivers string,
+	input map[string]any) ToolRow {
+
+	return ToolRow{
+		Name:        name,
+		Description: description,
+		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
+		// re-spelled: `builtin`, or `mcp:` and the bare server name.
+		Source: origin,
+		Title:  ann.Title,
+		Annotations: ToolHints{
+			ReadOnly:    ann.ReadOnly.String(),
+			Destructive: ann.Destructive.String(),
+			Idempotent:  ann.Idempotent.String(),
+			OpenWorld:   ann.OpenWorld.String(),
+		},
+		Delivers:    delivers,
+		InputSchema: input,
+	}
 }

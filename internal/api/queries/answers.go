@@ -208,6 +208,12 @@ type Sources struct {
 	// node holding it.
 	Builtins func() []ToolRow
 
+	// MCPListings is the fleet's listings of its MCP servers' tools and the
+	// schemas they name, as this node's watched copy holds them: what one
+	// server's detail is read from ([Sources.MCPServer]). Nil, or a nil
+	// [Sources.Config], answers the detail unavailable.
+	MCPListings MCPListingReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 

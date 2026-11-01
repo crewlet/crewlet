@@ -1,8 +1,8 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
-// [authz.Router] with the verb it is decided by: today `GET
-// /mcp-servers/catalogue`, what a server is added from.
+// [authz.Router] with the verb it is decided by: `GET /mcp-servers/catalogue`,
+// what a server is added from, and `GET /mcp-servers/{name}`, one server whole.
 //
-// # A route, not a registry question
+// # Routes, not registry questions
 //
 // The servers' condition is the `mcp_servers_status` question, which the
 // socket and REST both answer because a page watches it. The catalogue is
@@ -11,6 +11,11 @@
 // draft of a launch line every engine host runs, and the answer names the
 // registry the company's configuration does. Nothing about it is live, and
 // the question registry is for answers a room keeps current.
+//
+// One server's detail is a read on the same verb, for the status answer's
+// reason (it names the launch and the first line of each failure). It is a
+// route until a screen watches it: the registry refuses a question no room
+// asks for, and the page that reads it reads it on a poll.
 //
 // # A search that fails is an answer
 //
@@ -28,8 +33,11 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
 
@@ -51,9 +59,14 @@ type Options struct {
 	// client over the engine's shared transport.
 	Registry Searcher
 
+	// Detail answers one server whole ([queries.Sources.MCPServer]):
+	// required, since the detail is read off the fleet's listings, which
+	// only the API's sources reach.
+	Detail func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
+
 	// Guard decides each route's policy. Nil is the request context's
 	// principal with no org chart, which every route here asks for alone:
-	// the catalogue is the configuration's reader's.
+	// both routes are the configuration's reader's.
 	Guard authz.Guard
 }
 
@@ -61,6 +74,7 @@ type Options struct {
 type Service struct {
 	company  func() *config.Company
 	registry Searcher
+	detail   func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
 	guard    authz.Guard
 }
 
@@ -70,6 +84,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Company is required: the catalogue searches the " +
 			"registry the applied company names")
 	}
+	if opts.Detail == nil {
+		return nil, errors.New("mcpapi: Options.Detail is required: one server's detail is read " +
+			"off the fleet's listings")
+	}
 	registry := opts.Registry
 	if registry == nil {
 		registry = catalogue.NewRegistry(catalogue.RegistryOptions{})
@@ -78,7 +96,7 @@ func New(opts Options) (*Service, error) {
 	if guard == nil {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
-	return &Service{company: opts.Company, registry: registry, guard: guard}, nil
+	return &Service{company: opts.Company, registry: registry, detail: opts.Detail, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -86,10 +104,43 @@ func New(opts Options) (*Service, error) {
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, s.guard)
 	// A LITERAL SEGMENT under /mcp-servers, so it is never read as a
-	// server named "catalogue" by a route that takes a name there.
-	return router.Handle("GET /mcp-servers/catalogue", authz.Policy{Action: authz.ActionConfigRead},
-		http.HandlerFunc(s.serveCatalogue))
+	// server named "catalogue" by the route that takes a name there.
+	if err := router.Handle("GET /mcp-servers/catalogue", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveCatalogue)); err != nil {
+		return err
+	}
+	return router.Handle("GET /mcp-servers/{name}", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveDetail))
 }
+
+// serveDetail answers one server whole: 404 for a server no node configures,
+// reports or lists, and 503 where this node cannot read the fleet's listings
+// or its store, which a retry answers.
+func (s *Service) serveDetail(w http.ResponseWriter, r *http.Request) {
+	answer, err := s.detail(r.Context(), r.PathValue("name"))
+	switch {
+	case err == nil:
+		httpjson.Write(w, http.StatusOK, answer)
+	case errors.Is(err, queries.ErrNotFound):
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
+			httpjson.Detail{"detail": err.Error()})
+	case errors.Is(err, queries.ErrBadParams):
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": err.Error()})
+	default:
+		log.WarnContext(r.Context(), "mcp_server_detail_unavailable", "server", r.PathValue("name"),
+			"error", err.Error())
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
+			httpjson.Detail{"detail": "this node could not read the fleet's listing of the server; ask again"})
+	}
+}
+
+// detailRetrySeconds is the wait a detail that could not be read asks for:
+// one beat of the listings' publisher ([coord.ReconcileInterval]), by which a
+// watch that had not answered has, and a store that blinked has answered.
+var detailRetrySeconds = httpjson.RetrySeconds(coord.ReconcileInterval)
+
+var log = logging.Get("api.mcpapi")
 
 func (s *Service) serveCatalogue(w http.ResponseWriter, r *http.Request) {
 	answer, err := s.Catalogue(r.Context(), r.URL.Query().Get("q"))

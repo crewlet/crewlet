@@ -357,7 +357,7 @@ func (m *mcpRemoval) refuse(w http.ResponseWriter, r *http.Request, err error) b
 	if !errors.As(err, &refused) {
 		return false
 	}
-	held, err := m.held(r.Context(), refused.Unread)
+	held, err := m.s.held(r.Context(), refused.Unread)
 	if err != nil {
 		m.s.fail(w, r, "read which values the credential store holds", err)
 		return true
@@ -377,16 +377,59 @@ func (m *mcpRemoval) refuse(w http.ResponseWriter, r *http.Request, err error) b
 // checked answers a dry run that passed: the check, and what the removal
 // takes with it.
 func (m *mcpRemoval) checked(w http.ResponseWriter, r *http.Request, p *prepared) {
-	held, err := m.held(r.Context(), unreadAfter(p.prior, p.company))
+	dependants, err := m.s.mcpDependants(r.Context(), p.prior, p.company, m.name)
 	if err != nil {
 		m.s.fail(w, r, "read which values the credential store holds", err)
 		return
 	}
 	answer := checkedAnswer(p)
-	answer["dependants"] = MCPDependants{
-		MCPCleared: clearedOf(p.prior.MCPServerDependants(m.name)), Secrets: held,
-	}
+	answer["dependants"] = dependants
 	writeJSON(w, http.StatusOK, answer)
+}
+
+// ServerDependants is what removing the server called name from the fleet's
+// active revision would take with it: what a dry run of the removal answers
+// as `dependants`, and what a server's detail shows. False where the revision
+// declares no such server.
+//
+// THE DRY RUN'S OWN COMPUTATION ([Service.mcpDependants]), on the same two
+// documents: the revision, and the revision with the server removed and every
+// field naming it alone cleared. A second walk would be a detail page that
+// promises one removal and a dry run that answers another.
+func (s *Service) ServerDependants(ctx context.Context, name string) (MCPDependants, bool, error) {
+	cur, found, err := s.current(ctx)
+	if err != nil {
+		return MCPDependants{}, false, err
+	}
+	if !found {
+		return MCPDependants{}, false, ErrNoActiveRevision
+	}
+	document, prior, err := s.openDocument(cur)
+	if err != nil {
+		return MCPDependants{}, false, err
+	}
+	next, err := config.DecodeCompany(document)
+	if err != nil {
+		return MCPDependants{}, false, fmt.Errorf("configapi: decode the active revision: %w", err)
+	}
+	if _, found := next.RemoveMCPServer(name); !found {
+		return MCPDependants{}, false, nil
+	}
+	dependants, err := s.mcpDependants(ctx, prior, next, name)
+	return dependants, err == nil, err
+}
+
+// mcpDependants is what removing the server called name from prior takes with
+// it, next being prior with it removed: every field naming it alone, and every
+// value the store holds that nothing reads once it is gone.
+func (s *Service) mcpDependants(ctx context.Context, prior, next *config.Company,
+	name string) (MCPDependants, error) {
+
+	held, err := s.held(ctx, unreadAfter(prior, next))
+	if err != nil {
+		return MCPDependants{}, err
+	}
+	return MCPDependants{MCPCleared: clearedOf(prior.MCPServerDependants(name)), Secrets: held}, nil
 }
 
 // applied deletes the values the request named, now that the removal is
@@ -448,10 +491,10 @@ func (m *mcpRemoval) deleteSecrets(ctx context.Context, by iam.Actor) []MCPSecre
 
 // held is the names the credential store holds a value under, of names, in
 // their order. Never null.
-func (m *mcpRemoval) held(ctx context.Context, names []string) ([]string, error) {
+func (s *Service) held(ctx context.Context, names []string) ([]string, error) {
 	out := []string{}
 	for _, name := range names {
-		_, stored, err := m.s.secrets.Describe(ctx, name)
+		_, stored, err := s.secrets.Describe(ctx, name)
 		if err != nil {
 			return nil, fmt.Errorf("configapi: describe the stored value %s: %w", name, err)
 		}

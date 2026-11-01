@@ -381,6 +381,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `admin`** (see [below](#get-mcp-serversname)) |
 | `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
@@ -9396,6 +9397,87 @@ over 200 characters, or holding a control character) is refused, as
   "registry": "https://registry.modelcontextprotocol.io",
   "reason": "",
   "left_out": 1
+}
+```
+
+### `GET /mcp-servers/{name}`
+
+One MCP server, whole, for its page under **Settings › MCP & tools**. It is
+decided by `config.read`, so **it takes `admin`**, as `GET /mcp-servers` does
+and for its reason. A plain read rather than a question, until a screen
+watches it: the page reads it on a poll.
+
+**What the fleet lists, not what this node runs.** A per-agent server's
+children run only on the nodes holding its seats, so the node answering may
+run none of them. Every node publishes what its own instances of each server
+list, and this answer is the union of the live nodes' listings
+([Tools and MCP › What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
+A node's listing counts only while it holds its presence at the epoch it wrote
+it under, so a node that drained, died or restarted stops counting at once.
+
+- `server` is the server's row exactly as [`GET /mcp-servers`](#get-mcp-servers)
+  answers it, and `nodes` the live nodes its cells are drawn against.
+- `listed` is each live node's listing: when it last changed (`at`), how many
+  instances on the node it is the union of, and how many tools it counts.
+- `tools` is every tool a live node lists, by name, each once: `name` as it is
+  offered (the `tool_prefix` applied) and `raw` as the server names it, its
+  `title` and `description` (the server's words, the description cut to 1,024
+  bytes), its `annotations` with the company's overrides applied, as words
+  (`yes`, `no`, `unknown`), and the engine's one reading of them: `risk`
+  (`read_only`, `additive` or `destructive`; a tool that declares nothing is
+  `destructive` with `risk_declared: false`) and `external` (whether a call may
+  reach past the company; true unless the tool says it does not). `digest`
+  names the definition shown, the one most instances list; `definitions` counts
+  how many different definitions the fleet lists under the name (more than one
+  while a server is mid-upgrade). `instances` and `nodes` are summed across the
+  fleet. `input_schema` and `output_schema` are the definition's schemas, or
+  `null` where none is kept: a tool that publishes no output schema, or schemas
+  past 64 KiB.
+- `tool_count` is how many tools the server lists, never fewer than `tools`
+  holds: a node's listing names at most 256 of them.
+- `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
+  are what the server said of itself in its handshake, from the listing that
+  changed last; `null` and `""` where no live node's listing carries them. Both
+  are the server's own words, each bounded.
+- `dependants` is what removing the server takes with it, exactly as a dry run
+  of [`DELETE /config/mcp-servers/{name}`](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)
+  answers it: the `mcp_env` blocks and box entries it clears, and the stored
+  values nothing reads once it is gone. Empty lists for a server the
+  configuration does not declare.
+
+Never a credential: no `env`, no `headers`, no seat's `mcp_env` value. A server
+no node configures, reports or lists is `404 not_found`. A node that has not yet
+read the fleet's listings, or could not read its store, answers
+`503 unavailable` with `Retry-After: 15`, never a server that lists nothing.
+
+```json
+{
+  "server": {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
+             "configured": true, "shared": false, "enabled": true, "description": "",
+             "transport": "stdio", "command": "github-mcp-server", "args": ["stdio"], "url": "",
+             "state": "running", "started": 3, "failed": 0, "waiting": 0, "tools": 42,
+             "unlisted_annotations": [], "refused_tools": [], "refused_count": 0,
+             "shadowed_tools": [], "shadowed_count": 0, "nodes": [{"node": "node-a", "reported": true,
+             "started": 2, "failed": 0, "waiting": 0, "tools": 42, "error": "", "error_seat": "",
+             "wait": "", "wait_seat": ""}]},
+  "nodes": [{"id": "node-a", "reported": true}],
+  "listed": [{"node": "node-a", "at": "2026-11-01T09:00:00Z", "instances": 2, "tools": 42}],
+  "tools": [
+    {"name": "get_issue", "raw": "get_issue", "title": "Get issue",
+     "description": "Get details of a specific issue in a GitHub repository.",
+     "annotations": {"read_only": "yes", "destructive": "no", "idempotent": "unknown", "open_world": "yes"},
+     "risk": "read_only", "risk_declared": true, "external": true,
+     "digest": "5f0c9e3b2a8d4f7c1e6b9a2d3c4f5e6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e",
+     "definitions": 1, "instances": 2, "nodes": ["node-a"],
+     "input_schema": {"type": "object", "properties": {"owner": {"type": "string"},
+                      "repo": {"type": "string"}, "issue_number": {"type": "number"}},
+                      "required": ["owner", "repo", "issue_number"]},
+     "output_schema": null}
+  ],
+  "tool_count": 42,
+  "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
+  "instructions": "",
+  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []}
 }
 ```
 
