@@ -1469,7 +1469,13 @@ const (
 	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
 	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
 	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
-	treeBudget = 5<<20 + 134<<10
+	// The code host's screens, merged beside it (the Code workspace: its
+	// repositories, a repository's files and history, its changes with their
+	// reviews, checks and merge queue, and their words), took it from 5253.0
+	// KiB to 5377.4 KiB (+124.4 KiB), nearly all of it in chunks a reader
+	// fetches on opening Code; the frame's part is in initialBudget's history
+	// above. 5378 KiB.
+	treeBudget = 5<<20 + 258<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
@@ -1604,7 +1610,7 @@ func TestTheDesignReferenceQuotesTheBudgets(t *testing.T) {
 		{"The initial load:", quotedBudget(initialBudget, 1<<10, "KiB")},
 		{"Each chunk fetched later:", quotedBudget(lazyChunkBudget, 1<<10, "KiB")},
 		{"Every font face", quotedBudget(fontBudget, 1000, "KB")},
-		{"The whole of `static/dashboard`", quotedBudget(treeBudget, 1<<20, "MiB")},
+		{"The whole of `static/dashboard`", quotedBudget(treeBudget, 1<<10, "KiB")},
 	}
 	rows := budgetTable(t, string(raw))
 	if len(rows) != len(want) {
