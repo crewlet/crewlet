@@ -1,7 +1,6 @@
 package checkrun
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -439,6 +438,15 @@ func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *code.Check
 // sandbox.MaxFileBytes, into one list of failures — nil where the check names
 // neither, or neither was written — and says, for each one named and not
 // read, why.
+//
+// STREAMED from the box into its parser (Sandbox.OpenFile), never read whole:
+// what a report costs the runner is the failures an ending keeps and the one
+// element in hand (junit.go, sarif.go), whatever its size — read whole, each
+// failed run held up to two reports of sandbox.MaxFileBytes at once, every
+// ending on a node beside the others. The cap still holds: a report past it is
+// refused as a whole read refuses one, since a report cut short reads as a
+// finished one, and the failures named before the cap are kept as a report
+// that stops being XML or JSON keeps them.
 func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, []string) {
 	def := a.c.Def
 	if def.Report.JUnit == "" && def.Report.SARIF == "" {
@@ -446,27 +454,75 @@ func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, 
 	}
 	fs := newFailures()
 	var unread []string
-	read := func(named, file, kind string, parse func([]byte) error) {
+	read := func(named, file, kind string, parse func(io.Reader) error) {
 		if named == "" {
 			return
 		}
-		raw, err := box.ReadFile(ctx, file)
-		switch {
-		case err != nil:
+		rc, err := box.OpenFile(ctx, file)
+		if err != nil {
 			unread = append(unread, fmt.Sprintf("its %s report %s could not be read: %v", kind, named, err))
-		case len(raw) == 0:
+			return
+		}
+		defer func() { _ = rc.Close() }()
+		in := &capped{r: rc, left: sandbox.MaxFileBytes}
+		err = parse(in)
+		switch {
+		case errors.Is(in.err, errReportTooLarge):
+			unread = append(unread, fmt.Sprintf("its %s report %s is past %d MiB, the most a report is read "+
+				"to, and a report cut short would read as a finished one", kind, named, sandbox.MaxFileBytes>>20))
+		case in.err != nil:
+			unread = append(unread, fmt.Sprintf("its %s report %s could not be read: %v", kind, named, in.err))
+		case in.read == 0:
 			unread = append(unread, fmt.Sprintf("it wrote no %s report at %s", kind, named))
-		default:
-			if err := parse(raw); err != nil {
-				unread = append(unread, fmt.Sprintf("its %s report %s: %v", kind, named, err))
-			}
+		case err != nil:
+			unread = append(unread, fmt.Sprintf("its %s report %s: %v", kind, named, err))
 		}
 	}
-	read(def.Report.JUnit, junitFile, "JUnit", func(raw []byte) error { return readJUnit(bytes.NewReader(raw), fs) })
-	read(def.Report.SARIF, sarifFile, "SARIF", func(raw []byte) error {
-		return readSARIF(bytes.NewReader(raw), a.c.Repo, fs)
-	})
+	read(def.Report.JUnit, junitFile, "JUnit", func(r io.Reader) error { return readJUnit(r, fs) })
+	read(def.Report.SARIF, sarifFile, "SARIF", func(r io.Reader) error { return readSARIF(r, a.c.Repo, fs) })
 	return fs, unread
+}
+
+// errReportTooLarge is a report's stream past sandbox.MaxFileBytes.
+var errReportTooLarge = errors.New("checkrun: the report is past the most a report is read to")
+
+// capped is a report's stream held to the most a report is read to: past
+// left bytes it fails with errReportTooLarge, as a whole read refuses such a
+// file. It remembers how much it read and the error it failed with, so the
+// report's reader is told apart from its parser: a stream the box broke, or a
+// report too large, is no report the check wrote wrong.
+type capped struct {
+	r    io.Reader
+	left int64
+	read int64
+	err  error
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if c.left <= 0 {
+		// One byte past the cap is read to tell a file of exactly the cap
+		// from one past it, as sandbox's readCapped does.
+		var one [1]byte
+		switch n, err := io.ReadFull(c.r, one[:]); {
+		case n > 0:
+			c.err = errReportTooLarge
+		case errors.Is(err, io.EOF):
+			return 0, io.EOF
+		default:
+			c.err = err
+		}
+		return 0, c.err
+	}
+	n, err := c.r.Read(p[:min(int64(len(p)), c.left)])
+	c.left -= int64(n)
+	c.read += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		c.err = err
+	}
+	return n, err
 }
 
 // summary is the ending's summary: the file the command wrote to

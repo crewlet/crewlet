@@ -1,9 +1,13 @@
 package checkrun_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -107,5 +111,133 @@ func TestTheSweepWaitsOutARunsEnding(t *testing.T) {
 		checkrun.CheckPoll
 	if patience := checkrun.SweepPolls * checkrun.CheckPoll; patience < ending {
 		t.Fatalf("the sweep waits %s past a run's timeout and grace; its ending may take %s", patience, ending)
+	}
+}
+
+// wholeReportRefused is a box whose reports refuse a whole read: a reader of
+// them that does not stream is caught.
+type wholeReportRefused struct{ *sandbox.FakeSandbox }
+
+func (b wholeReportRefused) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if p == checkrun.JUnitFile || p == checkrun.SARIFFile {
+		return nil, errors.New("a report was read whole")
+	}
+	return b.FakeSandbox.ReadFile(ctx, p)
+}
+
+// junitPadded is a JUnit report of one passing case, exactly size bytes.
+func junitPadded(size int) string {
+	head, tail := `<testsuite tests="1" failures="0"><testcase classname="a" name="b"/>`, `</testsuite>`
+	return head + strings.Repeat(" ", size-len(head)-len(tail)) + tail
+}
+
+// A REPORT IS STREAMED FROM THE BOX AND HELD TO THE CAP: a run's JUnit and
+// SARIF reports are read as streams — never whole — into its failures; a
+// report of exactly sandbox.MaxFileBytes is read; and one a byte past it is
+// refused, saying so, as a whole read refuses it.
+//
+// Mutation: read the reports whole — every report unread, red; let the
+// stream run past the cap — the report past it read, red.
+func TestAReportIsStreamedFromTheBoxAndHeldToTheCap(t *testing.T) {
+	t.Parallel()
+	d := def("unit", time.Minute)
+	d.Report.JUnit, d.Report.SARIF = "out/junit.xml", "out/lint.sarif"
+	box := sandbox.NewFakeSandbox("box-1")
+	box.Put(checkrun.JUnitFile, junitOf(2, 5, 3))
+	box.Put(checkrun.SARIFFile, `{"runs":[{"results":[{"ruleId":"SA1000","message":{"text":"bad"}}]}]}`)
+	got, unread := checkrun.Reports(t.Context(), wholeReportRefused{box}, d, "web")
+	if len(unread) > 0 || len(got.Kept) != 3 || got.Failed != 2 || got.Results != 1 {
+		t.Fatalf("the reports read %+v, unread %q; want two JUnit failures and one SARIF result", got, unread)
+	}
+
+	junitOnly := def("unit", time.Minute)
+	junitOnly.Report.JUnit = "out/junit.xml"
+	box.Put(checkrun.JUnitFile, junitPadded(sandbox.MaxFileBytes))
+	if got, unread := checkrun.Reports(t.Context(), wholeReportRefused{box}, junitOnly, "web"); len(unread) > 0 ||
+		got.Tests != 1 {
+		t.Errorf("a report of exactly the cap read %+v, unread %q; want it read", got, unread)
+	}
+	box.Put(checkrun.JUnitFile, junitPadded(sandbox.MaxFileBytes+1))
+	_, unread = checkrun.Reports(t.Context(), wholeReportRefused{box}, junitOnly, "web")
+	if len(unread) != 1 || !strings.Contains(unread[0], fmt.Sprintf("past %d MiB", sandbox.MaxFileBytes>>20)) {
+		t.Errorf("a report a byte past the cap: unread %q; want it refused for its size", unread)
+	}
+}
+
+// sarifStream is a SARIF log of n failing results, made as it is read, so no
+// copy of it is held but what its reader holds.
+type sarifStream struct {
+	n, next int
+	buf     bytes.Buffer
+	done    bool
+	// produced counts the bytes handed out, and heap is the most heap in use
+	// sampled every sampleEvery of them.
+	produced, sampled int
+	heap              uint64
+}
+
+// sampleEvery is how often the stream samples the heap: 4 MiB, a dozen
+// samples of the case's log — each a stop of the world.
+const sampleEvery = 4 << 20
+
+func (s *sarifStream) Read(p []byte) (int, error) {
+	for s.buf.Len() < len(p) && !s.done {
+		if s.next == 0 {
+			s.buf.WriteString(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"lint"}},"results":[`)
+		}
+		if s.next == s.n {
+			s.buf.WriteString(`]}]}`)
+			s.done = true
+			continue
+		}
+		if s.next > 0 {
+			s.buf.WriteString(",")
+		}
+		fmt.Fprintf(&s.buf, `{"ruleId":"R%d","level":"error","message":{"text":"%s"},"locations":[`+
+			`{"physicalLocation":{"artifactLocation":{"uri":"web/pkg/f%d.go"},"region":{"startLine":%d}}}]}`,
+			s.next, strings.Repeat("m", 200), s.next, s.next+1)
+		s.next++
+	}
+	n, err := s.buf.Read(p)
+	s.produced += n
+	if s.produced-s.sampled >= sampleEvery {
+		s.sampled = s.produced
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		s.heap = max(s.heap, m.HeapAlloc)
+	}
+	if err == io.EOF && !s.done {
+		err = nil
+	}
+	return n, err
+}
+
+// A SARIF LOG IS READ A RESULT AT A TIME: a log of some 48 MiB, a hundred and
+// fifty thousand failing results, is read with the heap growing by a fraction
+// of it — the failures an ending keeps and the result in hand, never the log
+// or every result decoded — and its results all counted.
+//
+// Not parallel, so the heap it samples is its own.
+//
+// Mutation: decode the log whole — the heap grows past the log's size, red.
+func TestASARIFLogIsReadAResultAtATime(t *testing.T) {
+	const results = 150_000
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	log := &sarifStream{n: results}
+	got, err := checkrun.ReadSARIF(log, "web")
+	if err != nil {
+		t.Fatalf("ReadSARIF: %v", err)
+	}
+	if got.Results != results || len(got.Kept) == 0 || got.Kept[0].Path != "pkg/f0.go" {
+		t.Fatalf("the log read %d results, kept %d (first %+v); want all %d counted", got.Results,
+			len(got.Kept), got.Kept, results)
+	}
+	if log.produced < 40<<20 {
+		t.Fatalf("the log is %d bytes; the case is about one past 40 MiB", log.produced)
+	}
+	if grew := int64(log.heap) - int64(before.HeapAlloc); grew > 16<<20 {
+		t.Errorf("reading a %d MiB log grew the heap by %d MiB; want under 16 MiB", log.produced>>20, grew>>20)
 	}
 }
