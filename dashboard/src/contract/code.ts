@@ -335,3 +335,14 @@ interface CodeSearchNodeGap {
   why: string;
   repos: CodeSearchRepoSet;
 }
+
+/**
+ * How a code search reads its text (`codeindex.Modes`), in the engine's
+ * order: `literal`, the text as written (the default); `regex`, an RE2
+ * expression matched within a line; `word`, the text as a whole word. What
+ * Code › Search offers as its `mode=`. HELD BOTH WAYS, in order, by
+ * `internal/codeindex.TestTheDashboardOffersEveryModeOfASearch`: a mode the
+ * engine grew that this lacks is one nobody can choose, and one this keeps
+ * that the engine dropped is a search every press of it is refused.
+ */
+export const CODE_SEARCH_MODES = ["literal", "regex", "word"] as const;

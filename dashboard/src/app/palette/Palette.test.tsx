@@ -14,7 +14,8 @@ import { ToastProvider } from "@crewlethq/ui";
 import { CommandPalette } from "./Palette.tsx";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
-import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
+import { ANSWER_IDLE_MS, CODE_HITS, destinationHits } from "./hits.ts";
+import { QUIET_MS } from "~/lib/useQuiet.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
@@ -295,13 +296,14 @@ test.each([
 });
 
 describe("scopes and sigils", () => {
-  test("the six scopes are tabs, All first", () => {
+  test("the seven scopes are tabs, All first", () => {
     mount();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "All",
       "Tasks",
       "Pages",
       "Artifacts",
+      "Code",
       "Agents",
       "Actions",
     ]);
@@ -1492,6 +1494,82 @@ describe("a screen found by what it holds", () => {
     const p = mount();
     await p.type("principals");
     expect(screen.queryByRole("option", { name: /^Service accounts/ })).toBeNull();
+  });
+});
+
+// CODE IS ASKED IN ITS OWN SCOPE ONLY, once the term has rested: a code
+// search is a signed request to every git node holding a repository the
+// reader reads, so All's every pause sends none. A line opens its file AT THE
+// COMMIT ITS REPOSITORY WAS SEARCHED AT, with the line picked, as Code ›
+// Search's lines do. Mutations: ask in every scope, and All's pause sends a
+// search; open the branch rather than the searched commit, and the address
+// loses its ref.
+describe("code", () => {
+  const TIP = "c".repeat(40);
+  const none = { count: 0, names: [] };
+  function codeEngine(): URL[] {
+    const asked: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.href);
+        asked.push(url);
+        if (url.pathname !== "/query/code_search") return new Promise<Response>(() => {});
+        return Promise.resolve(
+          json({
+            hits: [
+              {
+                repo: "web",
+                path: "src/app.ts",
+                line: 7,
+                text: "const needle = 1;",
+                blob: "1".repeat(40),
+              },
+            ],
+            tips: { web: TIP },
+            coverage: {
+              searched: 1,
+              not_indexed: none,
+              building: none,
+              not_answering: null,
+              not_permitted: none,
+              grep_not_named: none,
+              stale: none,
+              no_ref: none,
+              skipped_files: 0,
+              truncated: false,
+            },
+          }),
+        );
+      }),
+    );
+    return asked;
+  }
+  const searched = (asked: URL[]) => asked.filter((u) => u.pathname === "/query/code_search");
+
+  test("Code asks the search once the term rests, and a line opens its file at the searched commit", async () => {
+    const asked = codeEngine();
+    const p = mount();
+    await p.type("needle");
+    // A PAUSE IN ALL ASKS NOTHING OF THE CODE HOST.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, QUIET_MS + 100));
+    });
+    expect(searched(asked)).toEqual([]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    });
+    expect(p.tab()).toBe("Code");
+    const line = await screen.findByText("web:src/app.ts:7");
+    const [search] = searched(asked);
+    expect(search?.searchParams.get("q")).toBe("needle");
+    expect(search?.searchParams.get("limit")).toBe(String(CODE_HITS));
+    await act(async () => {
+      fireEvent.click(line.closest('[role="option"]')!);
+    });
+    expect(location.hash).toBe(
+      href(["code", "repos", "web"], { tab: "files", ref: TIP, path: "src/app.ts", lines: "7" }),
+    );
   });
 });
 

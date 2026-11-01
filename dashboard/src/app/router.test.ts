@@ -394,6 +394,7 @@ describe("the navigation grammar", () => {
       // and the engine holds each answer to the reader's own grant.
       ["code"],
       ["code", "repos"],
+      ["code", "search"],
       ["code", "pushes"],
       ["code", "queue"],
       ["code", "checks"],
@@ -643,9 +644,10 @@ describe("the resolver", () => {
   // bare `#/code` is the row's landing, its changes — as `#/work` is Work's
   // projects. (A repository's own page is under Repositories: below.)
   // Mutation: send the bare head to Not Found again and the row lands nowhere.
-  test("Code's sections are its five lists, and no word under them is a page", () => {
+  test("Code's sections are its six lists, and no word under them is a page", () => {
     expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
     expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
+    expect(resolve(["code", "search"])).toMatchObject({ screen: "code-search", workspace: "code" });
     expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
     expect(resolve(["code", "queue"])).toMatchObject({ screen: "code-queue", workspace: "code" });
     expect(resolve(["code", "checks"])).toMatchObject({ screen: "code-checks", workspace: "code" });
@@ -653,6 +655,7 @@ describe("the resolver", () => {
       ["code", "pushes", "web"],
       ["code", "queue", "web"],
       ["code", "checks", "unit"],
+      ["code", "search", "web"],
       ["code", "changes"],
       ["code", "web"],
     ]) {

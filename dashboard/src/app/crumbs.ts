@@ -274,6 +274,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return [root(row, true), { label: `${where.repo}!${where.number}`, mono: true }];
     case "code-repos":
       return sectionPage("repos");
+    case "code-search":
+      return sectionPage("search");
     case "code-repo":
       // A REPOSITORY IS ONE OF CODE'S REPOSITORIES: the trail leads back to
       // the listing, and names the repository as git does, in the code face.

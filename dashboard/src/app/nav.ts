@@ -768,6 +768,14 @@ export const WORKSPACES: WorkspaceRow[] = [
         keywords: ["repository", "repos", "default branch"],
       },
       {
+        key: "search",
+        label: "Search",
+        icon: "search",
+        path: ["code", "search"],
+        hint: "The lines of every repository you read that match, by repository and file",
+        keywords: ["code search", "grep", "find in code", "regex", "symbol"],
+      },
+      {
         key: "pushes",
         label: "Pushes",
         icon: "upload",

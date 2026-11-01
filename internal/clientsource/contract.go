@@ -272,6 +272,7 @@ var contract = []Entry{
 	{"CodeSearchCoverage", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CODE_SEARCH_MODES", ReadLiteral, "internal/codeindex.TestTheDashboardOffersEveryModeOfASearch"},
 
 	// merge.ts
 	{"MERGE_METHODS", ReadLiteral, "internal/code.TestTheDashboardOffersEveryMergeMethod"},

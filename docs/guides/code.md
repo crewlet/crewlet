@@ -934,6 +934,13 @@ or ask after the node named. At most 500 lines come back, in the order of
 repository, path and line, and `truncated` says more matched. See
 [Code search](../concepts/code-host.md#code-search).
 
+**Searching from the dashboard.** **Code › Search** (`#/code/search`) takes
+the search as written above, with its mode, a repository, a path and a ref
+as controls beside it, and draws the lines by repository and file, each line
+opening its file at the commit it was searched at; what was not searched is
+said above them on every answer. In ⌘K, the **Code** tab searches the same
+way and lists the first eight lines.
+
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /code/search`](../reference/api-endpoints.md#get-codesearch):
 `?q=` is the search as written above, with `mode`, `ignore_case` and one
