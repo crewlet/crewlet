@@ -23,9 +23,10 @@ type When string
 
 const (
 	// Always: this skip is expected on EVERY run, and an entry that does not
-	// fire where the run judges its test is reported as stale: its test ran
-	// and did not skip, or, on a passing run of every test of its package,
-	// never ran at all (the package doc's "Stale means its test ran").
+	// fire where the run judges its test is reported as stale: its test
+	// reported a result that was not a skip, or, on a passing run of every
+	// test of its package, never ran at all (the package doc's "Stale means
+	// its test reported").
 	Always When = "always"
 
 	// Environment: this skip fires only where the machine lacks something,
@@ -346,12 +347,13 @@ type Measurement struct {
 //
 // TWO-SIDED, exactly like the Always half of [allowed]: an entry whose test
 // the run judges ([coverage]) and that never reported is STALE and fails the
-// build — one that started and said nothing, or one a passing unnarrowed run
-// of its package never started. A renamed or deleted measurement would
-// otherwise stop reaching the log silently, which is the failure this table
-// was added to fix — so the table cannot be allowed to rot into describing a
-// test that no longer exists. A run narrowed with -run that leaves it out, or
-// a package that failed before reaching it, says nothing about it.
+// build — one a passing unnarrowed run of its package never ran to a result,
+// since a test that reports a result is a measurement seen. A renamed or
+// deleted measurement would otherwise stop reaching the log silently, which is
+// the failure this table was added to fix — so the table cannot be allowed to
+// rot into describing a test that no longer exists. A run narrowed with -run
+// that leaves it out, or a package that failed before reaching it or died
+// under it (the -timeout panic inside it), says nothing about it.
 var measured = []Measurement{
 	{
 		Package: "internal/store",

@@ -342,11 +342,13 @@ thing, a driver capability that has not landed — which is ALSO reported when i
 stops firing, because a structural skip that stopped means the world changed;
 `Environment` for one that depends on what the machine has, which is only
 checked in the undeclared direction. Stopping is judged by the test, never by
-its package: an `Always` entry is stale when its test ran and did not skip,
-or when a passing run of every test of its package never ran it (it was
-renamed or deleted). A run narrowed with `-run` or `-skip`, and a package that
-failed, are judged only by the tests they started, so `go test -run X` on a
-package that declares entries passes when everything it ran passed.
+its package: an `Always` entry is stale when its test reported a result that
+was not a skip, or when a passing run of every test of its package never ran
+it (it was renamed or deleted). A run narrowed with `-run` or `-skip`, and a
+package that failed, are judged only by the tests that reported a result —
+not by a test that started and never finished because its binary died under
+it — so `go test -run X` on a package that declares entries passes when
+everything it ran passed.
 
 Adding an entry is the decision, so it lands in a diff somebody reviews. Before
 you add one, check the case is covered somewhere: the two defects this gate was

@@ -94,10 +94,10 @@ func TestAnAlwaysEntryIsStaleOnlyWhenItsPackageRan(t *testing.T) {
 }
 
 // wholeRun is the coverage of a passing run of every test in pkgs that
-// started none of them: what a run covering those packages says when the
+// reported none of them: what a run covering those packages says when the
 // declared tests are not there.
 func wholeRun(pkgs ...string) coverage {
-	return coverage{passed: ran(pkgs...), started: map[string]bool{}}
+	return coverage{passed: ran(pkgs...), reported: map[string]bool{}}
 }
 
 // stream renders test2json records, each {Action, Package, Test} with the
@@ -121,7 +121,7 @@ func stream(t *testing.T, records ...[3]string) report {
 
 // coverageOf is what main judges a read stream by.
 func coverageOf(r report, narrowed bool) coverage {
-	return coverage{passed: r.passed(), started: r.started, narrowed: narrowed}
+	return coverage{passed: r.passed(), reported: r.reported, narrowed: narrowed}
 }
 
 // firstAlways is an Always entry to exercise, and the case fails rather than
@@ -168,7 +168,8 @@ func TestAnAlwaysSkipItsRunFilteredOutIsNotStale(t *testing.T) {
 }
 
 // A STRUCTURAL SKIP THAT STOPPED SKIPPING IS STALE, filtered run or not: the
-// test started, so the run judged it, and it passed instead of skipping.
+// test reported a result, so the run judged it, and it passed instead of
+// skipping.
 func TestAnAlwaysSkipThatRanAndPassedIsStale(t *testing.T) {
 	t.Parallel()
 	probe := firstAlways(t)
@@ -205,23 +206,38 @@ func TestAMeasurementItsRunFilteredOutIsNotStale(t *testing.T) {
 	}
 }
 
-// A MEASUREMENT THAT STARTED AND NEVER REPORTED IS STALE, filtered run or
-// not: the run judged it, and no number reached the log.
-func TestAMeasurementThatRanAndSaidNothingIsStale(t *testing.T) {
+// A DECLARED TEST ITS BINARY DIED UNDER IS NOT STALE, filtered run or not.
+//
+// It started and never reported: the -timeout panic inside it, a sibling's
+// panic, or the race detector's abort while it sat paused under t.Parallel.
+// The stream has its `run` record, no result for it, and then the package's
+// `fail`. That says nothing about whether it would have skipped or measured,
+// and judging it by the `run` told the reader of a measurement that hit the
+// timeout to rename or drop its entry — the wrong defect, on a run that is red
+// already.
+func TestADeclaredTestItsBinaryDiedUnderIsNotStale(t *testing.T) {
 	t.Parallel()
-	m := firstMeasured(t)
+	probe, m := firstAlways(t), firstMeasured(t)
 
 	r := stream(t,
+		[3]string{"run", probe.Package, probe.Test},
+		[3]string{"output", probe.Package, probe.Test},
+		[3]string{"fail", probe.Package, ""},
 		[3]string{"run", m.Package, m.Test},
-		[3]string{"pass", m.Package, "TestSomethingElseEntirely"},
+		[3]string{"output", m.Package, m.Test},
+		[3]string{"fail", m.Package, ""},
 	)
 	for _, narrowed := range []bool{true, false} {
-		stale := JudgeMeasured(r.measuredSeen, coverageOf(r, narrowed))
-		if !slices.ContainsFunc(stale, func(s Skip) bool {
-			return s.Package == m.Package && s.Test == m.Test
+		cov := coverageOf(r, narrowed)
+		if _, stale := Judge(r.skipped, cov); slices.ContainsFunc(stale, func(s Skip) bool {
+			return s.Package == probe.Package && s.Test == probe.Test
 		}) {
-			t.Errorf("narrowed=%v: stale = %v, want %s %s — it started and never "+
-				"reported", narrowed, stale, m.Package, m.Test)
+			t.Errorf("narrowed=%v: stale = %v: %s %s was judged although its binary "+
+				"died under it", narrowed, stale, probe.Package, probe.Test)
+		}
+		if stale := JudgeMeasured(r.measuredSeen, cov); len(stale) != 0 {
+			t.Errorf("narrowed=%v: stale = %v: a measurement was judged although its "+
+				"binary died under it", narrowed, stale)
 		}
 	}
 }
@@ -682,6 +698,38 @@ func TestTheGateNamesNoMissingTestInAPackageThatDied(t *testing.T) {
 	if strings.Contains(out, probe.Test+" is allowed as When: Always") {
 		t.Errorf("a declared test of a package that died before reaching it was "+
 			"judged stale:\n%s", out)
+	}
+}
+
+// THE PROGRAM CALLS NO TEST ITS BINARY DIED UNDER STALE, end to end: the
+// measurement hit the -timeout, so the stream has its `run`, its output and
+// then the package's `fail`. The run fails on that, and the gate tells nobody
+// to rename or drop the entry, nor that a structural skip stopped firing.
+func TestTheGateCallsNoTestItsBinaryDiedUnderStale(t *testing.T) {
+	t.Parallel()
+	probe, m := firstAlways(t), firstMeasured(t)
+
+	var lines []string
+	for _, d := range [][2]string{{probe.Package, probe.Test}, {m.Package, m.Test}} {
+		pkg := "github.com/crewlet/crewlet/" + d[0]
+		lines = append(lines,
+			`{"Action":"run","Package":"`+pkg+`","Test":"`+d[1]+`"}`,
+			`{"Action":"output","Package":"`+pkg+`","Test":"`+d[1]+`","Output":"panic: test timed out\n"}`,
+			`{"Action":"fail","Package":"`+pkg+`"}`,
+		)
+	}
+	out, err := gateOver(t, lines...)()
+	if err == nil {
+		t.Fatalf("a run whose packages failed passed:\n%s", out)
+	}
+	for _, wrong := range []string{
+		probe.Test + " is allowed as When: Always",
+		m.Test + " is declared in the measured table",
+	} {
+		if strings.Contains(out, wrong) {
+			t.Errorf("a declared test its binary died under was judged stale (%q):\n%s",
+				wrong, out)
+		}
 	}
 }
 
