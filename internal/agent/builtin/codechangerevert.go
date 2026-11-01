@@ -95,7 +95,7 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE BRANCH IT CREATES IS HELD before the write is sent, with no read
 	// ([CodeDeps.branch]): a seat's revert branch is its own namespace's.
-	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, w.Ref, false); refusal != nil {
+	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, false, w.Ref); refusal != nil {
 		return *refusal, nil
 	}
 	res, err := t.deps.Writer.GitWrite(ctx, w)
