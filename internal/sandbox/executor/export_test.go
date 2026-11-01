@@ -2,6 +2,7 @@ package executor
 
 import (
 	"cmp"
+	"io"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -88,3 +89,12 @@ func JSONStringify(s string) string { return jsonStringify(s) }
 const ClaudeHookContext = claudeHookContext
 
 var ClaudeNoteEvents = []string{claudeEventToolBatch, claudeEventFinish}
+
+// ReadTranscriptWithin is [ReadTranscript] held to bounds: the cases about a
+// bound run at one they can fill — a page of three entries, a read budget of a
+// few kibibytes — and leave the engine's own to
+// [TestTheTranscriptBoundsAreTheEnginesOwn].
+func ReadTranscriptWithin(harness string, format int, archive io.Reader, from int,
+	bounds TranscriptBounds) (Transcript, error) {
+	return readTranscript(harness, format, archive, from, bounds)
+}
