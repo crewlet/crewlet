@@ -28,12 +28,12 @@ func anApply() code.EngineWrite {
 // the one rule every party holds a write to takes its fields and no other —
 // the head it lands on, a message and 1 to code.MaxSuggestionOps suggestions,
 // each a finding's id once, a path one write may name, a whole blob id, lines
-// from 1 and a text within its bound, the payload within one write's — and
-// refuses suggestions on every other kind.
+// from 1 to code.MaxAnchorLine and a text within its bound, the payload
+// within one write's — and refuses suggestions on every other kind.
 //
 // Mutations: Commits leaving apply_suggestions out → no signature, red; a
 // kind that takes suggestions beside files → red; a finding named twice
-// admitted → red.
+// admitted → red; a line past code.MaxAnchorLine admitted → red.
 func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 	t.Parallel()
 	if !slices.Contains(code.EngineWriteKinds(), code.WriteApplySuggestions) || !code.WriteApplySuggestions.Valid() ||
@@ -77,9 +77,12 @@ func TestApplySuggestionsExtendsEveryEngineWriteTable(t *testing.T) {
 			again.LineStart, again.LineEnd = 7, 7
 			w.Suggestions = append(w.Suggestions, again)
 		}), "finding_id"},
-		"no finding's id":  {edit(func(w *code.EngineWrite) { w.Suggestions[0].FindingID = "f-1" }), "finding_id"},
-		"a short blob":     {edit(func(w *code.EngineWrite) { w.Suggestions[0].BlobOID = "abc1234" }), "blob_oid"},
-		"lines backwards":  {edit(func(w *code.EngineWrite) { w.Suggestions[0].LineEnd = 2 }), "suggestions[0]"},
+		"no finding's id": {edit(func(w *code.EngineWrite) { w.Suggestions[0].FindingID = "f-1" }), "finding_id"},
+		"a short blob":    {edit(func(w *code.EngineWrite) { w.Suggestions[0].BlobOID = "abc1234" }), "blob_oid"},
+		"lines backwards": {edit(func(w *code.EngineWrite) { w.Suggestions[0].LineEnd = 2 }), "suggestions[0]"},
+		"a line past any file's": {edit(func(w *code.EngineWrite) {
+			w.Suggestions[0].LineEnd = code.MaxAnchorLine + 1
+		}), "suggestions[0]"},
 		"a path git keeps": {edit(func(w *code.EngineWrite) { w.Suggestions[0].Path = ".git/config" }), "path"},
 		"a text past its bound": {edit(func(w *code.EngineWrite) { w.Suggestions[0].Text = wide + "x" }),
 			"text"},

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -2686,6 +2687,15 @@ const MaxTouchedBytes = 48 << 10
 // at most, placed by one read.
 const MaxReanchors = 64
 
+// MaxAnchorLine is the last line an anchor's range may name: the most lines a
+// blob holds — a line a byte — at the largest blob code.limits.max_blob_bytes
+// lets any push carry, its ceiling (config.CodeMaxPushBytesCeiling, 1 GiB).
+// A range past it is no file's lines, and a placing moves a range by at most
+// the lines its new file holds, so a range within it is moved within what an
+// int holds rather than wrapped into a line no file has and reported where it
+// was.
+const MaxAnchorLine = int(config.CodeMaxPushBytesCeiling)
+
 // maxAnchorIDBytes bounds an anchor's id: an opaque name the caller gives
 // each anchor and reads its answer back by — a finding's, a UUID's 36
 // characters. 64 bytes leave room for another naming and keep a
@@ -3121,7 +3131,7 @@ type LineAnchor struct {
 	PathB64 string `json:"path_b64,omitempty"`
 	Side    Side   `json:"side"`
 	// BlobOID is the blob the lines were read in, whole, and Start and End
-	// the range, 1-based and inclusive.
+	// the range, 1-based and inclusive, ending at MaxAnchorLine at most.
 	BlobOID string `json:"blob_oid"`
 	Start   int    `json:"start"`
 	End     int    `json:"end"`
@@ -3605,9 +3615,9 @@ func (q ReanchorQuery) validate() error {
 		case a.Side == SideOld && q.Base == "":
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)
-		case a.Start < 1 || a.End < a.Start:
-			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, and end is at or after "+
-				"start", ErrInvalid, field, a.Start, a.End)
+		case a.Start < 1 || a.End < a.Start || a.End > MaxAnchorLine:
+			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
+				"start, and no file holds a line past %d", ErrInvalid, field, a.Start, a.End, MaxAnchorLine)
 		}
 		ids[a.ID] = true
 		if _, err := GitPath(field+".path", a.Path, a.PathB64, false); err != nil {

@@ -5888,7 +5888,9 @@ the one unit each of its merges would have held alone, and is logged
 
 ### Where lines are in another revision
 
-A finding or a comment is written against lines of one blob. Placed in
+A finding or a comment is written against lines of one blob — lines 1 to at
+most 1 073 741 824, the most a file under `max_blob_bytes`' ceiling holds, a
+range past it refused as no file's lines. Placed in
 another revision, up to 64 such ranges at a time, each is found by the diff
 between the blob it was read in and the file at its path now — on the new
 side of the change's diff, the revision's head; on the old side, its base —
@@ -5906,7 +5908,9 @@ which repeats in any file of size:
 
 One `git diff-pairs` diffs every distinct pair of blobs the read names, each
 handed as a numbered pair rather than by its path, so no path reaches git and
-every hunk names the pair it is of.
+every hunk names the pair it is of. Each hunk is placed as git writes it and
+kept nowhere, and a pair whose ranges are all placed is read no further, so
+what the engine holds is the ranges, however many hunks the diff has.
 
 ### What changed between two revisions
 

@@ -43,6 +43,8 @@ func TestReanchorFollowsHunks(t *testing.T) {
 		{"above and below", []code.Hunk{hunk(1, 1, 1, 3), hunk(9, 2, 11, 0)}, 3, 5, 5, 7, true},
 		{"above, then over it", []code.Hunk{hunk(0, 0, 1, 1), hunk(4, 1, 5, 2)}, 3, 5, 4, 6, false},
 		{"one line, moved", []code.Hunk{hunk(1, 0, 2, 1)}, 7, 7, 8, 8, true},
+		{"the last line a file holds, moved", []code.Hunk{hunk(0, 0, 1, 2)}, code.MaxAnchorLine, code.MaxAnchorLine,
+			code.MaxAnchorLine + 2, code.MaxAnchorLine + 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

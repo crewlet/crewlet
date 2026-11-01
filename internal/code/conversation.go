@@ -641,9 +641,9 @@ func findingProblem(f Finding) string {
 		return "path: " + validGitPath(f.Path, false)
 	case !f.Side.Valid():
 		return fmt.Sprintf("side: %q is not one of %v", f.Side, Sides())
-	case f.LineStart < 1 || f.LineEnd < f.LineStart:
-		return fmt.Sprintf("lines %d to %d: a finding's lines count from 1, the last at or past the first",
-			f.LineStart, f.LineEnd)
+	case f.LineStart < 1 || f.LineEnd < f.LineStart || f.LineEnd > MaxAnchorLine:
+		return fmt.Sprintf("lines %d to %d: a finding's lines count from 1, the last at or past the first "+
+			"and at most %d, the most lines a file holds", f.LineStart, f.LineEnd, MaxAnchorLine)
 	case !gitref.ValidOID(f.CommitOID):
 		return fmt.Sprintf("commit_oid: %q is not a whole object id", f.CommitOID)
 	case !gitref.ValidOID(f.BlobOID):
