@@ -69,6 +69,11 @@ func (rl *Relay) Forward(ctx context.Context, w http.ResponseWriter, req *Reques
 	case Refuse:
 		return Refused, why
 	case "":
+		// CLOSED ALL THE SAME: an OPEN that went unanswered may still have
+		// started the exchange, its reply lost or the client gone before it
+		// arrived, and nobody else will tell the holder that nothing reads
+		// the response. Unsent, the request would run on until [Idle].
+		rl.sendClose(context.WithoutCancel(ctx), node, owner, id)
 		return Unanswered, why
 	}
 	closeIt := func() { rl.sendClose(context.WithoutCancel(ctx), node, owner, id) }
@@ -107,8 +112,9 @@ func (rl *Relay) open(ctx context.Context, node, owner, id string, req *Request,
 	return "", why
 }
 
-// sendClose tells the holder its exchange's client has gone. Best effort: an
-// entry that cannot say so leaves the holder to find out at [Idle].
+// sendClose tells the holder its exchange's client has gone, whether or not
+// the holder has started it ([Relay.cancel]). Best effort: an entry that
+// cannot say so leaves the holder to find out at [Idle].
 func (rl *Relay) sendClose(ctx context.Context, node, owner, id string) {
 	rl.ask(ctx, node, openRequest{Kind: kindClose, Owner: owner, Exchange: id})
 }
