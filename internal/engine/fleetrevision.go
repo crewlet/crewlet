@@ -94,19 +94,28 @@ type errBehindFleet struct {
 	// node with no reconciler yet reads as one whose reconciler has not
 	// ticked, which is what it is.
 	confirmed bool
+	// served is what this node's company was applied from against the
+	// pointer, by INSTANT ([servedAgainst]), which the epochs above cannot
+	// say: an epoch is the reconciler's count, and a node with no reconciler
+	// or one that has not read the pointer has none to give, while the
+	// instant is on the company itself. A decline that a person reads
+	// ([chatPrune.tick] logs it every tick it lasts) has to name which
+	// activation this node serves and which one the fleet is on, or the
+	// one it is waiting for cannot be told from the one it failed.
+	served string
 }
 
 func (err *errBehindFleet) Error() string {
 	switch {
 	case !err.reconciler:
 		return fmt.Sprintf("engine: this node runs no reconciler, so it cannot tell whether it "+
-			"serves activation epoch %d", err.target)
+			"serves activation epoch %d: %s", err.target, err.served)
 	case !err.read:
 		return fmt.Sprintf("engine: this node's reconciler has not read the activation pointer yet, "+
-			"so it cannot tell whether it serves activation epoch %d", err.target)
+			"so it cannot tell whether it serves activation epoch %d: %s", err.target, err.served)
 	}
-	return fmt.Sprintf("engine: this node serves activation epoch %d and the fleet is on %d",
-		err.applied, err.target)
+	return fmt.Sprintf("engine: this node serves activation epoch %d and the fleet is on %d: %s",
+		err.applied, err.target, err.served)
 }
 
 // reconciled is whether this node's reconciler has read the activation
@@ -161,12 +170,14 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	if !found {
 		return nil, maintenance.ErrNoActiveRevision
 	}
-	if company, err := fleetCompanyAt(target, e.Company()); err == nil {
+	company := e.Company()
+	if company, err := fleetCompanyAt(target, company); err == nil {
 		return company, nil
 	}
+	served := servedAgainst(target, company)
 	r := e.reconciler.Load()
 	if r == nil {
-		return nil, &errBehindFleet{target: target.Epoch}
+		return nil, &errBehindFleet{target: target.Epoch, served: served}
 	}
 	// ONE SNAPSHOT for the applied epoch and the lag, so the lag judged is
 	// the lag of the epoch read.
@@ -174,7 +185,8 @@ func (e *Engine) servedFleetRevision(ctx context.Context) (*Company, error) {
 	self := progress.selfView(target.Epoch, r.now())
 	if self.AppliedEpoch < target.Epoch {
 		return nil, &errBehindFleet{applied: self.AppliedEpoch, target: target.Epoch,
-			reconciler: true, read: progress.target != 0, confirmed: self.LagConfirmed()}
+			reconciler: true, read: progress.target != 0, confirmed: self.LagConfirmed(),
+			served: served}
 	}
 	return fleetCompanyAt(target, e.Company())
 }
@@ -204,20 +216,31 @@ func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error)
 // one — COMPARED ON THE ACTIVATION'S INSTANT, in the precision the store keeps
 // it in, for the reason this file gives — or an error saying it is not.
 func fleetCompanyAt(target coord.Activation, c *Company) (*Company, error) {
+	if c != nil && !c.ActivatedAt.IsZero() &&
+		store.EncodeTime(c.ActivatedAt) >= store.EncodeTime(target.At) {
+		return c, nil
+	}
+	return nil, errors.New("engine: " + servedAgainst(target, c))
+}
+
+// servedAgainst says which activation c was applied from and which one the
+// fleet's pointer names, each by its instant — the words every answer that
+// this node does not serve the fleet's revision carries, from
+// [fleetCompanyAt] and [errBehindFleet] alike, so a reader is told the same
+// thing whichever of the two noticed.
+func servedAgainst(target coord.Activation, c *Company) string {
+	fleet := fmt.Sprintf("the fleet is on activation epoch %d of %s",
+		target.Epoch, target.At.Format(time.RFC3339Nano))
 	switch {
 	case c == nil:
-		return nil, errors.New("engine: this node publishes no company yet")
+		return "this node publishes no company yet and " + fleet
 	case c.ActivatedAt.IsZero():
 		// AN OFFER, most likely: what this node runs no activation has
 		// named, so there is no instant of its own to report.
-		return nil, fmt.Errorf("engine: this node serves a company no activation has "+
-			"named (an offline command's choice the fleet has not taken, or one "+
-			"handed to the engine in code) and the fleet is on activation epoch %d of %s",
-			target.Epoch, target.At.Format(time.RFC3339Nano))
-	case store.EncodeTime(c.ActivatedAt) < store.EncodeTime(target.At):
-		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
-			"fleet is on activation epoch %d of %s", c.ActivatedAt.Format(time.RFC3339Nano),
-			target.Epoch, target.At.Format(time.RFC3339Nano))
+		return "this node serves a company no activation has named (an offline " +
+			"command's choice the fleet has not taken, or one handed to the engine " +
+			"in code) and " + fleet
 	}
-	return c, nil
+	return fmt.Sprintf("this node serves the activation of %s and %s",
+		c.ActivatedAt.Format(time.RFC3339Nano), fleet)
 }
