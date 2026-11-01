@@ -783,8 +783,9 @@ func registeredStatements() map[string]statement {
 		// by its key; the live entries of a list of changes, driven from the
 		// list, one seek of code_queue_change_idx a change, and which of a
 		// list are queued, the push apply's; a target's waiting entries and
-		// the live ones before an entry, counted over code_queue_live_idx; an
-		// entry ended by its key, a change's live one by
+		// the live ones before an entry, counted over code_queue_live_idx, and
+		// its live entries up to a seq, read there in its order — a page's
+		// places, a walk a target; an entry ended by its key, a change's live one by
 		// code_queue_change_idx, and a list's, driven from the list; a
 		// target's live entries after a seq, a repository's from the top and
 		// after a place, and every repository's the same way, each in its
@@ -808,6 +809,8 @@ func registeredStatements() map[string]statement {
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
 		"an entry's place": {placeSQL, []any{"repo-1", "refs/heads/main", 1000},
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq<?)"}},
+		"a target's live entries up to a seq": {liveSeqsSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq<=?)"}},
 		"end an entry": {endEntrySQL, []any{"dequeued", 1, 1000, "asked", "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"end a change's entry": {endChangeEntrySQL, []any{"dequeued", 1, 1000, "closed", "repo-1-change-000001"},

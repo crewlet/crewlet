@@ -438,8 +438,11 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		return nil, err
 	}
 	// EACH CHANGE'S LIVE QUEUE ENTRY, of every change at once, and the place
-	// of each a queue holds — one count of its target's entries before it,
-	// for the few changes of a page a queue holds.
+	// of each a queue holds — ONE WALK A (REPOSITORY, TARGET) the page's
+	// entries are queued on ([placesIn]), never a count a change: a page of
+	// MaxChangesPerPage changes queued on one busy target counted each one's
+	// place over the target's live entries before it, MaxChangesPerPage
+	// statements and as many walks of up to MaxQueueEntries.
 	ids := make([]string, len(subjects))
 	for i, s := range subjects {
 		ids[i] = s.row.id
@@ -448,16 +451,23 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	if err != nil {
 		return nil, err
 	}
+	entries := make([]queueEntry, 0, len(live))
+	for _, s := range subjects {
+		if e, queued := live[s.row.id]; queued {
+			entries = append(entries, e)
+		}
+	}
+	places, err := placesIn(ctx, tx, entries)
+	if err != nil {
+		return nil, err
+	}
 	for i, s := range subjects {
 		e, queued := live[s.row.id]
 		if !queued {
 			continue
 		}
-		place, err := placeIn(ctx, tx, e)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Queue = &QueuedFacts{EntryID: e.EntryID, TargetRef: e.TargetRef, State: e.State, Place: place}
+		out[i].Queue = &QueuedFacts{EntryID: e.EntryID, TargetRef: e.TargetRef, State: e.State,
+			Place: places[e.EntryID]}
 	}
 	return out, nil
 }
