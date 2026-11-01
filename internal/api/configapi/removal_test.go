@@ -326,8 +326,12 @@ func TestARemovalIsAWriteLikeAnyOther(t *testing.T) {
 	body := `{"repoint": [{"at": {"seat": "qa", "job": "review"}, "to": null},
 		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`
 
-	if code, got := removeModel(t, s, "nope", "", "", nil); code != http.StatusNotFound {
-		t.Errorf("an absent entry = %d %v, want 404", code, got)
+	// SAID AS NOTHING TO REMOVE: the entity routes' 404 tells a PUT to send
+	// If-None-Match: * to add what it named, which no removal wants.
+	if code, got := removeModel(t, s, "nope", "", "", nil); code != http.StatusNotFound ||
+		!strings.Contains(got["hint"].(string), "nothing to remove") ||
+		strings.Contains(got["hint"].(string), "If-None-Match") {
+		t.Errorf("an absent entry = %d %v, want 404 saying there is nothing to remove", code, got)
 	}
 	if code, got := removeModel(t, s, "codex-review", "", body,
 		map[string]string{"If-Match": `"llm-providers-0000"`}); code != http.StatusPreconditionFailed {

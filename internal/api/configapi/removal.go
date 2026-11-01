@@ -533,7 +533,10 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 	}
 	current, held := entityKinds[e.kind].find(company.Redact(), e.id)
 	if !held {
-		s.refuseEntity(w, r, e.kind, e.id, &EntityError{Err: ErrNoSuchEntity})
+		// NOTHING TO REMOVE, said as that: the entity routes' 404 tells a
+		// PUT how to add what it named, which a removal never wants.
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+			map[string]string{"hint": NotFound(e.kind, e.id) + ", so there is nothing to remove"})
 		return true, nil
 	}
 	// THE PRECONDITION IS THE ENTRY'S, as an edit's is: what its GET served.
