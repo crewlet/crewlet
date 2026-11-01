@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/inbox"
@@ -880,7 +881,11 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 }
 
 // taskKeyPattern is what a task's description is scanned for.
-var taskKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var taskKeyPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)
+})
 
 // taskKeysIn is every distinct key a body names, IN DOCUMENT ORDER.
 //
@@ -893,7 +898,7 @@ var taskKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9]{1,9}-[0-9]+`)
 // ONE SCANNER for the applier's rows and the write path's warning, because
 // two would let a body be warned about at one count and capped at another.
 func taskKeysIn(body string) []string {
-	found := taskKeyPattern.FindAllString(body, -1)
+	found := taskKeyPattern().FindAllString(body, -1)
 	seen := make(map[string]bool, len(found))
 	keys := make([]string, 0, len(found))
 	for _, key := range found {

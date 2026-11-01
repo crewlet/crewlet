@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -1088,13 +1089,17 @@ const NodeIDEnvVar = "CREWLET_NODE_ID"
 
 // nodeIDPattern is what a node id may look like. It ends up in log fields
 // and in broker consumer names, so it is restricted to what both accept.
-var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var nodeIDPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+})
 
 // ValidNodeID reports whether id is one a node could run under — the rule
 // [Node.ID] is resolved against, for a caller naming some OTHER node, such as
 // the operator gesture that evicts one.
 func ValidNodeID(id string) bool {
-	return nodeIDPattern.MatchString(id) && reservedNodeID(id) == ""
+	return nodeIDPattern().MatchString(id) && reservedNodeID(id) == ""
 }
 
 // reservedNodeID is why id, which has a node id's shape, names something
@@ -1206,7 +1211,7 @@ func (n *Node) validate(path Path) error {
 				"effectively no limit", n.MaxConcurrent)
 	}
 
-	if n.ID != "" && !envref.Has(n.ID) && !nodeIDPattern.MatchString(n.ID) {
+	if n.ID != "" && !envref.Has(n.ID) && !nodeIDPattern().MatchString(n.ID) {
 		// A reference is checked after resolution, in ResolveNodeID — the
 		// YAML load path substitutes before this runs, so this branch only
 		// catches a config built in code.
@@ -1330,7 +1335,7 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 	if value == "" {
 		return DefaultNodeID, nil
 	}
-	if !nodeIDPattern.MatchString(value) {
+	if !nodeIDPattern().MatchString(value) {
 		return "", fault(field("node.id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars)", value)

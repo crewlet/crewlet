@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
@@ -243,7 +244,7 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 // the one difference the reader cannot see.
 func (p *RolePlacement) validate(path Path) error {
 	var probs problems
-	if p.Node != "" && !nodeIDPattern.MatchString(p.Node) {
+	if p.Node != "" && !nodeIDPattern().MatchString(p.Node) {
 		hint := ""
 		if envref.Has(p.Node) {
 			// Tier B resolves a ${VAR} only where a provider or transport
@@ -999,7 +1000,7 @@ func (Unit) identityIsDocumentWide() {}
 // rules (its name, its schedules) are the org model's, like a seat's.
 func (u *Unit) validate(path Path) error {
 	var p problems
-	if id := strings.TrimSpace(u.ID); id != "" && !entityID.MatchString(id) {
+	if id := strings.TrimSpace(u.ID); id != "" && !entityID().MatchString(id) {
 		p.add(at(path, "id"), ErrShape,
 			"%q is not a unit id: lowercase letters, digits, `-` and `_`, "+
 				"starting with a letter, up to 64 characters. It is chosen once "+
@@ -1013,7 +1014,7 @@ func (u *Unit) validate(path Path) error {
 	// would also make the published schema, which carries this same pattern
 	// and cannot trim anything, stricter than the engine. That is the one
 	// direction the schema must never take.
-	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+	if u.Channel != "" && !unitChannel().MatchString(u.Channel) {
 		p.add(at(path, "channel"), ErrShape,
 			"%q isn't a channel name. Use lowercase letters, digits, `-` and "+
 				"`_`, starting with a letter or a digit, up to 64 characters, "+
@@ -1039,7 +1040,11 @@ func (u *Unit) validate(path Path) error {
 // ONE pattern for both, because they are the same kind of thing and a second
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
-var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var entityID = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+})
 
 // unitChannel is what a unit's channel may look like.
 //
@@ -1079,7 +1084,11 @@ var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 // already has. Folding the two into one pattern would either refuse that
 // company's real channel or let an id start with a digit, and the second is
 // a key [MintUnitID] would then have to stop prefixing.
-var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var unitChannel = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+})
 
 // MintUnitID is the id a unit gets when its document declares none: its name,
 // reduced to the key grammar [entityID] accepts.

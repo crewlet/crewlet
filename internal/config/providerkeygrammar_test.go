@@ -51,7 +51,7 @@ func TestAProviderKeyInsideItsGrammarIsAccepted(t *testing.T) {
 		"default", "gpt-5", "claude_opus", "sonnet.4", "0", "4o-mini",
 		strings.Repeat("a", 63),
 	} {
-		if !ProviderKeyPattern.MatchString(key) {
+		if !ProviderKeyPattern().MatchString(key) {
 			t.Errorf("ProviderKeyPattern refuses %q", key)
 		}
 		mustCompany(t, providerKeysDoc(key))

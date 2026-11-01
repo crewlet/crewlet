@@ -42,6 +42,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -100,7 +101,11 @@ const (
 // from a button. Lower case with digits, `_` and `-` is what every one of
 // those spells the same way, and 32 keeps it an identifier rather than a
 // sentence somebody would paraphrase.
-var optionIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var optionIDPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+})
 
 // Decision is the structure an ask carries when it needs somebody to choose.
 type Decision struct {
@@ -310,7 +315,7 @@ func (d Decision) ValidateAt(prefix string) error {
 	for i, option := range d.Options {
 		field := fmt.Sprintf("%soptions[%d]", prefix, i)
 		switch {
-		case !optionIDPattern.MatchString(option.ID):
+		case !optionIDPattern().MatchString(option.ID):
 			note(invalid("%s.id is %q and must be 1 to 32 of "+
 				"a-z, 0-9, `_` and `-`: it is typed back in `choice`",
 				field, option.ID))

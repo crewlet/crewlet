@@ -330,7 +330,7 @@ func TestNodeIDPatternIsOneRule(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no %s", tc.def, tc.field)
 		}
-		if got, want := ownPattern(t, field), nodeIDPattern.String(); got != want {
+		if got, want := ownPattern(t, field), nodeIDPattern().String(); got != want {
 			t.Fatalf("%s.%s pattern = %v, the validator's nodeIDPattern is %q",
 				tc.def, tc.field, got, want)
 		}
@@ -383,7 +383,7 @@ func TestUnitChannelPatternIsOneRule(t *testing.T) {
 	if !ok {
 		t.Fatal("Unit has no channel")
 	}
-	if got, want := ownPattern(t, field), unitChannel.String(); got != want {
+	if got, want := ownPattern(t, field), unitChannel().String(); got != want {
 		t.Fatalf("Unit.channel pattern = %v, the validator's unitChannel is %q", got, want)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -772,7 +773,11 @@ func (l *LLMProvider) validateProfile(path Path) error {
 // character to `_`. Lowercase only, so the one key a person reads in the
 // document, a URL path and a Kubernetes resource name (crewlet-operator's,
 // which are DNS labels already) is the same string.
-var ProviderKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var ProviderKeyPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+})
 
 // validateLLMKeys holds every providers.llm key to [ProviderKeyPattern], and
 // no two keys to one credential bundle variable.
@@ -797,13 +802,13 @@ func (c *Company) validateLLMKeys() error {
 			continue
 		}
 		path := entryPath(key)
-		if !ProviderKeyPattern.MatchString(key) {
+		if !ProviderKeyPattern().MatchString(key) {
 			p.add(path, ErrShape,
 				"%q is not a provider key: a key is lowercase letters, digits, '.', '_' and "+
 					"'-', starting with a letter or a digit, at most 63 characters (%s). It "+
 					"names the entry's state directory and its credential bundle variable, "+
 					"so rename it, and every seat's llm that names it, e.g. %q",
-				key, ProviderKeyPattern, suggestProviderKey(key))
+				key, ProviderKeyPattern(), suggestProviderKey(key))
 			continue
 		}
 		bundle := cliprofile.BundleVarName(key)

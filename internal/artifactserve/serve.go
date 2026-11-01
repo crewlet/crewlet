@@ -335,7 +335,7 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract, b
 // A contract this binary holds no runtime for places nothing, as one of
 // another shape does: the element would name a file that is not there.
 func (h *Handler) withRuntime(page []byte, contract, declared string) []byte {
-	if !versionPattern.MatchString(contract) {
+	if !versionPattern().MatchString(contract) {
 		log.Warn("artifacts_serve_contract_unreadable", "contract", contract)
 		return page
 	}

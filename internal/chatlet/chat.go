@@ -100,6 +100,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -563,7 +564,11 @@ func NormalizeName(name string) string {
 //     each change a change to both.
 //
 // The bound and [MaxChannelName] must agree; a test holds them together.
-var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var namePattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+})
 
 // ValidName reports whether s is a legal channel name in its NORMALISED form.
 //
@@ -571,7 +576,7 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 // escaping what it does: the name is a claim key, half of a scope path and
 // the input to a broker subject token, and a character that is legal in one of
 // those and not the others is the bug an escaping alphabet exists to hide.
-func ValidName(s string) bool { return namePattern.MatchString(s) }
+func ValidName(s string) bool { return namePattern().MatchString(s) }
 
 // ErrInvalid reports a value this chat refuses.
 var ErrInvalid = fmt.Errorf("chatlet: invalid")

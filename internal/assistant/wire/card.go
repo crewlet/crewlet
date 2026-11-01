@@ -614,7 +614,7 @@ const BriefBudgetRunes = 1470
 // and that each row carries the one action its kind needs.
 func (b *BriefCard) Validate() error {
 	switch {
-	case !screenPattern.MatchString(b.Scope.Screen):
+	case !screenPattern().MatchString(b.Scope.Screen):
 		return fmt.Errorf("%w: a brief's scope screen %q is not a screen name", ErrInvalid,
 			b.Scope.Screen)
 	case !briefText(b.Scope.Title, pageTitleMaxRunes):
@@ -703,7 +703,7 @@ func (a *BriefAction) validate() error {
 		return fmt.Errorf("%w: a brief action's label is not one line of 1 to %d characters",
 			ErrInvalid, briefLabelMaxRunes)
 	case a.Kind == BriefOpen && (a.Link == nil || a.Question != "" ||
-		!strings.HasPrefix(a.Link.Href, "#/") || !screenPattern.MatchString(a.Link.Screen)):
+		!strings.HasPrefix(a.Link.Href, "#/") || !screenPattern().MatchString(a.Link.Screen)):
 		return fmt.Errorf("%w: a brief's open action carries a dashboard link and no question",
 			ErrInvalid)
 	case a.Kind == BriefAsk && (a.Link != nil || a.Question == "" ||

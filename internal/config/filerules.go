@@ -537,7 +537,7 @@ func (c *Company) validateReferenceShapes() error {
 	}
 
 	for role, path := range c.EachRole() {
-		if ref := strings.TrimSpace(role.Unit); ref != "" && !entityID.MatchString(ref) {
+		if ref := strings.TrimSpace(role.Unit); ref != "" && !entityID().MatchString(ref) {
 			p.add(at(path, "unit"), ErrShape,
 				"%q is not a unit key: %s. A seat declared at the org root "+
 					"joins its unit by KEY (the unit's `id:`), not by the "+
@@ -547,7 +547,7 @@ func (c *Company) validateReferenceShapes() error {
 		}
 		for i, target := range role.Manages {
 			target = strings.TrimSpace(target)
-			if target == "" || org.ValidHandle(target) || entityID.MatchString(target) {
+			if target == "" || org.ValidHandle(target) || entityID().MatchString(target) {
 				continue
 			}
 			p.add(idx(at(path, "manages"), i), ErrShape,

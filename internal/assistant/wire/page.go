@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -145,7 +146,11 @@ type DraftFileRef struct {
 }
 
 // mediaTypePattern is a media type with no parameters: `image/svg+xml`.
-var mediaTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$`)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var mediaTypePattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$`)
+})
 
 // draftFileNameMaxBytes bounds a file reference's name: a file name, never a
 // path.
@@ -163,7 +168,7 @@ func (r DraftFileRef) Validate() error {
 	case r.Name == "" || !plain(r.Name, draftFileNameMaxBytes) || strings.ContainsAny(r.Name, "/\\"):
 		return fmt.Errorf("%w: a file reference's name is not a file name of at most %d bytes",
 			ErrInvalid, draftFileNameMaxBytes)
-	case !mediaTypePattern.MatchString(r.MediaType):
+	case !mediaTypePattern().MatchString(r.MediaType):
 		return fmt.Errorf("%w: a file reference's media type %q is not one", ErrInvalid, r.MediaType)
 	}
 	return nil
@@ -179,10 +184,14 @@ func (r DraftFileRef) Validate() error {
 const PageDraftSecretPath = "(^|[._])(password|passphrase|secret|secrets|token|tokens|" +
 	"credential|credentials|(api|private|signing|access|secret)[._]?key)([._]|$)"
 
-var secretPath = regexp.MustCompile(PageDraftSecretPath)
+// Compiled at first use, not at init: the code host's push hook is this
+// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+var secretPath = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(PageDraftSecretPath)
+})
 
 // IsSecretDraftPath reports whether a draft field's path names a credential.
-func IsSecretDraftPath(path string) bool { return secretPath.MatchString(path) }
+func IsSecretDraftPath(path string) bool { return secretPath().MatchString(path) }
 
 // Resource is one thing in view, by id.
 type Resource struct {
@@ -203,11 +212,23 @@ type ResourceRef struct {
 
 // The grammars a page context's names are held to.
 var (
-	screenPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
-	keyPattern    = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	screenPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	})
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	keyPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)
+	})
 	// actionPattern is a page action id: dotted lowercase segments,
 	// `work.filter.apply`.
-	actionPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	// Compiled at first use, not at init: the code host's push hook is this
+	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	actionPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	})
 )
 
 // The bounds on a page context's strings, in bytes unless named in runes.
@@ -222,7 +243,7 @@ const (
 // ValidActionID reports whether s is a page action id a screen may declare:
 // dotted lowercase segments, and never the reserved [ActionContextInvalidate].
 func ValidActionID(s string) bool {
-	return len(s) <= actionIDMaxBytes && actionPattern.MatchString(s) &&
+	return len(s) <= actionIDMaxBytes && actionPattern().MatchString(s) &&
 		s != ActionContextInvalidate
 }
 
@@ -238,7 +259,7 @@ func (p PageContext) Validate() error {
 	case len(raw) > PageContextMaxBytes:
 		return fmt.Errorf("%w: page context is %d bytes, over %d", ErrInvalid, len(raw),
 			PageContextMaxBytes)
-	case !screenPattern.MatchString(p.Screen):
+	case !screenPattern().MatchString(p.Screen):
 		return fmt.Errorf("%w: page context screen %q is not a screen name", ErrInvalid, p.Screen)
 	case !plain(p.Title, 4*pageTitleMaxRunes) || utf8.RuneCountInString(p.Title) > pageTitleMaxRunes:
 		return fmt.Errorf("%w: page context title is not plain text of at most %d characters",
@@ -259,7 +280,7 @@ func (p PageContext) Validate() error {
 				len(m), pageMapMaxKeys)
 		}
 		for k, v := range m {
-			if !keyPattern.MatchString(k) || !plain(v, pageValueMaxBytes) {
+			if !keyPattern().MatchString(k) || !plain(v, pageValueMaxBytes) {
 				return fmt.Errorf("%w: page context %s key %q is not a name with a plain "+
 					"value of at most %d bytes", ErrInvalid, field, k, pageValueMaxBytes)
 			}
@@ -331,7 +352,7 @@ func (d PageDraft) validate() error {
 	case !plain(d.ID, draftIDMaxBytes) || !plain(d.Revision, draftIDMaxBytes):
 		return fmt.Errorf("%w: page context draft id or revision is not plain text of at most "+
 			"%d bytes", ErrInvalid, draftIDMaxBytes)
-	case d.Step != "" && !keyPattern.MatchString(d.Step):
+	case d.Step != "" && !keyPattern().MatchString(d.Step):
 		return fmt.Errorf("%w: page context draft step %q is not a name", ErrInvalid, d.Step)
 	case !text(d.Help, PageDraftHelpMaxRunes):
 		return fmt.Errorf("%w: page context draft help is not text of at most %d characters",
@@ -345,7 +366,7 @@ func (d PageDraft) validate() error {
 	seen := make(map[string]bool, len(d.Fields))
 	for _, f := range d.Fields {
 		switch {
-		case !keyPattern.MatchString(f.Path):
+		case !keyPattern().MatchString(f.Path):
 			return fmt.Errorf("%w: page context draft field path %q is not a name", ErrInvalid,
 				f.Path)
 		case seen[f.Path]:
