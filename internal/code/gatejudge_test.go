@@ -231,7 +231,7 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	f := gateCase("deploy/app.yaml", "docs/guide.go", "docs/notes.go")
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{2}, CommentOnly: []int{1}, Complete: true}
 	p := judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches deploy/**")
+		`touches "deploy/**"`)
 	if strings.Contains(p.Detail, "docs/**") {
 		t.Errorf("a docs entry its unless waived still holds the change: %q", p.Detail)
 	}
@@ -239,12 +239,12 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	f = gateCase("docs/guide.go", "docs/notes.go")
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{1}, CommentOnly: []int{0}, Complete: true}
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionMet,
-		"touches docs/** only with changes of a class its unless waives")
+		`touches "docs/**" only with changes of a class its unless waives`)
 
 	f = gateCase("docs/guide.go", "docs/server.go")
 	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches docs/**")
+		`touches "docs/**"`)
 }
 
 // AN EXTERNAL CHECK WAITS ON ITS REPORT: a required check with no attempt on

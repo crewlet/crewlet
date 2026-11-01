@@ -168,9 +168,9 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 		t.Errorf("an answer resolving every name refuses %v", err)
 	}
 	for ref, tried := range map[string]string{
-		"refs/heads/old": "refs/heads/old",
-		"nope":           "refs/heads/nope or refs/tags/nope",
-		"HEAD":           "refs/tags/HEAD",
+		"refs/heads/old": `"refs/heads/old"`,
+		"nope":           `"refs/heads/nope" or "refs/tags/nope"`,
+		"HEAD":           `"refs/tags/HEAD"`,
 	} {
 		got, err := resolve(ref, "v1")
 		if err != nil || len(got.Refs) != 2 || got.Refs[1].OID != oidOf("branch v1") {
@@ -190,7 +190,7 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 		t.Fatalf("ResolveRef(nope, gone) = %v, want both answered missing", err)
 	}
 	if refusal := both.Err(); refusal == nil || !strings.Contains(refusal.Error(),
-		"refs/tags/nope; repository app holds no live refs/heads/gone") {
+		`"refs/tags/nope"; repository app holds no live "refs/heads/gone"`) {
 		t.Errorf("ResolveRef(nope, gone) refuses %v; want both missing names named, in order", refusal)
 	}
 	past := make([]string, code.MaxRefsPerQuery+1)
