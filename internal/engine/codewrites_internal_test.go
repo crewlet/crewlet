@@ -151,6 +151,12 @@ func (h *codeWriteHost) Queue(context.Context, code.QueueProposal) (code.QueueRe
 	return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(26)}, nil
 }
 
+// Expunge answers a purge request as recorded: no case here purges.
+func (h *codeWriteHost) Expunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	return code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(27),
+		Request: p.Request.RequestID}, nil
+}
+
 // writesAsked is the engine writes the host was asked, copied under its lock.
 func (h *codeWriteHost) writesAsked() []code.EngineWrite {
 	h.mu.Lock()

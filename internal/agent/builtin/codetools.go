@@ -231,6 +231,12 @@ type CodeDeps struct {
 	// call naming a log page is told this node reads none.
 	Logs CheckLogReader
 
+	// Placement is where a repository's work is placed — its maintainer and
+	// the nodes that may hold a copy — which a purge's answer names
+	// ([CodePlacement]). Nil names neither, and a purge's answer says so:
+	// its request is recorded all the same.
+	Placement CodePlacement
+
 	// Now is the clock a hold's idle threshold is read on, read after the
 	// hold is taken; nil is the wall clock.
 	Now func() time.Time
@@ -307,8 +313,9 @@ func codeCandidates(deps CodeDeps) []candidate {
 // a call can take away what somebody else made with nothing kept to undo it by
 // the same tool: a branch deleted (its commits stay in the repository, its
 // name and head only in the push history), a repository deleted (restorable
-// until its purge, then gone), and a finding dismissed — a reviewer's
-// blocker cleared, which nothing moves back. A commit moves a branch forward
+// until its purge, then gone), a finding dismissed — a reviewer's
+// blocker cleared, which nothing moves back — and a repository's unreachable
+// objects purged, which nothing brings back once the purge commits. A commit moves a branch forward
 // over its history, which keeps every earlier version; a setting, a
 // protection or what a change says is set back by the same tool, the record
 // of each change keeping what it replaced; and an archive, a close and a
@@ -322,7 +329,7 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 	if slices.Contains(CodeWrites(), name) {
 		destructive, idempotent := mcp.No, mcp.Yes
 		switch name {
-		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool:
+		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool, CodePurgeUnreachableTool:
 			destructive = mcp.Yes
 		case CodeReviewChangeTool, CodeCommentOnChangeTool:
 			idempotent = mcp.No

@@ -76,7 +76,7 @@ is read, which the node that answers judges both at, and a write's is the
 least access at which the node that decides it may admit the call — the rest
 is the relation that node judges from its own chart, which no access alone
 names (an open's push of its branch, a change's owner steering it). Their
-twenty-four writes — `code_commit_files`,
+twenty-five writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
@@ -84,8 +84,9 @@ twenty-four writes — `code_commit_files`,
 `code_request_review`, `code_review_change`, `code_comment_on_change`,
 `code_resolve_finding`, its findings' `code_apply_suggestions` and its
 `code_rebase_change`, its `code_merge_change`, `code_dequeue_change` and
-`code_revert_change`, and a commit's checks' `code_rerun_checks` and
-`code_report_check` — are each `read_only: false`
+`code_revert_change`, a commit's checks' `code_rerun_checks` and
+`code_report_check`, and a repository's `code_purge_unreachable` — are each
+`read_only: false`
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
 which would write under its parent's grant; each is registered as a delivery
@@ -101,10 +102,11 @@ row holds — and the same call made again is the same operation. `code_review_c
 additive, and two saying the same are two, as `comment_on_work_item`'s are —
 the engine makes a re-run of the same call the same write, but the hint
 describes the tool a model is offered. `code_delete_branch`,
-`code_delete_repo` and `code_resolve_finding` are also `destructive: true`:
-each takes away what somebody else made with nothing the same tool keeps to
-undo it — a finding dismissed is a reviewer's blocker cleared, which no write
-moves back. `code_apply_suggestions` is a commit like `code_commit_files`,
+`code_delete_repo`, `code_resolve_finding` and `code_purge_unreachable` are
+also `destructive: true`: each takes away what somebody else made with
+nothing the same tool keeps to undo it — a finding dismissed is a reviewer's
+blocker cleared, which no write moves back, and a purged object is gone once
+the purge commits. `code_apply_suggestions` is a commit like `code_commit_files`,
 held to the head its caller read, and the CALLER's: whoever applies a
 review's suggestions becomes an author of the change, whose approval of it
 then counts for nothing, and answers the findings applied `resolved` — an
@@ -122,10 +124,15 @@ precondition and who it waits on — never `invalid`, since nothing about the
 call was wrong, and never a retry, since its people clear it and a
 `ready_to_merge` wake follows. A seat holding it is also told, in its
 executor prompt's `code_merging` section, to end its turn rather than wait.
-`code_report_check` is the one code write no seat is offered: it is
-human-only in the authority table, since a report is a check result, and a
-seat runs no CI whose result it could report ([External
-CI](../guides/code.md#external-ci)). A seat holding the
+`code_report_check` and `code_purge_unreachable` are the two code writes no
+seat is offered: each is human-only in the authority table — a report is a
+check result, and a seat runs no CI whose result it could report ([External
+CI](../guides/code.md#external-ci)); a purge drops history nothing brings
+back, which no model's say-so may erase, and it asks the person a fresh proof
+of who they are besides. A purge is `idempotent: true`: its request is the
+call's operation, so the same call made again is the same request, and a
+request asked while another is open widens that one rather than adding a
+second. A seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one
 choice no description can carry: a small change is committed on the server,
 and anything to build or test belongs in a checkout. The operator-only

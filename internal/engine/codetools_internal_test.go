@@ -107,8 +107,8 @@ type unwrittenCode struct{ builtin.CodeWriter }
 // caps it below write — no repository's grant would let one of its calls
 // through — and so does the executor's guidance on changing code, which is
 // gated on holding them; and a human-only write (code_report_check, a person's
-// own CI's report) is shown to no seat at any tier, since the authority table
-// refuses every seat it. Every seat is shown the reads. Read off what the executor sends its
+// own CI's report, and code_purge_unreachable, a person's purge) is shown to
+// no seat at any tier, since the authority table refuses every seat it. Every seat is shown the reads. Read off what the executor sends its
 // model, because the decision is the epoch's and the leaving out is the
 // runner's, and either half alone could drop it.
 //

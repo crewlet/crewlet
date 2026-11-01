@@ -30,6 +30,7 @@ subcommand below is served by it.
 | `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
 | `crewlet code import <source-url> <name> [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into a declared one, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
+| `crewlet code purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
@@ -1232,12 +1233,15 @@ crewlet code status [<config.yaml>] [-url URL] [-repo NAME] [-pushes N] [-json]
 crewlet code verify [<config.yaml>] [-url URL] [-repo NAME]... [-repair] [-json]
 crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
 crewlet code import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
+crewlet code purge-unreachable <name> [<config.yaml>] [-url URL] [-op-id ID]
 crewlet code credential [-token-env NAME] get|store|erase
 ```
 
 The engine's own [git host](../concepts/code-host.md) from the command line.
-`status` and `verify` ask a **running node** through its `/code/` routes
-([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), as whoever the
+`status`, `verify` and `purge-unreachable` ask a **running node** — the first
+two through its `/code/` routes
+([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), the third
+through the act transport — as whoever the
 token resolves to: the repositories are rows the data nodes keep, and a git
 node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they take the token from `$CREWLET_API_TOKEN`
@@ -1646,6 +1650,50 @@ files an LFS server keeps beside it; the code host serves no LFS.
 
 Exits 0 once every ref is proven, and 1 on any refusal, a stopped step or a
 ref that differs.
+
+### `crewlet code purge-unreachable`
+
+Asks the repository's maintainer — the git node that compacts and publishes
+it — to drop every object no branch or tag reaches: the commit a leaked
+secret was force-pushed away from, the history a deleted branch left. It is
+the `code_purge_unreachable` tool your own assistant and the dashboard call,
+over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
+so the request is one record however it was asked.
+
+```
+$ crewlet code purge-unreachable web
+purge of web requested (0192f6c1-…, at CREWLET_CODE_LOG@1:4821)
+  served by git-2, the repository's maintainer
+  until it is served and after, the purged objects are still held by:
+    the caches of git-2, git-1, until each syncs past the purge
+    every backup taken before the purge commits keeps the purged objects for as long as the backup is kept; code_get_repo's expunge.expunged_at is the commit's instant
+    the object store keeps them for 24 hours after the purge commits, until the retired packs' sweep and the store's next collection take them
+  `crewlet code status -repo web` shows the request until it is served
+```
+
+**A person's alone.** `$CREWLET_API_TOKEN` must be your own token — `crewlet
+iam token -login` mints one — bound to the human seat you hold: a purge drops
+what nothing brings back, so a token bound to nobody is refused, naming why,
+and so is a seat's tool call. Your grant on the repository must be
+`maintain`, which every person holds. The fresh proof of who you are a purge
+asks of a dashboard session (`api.auth.session.step_up`) is not asked of a
+token, which is stepped up by construction as every machine token is — so a
+token that can purge is one to keep as carefully as your password.
+
+**No grace.** A ref's drop is otherwise kept fetchable for two weeks; a purge
+is asked because something must go now, so it keeps only what a ref reaches.
+The command is answered once the request is recorded, long before its
+maintainer has served it: `crewlet code status -repo <name>` prints an
+`expunge:` line naming the request until it is served, and then when the
+purge committed and what it dropped. Asked while another request is open, it
+widens that one: the repository holds one purge, served once nothing from
+before the latest request is left.
+
+**A retry is the same request.** The command mints an operation id and sends
+it as the `Idempotency-Key`; an answer whose outcome is unknown, or none at
+all, prints it, and `-op-id <id>` sends it again, which the repository's
+committer answers as the first request.
 
 ### `crewlet code credential`
 

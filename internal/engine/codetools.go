@@ -3,6 +3,9 @@ package engine
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/estate"
 )
 
 // THE CODE TOOLS' ENGINE WIRING: the same deps for a seat's registry and for
@@ -55,8 +58,12 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// wired whether or not a seat writes, since a seat that only reads
 	// still holds what it reads; an operator's call has no turn and holds
 	// nothing whatever is wired here.
+	//
+	// AND WHERE A REPOSITORY'S WORK IS PLACED, which a person's purge is
+	// answered with: the router's own view of the git nodes, read per call.
 	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
-		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e)}
+		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e),
+		Placement: codePlacement{router: e.router, limits: e.codeLimits}}
 	// AND THE OBJECT STORE A CHECK'S KEPT LOG IS READ FROM, where this node
 	// has one: the log a failed run kept is one object the fleet shares,
 	// read a page at a time by code_get_check_failures.
@@ -108,3 +115,25 @@ func (e *Engine) cloneURL(name string) string {
 	}
 	return e.externalBase + auth.GitRepoPath(name)
 }
+
+// codePlacement is where a repository's work is placed, as a purge's answer
+// names it (builtin.CodePlacement): its maintainer, by the charge every node
+// running this build places a repository's maintenance by
+// (cache.PlacementCharge, the figure the maintainers' own loops ask by), so a
+// node that opens no cache of its own names the node those loops pick; and
+// every live node serving git, in the repository's order, each of which may
+// hold a copy.
+type codePlacement struct {
+	router *estate.Router
+	limits func() code.Limits
+}
+
+func (p codePlacement) Maintainer(repoID string, liveObjects int64) (string, error) {
+	charge, err := cache.PlacementCharge(liveObjects, p.limits())
+	if err != nil {
+		return "", err
+	}
+	return p.router.Maintainer(repoID, charge)
+}
+
+func (p codePlacement) GitNodes(repoID string) ([]string, error) { return p.router.GitOrder(repoID) }

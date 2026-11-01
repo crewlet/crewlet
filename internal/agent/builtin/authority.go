@@ -686,6 +686,15 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 // the node failing to decide, and reporting it as [ErrUndecidable] would
 // answer every lead's question with a retry.
 //
+// A STEP-UP ADMITS TOO. [authz.ReasonStepUp] is the table admitting the
+// caller on a proof of identity older than the verb's window — the one
+// refusal the caller clears themselves — so the verb is offered, and a press
+// of it is answered `step_up_required`, which the surface's step-up ceremony
+// turns into a fresh proof and the same press again. Refused here instead, a
+// verb that asks a step-up (code_purge_unreachable) would be offered to
+// nobody who had not just signed in, and its control would stay disabled
+// with nothing to say why.
+//
 // nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
 // [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
 // from "this node cannot say" exactly as a call does.
@@ -700,7 +709,9 @@ func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 		object = subject.objectFor(principal, nil)
 	}
 	err := authorize(ctx, authz.Action(tool), object)
-	if errors.Is(err, authz.ErrUnresolved) {
+	var refused *DecisionRefused
+	if errors.Is(err, authz.ErrUnresolved) ||
+		errors.As(err, &refused) && refused.Decision.Reason == authz.ReasonStepUp {
 		return nil
 	}
 	return err

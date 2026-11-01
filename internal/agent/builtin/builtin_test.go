@@ -370,6 +370,9 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeGetCheckFailuresTool: false,
 		builtin.CodeRerunChecksTool:      true,
 		builtin.CodeReportCheckTool:      true,
+		// A REPOSITORY'S PURGE: a request every reader of the repository's
+		// history loses objects to.
+		builtin.CodePurgeUnreachableTool: true,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.

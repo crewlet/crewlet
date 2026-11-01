@@ -2607,8 +2607,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work, knowledge and artifact verb but the three purges; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work, knowledge and artifact verb but the three purges, and every code tool but a repository's purge; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -2685,8 +2685,12 @@ Answering a step-up is not a verb in the table — it is about nothing and asks
 no permission — so `POST /auth/step-up` refuses a token itself: nobody is there to
 confirm.
 
-And **no tool** asks for a proof — a seat has no keyboard, and the operator's
-assistant's surface is not a step-up surface — which the build checks too.
+And **no tool a seat may take** asks for a proof — a seat has no keyboard —
+which the build checks too. A tool only a person may take can:
+`code_purge_unreachable` asks `step_up` as the other purges do. No seat is
+offered it, the token your assistant reaches `/operator/mcp` with is fresh by
+construction, and a dashboard session whose proof has aged is asked to confirm
+who it is when it presses it.
 
 ### Route policy travels with the route
 

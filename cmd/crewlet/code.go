@@ -76,6 +76,9 @@ const codeUsage = `usage: crewlet code <command>
   import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
       push another host's repository into a declared one, in steps under
       code.limits.max_push_bytes; the same command again resumes it
+  purge-unreachable <name> [<config.yaml>] [-url URL] [-op-id ID]
+      ask the repository's maintainer to drop every object no branch or tag
+      reaches, with no grace; a person's alone, through their own token
   credential [-token-env NAME] get|store|erase
       git's credential helper: credential.<url>.helper = !crewlet code credential
 `
@@ -94,6 +97,8 @@ func runCode(environ config.Source, args []string, stdout, stderr io.Writer) err
 		return codeExport(environ, rest, stdout, stderr)
 	case "import":
 		return codeImport(environ, rest, stdout, stderr)
+	case "purge-unreachable":
+		return codePurge(environ, rest, stdout, stderr)
 	case "credential":
 		return codeCredential(rest, os.Stdin, stdout, stderr, func(name string) string {
 			value, _ := environ.Lookup(name)
@@ -295,6 +300,15 @@ type codeRepoView struct {
 		MaxBlobBytes int64 `json:"max_blob_bytes"`
 		RepoMaxBytes int64 `json:"repo_max_bytes"`
 	} `json:"limits"`
+	// Expunge is where the repository's expunges stand: a person's purge
+	// requested and not yet served, an expunge open, and the last commit.
+	Expunge struct {
+		Open           string    `json:"open"`
+		Request        string    `json:"request"`
+		ExpungedAt     time.Time `json:"expunged_at"`
+		DroppedObjects int64     `json:"dropped_objects"`
+		DroppedBytes   int64     `json:"dropped_bytes"`
+	} `json:"expunge"`
 }
 
 // codeProtectionView is one protection rule.
@@ -727,6 +741,9 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 			humanBytes(r.Limits.MaxBlobBytes), humanBytes(r.Limits.RepoMaxBytes))
 	}
 	fmt.Fprintf(&b, "  pushes:       %d ever, the last %s\n", r.Pushes, codeTime(r.LastPushAt))
+	if line := expungeLine(r); line != "" {
+		fmt.Fprintf(&b, "  expunge:      %s\n", line)
+	}
 	fmt.Fprintf(&b, "  created:      %s\n", codeTime(r.CreatedAt))
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return err
@@ -741,6 +758,24 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", p.at, p.by, p.node, p.refs, p.results)
 	}
 	return tw.Flush()
+}
+
+// expungeLine is where a repository's expunges stand, as `status` prints it:
+// a purge requested and not yet served, an expunge open, and the last one
+// committed — "" for a repository never expunged with none asked of it.
+func expungeLine(r codeRepoView) string {
+	var parts []string
+	if e := r.Expunge; e.Request != "" {
+		parts = append(parts, "purge "+e.Request+" requested, not yet served")
+	}
+	if e := r.Expunge; e.Open != "" {
+		parts = append(parts, "expunge "+e.Open+" open")
+	}
+	if e := r.Expunge; !e.ExpungedAt.IsZero() {
+		parts = append(parts, fmt.Sprintf("last committed %s, dropping %d objects (%s)", codeTime(e.ExpungedAt),
+			e.DroppedObjects, humanBytes(e.DroppedBytes)))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // managedLine is who changes a repository and what it is for, as `status`

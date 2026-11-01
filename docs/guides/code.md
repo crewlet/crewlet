@@ -795,7 +795,8 @@ repository, path and line, and `truncated` says more matched. See
 Nothing to set up: once the company hosts code, your seats work in its
 repositories through thirty-five of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
-names — every one but `code_report_check`, which is a person's. A seat holds
+names — every one but `code_report_check` and `code_purge_unreachable`, each
+a person's. A seat holds
 no git credential and needs none. Every seat reads with twelve of the tools;
 a seat whose `role.code.access` is `full_access` also changes the
 repositories with the other twenty-three; and a seat whose role has a
@@ -833,7 +834,8 @@ opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
 `read_only` is what a seat that sets none runs at — is offered the twelve
 reads alone, none of the twenty-three. Your assistant has the same twenty-three
-and `code_report_check` besides, which is a person's alone, as you.
+and `code_report_check` and `code_purge_unreachable` besides, each a person's
+alone, as you.
 
 **A commit is built on the server and lands as one push** in the seat's name
 ([Engine-built commits](../concepts/code-host.md#engine-built-commits)). The

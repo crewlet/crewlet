@@ -126,8 +126,11 @@
 // exactly the arms it names, and a token holding every permission is refused
 // every such gesture about anybody but its owner.
 //
-// No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
-// the operator's MCP surface is not a step-up surface.
+// No TOOL A SEAT MAY TAKE asks for a proof (a walk holds that too): a seat has
+// no keyboard. A human-only tool may (code_purge_unreachable): no seat is
+// offered it, every credential reaching the operator's MCP surface with nobody
+// at a keyboard is fresh by construction, and a person's dashboard session
+// pressing it is answered step_up_required, which the step-up ceremony clears.
 //
 // # Admin, and one permission per app (ADR-0033)
 //

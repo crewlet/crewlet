@@ -202,6 +202,10 @@ const (
 	ActionCodeGetCheckFailures Action = "code_get_check_failures"
 	ActionCodeRerunChecks      Action = "code_rerun_checks"
 	ActionCodeReportCheck      Action = "code_report_check"
+	// ActionCodePurgeUnreachable is a person's purge of a repository's
+	// unreachable objects: a request its maintainer serves by expunging
+	// every object no ref reaches.
+	ActionCodePurgeUnreachable Action = "code_purge_unreachable"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -864,6 +868,14 @@ var rules = map[Action]rule{
 	ActionCodeGetCheckFailures: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeRerunChecks:      {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeReportCheck:      {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny},
+	// A PURGE OF A REPOSITORY'S UNREACHABLE OBJECTS IS A PERSON'S, and a
+	// fresh proof of who they are: it drops history no ref reaches, which
+	// nothing brings back — the purge of a leaked secret is its use — so
+	// never an agent's, whose say-so would have a model erase what the
+	// company's code held, and a step-up as every purge is
+	// ([ActionWorkPurge]). EVERYBODY at the gate, since who maintains the
+	// repository is its grant, which the tool judges once it is read.
+	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyStepUp},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

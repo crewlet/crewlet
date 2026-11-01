@@ -55,7 +55,35 @@ type codeWrites struct {
 	converse   func(w code.ConversationWrite) (code.ConversationResult, error)
 	queues     []code.QueueProposal
 	queue      func(p code.QueueProposal) (code.QueueResult, error)
+	expunges   []code.ExpungeProposal
+	expunge    func(p code.ExpungeProposal) (code.ExpungeResult, error)
 	before     func(what, repoID string)
+}
+
+// Expunge answers a purge request as its committer does: recorded, the
+// repository's open request its own id — and asked again under an id it
+// already holds, the SAME request at the same position, as the operation
+// ledger collapses it — unless a case answers otherwise.
+func (c *codeWrites) Expunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	c.mu.Lock()
+	c.expunges = append(c.expunges, p)
+	answer, before := c.expunge, c.before
+	at := len(c.expunges)
+	for i, earlier := range c.expunges[:len(c.expunges)-1] {
+		if earlier.Request != nil && p.Request != nil && earlier.Request.RequestID == p.Request.RequestID {
+			at = i + 1
+			break
+		}
+	}
+	c.mu.Unlock()
+	if before != nil {
+		before("expunge", p.RepoID())
+	}
+	if answer != nil {
+		return answer(p)
+	}
+	return code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: codeAt(uint64(40 + at)),
+		Request: p.Request.RequestID}, nil
 }
 
 // Queue answers a write of a target's queue — a dequeue — as applied, unless
@@ -1208,10 +1236,12 @@ func holdingCall(name string) (map[string]any, bool) {
 			"checks": []any{map[string]any{"name": "unit", "attempt": 1}}},
 		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
 		// sends one, so it holds nothing, as an operator's call holds nothing.
-		builtin.CodeReportCheckTool:   nil,
-		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7, "expected_head": revHead(3)},
-		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7},
-		builtin.CodeRevertChangeTool:  {"repo": repo, "change": 7},
+		builtin.CodeReportCheckTool: nil,
+		// A PURGE IS A PERSON'S (TestOnlyAPersonPurges), likewise.
+		builtin.CodePurgeUnreachableTool: nil,
+		builtin.CodeMergeChangeTool:      {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeDequeueChangeTool:    {"repo": repo, "change": 7},
+		builtin.CodeRevertChangeTool:     {"repo": repo, "change": 7},
 	}
 	args, ok := rows[name]
 	return args, ok

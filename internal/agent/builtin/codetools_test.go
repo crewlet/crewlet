@@ -444,11 +444,15 @@ func asBoundPerson() context.Context {
 	})
 }
 
-// asUnboundToken is a machine token bound to nobody, as CI holds one.
+// asUnboundToken is a machine token bound to nobody, as CI holds one —
+// stepped up, as the node composes every machine token
+// (iam.Principal.MachineToken), so a gesture asking a fresh proof reaches the
+// tool and is refused there for the binding it lacks, never for the proof.
 func asUnboundToken() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
 		Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+		ReauthAt: time.Now().Add(time.Hour).UTC(),
 	})
 }
 
@@ -1753,10 +1757,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty-six code tools'
+// codeCatalogueBudget is the most bytes the thirty-seven code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
-// (CodeWritesWithheld) — but for code_report_check, a person's alone — and
+// (CodeWritesWithheld) — but for code_report_check and code_purge_unreachable,
+// each a person's alone — and
 // what the operator catalogue serves; every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
@@ -1817,7 +1822,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // deliberately, with their measured cost: 46 587 → 49 963 (~12 491 tokens),
 // 3 376 bytes (~844 tokens), what a refused merge names and that a revert is a
 // change of its own said once, in each description, and every argument cut
-// to its name and type; ~6% headroom again.
+// to its name and type; ~6% headroom again. And code_purge_unreachable joined
+// within it, deliberately, with its measured cost: 49 963 → 50 535 (~12 634
+// tokens), 572 bytes (~143 tokens), which no seat is shown (it is human-only),
+// its one argument the repository and what it is answered with said once, in
+// its description; ~4% headroom left, so the next tool raises this.
 const codeCatalogueBudget = 52_900
 
 // codeReadsCatalogueBudget is the most bytes the twelve code reads'
@@ -1847,7 +1856,7 @@ const codeReadsCatalogueBudget = 20_300
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// thirty-six, each held to a budget, so a later description edit is a
+// thirty-seven, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1875,7 +1884,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the twelve code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty-six code tools (a full_access seat's and the operator's)",
+		{"all thirty-seven code tools (a full_access seat's and the operator's)",
 			added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {

@@ -183,6 +183,32 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 	}
 }
 
+// A NODE WITH NO CACHE PLACES A MAINTAINER AS THE GIT NODES DO: the purge's
+// answer names its maintainer from whichever node took the request, an
+// ingress node opening no cache among them, so cache.PlacementCharge — the
+// charge over the declarations this build ships — is exactly what an opened
+// cache's MaintenanceCharge places the repository by, at every size and
+// under every limit; a different figure names a node the maintainers' own
+// loops do not place it on.
+//
+// Mutation: charge the placement by the compaction alone → red.
+func TestANodeWithNoCachePlacesAMaintainerAsTheGitNodesDo(t *testing.T) {
+	t.Parallel()
+	c := newSyncWorld(t, onMemory).open(t)
+	for _, limits := range []code.Limits{{MaxBlobBytes: 1}, {MaxBlobBytes: 50 << 20}} {
+		for _, objects := range []int64{0, 1, 4_096, 6_000_000, 250_000_000} {
+			placed, err := cache.PlacementCharge(objects, limits)
+			if err != nil {
+				t.Fatalf("the charge a node with no cache places by: %v", err)
+			}
+			if want := c.MaintenanceCharge(objects, limits); placed != want {
+				t.Errorf("max_blob_bytes %d, %d objects: a node with no cache places by %d, the git nodes' "+
+					"caches by %d", limits.MaxBlobBytes, objects, placed, want)
+			}
+		}
+	}
+}
+
 // A PUBLICATION'S CHARGE MOVES IN ITS OWN SLOT: a publication that plans
 // again over the copy its admission pins — its maintainer replacing a base the
 // object store lost, with a larger layer or a repack its packs now need —

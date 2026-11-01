@@ -148,14 +148,21 @@ func (*writingHost) Queue(context.Context, code.QueueProposal) (code.QueueResult
 	return code.QueueResult{}, code.ErrNotServing
 }
 
+func (*writingHost) Expunge(context.Context, code.ExpungeProposal) (code.ExpungeResult, error) {
+	return code.ExpungeResult{}, code.ErrNotServing
+}
+
 // THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
 // PRESS THEM: the catalogue holds the code writes beside the reads exactly
 // while the call's code half carries the code host's writes, advertises each
 // as the write it is, and the act transport's account of what a person may
 // press (Acts) names every one — admitted for every person, and decided per
-// repository by the grant. A code half with no writer offers the reads alone.
+// repository by the grant; the purge too, which asks a step-up the founder
+// here has not made, since the press is what asks for the fresher proof
+// (builtin.Admits). A code half with no writer offers the reads alone.
 //
-// Mutation: the code writes annotated as reads → absent from Acts, red.
+// Mutation: the code writes annotated as reads → absent from Acts, red; and
+// Admits refusing a verb on the step-up it asks → the purge absent, red.
 func TestTheCodeWritesAreServedAndActable(t *testing.T) {
 	t.Parallel()
 	var writing atomic.Bool

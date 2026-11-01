@@ -545,3 +545,57 @@ func TestAnUnstoredExpungeIsCheckedAsItWillBeStored(t *testing.T) {
 		t.Errorf("ValidateUnstored of a request: %v, want ErrInvalidProposal", err)
 	}
 }
+
+// A REPOSITORY'S DETAIL SAYS WHERE ITS PURGE STANDS, from its own row: none
+// before anything is asked; the purge a person asked for, and where its
+// record landed, once it is; the expunge its maintainer opened to serve it
+// while that is open; and, once its commit lands, the request served, the
+// commit's instant and what it dropped — what a person who asked for a purge
+// reads to know it is done.
+//
+// Mutation: leave the detail's expunge block unread, or read the open
+// expunge into the request → red.
+func TestARepositorysDetailSaysWhereItsPurgeStands(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	c, _ := committerOn(t, n, n.pub)
+	detail := func() code.ExpungeState {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: "web"})
+		if err != nil {
+			t.Fatalf("read web's detail: %v", err)
+		}
+		return a.Repo.Expunge
+	}
+	if got := detail(); got != (code.ExpungeState{}) {
+		t.Fatalf("a repository never purged details its expunge as %+v, want none", got)
+	}
+
+	ask := purgeOf(repo)
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Request: &ask})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Request != ask.RequestID || got.Requested != res.Position || got.Open != "" ||
+		!got.ExpungedAt.IsZero() {
+		t.Fatalf("a purge asked details as %+v, want request %s at %s and nothing open", got, ask.RequestID,
+			res.Position)
+	}
+
+	b := beginFor(n, repo, 1, ids, 1, 1)
+	b.RequestID, b.Grace = ask.RequestID, 0
+	res, err = c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Open != b.ExpungeID || got.Request != ask.RequestID {
+		t.Fatalf("a purge being served details as %+v, want expunge %s open for request %s", got, b.ExpungeID,
+			ask.RequestID)
+	}
+
+	commit := commitFor(n, b, 0)
+	res, err = c.ProposeExpunge(t.Context(), code.ExpungeProposal{Commit: &commit})
+	requireExpunged(t, res, err)
+	if got := detail(); got.Open != "" || got.Request != "" || got.ExpungedAt.IsZero() ||
+		got.DroppedObjects != 1 || got.DroppedBytes <= 0 {
+		t.Fatalf("a purge served details as %+v, want nothing open or asked, and its commit's instant and "+
+			"the one object it dropped", got)
+	}
+}

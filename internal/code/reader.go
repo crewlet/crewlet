@@ -2478,6 +2478,15 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
+	// AND WHERE ITS EXPUNGES STAND, from the row an expunge's apply reads
+	// ([expungeStateIn]): a person who asked for a purge reads its progress
+	// here — the request open until its maintainer serves it, and what the
+	// last commit dropped.
+	state, err := expungeStateIn(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	out.Repo.Expunge = state.view()
 	return nil
 }
 

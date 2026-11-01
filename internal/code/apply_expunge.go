@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE EXPUNGE'S APPLIES: a request's, a begin's and a commit's, each in the
@@ -48,25 +50,43 @@ import (
 // rescue cut from it — so its kept and its dropping packs date from its Seen,
 // and the rescue from them.
 
-// expungeState is what an expunge's apply reads of the repository's row: its
+// expungeState is what an expunge's apply reads of the repository's row — its
 // drop epoch, the open expunge, and the purge requested and its record's
-// position.
+// position — and what a repository's detail says of its last commit beside
+// them ([ExpungeState]): its broker instant and what it dropped. ONE READ for
+// both, so the detail and the applier never read the row two ways.
 type expungeState struct {
 	dropEpoch   int64
 	expungeID   string
 	request     string
 	requestedAt int64
+	expungedAt  int64
+	droppedObj  int64
+	droppedB    int64
 }
 
 // expungeStateIn reads it.
 func expungeStateIn(ctx context.Context, tx *sql.Tx, repoID string) (expungeState, error) {
 	var s expungeState
 	err := tx.QueryRowContext(ctx, expungeStateSQL, repoID).Scan(&s.dropEpoch, &s.expungeID, &s.request,
-		&s.requestedAt)
+		&s.requestedAt, &s.expungedAt, &s.droppedObj, &s.droppedB)
 	if err != nil {
 		return expungeState{}, fmt.Errorf("code: read %s's expunge: %w", repoID, err)
 	}
 	return s, nil
+}
+
+// view is the state as a repository's detail serves it.
+func (s expungeState) view() ExpungeState {
+	v := ExpungeState{Open: s.expungeID, Request: s.request, DroppedObjects: s.droppedObj,
+		DroppedBytes: s.droppedB}
+	if s.request != "" {
+		v.Requested = unpacked(s.requestedAt)
+	}
+	if s.expungedAt != 0 {
+		v.ExpungedAt = store.DecodeTime(s.expungedAt)
+	}
+	return v
 }
 
 // requestServed reports whether a request whose record landed at requested is
@@ -297,8 +317,8 @@ func topOf(chain []LayerRow, ids []string) bool {
 // the repository dates its content from before a request, one seek of the
 // packs' content index (replicated 0067) that stops at its first row.
 const (
-	expungeStateSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position
-		FROM code_repos WHERE id = ?`
+	expungeStateSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position,
+		expunged_at, expunge_dropped_objects, expunge_dropped_bytes FROM code_repos WHERE id = ?`
 	requestPendingSQL = `SELECT EXISTS (SELECT 1 FROM code_packs INDEXED BY code_packs_content_idx
 		WHERE repo_id = ? AND content_position < ?)`
 	requestSQL = `UPDATE code_repos SET expunge_request = ?, expunge_request_position = ?, version = ?

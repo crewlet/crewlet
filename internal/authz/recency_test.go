@@ -159,17 +159,28 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 	}
 }
 
-// NO TOOL ASKS FOR A PROOF.
+// NO TOOL A SEAT MAY TAKE ASKS FOR A PROOF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no
-// dot. A seat has no keyboard to prove anything at, and the operator's MCP
-// surface — the same tools, for a person's assistant — is not a step-up
-// surface: a tool row asking for a proof would refuse every seat that holds
-// the grant, with a sentence telling a model to sign in again.
+// dot. A seat has no keyboard to prove anything at: a tool row asking for a
+// proof would refuse every seat that holds the grant, with a sentence telling
+// a model to sign in again. A HUMAN-ONLY tool may ask one
+// (code_purge_unreachable, a purge as the work, page and artifact purges are):
+// the table refuses every seat it before the window is read, every credential
+// that reaches the operator's MCP surface with nobody at a keyboard is fresh by
+// construction, so no model is ever told to sign in, and the one caller the
+// window does stop is a person's dashboard session, whose press answers
+// step_up_required and runs the step-up ceremony.
+//
+// Mutation: drop humanOnly from code_purge_unreachable's row, or ask a step-up
+// of a tool a seat takes → red.
 func TestNoToolAsksForAProof(t *testing.T) {
 	t.Parallel()
 	for _, a := range authz.Actions() {
 		if strings.Contains(string(a), ".") {
+			continue
+		}
+		if human, _ := authz.HumanOnlyOf(a); human {
 			continue
 		}
 		if r, _ := authz.RecencyOf(a); r.Demands() {

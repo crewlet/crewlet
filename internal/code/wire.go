@@ -2161,6 +2161,33 @@ type RepoDetail struct {
 	// repository's gates are half a mebibyte of JSON. A read that asked and
 	// finds none answers none.
 	Gates []RuleGate `json:"gates,omitempty"`
+	// Expunge is where the repository's expunges stand ([ExpungeState]):
+	// the one open, the purge a person asked for and not yet served, and the
+	// last one committed — the repository's own row, read with the rest of
+	// it, so a person who asked for a purge reads its progress here.
+	Expunge ExpungeState `json:"expunge,omitzero"`
+}
+
+// ExpungeState is a repository's expunges as its row holds them (code_repos,
+// written by the expunge's three records alone): zero for a repository never
+// expunged, with no expunge open and no purge asked of it.
+type ExpungeState struct {
+	// Open is the expunge begun and not yet committed — its id — and ""
+	// for none: while it is open, objects no ref reached at its scan are
+	// still served, and no new push may rely on them.
+	Open string `json:"open,omitempty"`
+	// Request is the purge a person asked for and its maintainer has not yet
+	// served — its id — and Requested where its record landed: it is served
+	// once no pack holds content from before that position. "" and zero for
+	// none.
+	Request   string            `json:"request,omitempty"`
+	Requested statelog.Position `json:"requested,omitzero"`
+	// ExpungedAt is the last commit's broker instant, zero for a repository
+	// never expunged, and DroppedObjects and DroppedBytes what that commit
+	// took out of the repository's live packs.
+	ExpungedAt     time.Time `json:"expunged_at,omitzero"`
+	DroppedObjects int64     `json:"dropped_objects,omitempty"`
+	DroppedBytes   int64     `json:"dropped_bytes,omitempty"`
 }
 
 // ChangeRow is a change as its row holds it (code_changes): every column, as

@@ -113,7 +113,7 @@ const (
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, append(ChangeWrites(), CheckWrites()...)...)
+		CodeProtectBranchTool}, append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...)...)
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
@@ -166,6 +166,9 @@ type CodeWriter interface {
 	// Queue asks the repository's committer to decide one write of a
 	// target's merge queue — a dequeue, here (code.QueueProposal).
 	Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
+	// Expunge asks the repository's committer to record a person's purge
+	// request (code.ExpungeProposal), which its maintainer then serves.
+	Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 }
 
 // codeWriteTools are the writes over deps, in [CodeWrites]' order.
@@ -181,7 +184,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeRestoreRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeProtectBranchTool},
-	}, append(changeWriteTools(deps), checkWriteTools(deps)...)...)
+	}, append(append(changeWriteTools(deps), checkWriteTools(deps)...), &codePurgeUnreachable{deps: deps})...)
 }
 
 // ---- who writes ------------------------------------------------------------ //
