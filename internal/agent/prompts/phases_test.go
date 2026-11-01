@@ -115,6 +115,7 @@ func TestSubagentPromptOrdersParentThenSkillsThenDiscoverableThenPreamble(t *tes
 		ParentSystemPrompt: "PARENT-PROMPT-MARKER",
 		Discoverable:       "- foo: Does foo.",
 		Skills:             cat,
+		MCPServers:         engineerServers,
 	}).Text
 	order(t, p, "PARENT-PROMPT-MARKER", "GITHUB-SUMMARY",
 		"## Tools to discover", SubagentPreamble)
