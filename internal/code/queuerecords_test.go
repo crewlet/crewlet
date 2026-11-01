@@ -638,8 +638,8 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
 		t.Fatalf("%d candidates outlive the train their entry was ejected from", left)
 	}
-	waitAnnounced(t, stream, 1)
-	ev := stream.all()[0]
+	waitAnnouncedOf(t, stream, "code_queue_ejected", 1)
+	ev := stream.of("code_queue_ejected")[0]
 	payload, ok := ev.Data.(*types.CodeQueueEjected)
 	if !ok || ev.Type != "code_queue_ejected" || payload.ChangeID != change || payload.Number != 1 ||
 		payload.EntryID != entryID || payload.Reason != string(code.EjectCheckFailed) ||
