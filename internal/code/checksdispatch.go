@@ -58,6 +58,12 @@ import (
 // record a target, and the heads follow only a file that changed.
 //
 // # Additive, so the apply is a join
+//
+// The subject carries no expectation, so a home's record and a failover's
+// second one's land in either order. Each row keeps the record that read the
+// LATER tip — the higher tip position — and of two that read one tip, the
+// later record: a total order, so either order leaves one row byte for byte.
+//
 // # What a head owes, and the `checks_due` listing that says so
 //
 // A LIVE change of an ACTIVE repository, its target a live branch, owes its
@@ -95,12 +101,6 @@ import (
 // check its file has not defined yet kept every change into it its home's
 // work at every pass, its file read again each time, for as long as the file
 // stayed as it was.
-//
-//
-// The subject carries no expectation, so a home's record and a failover's
-// second one's land in either order. Each row keeps the record that read the
-// LATER tip — the higher tip position — and of two that read one tip, the
-// later record: a total order, so either order leaves one row byte for byte.
 //
 // # Their lifetime
 //
