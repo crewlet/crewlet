@@ -391,6 +391,18 @@ func TestTheSearchDialsNothingAListingNames(t *testing.T) {
 	if hits := elsewhere.hits.Load(); hits != 0 {
 		t.Errorf("an address a listing or a redirect named was dialled %d times", hits)
 	}
+
+	// The address a redirect names is the registry's to choose, so the
+	// refusal quoting it is bounded whatever it sent.
+	sprawling := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "https://moved.example/"+strings.Repeat("a", 64<<10))
+		w.WriteHeader(http.StatusFound)
+	})
+	if _, err = search(t, sprawling, sprawling.URL, "x"); err == nil {
+		t.Error("a redirect naming a 64 KiB address answered no error")
+	} else if len(err.Error()) > 4<<10 {
+		t.Errorf("a redirect naming a 64 KiB address answered a %d-byte refusal; want it cut", len(err.Error()))
+	}
 }
 
 // A SEARCH ENDS AT ITS BUDGET OR ITS ASKER'S, whichever is first: a registry

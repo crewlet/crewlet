@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // SearchBudget bounds one search, the registry's answer included. A person is
@@ -200,9 +201,11 @@ func (r *Registry) Search(ctx context.Context, base, q string) (Found, error) {
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// The address it names is the registry's words, quoted and cut to
+		// the longest address a listing may carry.
 		return Found{}, fmt.Errorf("the registry at %s answered %s and named %q; this build follows "+
 			"no redirect, so write the address it moved to as mcp_registry.url", base, resp.Status,
-			resp.Header.Get("Location"))
+			textcut.Within(resp.Header.Get("Location"), maxAddress))
 	case resp.StatusCode != http.StatusOK:
 		return Found{}, fmt.Errorf("the registry at %s answered %s: %s", base, resp.Status,
 			httpx.ReadRefusal(resp))
