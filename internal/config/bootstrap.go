@@ -2633,13 +2633,14 @@ func (s *Secrets) validate(path Path) error {
 	ids := make(map[string]struct{}, len(s.Keys))
 	for i, k := range s.Keys {
 		kp := idx(at(path, "keys"), i)
-		if k.ID == "" {
+		switch {
+		case k.ID == "":
 			p.add(at(kp, "id"), ErrMissing, "every key needs an id")
-		} else if !secretKeyIDPattern.MatchString(k.ID) {
+		case !secretKeyIDPattern.MatchString(k.ID):
 			p.add(at(kp, "id"), ErrUnknownValue,
 				"%q must contain only letters, digits, '.', '_' or '-': it is "+
 					"stamped into every envelope this key seals", k.ID)
-		} else if len(k.ID) > secrets.MaxStreamKeyIDBytes {
+		case len(k.ID) > secrets.MaxStreamKeyIDBytes:
 			p.add(at(kp, "id"), ErrOutOfRange,
 				"the id is %d characters and at most %d are allowed: a sealed "+
 					"stream's header names its key in one length byte", len(k.ID),
