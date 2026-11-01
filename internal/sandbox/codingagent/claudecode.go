@@ -177,18 +177,29 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
 	}
 	cmd := strings.Join(parts, " ")
-	if !req.Steer.Set() {
+	var script strings.Builder
+	// THE CLI'S RELEASE, recorded for a run that continues a session: from
+	// [claudeTotalsRestored] its result states the session's spend, which the
+	// collection charges less what the session had already spent
+	// ([sessionTotals]). Asked of the CLI the box's PATH finds, in the box,
+	// because that is the one that runs.
+	if req.Resume != "" {
+		script.WriteString("claude --version < /dev/null > " + shellQuote(paths.CLIVersion()) + " 2> /dev/null; ")
+	}
+	if req.Steer.Set() {
+		plain := ""
+		if req.System != "" {
+			plain = paths.System()
+		}
+		script.WriteString(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain))
+	}
+	if script.Len() == 0 {
 		return cmd
 	}
 	// ONE SCRIPT, so the wrapper's redirections — the brief on stdin, the
 	// stream, the error file — reach the gate and the CLI alike, and `exec`
 	// leaves the CLI where the script was.
-	plain := ""
-	if req.System != "" {
-		plain = paths.System()
-	}
-	return "sh -c " + shellQuote(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain)+
-		"exec "+cmd)
+	return "sh -c " + shellQuote(script.String()+"exec "+cmd)
 }
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
@@ -470,6 +481,79 @@ type claudeResult struct {
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
+	// SinceLastResult is, per model, what the calls THIS PROCESS counted
+	// since it wrote its previous result cost — since it started, for its
+	// first — on 2.1.310 and later, absent before. The CLI's own SDK schema
+	// says to sum it over a conversation's results rather than subtract its
+	// totals, "whatever a resume or a kill does to modelUsage": nothing is
+	// carried into it from another process, so the sum over one run's
+	// results is that run's own spend whether or not it continued a session
+	// ([claudeEvents.runSpend]). `usage` and `total_cost_usd` beside it are
+	// the session's, which from 2.1.277 a continued session starts from
+	// ([ClaudeCode.TotalsRestored]).
+	SinceLastResult map[string]claudeModelUsage `json:"model_usage_since_last_result"`
+}
+
+// claudeModelUsage is one model's spend as Claude Code's result states it per
+// model, in camelCase as `modelUsage` and its per-run sibling print it.
+type claudeModelUsage struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	CostUSD                  float64 `json:"costUSD"`
+}
+
+// claudeTotalsRestored is the first Claude Code release whose continued
+// session starts from the totals the job before it saved, so that its result
+// states the session's spend: 2.1.277, whose changelog reads "Fixed a headless
+// resume (claude -p --resume, …) starting the session's cost and usage totals
+// at zero; headless sessions now save their totals at exit".
+const claudeTotalsRestored = "2.1.277"
+
+// TotalsRestored reports whether release version restores a continued
+// session's totals ([sessionTotals]): from [claudeTotalsRestored]. A version
+// that cannot be read is taken for a current release, as the notes gate takes
+// it ([claudeNotesGate]): every release prints `MAJOR.MINOR.PATCH (Claude
+// Code)`, so one that prints anything else is newer than this code.
+func (ClaudeCode) TotalsRestored(version string) bool {
+	return releaseAtLeast(version, claudeTotalsRestored)
+}
+
+// releaseAtLeast reports whether version, as a CLI's `--version` printed it,
+// is at or after floor. Its numbers are read up to the first character that is
+// neither a digit nor a dot; a version with fewer than three numbers is one
+// this code cannot read, and is taken for a current release.
+func releaseAtLeast(version, floor string) bool {
+	read := func(v string) ([3]int, bool) {
+		if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
+			v = v[:cut]
+		}
+		fields := strings.Split(v, ".")
+		var out [3]int
+		if len(fields) < 3 {
+			return out, false
+		}
+		for i := range 3 {
+			n, err := strconv.Atoi(fields[i])
+			if err != nil {
+				return out, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+	have, ok := read(strings.TrimSpace(version))
+	if !ok {
+		return true
+	}
+	want, _ := read(floor)
+	for i := range 3 {
+		if have[i] != want[i] {
+			return have[i] > want[i]
+		}
+	}
+	return true
 }
 
 // claudeHookStopped is the terminal reason of a run whose loop a hook stopped.

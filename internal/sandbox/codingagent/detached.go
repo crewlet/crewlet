@@ -160,6 +160,66 @@ type CLI interface {
 // resumer is a CLI that continues a session an earlier run reported.
 type resumer interface{ Resumes() bool }
 
+// sessionTotals is a CLI whose result, on a run that continues a session, can
+// state the SESSION's spend rather than the run's own: from the release
+// TotalsRestored names, the CLI starts a continued session from the totals
+// the job before it saved, and every result after counts them again. The
+// runner keeps that job's result as the run starts ([Paths.BaseResult]) and
+// charges a continued run the difference — unless its own stream stated what
+// the run spent ([runSpender]), which is exact on any release that says it.
+//
+// OPTIONAL, as [resumer] is: a CLI whose result is the run's own spend on
+// every release needs nothing kept, and OpenCode measures its session before
+// and after the run in the run's own script instead ([openCodeUsageBefore]).
+type sessionTotals interface {
+	// TotalsRestored reports whether the CLI release version, as its
+	// `--version` printed it, restores a continued session's totals. A
+	// version that cannot be read is taken for a current release.
+	TotalsRestored(version string) bool
+}
+
+// runSpender is a decoder that read the run's OWN spend off its stream: the
+// figures its CLI states for the calls this process made, which nothing a
+// resume or a kill does to the session's totals can add to.
+type runSpender interface {
+	// runSpend is that spend, and whether the stream stated any.
+	runSpend() (runSpend, bool)
+}
+
+// runSpend is what one run spent, as its CLI stated it: the prompt not served
+// from the cache, the cache's reads and writes, the reply, and the price.
+type runSpend struct {
+	input, cacheRead, cacheWrite, output int
+	costUSD                              float64
+}
+
+// on is result charged s: the whole prompt, its cached shares beside it, the
+// reply and the price — the convention every engine meter charges
+// ([sandbox.Result.InputTokens]).
+func (s runSpend) on(result sandbox.Result) sandbox.Result {
+	result.CacheReadTokens = s.cacheRead
+	result.CacheWriteTokens = s.cacheWrite
+	result.InputTokens = s.input + s.cacheRead + s.cacheWrite
+	result.OutputTokens = s.output
+	result.CostUSD = s.costUSD
+	return result
+}
+
+// less is result with what base already stated taken off: a continued run's
+// own spend, where its CLI stated the session's. A difference below zero is
+// passed on as it is, for the coordinator to floor and say
+// ([sandbox.Result]'s floor, sandbox_usage_negative), as every negative count a
+// CLI reports is. The turn count is the process's own on every release, so it
+// is never a difference.
+func less(result, base sandbox.Result) sandbox.Result {
+	result.InputTokens -= base.InputTokens
+	result.OutputTokens -= base.OutputTokens
+	result.CacheReadTokens -= base.CacheReadTokens
+	result.CacheWriteTokens -= base.CacheWriteTokens
+	result.CostUSD -= base.CostUSD
+	return result
+}
+
 // noteReader is a CLI that takes a person's notes to its run's turn between its
 // own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
 // and tells its model so: NoteInstruction is the standing instruction about
@@ -310,7 +370,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	p := PathsFor(box)
 	out := r.cli.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
-		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig()}
+		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(), p.CLIVersion()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -353,11 +413,25 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			"session, and this run asks it to", r.cli.Name())
 	}
 	paths := PathsFor(box)
+	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
+	// result the job before this one left in the box, where this run
+	// continues its session and its CLI's result may state the session's
+	// spend ([sessionTotals]). Read where the job before left it — the box
+	// a continued session lives in is the box that job ran in.
+	base, err := r.baseResult(ctx, box, paths, req)
+	if err != nil {
+		return sandbox.RunHandle{}, err
+	}
 	// The artefacts are cleared unconditionally rather than only on a reuse
 	// path: the runner cannot tell a fresh box from a reused one, and
 	// clearing a fresh box's absent files costs one exec.
 	if err := r.ClearArtifacts(ctx, box); err != nil {
 		return sandbox.RunHandle{}, err
+	}
+	if base != "" {
+		if err := box.WriteFile(ctx, paths.BaseResult(), []byte(base)); err != nil {
+			return sandbox.RunHandle{}, fmt.Errorf("codingagent: keeping the session's spend so far: %w", err)
+		}
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
 	// system text from — all but the instruction about notes, which a CLI
@@ -415,6 +489,72 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	log.InfoContext(ctx, "coding_agent_started", "agent", r.cli.Name(), "pid", pid)
 	return sandbox.RunHandle{CommandID: pid}, nil
+}
+
+// baseResult is the result the job before req left in box, for a run that
+// continues its session on a CLI whose result may state the session's spend
+// ([sessionTotals]), and "" for every other run.
+//
+// A RESULT THE BOX COULD NOT GIVE BACK IS NO BASE, and the run still starts: a
+// continued session is the work the person was waiting for, and its spend is
+// then the one its CLI states, logged so that an overcharge has a cause on
+// record. A read that failed outright fails the start, as every other read
+// of Start's does, for the launch to try again.
+func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
+	if _, totals := r.cli.(sessionTotals); !totals || req.Resume == "" {
+		return "", nil
+	}
+	out := r.cli.Output(paths)
+	if out.Result == "" {
+		return "", nil
+	}
+	raw, refusal, err := readWhole(ctx, box, out.Result, "the result the job before it left")
+	if err != nil {
+		return "", fmt.Errorf("codingagent: reading what the continued session had spent: %w", err)
+	}
+	if refusal != "" || strings.TrimSpace(raw) == "" {
+		log.WarnContext(ctx, "coding_agent_session_spend_unread", "agent", r.cli.Name(),
+			"detail", "this run continues a session, and the result the job before it left "+
+				"could not be read, so the run is charged the spend its CLI states, which counts "+
+				"the session's earlier jobs again", "refusal", refusal)
+		return "", nil
+	}
+	return raw, nil
+}
+
+// ownSpend is result charged what THIS run spent ([sessionTotals],
+// [runSpender]): the spend the run's own stream stated, where it stated any;
+// else, for a run that continued a session on a CLI that restores the
+// session's totals, the result less what the session had spent when the run
+// took it up ([Paths.BaseResult]); else the result as its CLI stated it, which
+// is the run's own.
+func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	result sandbox.Result, streamed *runSpend) (sandbox.Result, error) {
+
+	if streamed != nil {
+		return streamed.on(result), nil
+	}
+	totals, ok := r.cli.(sessionTotals)
+	if !ok {
+		return result, nil
+	}
+	raw, refusal, err := readWhole(ctx, box, paths.BaseResult(), "what the continued session had spent")
+	if err != nil {
+		return sandbox.Result{}, err
+	}
+	if refusal != "" || strings.TrimSpace(raw) == "" {
+		// NO BASE: a run that started a session of its own, or one whose
+		// base could not be kept ([Runner.baseResult] said so).
+		return result, nil
+	}
+	version, _, err := readWhole(ctx, box, paths.CLIVersion(), "its CLI's version")
+	if err != nil {
+		return sandbox.Result{}, err
+	}
+	if !totals.TotalsRestored(strings.TrimSpace(version)) {
+		return result, nil
+	}
+	return less(result, r.cli.Parse(raw)), nil
 }
 
 // wrapperScript is the shell line a job runs under: the CLI with its stdout
@@ -595,16 +735,17 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	var (
 		result sandbox.Result
 		last   streamLast
+		spent  *runSpend
 	)
 	if out.Events {
-		streamed, end, refusal, err := r.decodeStream(ctx, box, out.Stdout)
+		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout)
 		if err != nil {
 			return sandbox.Result{}, err
 		}
 		if refusal != "" {
 			refused = append(refused, refusal)
 		}
-		result, last = streamed, end
+		result, last, spent = streamed.result, streamed.last, streamed.spent
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its CLI printed")
@@ -648,6 +789,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			}
 			result = parsed
 		}
+	}
+
+	// WHAT THIS RUN SPENT, never its session's: a CLI that continued a
+	// session can state the session's spend, and charged as it is, every
+	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
+	result, err := r.ownSpend(ctx, box, paths, result, spent)
+	if err != nil {
+		return sandbox.Result{}, fmt.Errorf("codingagent: reading what the run itself spent: %w", err)
 	}
 
 	// The transcript is the observability surface for an agent that emits no
@@ -832,20 +981,35 @@ func unreadNote(unread int64, none bool) string {
 // decodeStream reads one event stream through a fresh decoder, and keeps its
 // last line — or answers a refusal where the box would not open the stream
 // because it is not a regular file ([notRegularPiece]).
-func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.Result, streamLast, string, error) {
+func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path string) (decodedStream, string, error) {
 	stream, err := box.OpenFile(ctx, path)
 	if refusal := notRegularPiece(err, path, "the event stream"); refusal != "" {
-		return sandbox.Result{}, streamLast{}, refusal, nil
+		return decodedStream{}, refusal, nil
 	}
 	if err != nil {
-		return sandbox.Result{}, streamLast{}, "", fmt.Errorf("codingagent: opening the event stream: %w", err)
+		return decodedStream{}, "", fmt.Errorf("codingagent: opening the event stream: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 	dec := &keepingLast{Decoder: r.cli.Events()}
 	if err := eachLine(stream, dec, r.lineBound); err != nil {
-		return sandbox.Result{}, streamLast{}, "", fmt.Errorf("codingagent: reading the event stream: %w", err)
+		return decodedStream{}, "", fmt.Errorf("codingagent: reading the event stream: %w", err)
 	}
-	return dec.Result(), dec.last, "", nil
+	out := decodedStream{result: dec.Result(), last: dec.last}
+	if spender, ok := dec.Decoder.(runSpender); ok {
+		if spent, stated := spender.runSpend(); stated {
+			out.spent = &spent
+		}
+	}
+	return out, "", nil
+}
+
+// decodedStream is what a run's event stream said: the result as its decoder
+// read it, the stream's last line, and the run's own spend where the stream
+// stated it ([runSpender]), nil where it stated none.
+type decodedStream struct {
+	result sandbox.Result
+	last   streamLast
+	spent  *runSpend
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

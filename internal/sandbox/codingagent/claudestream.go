@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -124,6 +126,34 @@ type claudeEvents struct {
 	// grew), and spentTotal their sum: what [claudeEvents.Spent] answers.
 	spent      map[string]int
 	spentTotal int
+
+	// own is the run's own spend as its results stated it, each result's
+	// per-model figures for the calls since the one before
+	// ([claudeResult.SinceLastResult]) added up, and stated whether any
+	// result carried them ([claudeEvents.runSpend]).
+	own    runSpend
+	stated bool
+}
+
+// runSpend is the run's own spend, summed over every result its stream
+// carried, and whether any carried the per-run figures (2.1.310 and later).
+// A run can print several results — a person's note handed to it as it
+// finished carries its loop on to another — and each states only the calls
+// since the one before, so the sum is the whole run's.
+func (d *claudeEvents) runSpend() (runSpend, bool) { return d.own, d.stated }
+
+// state adds one result's per-run figures, model by model in name order, so
+// the price is summed in one order on every read.
+func (d *claudeEvents) state(models map[string]claudeModelUsage) {
+	d.stated = true
+	for _, name := range slices.Sorted(maps.Keys(models)) {
+		m := models[name]
+		d.own.input += m.InputTokens
+		d.own.cacheRead += m.CacheReadInputTokens
+		d.own.cacheWrite += m.CacheCreationInputTokens
+		d.own.output += m.OutputTokens
+		d.own.costUSD += m.CostUSD
+	}
 }
 
 // Spent is every token the run's model calls have reported so far: what a
@@ -208,6 +238,11 @@ func (d *claudeEvents) Line(line []byte) {
 		// says how, as [ClaudeCode.Parse] reads the same line.
 		if !ev.succeeded() {
 			d.transcript.add("[error] the run ended: " + firstLine(ev.failure(), transcriptDetailLimit))
+		}
+		// PRESENT, EVEN EMPTY, IS STATED: a result with no calls since the
+		// one before says the run spent nothing more, which is an answer.
+		if ev.SinceLastResult != nil {
+			d.state(ev.SinceLastResult)
 		}
 	}
 }

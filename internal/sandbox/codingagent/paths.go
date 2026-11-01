@@ -74,6 +74,21 @@ func (p Paths) Result() string { return p.WorkDir() + "/result.json" }
 // read as a stream and from its end, never whole.
 func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 
+// BaseResult is where a run that CONTINUES a session in this box keeps the
+// result the job before it left ([Paths.Result]), copied there as the run
+// starts and before its own artefacts are cleared: what the session had
+// already spent when this run took it up. A CLI whose result states the
+// SESSION's spend rather than the run's own ([sessionTotals]) is charged the
+// difference, so a continued run is never charged its predecessors' calls
+// again.
+func (p Paths) BaseResult() string { return p.WorkDir() + "/base-result.json" }
+
+// CLIVersion is where a run that continues a session records its CLI's own
+// `--version`, which says whether that CLI's result states the session's spend
+// or the run's ([sessionTotals]). Written by the run's script in the box,
+// because the CLI that answers is the one the box's PATH finds there.
+func (p Paths) CLIVersion() string { return p.WorkDir() + "/cli-version" }
+
 // Brief is where the brief is written for a CLI that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.
 func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }

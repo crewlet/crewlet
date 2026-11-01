@@ -13,8 +13,8 @@ import (
 // same box, so the brief is the next message in it rather than a new task.
 func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{Brief: "approved", Resume: "4f1c-session"},
-		codingagent.Paths{}, "")
+	cmd := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "approved", Resume: "4f1c-session"},
+		codingagent.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume '4f1c-session'") {
 		t.Fatalf("the session to continue was not passed:\n%s", cmd)
 	}

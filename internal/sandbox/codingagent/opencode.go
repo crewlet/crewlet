@@ -34,6 +34,15 @@ const transcriptDetailLimit = 160
 // ended. A type OpenCode never prints, so nothing the CLI emits is read as it.
 const openCodeUsageEvent = "crewlet.usage"
 
+// openCodeUsageBefore is the type of the line a run that CONTINUES a session
+// adds before its `opencode run`: the same report, asked for before the run
+// takes the session up. OpenCode's report is the session's lifetime totals —
+// every step it ever ran, and every total an import restored — so a continued
+// run's own spend is the report after it less the report before it, both read
+// off one session in one box by the run's own script. A type OpenCode never
+// prints, for [openCodeUsageEvent]'s reason.
+const openCodeUsageBefore = "crewlet.usage_before"
+
 // openCodeListenWait bounds how long the run waits for its private server to
 // say where it listens. Measured on OpenCode 2.0.32 it does so in about a
 // second, most of it the runtime starting; sixty is room for a box whose disk
@@ -358,6 +367,14 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 		line(`done`)
 	}
 
+	// WHAT THE CONTINUED SESSION HAD SPENT, asked of the server that runs it
+	// just before the run takes it up ([openCodeUsageBefore]). A run that
+	// starts a session of its own needs none: its session's totals begin at
+	// the run.
+	if req.Resume != "" {
+		line(`before=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac`,
+			shellQuote(sid), openCodeUsageBefore)
+	}
 	line(`%s`, strings.Join(run, " "))
 	line(`code=$?`)
 	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
@@ -1049,8 +1066,10 @@ type openCodeEvents struct {
 	sawEvent   bool
 	sawLine    bool
 
-	// usage is the session's usage report, when the script printed one.
-	usage *openCodeReport
+	// usage is the session's usage report, when the script printed one, and
+	// usageBefore the one a continued run's script printed before the run
+	// took the session up ([openCodeUsageBefore]).
+	usage, usageBefore *openCodeReport
 
 	// plain is the output while no event has been seen: a run that printed
 	// its answer as text rather than as the event stream it was asked for,
@@ -1110,6 +1129,10 @@ func (d *openCodeEvents) Line(line []byte) {
 	case openCodeUsageEvent:
 		if ev.Report != nil {
 			d.usage = ev.Report
+		}
+	case openCodeUsageBefore:
+		if ev.Report != nil {
+			d.usageBefore = ev.Report
 		}
 	}
 }
@@ -1184,6 +1207,19 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		// with nothing logged, while a negative token count beside it was not.
 		res.CostUSD = u.Data.Cost
 		res.SessionID = u.Data.ID
+		// THE RUN'S OWN SPEND, for a run that continued a session: the
+		// report is the session's lifetime, so what it said before the run
+		// took the session up is taken off ([openCodeUsageBefore]). A
+		// difference below zero is handed on as any negative is, for the
+		// coordinator to floor and say.
+		if b := d.usageBefore; b != nil {
+			was := b.Data.Tokens
+			res.InputTokens -= was.Input + was.Cache.Read + was.Cache.Write
+			res.OutputTokens -= was.Output + was.Reasoning
+			res.CacheReadTokens -= was.Cache.Read
+			res.CacheWriteTokens -= was.Cache.Write
+			res.CostUSD -= b.Data.Cost
+		}
 	}
 	// NO TURN COUNT ([sandbox.Result.Turns]): the session report carries
 	// none, and the stream's step markers cannot be counted — 2.0.32 prints
