@@ -306,7 +306,9 @@ the company's budgets like any turn's, and appear on the spend history as
 
 Its only way into Crewlet is the person's own Ask Crewlet tools, served to it
 over the engine's tool bridge, so every read is the person's request and every
-change a proposal they approve. No API token, grant or engine credential is
+change a proposal they approve. It is held to that bridge: unlike a seat's
+executor, it starts no MCP server a repository it checked out, its box or the
+account it signs in with would add (`--strict-mcp-config`). No API token, grant or engine credential is
 placed in its box; it holds a bridge token valid for that run alone, which
 stops working when the run ends. It does reach the web, always: a page can try
 to steer it, and it could carry what it read out in an address it fetches.

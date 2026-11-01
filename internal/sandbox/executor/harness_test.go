@@ -61,9 +61,6 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	for _, want := range []string{
 		"--max-turns 30", "--model 'claude-opus-5'",
 		"--mcp-config '/box/.crewlet/mcp.json'",
-		// Without strict mode the harness ALSO loads whatever config the box's
-		// home carries, which on a reused box is the previous run's.
-		"--strict-mcp-config",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)

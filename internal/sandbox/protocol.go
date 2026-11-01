@@ -795,12 +795,28 @@ type RunRequest struct {
 	// inside the box.
 	Model string
 
-	// MCPServers is the scoped MCP surface, keyed by server name.
-	// SERVER-LEVEL SCOPING ONLY — there is no per-tool allowlist, because
-	// the agent inside the box negotiates its own tool list with the server
-	// and an allowlist the engine could not enforce would be a claim rather
-	// than a control.
+	// MCPServers are the MCP servers the engine hands the run, keyed by
+	// server name: its tool bridge, and the seat's servers that run in its
+	// box. SERVER-LEVEL ONLY — there is no per-tool allowlist, because the
+	// agent inside the box negotiates its own tool list with the server and
+	// an allowlist the engine could not enforce would be a claim rather than
+	// a control.
 	MCPServers map[string]MCPServer
+
+	// OnlyMCPServers holds the run to MCPServers alone: no server its
+	// harness's own configuration, a repository's or a plugin's declares,
+	// and no connector of the account it signs in with, starts beside them
+	// (Claude Code's --strict-mcp-config).
+	//
+	// The assistant's deep work sets it: it acts for a person, confined on
+	// the engine host, and reaches exactly the tools it is handed. A seat's
+	// executor leaves it false, and its harness starts what it would start
+	// for a person running it — the box's own configuration's servers, the
+	// repository's, a plugin's, the signed-in account's connectors — beside
+	// the ones the engine hands it: what those reach is the run's cell's to
+	// bound, never the engine's to decide. A runner whose harness has no way
+	// to be held to the servers it is handed refuses a run that sets it.
+	OnlyMCPServers bool
 
 	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the

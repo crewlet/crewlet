@@ -410,7 +410,12 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
 		Resume: session, MCPServers: bridgeServer(endpoint),
-		Attribution: t.manager.CommitAttribution("")})
+		// HELD TO ITS BRIDGE: deep work acts for a person, confined on the
+		// engine host, and reaches exactly the tools it is handed — never a
+		// server a repository it checked out declares, or a connector of the
+		// account it signs in with.
+		OnlyMCPServers: true,
+		Attribution:    t.manager.CommitAttribution("")})
 	if err != nil {
 		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, fmt.Errorf("the deep-work run could not start: %w", err)

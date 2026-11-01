@@ -157,6 +157,11 @@ func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 	if len(req.MCPServers) != 1 {
 		t.Fatalf("the job was handed %d MCP servers, want the bridge alone", len(req.MCPServers))
 	}
+	// HELD TO THEM: deep work acts for a person and starts no server a
+	// repository, the box or the signed-in account would add.
+	if !req.OnlyMCPServers {
+		t.Fatal("deep work was started free to load MCP servers it was not handed")
+	}
 	// ITS COMMITS CREDIT CREWLET AND NAME NO RUN: deep work has no page a
 	// `Crewlet-Run:` could lead to, and the company left the credit on.
 	if req.Attribution == nil || req.Attribution.Run != "" {
