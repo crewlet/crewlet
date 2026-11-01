@@ -47,7 +47,7 @@ import (
 // question's own authority never decided.
 type Movement struct {
 	// Source is the domain whose applier wrote the notices — its state log
-	// name, `tracker` — so it names the one copy whose service the
+	// name, `tracker` or `code` — so it names the one copy whose service the
 	// announcement depends on: a node relays a domain's movements from a
 	// peer exactly while its own copy of THAT domain is out of service.
 	// And it tells a screen whose half of its inbox moved.

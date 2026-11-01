@@ -55,14 +55,16 @@ export type PushKind =
  * may count one twice — so no screen adds it to a badge.
  */
 export interface InboxChange {
-  /** The domain whose half of the inbox moved — `tracker` — on a movement
-   *  and on a re-read alike. */
+  /** The domain whose half of the inbox moved — `tracker` or `code` — on a
+   *  movement and on a re-read alike. Either way the screen re-reads the
+   *  composed `inbox` question: `work_inbox` answers the tracker's alone. */
   source: string;
   handle: string;
   unread_delta: number;
   /** The id of the object the newest of those notices was written on: the
-   *  task for a task commit, the PERSON for a `prioritised` notice — whose
-   *  task `work_inbox` names as `task`. Empty on a re-read. */
+   *  task for a task commit, the change for a record about a change, the
+   *  PERSON for a `prioritised` notice — whose task the tracker's notice
+   *  names as `task`. Empty on a re-read. */
   subject: string;
   /** The reason that notice was routed under, in its domain's own
    *  vocabulary. Empty on a re-read. */

@@ -725,7 +725,7 @@ func (s *Service) ToolsChanged() {
 // this never sends is one it reads as undefined.
 type InboxChange struct {
 	// Source is the domain whose half of the inbox moved — the state log's
-	// name, `tracker` — on a movement and on a re-read alike: a gap is one
+	// name, `tracker` or `code` — on a movement and on a re-read alike: a gap is one
 	// domain's movements switching where they come from.
 	Source      string `json:"source"`
 	Handle      string `json:"handle"`
