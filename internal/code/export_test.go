@@ -192,18 +192,36 @@ func ChangeWriterHolders(w *ChangeWriter, changeID string) int { return w.flight
 // its turn on w.
 func ChecksWriterHolders(w *ChecksWriter, repoID string) int { return w.flights.holders(repoID) }
 
-// SetChecksWriterBounds bounds w's writes waiting at perRepo of one
-// repository's and perNode in all, so a case reaches a bound with a handful of
-// writes rather than hundreds.
-func SetChecksWriterBounds(w *ChecksWriter, perRepo, perNode int) {
-	w.flights.perKey, w.flights.perNode = perRepo, perNode
+// SetChangeWriterBounds has w admit at most key writes of one change, node of
+// every change and bytes of their weight, rather than its constants — the
+// cases that fill a node's share without a thousand writes or sixty-four
+// maximal reviews. Writes already held stay held.
+func SetChangeWriterBounds(w *ChangeWriter, key, node, bytes int) {
+	w.flights.setBounds(key, node, bytes)
 }
 
-// SetChangeWriterBounds bounds w's writes waiting at perChange of one change's
-// and perNode in all.
-func SetChangeWriterBounds(w *ChangeWriter, perChange, perNode int) {
-	w.flights.perKey, w.flights.perNode = perChange, perNode
+// SetChecksWriterBounds is [SetChangeWriterBounds] for a checks writer, a
+// repository's check writes in place of a change's conversation.
+func SetChecksWriterBounds(w *ChecksWriter, key, node, bytes int) {
+	w.flights.setBounds(key, node, bytes)
 }
+
+// setBounds is a test's bounds in place of f's constants, under its lock.
+func (f *flights) setBounds(key, node, bytes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bounds.key, f.bounds.node, f.bounds.bytes = key, node, bytes
+}
+
+// SetCommitterNodeProposals has c hold at most n proposals across its
+// repositories, rather than CommitterNodeProposals — the case that fills a
+// node's count across two repositories without a thousand pushes. Set before
+// c's first proposal.
+func SetCommitterNodeProposals(c *Committer, n int) { c.nodeProposals = n }
+
+// ConversationWeight is what cw weighs in its writer's node bytes: the bytes
+// its record carries as the writer stamps it.
+func ConversationWeight(cw ConversationWrite) (int, error) { return cw.measure() }
 
 // StandingStates is the list of states a raiser's standing findings are read
 // by, as the decide's statement is driven from it.

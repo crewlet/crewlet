@@ -52,8 +52,10 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // election stalling the code log stalled every committer with sixty-four
 // pushes in flight, spreading the suspicion across the fleet — while the
 // committer's queue, sized to take a burst whole, could never fill. So
-// proposals have a lane of their own, as wide as the committer's queue
-// ([proposalAnswers]), and a lane answers only the operations declared on it
+// proposals have a lane of their own, as wide as everything the committer and
+// its two sibling writers hold at once — each refusing busy at its own
+// node-wide count, so each has its share and none takes another's
+// ([proposalAnswers]) — and a lane answers only the operations declared on it
 // ([op.answeredOn]). A git node's reads of a repository by object id wait
 // too — on a sync of the node's copy and a git process of up to
 // [GitReadAttempt] — so they have a third lane, and its engine writes, which
@@ -69,10 +71,9 @@ const (
 	// laneProposals answers proposals alone — a push's, a compaction's, an
 	// expunge record's, a change's and a merge queue's, a write of a change's
 	// conversation, which waits its change's turn on the same node, and a
-	// write of a repository's checks, which waits its repository's turn
-	// there — on [ProposalSubject]. Each kind that waits is bounded by its writer, which
-	// answers past its bound busy at once, and the lane is as wide as their
-	// bounds together ([proposalAnswers]).
+	// write of a repository's checks, which waits its repository's — on
+	// [ProposalSubject], as many at once as the three components answering
+	// them hold together ([proposalAnswers]).
 	laneProposals lane = "proposals"
 
 	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on

@@ -12,9 +12,13 @@ import (
 
 // A WRITER'S WAITING WRITES ARE BOUNDED: the checks writer and the change
 // writer each take one write of a key at a time, the others of the key waiting
-// their turn — and each answers a write past its key's bound, or past the
-// node's across every key, busy AT ONCE, undecided, rather than holding the
-// estate answer slot it arrived on while it waits (flights.go).
+// their turn — and each answers a write past its key's bound, past the node's
+// count across every key or past the bytes those weigh, busy AT ONCE,
+// undecided, rather than holding the estate answer slot it arrived on while it
+// waits (flight.go). The change writer's three bounds are held by
+// TestABurstPastTheWritersBoundsIsRefusedAtOnce, the checks writer's key bound
+// alone by TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce; this file
+// holds the checks writer's node count beside its key's.
 
 // answerOf is a write's answer, delivered on a channel by the goroutine that
 // asked it.
@@ -64,7 +68,7 @@ func TestAChecksWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
 		gate.open()
 		w.Stop(context.WithoutCancel(t.Context()))
 	})
-	code.SetChecksWriterBounds(w, 3, 4)
+	code.SetChecksWriterBounds(w, 3, 4, code.ChecksWriterNodeBytes)
 	key := func(repo, name string) code.CheckKey {
 		return code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: name, Attempt: 1}
 	}
@@ -90,10 +94,10 @@ func TestAChecksWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
 				bound)
 		}
 	}
-	busy("web's fourth write", key(web, "d"), "code.ChecksWritesPerRepo")
+	busy("web's fourth write", key(web, "d"), "(MaxCheckWritesWaiting)")
 	held = append(held, publish(key(api, "a")))
 	eventually(t, "api's first write reaching the publisher", func() bool { return gate.calls.Load() == 2 })
-	busy("api's second write, the node at its bound", key(api, "b"), "code.ChecksWritesPerNode")
+	busy("api's second write, the node at its bound", key(api, "b"), "(ChecksWriterNodeWrites)")
 	if got := gate.calls.Load(); got != 2 {
 		t.Fatalf("%d publishes reached the publisher, want web's first and api's first alone", got)
 	}
@@ -105,58 +109,4 @@ func TestAChecksWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
 	}
 	res, err := w.Publish(t.Context(), queueing(key(web, "d"), code.QueueDispatch))
 	requireChecked(t, "web's fourth write sent again", res, err)
-}
-
-// A CONVERSATION WRITE PAST ITS BOUNDS IS ANSWERED BUSY AT ONCE, as a check
-// write is: with the bounds set to two writes of a change and three in all,
-// the change's first comment holds its turn at the publisher's gate and its
-// second waits; its third is answered busy at once naming the change's bound;
-// another change's first is taken, and its second — the node at three — is
-// answered busy at once naming the node's.
-//
-// Mutation: let a write join past either bound, and the change's third
-// comment waits its turn behind the gate — red.
-func TestAConversationWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
-	t.Parallel()
-	n := newNode(t)
-	repo, change := discussed(t, n, "web")
-	c, _ := committerOn(t, n, n.pub)
-	other, err := c.ProposeChange(t.Context(), opening(repo, releaseRef, mainRef, dev))
-	requireChanged(t, other, err)
-	gate := newGate(n.pub)
-	w, _ := writerOn(t, n, gate)
-	code.SetChangeWriterBounds(w, 2, 3)
-	say := func(id, body string) <-chan answerOf[code.ConversationResult] {
-		out := make(chan answerOf[code.ConversationResult], 1)
-		go func() {
-			res, err := w.Converse(t.Context(), saying(repo, id, ada, "", body))
-			out <- answerOf[code.ConversationResult]{res, err}
-		}()
-		return out
-	}
-	held := []<-chan answerOf[code.ConversationResult]{say(change, "One.")}
-	eventually(t, "the first comment reaching the publisher", func() bool { return gate.calls.Load() == 1 })
-	held = append(held, say(change, "Two."))
-	eventually(t, "the second comment waiting", func() bool { return code.ChangeWriterHolders(w, change) == 2 })
-
-	busy := func(what, id, bound string) {
-		t.Helper()
-		a := answeredWithin(t, what, say(id, "Past the bound."), 10*time.Second)
-		if a.err != nil || a.res.Refusal != code.ConversationRefusalBusy || !a.res.Position.IsZero() ||
-			!strings.Contains(a.res.Detail, bound) {
-			t.Fatalf("%s answered (%+v, %v), want refused busy naming %s, with no record", what, a.res, a.err,
-				bound)
-		}
-	}
-	busy("the change's third comment", change, "code.ConversationWritesPerChange")
-	held = append(held, say(other.ChangeID, "Elsewhere."))
-	eventually(t, "the other change's comment reaching the publisher", func() bool { return gate.calls.Load() == 2 })
-	busy("the other change's second comment, the node at its bound", other.ChangeID,
-		"code.ConversationWritesPerNode")
-
-	gate.open()
-	for _, ch := range held {
-		a := answeredWithin(t, "a held comment", ch, 30*time.Second)
-		requireConversed(t, a.res, a.err)
-	}
 }

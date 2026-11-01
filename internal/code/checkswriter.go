@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,11 +51,10 @@ import (
 // A write waits for its turn while its asker's attempt leaves room for a
 // publish and its answer ([CommitBudget], [ReplyMargin]), and is refused busy,
 // undecided, the moment it does not — the change writer's rule, and for its
-// reason. And AT MOST SO MANY WAIT ([ChecksWritesPerRepo] of one repository,
-// [ChecksWritesPerNode] in all): each holds its answer slot on the estate's
-// proposals lane while it waits, so a write past either bound is answered busy
-// at once, undecided, rather than holding a slot a push is waiting for
-// (flights.go).
+// reason; and it is refused busy AT ONCE past any of three bounds, the change
+// writer's too (flight.go): [MaxCheckWritesWaiting] writes of its own
+// repository, [ChecksWriterNodeWrites] across every repository — the writer's
+// share of the node's proposal lane — and [ChecksWriterNodeBytes] of them.
 //
 // # Its decide: attempt arithmetic and the claim
 //
@@ -178,37 +178,6 @@ type EventPublisher interface {
 // the code log still hold.
 const checkEventBudget = 5 * time.Second
 
-const (
-	// ChecksWritesPerRepo is the most writes of ONE repository's checks this
-	// node's checks writer holds at once — the one in flight and those
-	// waiting their turn behind it: 128, twice MaxChecksPerFile. A
-	// repository's checks are written a head at a time — the home queues a
-	// head's checks, at most a file's sixty-four, and the git nodes running
-	// them claim, name a box for and end each — so the most a repository asks
-	// at once is a head's whole dispatch beside a whole round of claims of
-	// the head before it. A write holds its turn from its decide to its
-	// record's apply, milliseconds when the log is healthy, so a full bound
-	// drains in under a second; a write past it is answered busy at once,
-	// undecided, and its asker — a runner's claim walk, the home's next pass
-	// — sends it again.
-	ChecksWritesPerRepo = 2 * MaxChecksPerFile
-
-	// ChecksWritesPerNode is the most writes of repositories' checks this
-	// node's checks writer holds at once, every repository's together: 512,
-	// four repositories' ChecksWritesPerRepo — a node writes the checks of
-	// every repository rendezvous ranks it first for, and four bursts at once
-	// is CommitterNodeBytes' reach for pushes. Each holds an answer slot of
-	// the estate's proposals lane while it waits, which is sized to hold this
-	// beside the committer's whole queue (internal/estate's proposalAnswers),
-	// so check writes never take a slot a push is waiting for; past it a
-	// write is answered busy at once. A slot costs a goroutine and the write
-	// it carries: a claim or a box a few hundred bytes, an ending at most its
-	// summary, tail and failures (CheckSummaryBytes, CheckTailBytes,
-	// MaxCheckFailureBytes), some 86 KiB, so a full bound of the widest is
-	// some 43 MiB, under CommitterNodeBytes' 64 MiB.
-	ChecksWritesPerNode = 4 * ChecksWritesPerRepo
-)
-
 // ChecksWriter is this node's writer of repositories' checks — one write of a
 // repository's checks in flight at a time, and repositories side by side.
 type ChecksWriter struct {
@@ -224,18 +193,16 @@ type ChecksWriter struct {
 	metrics   *metrics.Recorder
 	log       *slog.Logger
 
-	// clock is the wait's clock — the wall clock's monotonic reading, never
-	// Now — and a test's own (export_test.go).
-	clock func() time.Time
-
-	// life is the publishes' context: the writer's own lifetime, never an
-	// asker's. Ended by Stop once its wait is over.
-	life context.Context
-	end  context.CancelFunc
-
-	// flights is each repository's single flight on this node, bounded at
-	// ChecksWritesPerRepo and ChecksWritesPerNode.
+	// flights is each repository's single flight, the three bounds a write is
+	// admitted under, and the publishes' own lifetime (flight.go).
 	flights *flights
+}
+
+// checkFlights is what a checks writer's single flights admit.
+var checkFlights = flightBounds{
+	key: MaxCheckWritesWaiting, node: ChecksWriterNodeWrites, bytes: ChecksWriterNodeBytes,
+	keyBound: "MaxCheckWritesWaiting", nodeBound: "ChecksWriterNodeWrites", bytesBound: "ChecksWriterNodeBytes",
+	noun: "repository", writes: "check writes", closed: stoppingChecks,
 }
 
 // NewChecksWriter builds a checks writer, refusing what it cannot work
@@ -265,9 +232,7 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	w := &ChecksWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
 		current: o.Current, events: o.Events, agentIDs: o.AgentIDs, now: o.Now,
-		metrics: o.Metrics, log: o.Logger, clock: time.Now,
-		flights: newFlights("repository", ChecksWritesPerRepo, "code.ChecksWritesPerRepo", ChecksWritesPerNode,
-			"code.ChecksWritesPerNode"),
+		metrics: o.Metrics, log: o.Logger, flights: newFlights(checkFlights),
 	}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
@@ -275,7 +240,6 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	if w.log == nil {
 		w.log = logging.Get("code")
 	}
-	w.life, w.end = context.WithCancel(context.Background())
 	return w, nil
 }
 
@@ -428,27 +392,53 @@ func (r ChecksRequest) RepoID() string {
 }
 
 // Publish decides one write of a repository's checks and answers what became
-// of it: a write whose asker's DEADLINE leaves too little for a publish and its
-// answer is answered busy undecided — at once, or the moment that is so while
-// it waits for its repository's turn — and one whose asker has none waits at
-// most a CommitBudget; a stopping writer answers [ErrNotServing]; a request
-// that is not one answers [ErrInvalidProposal]. ctx bounds only this caller's
-// wait.
+// of it: a write past one of the writer's three bounds — its repository's
+// check writes ([MaxCheckWritesWaiting]), every repository's
+// ([ChecksWriterNodeWrites]) and their bytes ([ChecksWriterNodeBytes]) — is
+// answered busy undecided at once; one whose asker's DEADLINE leaves too
+// little for a publish and its answer is answered busy undecided — at once, or
+// the moment that is so while it waits for its repository's turn — and one
+// whose asker has none waits at most a CommitBudget; a stopping writer answers
+// [ErrNotServing]; a request that is not one answers [ErrInvalidProposal]. ctx
+// bounds only this caller's wait.
 //
 // ITS OPERATION ID IS THE WRITE'S OWN, so a write its asker hands the
 // repository's runner-up after this node went silent is the same write there,
 // collapsed by the ledger onto the record that landed. Applied is answered
 // FROM THE ROWS the record wrote, never from the decision.
 func (w *ChecksWriter) Publish(ctx context.Context, r ChecksRequest) (ChecksResult, error) {
-	if err := r.Validate(); err != nil {
+	weight, err := r.weight()
+	if err != nil {
 		w.count(r, ChecksResult{}, err, checksLanded{})
 		return ChecksResult{}, err
 	}
-	res, err, counted := w.publish(ctx, r)
+	res, err, counted := w.publish(ctx, r, weight)
 	if !counted {
 		w.count(r, res, err, checksLanded{})
 	}
 	return res, err
+}
+
+// weight validates r ([ChecksRequest.Validate]) and answers what it weighs in
+// its writer's node bytes: the bytes its record's payload encodes to — or, for
+// a principal's rerun or report, which carries no record until its decide forms
+// one, the bytes of what it asks, which that record carries.
+func (r ChecksRequest) weight() (int, error) {
+	if err := r.Validate(); err != nil {
+		return 0, err
+	}
+	op, payload := r.record()
+	switch {
+	case r.Rerun != nil:
+		op, payload = r.op(), *r.Rerun
+	case r.Report != nil:
+		op, payload = r.op(), *r.Report
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
+	}
+	return len(encoded), nil
 }
 
 // stoppingChecks is the refusal of a write a stopping writer decides nothing
@@ -458,49 +448,16 @@ var stoppingChecks = fmt.Errorf("%w: the checks writer is stopping", ErrNotServi
 // checksAgain is what a write refused busy or unavailable is told to do.
 const checksAgain = "send the write again"
 
-// publish is [ChecksWriter.Publish] once the request is known to be one, and
-// whether its outcome is counted already — a publish counts its own, since it
-// ends whether or not its asker still waits.
-func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResult, error, bool) {
-	arrived := w.clock()
-	deadline, hasDeadline := ctx.Deadline()
-	wait := CommitBudget
-	if hasDeadline {
-		if wait = deadline.Sub(arrived) - CommitBudget - ReplyMargin; wait <= 0 {
-			return busyChecks(w.shortOfTime(deadline.Sub(arrived))), nil, false
-		}
-	}
-	repoID := r.RepoID()
-	j := w.flights.join(repoID)
+// publish is [ChecksWriter.Publish] once the request is known to be one,
+// weighing weight, and whether its outcome is counted already — a publish
+// counts its own, since it ends whether or not its asker still waits.
+func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest, weight int) (ChecksResult, error, bool) {
+	hold, busy, err := w.flights.take(ctx, r.RepoID(), weight)
 	switch {
-	case j.stopped:
-		return ChecksResult{}, stoppingChecks, false
-	case j.busy != "":
-		return busyChecks(j.busy + "; " + checksAgain), nil, false
-	}
-	turn := j.flight
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case turn.token <- struct{}{}:
-	case <-timer.C:
-		w.flights.leave(repoID, turn)
-		if hasDeadline {
-			return busyChecks(w.shortOfTime(deadline.Sub(w.clock()))), nil, false
-		}
-		return busyChecks(fmt.Sprintf("the write waited %s behind this repository's other check writes on "+
-			"this node, and a write waits at most %s for its turn; %s", w.clock().Sub(arrived).Round(
-			time.Millisecond), CommitBudget, checksAgain)), nil, false
-	case <-ctx.Done():
-		w.flights.leave(repoID, turn)
-		return ChecksResult{}, ctx.Err(), false
-	case <-w.flights.stopping:
-		w.flights.leave(repoID, turn)
-		return ChecksResult{}, stoppingChecks, false
-	}
-	release := func() {
-		<-turn.token
-		w.flights.leave(repoID, turn)
+	case err != nil:
+		return ChecksResult{}, err, false
+	case busy != "":
+		return busyChecks(busy), nil, false
 	}
 	// A WRITE THE CHART JUDGES is decided only by a node that can judge it:
 	// one current to the company's configuration, holding an epoch's chart,
@@ -510,18 +467,18 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 		var held bool
 		switch seats, held = w.seatRules(); {
 		case w.current != nil && !w.current():
-			release()
+			hold.release()
 			return ChecksResult{}, fmt.Errorf("%w: this node is behind the company's configuration, and a "+
 				"seat's rerun is judged by its chart; the repository's next committing node decides it",
 				ErrNotServing), false
 		case !held:
-			release()
+			hold.release()
 			return ChecksResult{}, fmt.Errorf("%w: this node holds no chart yet to judge the write by; the "+
 				"repository's next committing node decides it", ErrNotServing), false
 		}
 	}
-	if !w.flights.launch() {
-		release()
+	if !w.flights.begin() {
+		hold.release()
 		return ChecksResult{}, stoppingChecks, false
 	}
 	type answer struct {
@@ -531,12 +488,12 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 	done := make(chan answer, 1)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the repository's next check write deciding beside a record still in flight.
 	go func() {
-		defer w.flights.landed()
+		defer w.flights.done()
 		res, err, own := w.write(r, seats)
 		// THE TURN IS RELEASED ONCE THE ANSWER IS KNOWN — the record applied
 		// here, or the wait for it gave up — and before the announcement,
 		// which no write of the repository waits on.
-		release()
+		hold.release()
 		w.count(r, res, err, own)
 		done <- answer{res, err}
 		if own.ending != nil {
@@ -558,14 +515,6 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 	}
 }
 
-// shortOfTime is the refusal of a write whose asker stops waiting in left —
-// no more than a publish and its answer may take.
-func (w *ChecksWriter) shortOfTime(left time.Duration) string {
-	left = min(max(left, 0), CommitBudget+ReplyMargin)
-	return fmt.Sprintf("the write's asker stops waiting in %s, and a publish started now may take %s and its "+
-		"answer %s more; %s", left.Round(time.Millisecond), CommitBudget, ReplyMargin, checksAgain)
-}
-
 // busyChecks is a write refused busy, undecided, saying detail.
 func busyChecks(detail string) ChecksResult {
 	return ChecksResult{Refusal: CheckRefusalBusy, Detail: detail}
@@ -577,7 +526,7 @@ func busyChecks(detail string) ChecksResult {
 // than abandoned so their askers get their outcome. If ctx ends first, they
 // are cancelled and answered from what their publish returned. Safe to call
 // more than once.
-func (w *ChecksWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
+func (w *ChecksWriter) Stop(ctx context.Context) { w.flights.stop(ctx) }
 
 // checksDecision is what one round of a write's decide concluded: a payload
 // to append, or none — refused, or unchanged — with the row it read.
@@ -603,7 +552,7 @@ type checksLanded struct {
 // the writer's own lifetime and one CommitBudget — with what landed of its
 // own record.
 func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, error, checksLanded) {
-	ctx, cancel := context.WithTimeout(w.life, CommitBudget)
+	ctx, cancel := context.WithTimeout(w.flights.life, CommitBudget)
 	defer cancel()
 	op := r.op()
 	retention := w.retention()
@@ -1068,7 +1017,7 @@ func (w *ChecksWriter) announce(e *types.CodeCheckFinished) {
 	if w.events == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(w.life, checkEventBudget)
+	ctx, cancel := context.WithTimeout(w.flights.life, checkEventBudget)
 	defer cancel()
 	ev := events.New(*e, events.TraceContext{})
 	ev.Source = w.nodeID

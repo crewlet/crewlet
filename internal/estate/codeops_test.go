@@ -37,11 +37,8 @@ func (f *fakeNode) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 	hold := f.holdProposals
 	f.mu.Unlock()
 	if hold != nil {
-		f.proposing.Add(1)
-		select {
-		case <-hold:
-		case <-ctx.Done():
-			return code.ProposeResult{}, ctx.Err()
+		if err := waitHeld(ctx, hold, &f.proposing); err != nil {
+			return code.ProposeResult{}, err
 		}
 	}
 	f.mu.Lock()
@@ -148,9 +145,18 @@ func (f *fakeNode) ProposeMerge(_ context.Context, p code.MergeProposal) (code.M
 
 // Converse is a change writer that writes every write of a change's
 // conversation it is given at the next position on the code log — or refuses
-// every one with codeErr.
-func (f *fakeNode) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+// every one with codeErr; and, while holdConversations is set, writes nothing
+// until it is closed.
+func (f *fakeNode) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
 	f.note("code.conversation")
+	f.mu.Lock()
+	hold := f.holdConversations
+	f.mu.Unlock()
+	if hold != nil {
+		if err := waitHeld(ctx, hold, &f.conversing); err != nil {
+			return code.ConversationResult{}, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.conversations = append(f.conversations, w)
@@ -179,9 +185,18 @@ func (f *fakeNode) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, e
 
 // PublishChecks is a checks writer that writes every write of a repository's
 // checks it is given at the next position on the code log — or refuses every
-// one with codeErr.
-func (f *fakeNode) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+// one with codeErr; and, while holdChecks is set, writes nothing until it is
+// closed.
+func (f *fakeNode) PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
 	f.note("code.checks")
+	f.mu.Lock()
+	hold := f.holdChecks
+	f.mu.Unlock()
+	if hold != nil {
+		if err := waitHeld(ctx, hold, &f.checking); err != nil {
+			return code.ChecksResult{}, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks = append(f.checks, r)

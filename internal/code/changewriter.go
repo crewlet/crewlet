@@ -37,19 +37,27 @@ import (
 // again — a review lost to a comment beside it, sixteen rounds of losing for a
 // thread a burst of comments lands in. So the writer takes ONE CHANGE'S WRITES
 // ONE AT A TIME — a SINGLE FLIGHT a change, held from the decide's first round
-// to its answer — and writes of different changes side by side. A write waits
-// for its turn while its asker's attempt leaves room for a publish and its
-// answer ([CommitBudget], [ReplyMargin]), and is refused busy, undecided, the
-// moment it does not — the committer's rule for a push's wait in its queue, and
-// for its reason: past it the asker hands the same operation id to the
-// repository's runner-up, which then contends with this node on the change's
-// subject. Two nodes writing one change — a runner-up asked while the committing
-// node answered slowly — still meet at the broker, where exactly one record
-// lands a round. And AT MOST SO MANY WAIT ([ConversationWritesPerChange] of
-// one change, [ConversationWritesPerNode] in all): each holds its answer slot
-// on the estate's proposals lane while it waits, so a write past either bound
-// is answered busy at once, undecided, rather than holding a slot a push is
-// waiting for (flights.go).
+// to its answer — and writes of different changes side by side (flight.go). A
+// write waits for its turn while its asker's attempt leaves room for a publish
+// and its answer ([CommitBudget], [ReplyMargin]), and is refused busy,
+// undecided, the moment it does not — the committer's rule for a push's wait in
+// its queue, and for its reason: past it the asker hands the same operation id
+// to the repository's runner-up, which then contends with this node on the
+// change's subject. Two nodes writing one change — a runner-up asked while the
+// committing node answered slowly — still meet at the broker, where exactly one
+// record lands a round.
+//
+// # Bounded as the committer is
+//
+// A write holding or waiting for its change's turn holds the estate's answer
+// slot on the node's proposal lane, which pushes are answered on too, and its
+// decoded request — a review up to [MaxConversationBytes]. So it is refused
+// busy AT ONCE, undecided, past any of three bounds, the committer's rule for a
+// proposal: [MaxChangeWritesWaiting] writes of its own change, a burst written
+// faster than the change's single flight lands them or queued behind a publish
+// an election holds; [ChangeWriterNodeWrites] writes across every change, the
+// writer's share of the proposal lane; and [ChangeWriterNodeBytes] of them,
+// weighed by what each record carries.
 //
 // # The publish is the writer's
 //
@@ -68,33 +76,6 @@ import (
 // holding no chart yet ([ChangeWriterOptions.SeatRules]), as the committer
 // refuses a seat's push there: the router asks the repository's runner-up under
 // the same operation id. A person's comment or resolution is decided as ever.
-
-const (
-	// ConversationWritesPerChange is the most writes of ONE change's
-	// conversation this node's change writer holds at once — the one in
-	// flight and those waiting their turn behind it: 64, a JUDGEMENT past
-	// every burst a conversation makes. A review is one write however many
-	// findings it carries, a person or a seat writes a comment at a time, and
-	// the home a record a revision or a refresh, each decided in
-	// milliseconds when the log is healthy; sixty-four waiting on one change
-	// is a loop writing to it, and a write past them is answered busy at once,
-	// undecided, its asker sending it again.
-	ConversationWritesPerChange = 64
-
-	// ConversationWritesPerNode is the most writes of changes' conversations
-	// this node's change writer holds at once, every change's together: 512,
-	// eight changes' whole bounds — the conversations of every change of
-	// every repository rendezvous ranks this node first for, which the
-	// changes' own pace keeps far below it. Each holds an answer slot of the
-	// estate's proposals lane while it waits, which is sized to hold this
-	// beside the committer's whole queue and the checks writer's bound
-	// (internal/estate's proposalAnswers), so a conversation never takes a
-	// slot a push is waiting for; past it a write is answered busy at once.
-	// A slot costs a goroutine and the write it carries, a comment at most
-	// MaxCommentBytes; before the bound the lane's whole width could hold
-	// conversation writes waiting.
-	ConversationWritesPerNode = 8 * ConversationWritesPerChange
-)
 
 // ChangeWriterOptions configure a change writer.
 type ChangeWriterOptions struct {
@@ -155,20 +136,16 @@ type ChangeWriter struct {
 	metrics   *metrics.Recorder
 	log       *slog.Logger
 
-	// clock is the wait's clock — the wall clock's monotonic reading, never
-	// Now (the decide's, which a caller may pin) — and a test's own
-	// (export_test.go).
-	clock func() time.Time
-
-	// life is the publishes' context: the writer's own lifetime, never an
-	// asker's — a publish runs on whether or not its asker still waits.
-	// Ended by Stop once its wait is over.
-	life context.Context
-	end  context.CancelFunc
-
-	// flights is each change's single flight on this node, bounded at
-	// ConversationWritesPerChange and ConversationWritesPerNode.
+	// flights is each change's single flight, the three bounds a write is
+	// admitted under, and the publishes' own lifetime (flight.go).
 	flights *flights
+}
+
+// changeFlights is what a change writer's single flights admit.
+var changeFlights = flightBounds{
+	key: MaxChangeWritesWaiting, node: ChangeWriterNodeWrites, bytes: ChangeWriterNodeBytes,
+	keyBound: "MaxChangeWritesWaiting", nodeBound: "ChangeWriterNodeWrites", bytesBound: "ChangeWriterNodeBytes",
+	noun: "change", writes: "writes", closed: stopping,
 }
 
 // NewChangeWriter builds a change writer, refusing what it cannot work without.
@@ -197,9 +174,7 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	w := &ChangeWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
 		current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs, metrics: o.Metrics,
-		log: o.Logger, clock: time.Now,
-		flights: newFlights("change", ConversationWritesPerChange, "code.ConversationWritesPerChange",
-			ConversationWritesPerNode, "code.ConversationWritesPerNode"),
+		log: o.Logger, flights: newFlights(changeFlights),
 	}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
@@ -207,19 +182,21 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	if w.log == nil {
 		w.log = logging.Get("code")
 	}
-	w.life, w.end = context.WithCancel(context.Background())
 	return w, nil
 }
 
 // Converse decides one write of a change's conversation and answers what
-// became of it: a write whose asker's DEADLINE leaves too little for a publish
-// and its answer ([CommitBudget] and [ReplyMargin]) is answered busy undecided
-// — at once, or the moment that is so while it waits for its change's turn —
-// and one whose asker has none waits at most a CommitBudget; a stopping writer
-// answers [ErrNotServing], and so does one that cannot judge a write the chart
-// judges — behind the company's configuration, or holding no chart yet; a
-// write that is not one answers [ErrInvalidProposal]. ctx bounds only this
-// caller's wait.
+// became of it: a write past one of the writer's three bounds — its change's
+// writes ([MaxChangeWritesWaiting]), every change's
+// ([ChangeWriterNodeWrites]) and their bytes ([ChangeWriterNodeBytes]) — is
+// answered busy undecided at once; one whose asker's DEADLINE leaves too
+// little for a publish and its answer ([CommitBudget] and [ReplyMargin]) is
+// answered busy undecided — at once, or the moment that is so while it waits
+// for its change's turn — and one whose asker has none waits at most a
+// CommitBudget; a stopping writer answers [ErrNotServing], and so does one
+// that cannot judge a write the chart judges — behind the company's
+// configuration, or holding no chart yet; a write that is not one answers
+// [ErrInvalidProposal]. ctx bounds only this caller's wait.
 //
 // ITS OPERATION ID IS THE WRITE'S OWN, so a write its asker hands the
 // repository's runner-up after this node went silent is the same write there,
@@ -227,11 +204,12 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 // comment it said, never a second. Applied is answered FROM THE ROWS the
 // record wrote, never from the decision.
 func (w *ChangeWriter) Converse(ctx context.Context, cw ConversationWrite) (ConversationResult, error) {
-	if _, err := cw.measure(); err != nil {
+	weight, err := cw.measure()
+	if err != nil {
 		w.count(cw, ConversationResult{}, err)
 		return ConversationResult{}, err
 	}
-	res, err, counted := w.converse(ctx, cw)
+	res, err, counted := w.converse(ctx, cw, weight)
 	if !counted {
 		w.count(cw, res, err)
 	}
@@ -241,70 +219,39 @@ func (w *ChangeWriter) Converse(ctx context.Context, cw ConversationWrite) (Conv
 // stopping is the refusal of a write a stopping writer decides nothing of.
 var stopping = fmt.Errorf("%w: the change writer is stopping", ErrNotServing)
 
-// converse is [ChangeWriter.Converse] once the write is known to be one, and
-// whether its outcome is counted already — a publish counts its own, since it
-// ends whether or not its asker still waits.
-func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (ConversationResult, error, bool) {
+// converse is [ChangeWriter.Converse] once the write is known to be one,
+// weighing weight, and whether its outcome is counted already — a publish
+// counts its own, since it ends whether or not its asker still waits.
+func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weight int) (ConversationResult, error,
+	bool) {
+
 	if why := w.behindFor(cw); why != "" {
 		return ConversationResult{}, fmt.Errorf("%w: %s", ErrNotServing, why), false
 	}
-	arrived := w.clock()
-	deadline, hasDeadline := ctx.Deadline()
-	wait := CommitBudget
-	if hasDeadline {
-		if wait = deadline.Sub(arrived) - CommitBudget - ReplyMargin; wait <= 0 {
-			return busyConversation(w.shortOfTime(deadline.Sub(arrived))), nil, false
-		}
-	}
-	changeID := cw.ChangeID()
-	j := w.flights.join(changeID)
+	hold, busy, err := w.flights.take(ctx, cw.ChangeID(), weight)
 	switch {
-	case j.stopped:
-		return ConversationResult{}, stopping, false
-	case j.busy != "":
-		return busyConversation(j.busy + "; " + conversationAgain), nil, false
-	}
-	turn := j.flight
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case turn.token <- struct{}{}:
-	case <-timer.C:
-		w.flights.leave(changeID, turn)
-		if hasDeadline {
-			return busyConversation(w.shortOfTime(deadline.Sub(w.clock()))), nil, false
-		}
-		return busyConversation(fmt.Sprintf("the write waited %s behind this change's other writes on this "+
-			"node, and a write waits at most %s for its turn; %s", w.clock().Sub(arrived).Round(time.Millisecond),
-			CommitBudget, conversationAgain)), nil, false
-	case <-ctx.Done():
-		w.flights.leave(changeID, turn)
-		return ConversationResult{}, ctx.Err(), false
-	case <-w.flights.stopping:
-		w.flights.leave(changeID, turn)
-		return ConversationResult{}, stopping, false
+	case err != nil:
+		return ConversationResult{}, err, false
+	case busy != "":
+		return busyConversation(busy), nil, false
 	}
 	// ITS TURN: judged again, since the revision this node failed to apply
 	// may be the one its wait spanned, and its chart read once.
-	release := func() {
-		<-turn.token
-		w.flights.leave(changeID, turn)
-	}
 	if why := w.behindFor(cw); why != "" {
-		release()
+		hold.release()
 		return ConversationResult{}, fmt.Errorf("%w: %s", ErrNotServing, why), false
 	}
 	var seats SeatRules
 	if cw.JudgesChart() {
 		var held bool
 		if seats, held = w.seatRules(); !held {
-			release()
+			hold.release()
 			return ConversationResult{}, fmt.Errorf("%w: this node holds no chart yet to judge the write by; "+
 				"the repository's next committing node decides it", ErrNotServing), false
 		}
 	}
-	if !w.flights.launch() {
-		release()
+	if !w.flights.begin() {
+		hold.release()
 		return ConversationResult{}, stopping, false
 	}
 	type answer struct {
@@ -314,13 +261,13 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 	done := make(chan answer, 1)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the change's next write deciding beside a record still in flight.
 	go func() {
-		defer w.flights.landed()
+		defer w.flights.done()
 		res, err, fresh := w.write(cw, seats)
 		// THE CHANGE'S NEXT WRITE WAITS ON NONE OF THE ANNOUNCEMENT: its
 		// turn is released with the answer, and the announcement — a read
 		// and a publish, bounded by checkEventBudget — runs after both,
 		// still inside this publish's flight so Stop waits for it.
-		release()
+		hold.release()
 		w.count(cw, res, err)
 		done <- answer{res, err}
 		if fresh {
@@ -352,14 +299,6 @@ func (w *ChangeWriter) behindFor(cw ConversationWrite) string {
 		"chart the fleet replaced; the repository's next committing node decides it"
 }
 
-// shortOfTime is the refusal of a write whose asker stops waiting in left —
-// no more than a publish and its answer may take.
-func (w *ChangeWriter) shortOfTime(left time.Duration) string {
-	left = min(max(left, 0), CommitBudget+ReplyMargin)
-	return fmt.Sprintf("the write's asker stops waiting in %s, and a publish started now may take %s and its "+
-		"answer %s more; %s", left.Round(time.Millisecond), CommitBudget, ReplyMargin, conversationAgain)
-}
-
 // busyConversation is a write refused busy, undecided, saying detail.
 func busyConversation(detail string) ConversationResult {
 	return ConversationResult{Refusal: ConversationRefusalBusy, Detail: detail}
@@ -371,7 +310,7 @@ func busyConversation(detail string) ConversationResult {
 // than abandoned so their askers get their outcome. If ctx ends first, they
 // are cancelled and answered from what their publish returned. Safe to call
 // more than once.
-func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
+func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx) }
 
 // write publishes one write of a change's conversation and answers it — under
 // the writer's own lifetime and one CommitBudget — and whether it is a review
@@ -379,7 +318,7 @@ func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
 // (announce.go): never one answered unchanged, from no record, nor a retry the
 // ledger collapsed onto an earlier landing, whose call announced it.
 func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (ConversationResult, error, bool) {
-	ctx, cancel := context.WithTimeout(w.life, CommitBudget)
+	ctx, cancel := context.WithTimeout(w.flights.life, CommitBudget)
 	defer cancel()
 	op, _ := cw.record()
 	retention := w.retention()

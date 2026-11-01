@@ -182,11 +182,14 @@ import (
 // CommitterInboxBytes of entries; past either a push is refused busy AT
 // ONCE, never blocked — sixteen full records waiting behind one in flight is
 // a repository taking pushes faster than one node commits them. And the node
-// holds at most CommitterNodeBytes of proposals across every repository, from
-// each one's queueing to its caller's answer: a node commits for every
-// repository rendezvous ranks it first for, and per-repository bounds alone
-// let a thousand of the largest pushes from as many repositories hold about a
-// gibibyte of entries (EntryRoom each), and as much again decoded. A proposal
+// holds at most CommitterNodeProposals proposals and CommitterNodeBytes of
+// them across every repository, from each one's queueing to its caller's
+// answer: a node commits for every repository rendezvous ranks it first for,
+// and per-repository bounds alone let a thousand of the largest pushes from
+// as many repositories hold about a gibibyte of entries (EntryRoom each), and
+// as much again decoded — and small pushes to a few repositories hold more
+// answer slots of the estate's proposal lane than it has, the rest waiting
+// unseen in the broker's buffer rather than refused. A proposal
 // waits in the queue only while its asker's attempt still holds a batch and
 // its answer — one asked with no deadline, a whole CommitBudget — and is
 // refused busy past it, withdrawn as it waits ([Committer.await]) or refused
@@ -302,9 +305,10 @@ type Committer struct {
 	// wall clock's monotonic reading, never Now (the decide's clock, which a
 	// caller may pin), and a test's own (export_test.go).
 	clock func() time.Time
-	// nodeBytes is CommitterNodeBytes, and a test's smaller value
-	// (export_test.go).
-	nodeBytes int
+	// nodeBytes is CommitterNodeBytes, and nodeProposals
+	// CommitterNodeProposals; each a test's smaller value (export_test.go).
+	nodeBytes     int
+	nodeProposals int
 	// formedInRound, when set, is told how many protection verdicts each
 	// decide round formed inside the publisher's snapshot — a test's
 	// (export_test.go), which holds a round under the rules the formation
@@ -329,10 +333,12 @@ type Committer struct {
 	repos map[string]*repoCommitter
 	// held is the entryBound of every proposal this node holds, across its
 	// repositories, from its queueing until its caller has its answer —
-	// queued or in a batch. A caller that leaves before its answer releases
-	// its push while a batch that took it still runs, which is at most one
-	// batch a repository for at most a CommitBudget.
+	// queued or in a batch — and holding how many proposals those are. A
+	// caller that leaves before its answer releases its push while a batch
+	// that took it still runs, which is at most one batch a repository for at
+	// most a CommitBudget.
 	held     int
+	holding  int
 	stopped  bool
 	stopping chan struct{}
 	wg       sync.WaitGroup
@@ -609,7 +615,8 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
 		seatRules: o.SeatRules, current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs,
 		metrics: o.Metrics, log: o.Logger,
-		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, queueEntries: MaxQueueEntries, clock: time.Now,
+		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, nodeProposals: CommitterNodeProposals,
+		queueEntries: MaxQueueEntries, clock: time.Now,
 		repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
 	if c.now == nil {
@@ -623,8 +630,9 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 }
 
 // Propose decides one push in the next batch of its repository and answers
-// what became of it. A full queue, or a node holding its bytes
-// ([CommitterNodeBytes]), answers busy at once; a push whose caller's
+// what became of it. A full queue, or a node holding its count or its bytes
+// ([CommitterNodeProposals], [CommitterNodeBytes]), answers busy at once; a
+// push whose caller's
 // DEADLINE leaves too little for a batch and its answer ([CommitBudget] and
 // [ReplyMargin]) answers busy undecided — at once, or the moment that is so
 // while it waits — and one whose caller has no deadline answers busy once it
@@ -767,7 +775,7 @@ func (c *Committer) countBusy(repoID, kind string, reason busyReason, n int) {
 // goroutine when it has none, and counts it held until [Committer.release].
 // It answers why it did not: a sentence, and the bound a full one met —
 // [busyQueue] for the repository's count or bytes, [busyNode] for the node's
-// bytes — or none for a committer that is stopping.
+// count or bytes — or none for a committer that is stopping.
 //
 // THE SEND IS UNDER mu, which is what makes the idle exit race-free: a
 // goroutine leaves the map only under mu and only with an empty queue, so a
@@ -778,9 +786,13 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	if c.stopped {
 		return "the committer is stopping", ""
 	}
-	if c.held+q.bytes > c.nodeBytes {
-		// BEFORE A GOROUTINE IS STARTED for a repository this node may
-		// hold nothing of.
+	// BEFORE A GOROUTINE IS STARTED for a repository this node may hold
+	// nothing of.
+	switch {
+	case c.holding >= c.nodeProposals:
+		return fmt.Sprintf("%d proposals are held across this node's repositories, the most it holds "+
+			"(CommitterNodeProposals)", c.holding), busyNode
+	case c.held+q.bytes > c.nodeBytes:
 		return fmt.Sprintf("%d bytes of pushes are held across this node's repositories, and %d "+
 			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), busyNode
 	}
@@ -799,6 +811,7 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	case rc.inbox <- q:
 		rc.queued += q.bytes
 		c.held += q.bytes
+		c.holding++
 		return "", ""
 	default:
 		return fmt.Sprintf("%d pushes are queued for this repository on this node, the most "+
@@ -988,12 +1001,13 @@ func (c *Committer) admit(q *queued) bool {
 	return true
 }
 
-// release takes q's bytes off what the node holds, once its caller has left
-// [Committer.Propose].
+// release takes q and its bytes off what the node holds, once its caller has
+// left [Committer.Propose].
 func (c *Committer) release(q *queued) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.held -= q.bytes
+	c.holding--
 }
 
 // dequeued takes q's bytes off rc's queue.

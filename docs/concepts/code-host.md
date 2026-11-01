@@ -782,10 +782,18 @@ sequenceDiagram
 A queue holds at most 1 024 pushes, and a push waits in it only while its
 asker's attempt still holds a batch — which has 30 seconds to land — and its
 answer; past either bound a push is refused `busy` undecided and the client
-pushes again. The `crewlet.code.commit.busy` counter, in the
-[metrics reference](../reference/metrics.md), counts each by its `reason`:
-`queue`, the repository's queue full; `node`, the committer's node holding as
-many proposals across its repositories as it may; `waited`, a push that
+pushes again. The committer's node holds at most 1 088 proposals — one
+repository's full queue and the batch ahead of it — and 64 records' worth of
+their bytes across all its repositories, and refuses `busy` at once past
+either: every proposal holds a slot of the node's lane for proposals while it
+waits, and that lane is as wide as what the committer and its two sibling
+writers — of changes' conversations and of repositories' checks — hold
+together, so each one's burst is refused by its own bound and never keeps
+another's requests waiting for a slot. The `crewlet.code.commit.busy`
+counter, in the [metrics reference](../reference/metrics.md), counts each by
+its `reason`: `queue`, the repository's queue full; `node`, the committer's
+node holding as many proposals, or as many bytes of them, across its
+repositories as it may; `waited`, a push that
 queued with time to spare and lost it waiting behind the repository's earlier
 pushes; `late`, a push that arrived with too little of its asker's attempt
 left; and `contended`, a record that lost every round at the broker. The
@@ -1442,9 +1450,14 @@ behind their batches and contend with every push to the repository.
   one expectation, and one of them would lose a round to the other — and
   different changes' side by side. A write waits for its change's turn while
   its asker's attempt has room for it, and is refused `busy`, undecided, the
-  moment it does not. A node that stops answering is replaced by the
-  repository's next data node, under the same operation id, so a write asked
-  again is the write that landed, never a second one.
+  moment it does not — and at once where its change already has 64 writes
+  publishing or waiting on the node, where the node holds 1 024 across all its
+  changes, or where it would take the node past about 60 MiB of them — 64 of
+  the widest reviews: a change written faster than its writes land, or held behind a
+  publish an election stalls, is refused by the writer rather than holding
+  the slots the node answers pushes through. A node that stops answering is
+  replaced by the repository's next data node, under the same operation id, so
+  a write asked again is the write that landed, never a second one.
 - **A write is decided at or past what its asker read.** The asker names the
   position on the code log it read the change at, and the writer decides only
   once its own copy holds it, or refuses as a node that is behind, which the
@@ -1828,7 +1841,9 @@ itself**: it asks the committing data node, through the estate's
 **checks writer** — beside its committer, sharing none of its queue — takes
 one repository's check writes **one at a time**, each decided against the
 rows every earlier one left and published once the one before it applied
-there, so:
+there — and refuses `busy` at once, as the change writer does, a write past
+256 of its repository's publishing or waiting on the node, past 1 024 across
+all its repositories, or past about 60 MiB of them — so:
 
 - **a second claim of an attempt is refused before it appends**: a runner
   asking for an attempt another runner holds, or one that has ended, is told

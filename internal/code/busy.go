@@ -110,9 +110,9 @@ const (
 	// CommitterInboxBytes of entries: the repository takes proposals faster
 	// than one committer commits them.
 	busyQueue busyReason = "queue"
-	// busyNode is the node holding CommitterNodeBytes of proposals across its
-	// repositories: one node committing for too many busy repositories at
-	// once.
+	// busyNode is the node holding CommitterNodeProposals proposals, or
+	// CommitterNodeBytes of them, across its repositories: one node
+	// committing for too many busy repositories at once.
 	busyNode busyReason = "node"
 	// busyWaited is a proposal that QUEUED with more of its asker's attempt
 	// left than a batch and its answer (CommitBudget and ReplyMargin) and

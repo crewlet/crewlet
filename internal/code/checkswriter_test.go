@@ -228,6 +228,77 @@ func TestASecondClaimIsRefusedBeforeItAppends(t *testing.T) {
 	}
 }
 
+// A BURST OF ONE REPOSITORY'S CHECK WRITES PAST ITS BOUND IS REFUSED AT ONCE —
+// the change writer's rule, one implementation (flight.go): while one write of
+// a repository publishes and another waits its turn, a third of the same
+// repository is refused busy, undecided, the moment it arrives, naming the
+// bound, and appends nothing; another repository's write is still taken; and
+// the two taken land once the held publish goes through.
+//
+// Mutation: drop the per-key count, and the third write waits its turn and
+// lands.
+func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, other := changeRepo(t, n, "web"), changeRepo(t, n, "api")
+	gate := newGate(n.pub)
+	w, err := code.NewChecksWriter(code.ChecksWriterOptions{Publisher: gate, DB: n.db.Reader(), NodeID: n.id,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
+		Now:       func() time.Time { return harnessAt }})
+	if err != nil {
+		t.Fatalf("NewChecksWriter: %v", err)
+	}
+	t.Cleanup(func() {
+		gate.open()
+		w.Stop(context.WithoutCancel(t.Context()))
+	})
+	code.SetChecksWriterBounds(w, 2, 8, code.ChecksWriterNodeBytes)
+	type answer struct {
+		res code.ChecksResult
+		err error
+	}
+	publish := func(r code.ChecksRequest) <-chan answer {
+		out := make(chan answer, 1)
+		go func() {
+			res, err := w.Publish(t.Context(), r)
+			out <- answer{res, err}
+		}()
+		return out
+	}
+	first := publish(queueing(checkOn(repo, 1), code.QueueDispatch))
+	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
+	second := publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("A"), Name: "unit", Attempt: 1},
+		code.QueueDispatch))
+	// THE SECOND IS WAITING ITS TURN before the third arrives, or the third
+	// could take its place and the second be the one refused.
+	eventually(t, "the second write waiting its turn", func() bool { return code.ChecksWriterHolders(w, repo) == 2 })
+	select {
+	case a := <-publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("R"), Name: "unit", Attempt: 1},
+		code.QueueDispatch)):
+		requireCheckRefused(t, "a third write of the repository", a.res, a.err, code.CheckRefusalBusy)
+		if want := "2 check writes of this repository hold or wait for its turn on this node, the most one " +
+			"repository takes at once (MaxCheckWritesWaiting)"; !strings.Contains(a.res.Detail, want) {
+			t.Fatalf("the third write was refused %q, want it saying %q", a.res.Detail, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a third write of the repository waited rather than being refused at once")
+	}
+	elsewhere := publish(queueing(checkOn(other, 1), code.QueueDispatch))
+	eventually(t, "the other repository's write reaching the publisher", func() bool {
+		return gate.calls.Load() == 2
+	})
+	gate.open()
+	for name, ch := range map[string]<-chan answer{"first": first, "second": second, "elsewhere": elsewhere} {
+		select {
+		case a := <-ch:
+			requireChecked(t, "the "+name+" write", a.res, a.err)
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s write was not answered in 30 s", name)
+		}
+	}
+}
+
 // AN ATTEMPT FOLLOWS THE ONE BEFORE IT, ENDED: a dispatch is a commit's first
 // attempt, answered from its row when it is queued already; the next is queued
 // only once the one before it ended, the home's requeue only after its

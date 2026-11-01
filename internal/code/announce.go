@@ -192,7 +192,7 @@ func (w *ChangeWriter) announceReview(cw ConversationWrite) {
 	if w.events == nil || cw.Review == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(w.life, checkEventBudget)
+	ctx, cancel := context.WithTimeout(w.flights.life, checkEventBudget)
 	defer cancel()
 	reviewID := ReviewID(cw.OpID)
 	e, found, err := reviewEvent(ctx, w.db, w.agentIDs, cw.RepoID(), reviewID)

@@ -917,11 +917,11 @@ const (
 	// counts it so (busy.go's `waited`).
 	//
 	// A ROUTED burst reaches it too: the estate answers a node's proposals
-	// on a registration of their own whose concurrency is this queue and
-	// the batch ahead of it (internal/estate's proposalAnswers), so the
-	// bound a burst meets is this one, refused busy at once, never the
-	// registration's — past which a push would wait unseen in the broker's
-	// buffer for a slot.
+	// on a registration of their own, the committer's share of which is
+	// this queue and the batch ahead of it (CommitterNodeProposals; the
+	// lane is internal/estate's proposalAnswers), so the bound a burst
+	// meets is this one, refused busy at once, never the registration's —
+	// past which a push would wait unseen in the broker's buffer for a slot.
 	CommitterInbox = 1_024
 
 	// CommitterInboxBytes is the most one repository's queue may weigh, by
@@ -947,8 +947,9 @@ const (
 	// Each repository's queue is bounded on its own, and nothing else bound
 	// them together: a node is the committer of every repository rendezvous
 	// ranks it first for, and the estate answers its proposals on a
-	// registration of their own as wide as one repository's whole queue
-	// (CommitterInbox), so a thousand of the largest pushes at once — each
+	// registration of their own whose committer's share is one repository's
+	// whole queue (CommitterNodeProposals), so a thousand of the largest
+	// pushes at once — each
 	// one a receive-pack some receiving node holds open, from as many
 	// repositories — held about a gibibyte of entries on the committer, and
 	// as much again decoded. The largest entry this domain admits is
@@ -969,6 +970,98 @@ const (
 	// four repositories' worth at once and are refused busy past it, and the
 	// client runs git push again.
 	CommitterNodeBytes = 4 * CommitterInboxBytes
+
+	// CommitterNodeProposals is the most proposals one node's committer HOLDS
+	// at once, by COUNT, across every repository — each from its queueing to
+	// its caller's answer, as CommitterNodeBytes counts them: ONE
+	// REPOSITORY'S FULL QUEUE AND THE BATCH IN FLIGHT AHEAD OF IT
+	// (CommitterInbox and MaxPushesPerRecord), 1 088. Past it a proposal is
+	// refused busy at once, as past the node's bytes.
+	//
+	// The node's bytes alone never bound the count: pushes of a kilobyte or
+	// two meet CommitterNodeBytes only past some forty thousand of them, and
+	// each repository's queue holds CommitterInbox, so small pushes to two
+	// repositories at once already held more than the estate answers on the
+	// lane its proposals have (internal/estate's proposalAnswers) — and those
+	// past the lane waited unseen in the broker's buffer for a slot, behind
+	// the very bursts a busy answer would have turned away. Bounded by count,
+	// the committer's share of that lane is this many, which the estate sizes
+	// the lane by beside the change writer's and the checks writer's shares
+	// (ChangeWriterNodeWrites, ChecksWriterNodeWrites), so a burst meets the
+	// committer's own refusal at once. One repository's burst is still taken
+	// whole; several repositories' together share it, refused busy past it as
+	// one repository's past its queue — what the lane's own bound did before,
+	// with the refusal said rather than the wait left unseen.
+	CommitterNodeProposals = CommitterInbox + MaxPushesPerRecord
+
+	// MaxChangeWritesWaiting is the most writes of ONE change's conversation
+	// one node's change writer holds at once — the one publishing and those
+	// waiting for its turn ([ChangeWriter]): SIXTY-FOUR. A change's widest
+	// burst is everybody it concerns writing at once — its reviewers
+	// (MaxReviewersPerChange) and as many again of its authors and the
+	// people talking on it — and that queue drains in well under a second
+	// on a healthy log: one change's single flight lands a write every 4.3 ms
+	// (BenchmarkAChangesWritesInTurn, -benchtime 64x, one run, on one
+	// embedded member and two cores of the test runner), so sixty-four drain
+	// in about 0.3 s, where the wait a write may make for its turn is up to a whole
+	// CommitBudget. Past it the change is written faster than its single
+	// flight lands them, or its publish is held — an election, or the
+	// publisher's wait on a lagging applier — and every write past it would
+	// only hold a slot of the node's proposal lane while it waited to be
+	// refused: so it is refused busy AT ONCE, undecided, and its asker sends
+	// it again. It keeps one hot change from taking more than a sixteenth of
+	// what the node's writer holds (ChangeWriterNodeWrites).
+	MaxChangeWritesWaiting = 64
+
+	// ChangeWriterNodeWrites is the most writes of changes' conversations one
+	// node's change writer holds at once, across every change: SIXTEEN
+	// CHANGES' widest bursts (MaxChangeWritesWaiting), 1 024 — what one
+	// repository's committer queue holds of pushes (CommitterInbox), for a
+	// node that writes the conversations of every repository it commits for.
+	// Past it a write is refused busy at once. It is the writer's SHARE of the
+	// estate's proposal lane (internal/estate's proposalAnswers, which sums
+	// the shares), so a burst of comments across a node's changes never
+	// holds the slots a push routed to the node needs.
+	ChangeWriterNodeWrites = 1_024
+
+	// ChangeWriterNodeBytes is the most the writes one node's change writer
+	// holds may weigh together, each by the bytes its record carries
+	// ([ConversationWrite.Validate]'s measure): SIXTY-FOUR OF THE WIDEST — a
+	// review with its findings at MaxConversationBytes — or some sixteen
+	// thousand ordinary comments, which meet ChangeWriterNodeWrites first.
+	// The committer's judgment of a node's memory (CommitterNodeBytes, 64
+	// records' worth of the largest entries), for the same exposure: without
+	// it, a full share of maximal reviews held about a gibibyte decoded,
+	// beside the raw requests the lane holds. Past it a write is refused busy
+	// at once.
+	ChangeWriterNodeBytes = 64 * MaxConversationBytes
+
+	// MaxCheckWritesWaiting is the most writes of ONE repository's checks one
+	// node's checks writer holds at once — the one publishing and those
+	// waiting for its turn ([ChecksWriter]): FOUR CHECKS FILES' WORTH
+	// (MaxChecksPerFile), 256. A repository's widest burst is every check of
+	// a commit claimed, its box named and ended — three writes each, a
+	// commit's file of MaxChecksPerFile checks among them landing together —
+	// beside the next commit's dispatches, and like a change's it drains in a
+	// fraction of the wait a write may make. Past it the repository's checks
+	// are written faster than its single flight lands them, or its publish is
+	// held, and a write is refused busy at once.
+	MaxCheckWritesWaiting = 4 * MaxChecksPerFile
+
+	// ChecksWriterNodeWrites is the most writes of repositories' checks one
+	// node's checks writer holds at once, across every repository: 1 024, as
+	// the change writer's (ChangeWriterNodeWrites) — four repositories'
+	// widest bursts. It is the checks writer's share of the estate's proposal
+	// lane, and past it a write is refused busy at once.
+	ChecksWriterNodeWrites = 1_024
+
+	// ChecksWriterNodeBytes is the most the writes one node's checks writer
+	// holds may weigh together, each by the bytes its record carries: the
+	// change writer's share of a node's memory (ChangeWriterNodeBytes) — some
+	// seven hundred of a check's largest endings (its summary, its output's
+	// tail and its failures at their bounds), while a claim or a dispatch of
+	// a kilobyte or two meets ChecksWriterNodeWrites first.
+	ChecksWriterNodeBytes = ChangeWriterNodeBytes
 
 	// CommitterIdle is how long a repository's committer goroutine waits
 	// with nothing queued before it exits and forgets the repository. A

@@ -164,6 +164,26 @@ type fakeNode struct {
 	// earlier ones, holding whatever slot it was answered through.
 	holdProposals chan struct{}
 	proposing     atomic.Int32
+	// holdConversations and holdChecks, when set, are a change writer and a
+	// checks writer whose publishes are held the same way, each write
+	// counted in conversing or checking as it arrives — a write waiting its
+	// key's turn behind a publish an election holds.
+	holdConversations chan struct{}
+	conversing        atomic.Int32
+	holdChecks        chan struct{}
+	checking          atomic.Int32
+}
+
+// waitHeld waits inside a held component until hold is closed, counting the wait
+// in arrived as it begins, and answers the asker's context ending first.
+func waitHeld(ctx context.Context, hold <-chan struct{}, arrived *atomic.Int32) error {
+	arrived.Add(1)
+	select {
+	case <-hold:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeNode) note(op string) {

@@ -110,16 +110,16 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 }
 
 // EACH LANE IS SERVED ON ITS OWN SUBJECT WITH ITS OWN BOUND, and proposals'
-// bound is the committer's queue: a burst to one repository must meet the
-// committer's own bounds — busy at once past its count, its bytes or the
-// node's — never the registration's, past which a push waits unseen in the
-// broker's buffer for a slot. A node serving git registers the git reads' lane
-// and the git writes' lane too: the reads' as wide as the shared one (the
-// node's seat git-work share, not a lane, bounds the git work running), and
-// the writes' as wide as the writes it holds and the shared lane's width
-// beside them, for the answers it gives at once to a write past the held
-// ones — so no such write waits unseen in the broker's buffer either. A node
-// serving none registers neither.
+// bound is everything the committer and its two sibling writers hold at once:
+// a burst must meet its component's own bounds — busy at once past a key's
+// count, the node's count or the node's bytes — never the registration's,
+// past which a request waits unseen in the broker's buffer for a slot. A node
+// serving git registers the git reads' lane and the git writes' lane too: the
+// reads' as wide as the shared one (the node's seat git-work share, not a
+// lane, bounds the git work running), and the writes' as wide as the writes it
+// holds and the shared lane's width beside them, for the answers it gives at
+// once to a write past the held ones — so no such write waits unseen in the
+// broker's buffer either. A node serving none registers neither.
 func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	t.Parallel()
 	shared := map[string]int{
@@ -161,17 +161,117 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 			t.Errorf("the %s subject %q is not data.a's own", l, s)
 		}
 	}
-	// THE LANE HOLDS EVERY WRITER THAT WAITS ON IT AT ITS BOUND: a push's
-	// whole queue and the batch ahead of it, and beside them the most writes
-	// the checks writer and the change writer hold waiting for their turns —
-	// each answering past its bound busy at once — so a burst of check writes
-	// takes no slot a push is waiting for.
-	waiting := code.CommitterInbox + code.MaxPushesPerRecord + code.ChecksWritesPerNode +
-		code.ConversationWritesPerNode
-	if proposalAnswers < waiting {
-		t.Errorf("the proposal lane answers %d at once, under one repository's full queue, the batch ahead "+
-			"of it and the checks and change writers' bounds (%d): a burst would wait for a slot before its "+
-			"writer could answer it busy", proposalAnswers, waiting)
+	// EVERY HOLDER'S SHARE AT ONCE: the committer's node-wide count holds at
+	// least one repository's full queue and the batch ahead of it, and the
+	// lane holds it beside both writers' counts.
+	if code.CommitterNodeProposals < code.CommitterInbox+code.MaxPushesPerRecord {
+		t.Errorf("the committer holds %d proposals a node, under one repository's full queue and the batch "+
+			"ahead of it (%d): a burst to one repository would be refused before its queue filled",
+			code.CommitterNodeProposals, code.CommitterInbox+code.MaxPushesPerRecord)
+	}
+	if held := code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites; proposalAnswers < held {
+		t.Errorf("the proposal lane answers %d at once, under the %d its committer and its two writers hold "+
+			"together: a burst would wait unseen for a slot before its component could answer it busy, "+
+			"and one component's burst would hold the slots another's requests need", proposalAnswers, held)
+	}
+}
+
+// EVERY HOLDER ON THE PROPOSAL LANE HAS ITS SHARE AT ONCE. The committer, the
+// change writer and the checks writer each hold a request's slot for as long
+// as they hold the request — a push queued behind a held batch, a write of a
+// change's conversation or of a repository's checks waiting its key's turn
+// behind a publish an election holds — and each refuses busy at once past its
+// own node-wide count. With all three full at once, every one of their
+// requests reaches its component: none waits unseen in the broker's buffer
+// for a slot another component's burst holds, so a burst of comments on a
+// node's changes never keeps a push routed to it from its committer.
+//
+// JUDGED BY WHAT REACHED EACH COMPONENT, never by a clock, as the read case
+// above is: every request's attempt outlasts the wait.
+//
+// Mutation: size the lane to the committer's count alone, as it was before
+// the writers' shares, and the writes past it never reach their writers.
+func TestEveryHolderOnTheProposalLaneHasItsShareAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	hold := make(chan struct{})
+	node.set(func(n *fakeNode) {
+		n.holdProposals, n.holdConversations, n.holdChecks = hold, hold, hold
+	})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	var asks sync.WaitGroup
+	t.Cleanup(asks.Wait)
+	t.Cleanup(release)
+
+	r := f.router(t, "agent-2", nil)
+	asking, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	total := code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites
+	failed := make(chan error, total)
+	ask := func(each func() error) {
+		asks.Add(1)
+		go func() {
+			defer asks.Done()
+			if err := each(); err != nil {
+				failed <- err
+			}
+		}()
+	}
+	for i := range code.CommitterNodeProposals {
+		repo := fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", i)
+		ask(func() error {
+			_, err := r.Code().Propose(asking, proposalTo(repo, "push-"+repo))
+			return err
+		})
+	}
+	for i := range code.ChangeWriterNodeWrites {
+		ask(func() error {
+			_, err := r.Code().Converse(asking, code.ConversationWrite{
+				OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
+				Comment: &code.Comment{RepoID: fmt.Sprintf("repo-%04d", i),
+					ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100_000+i), Body: "why?"}})
+			return err
+		})
+	}
+	for i := range code.ChecksWriterNodeWrites {
+		ask(func() error {
+			_, err := r.Code().Checks(asking, code.ChecksRequest{
+				OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
+				Started: &code.CheckStarted{CheckKey: code.CheckKey{
+					RepoID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 200_000+i),
+					OID:    "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1},
+					Runner: "git-1", Placement: code.PlacementContainer,
+					StartedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)}})
+			return err
+		})
+	}
+
+	deadline := time.Now().Add(2 * time.Minute)
+	for _, c := range []struct {
+		what    string
+		reached *atomic.Int32
+		share   int
+	}{
+		{"pushes reached the committer", &node.proposing, code.CommitterNodeProposals},
+		{"conversation writes reached the change writer", &node.conversing, code.ChangeWriterNodeWrites},
+		{"check writes reached the checks writer", &node.checking, code.ChecksWriterNodeWrites},
+	} {
+		for int(c.reached.Load()) < c.share {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d of %d %s in two minutes, with every holder full at once — the lane answers "+
+					"fewer requests than its holders hold together", c.reached.Load(), c.share, c.what)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	release()
+	asks.Wait()
+	close(failed)
+	for err := range failed {
+		t.Errorf("a held request, once released: %v", err)
 	}
 }
 

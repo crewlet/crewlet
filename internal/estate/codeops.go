@@ -243,9 +243,11 @@ var opCodeMerge = define("code.merge", opIdempotentWrite, codeDomain, false,
 // operation ledger collapses (a comment's id is derived from it, so no retry
 // says it twice), so an unanswered one is asked of the repository's runner-up
 // with the same id. On the proposals lane, because it holds its answer slot
-// while it waits for its change's turn on that node. No actor: the asker
-// travels inside the write, checked by its Validate on the node that decides,
-// which records it as who wrote it.
+// while it waits for its change's turn on that node — its share of the lane
+// the change writer's own node-wide count, past which the writer answers busy
+// at once ([proposalAnswers]). No actor: the asker travels inside the write,
+// checked by its Validate on the node that decides, which records it as who
+// wrote it.
 //
 // A WRITE THE CHART JUDGES — a seat's, an ask of reviewers by anybody, since
 // each reviewer is judged by the chart, and the home's own record of a
@@ -301,12 +303,11 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 // the domain's operation ledger collapses, so an unanswered one is asked of the
 // repository's runner-up with the same id. On the proposals lane, because it
 // holds its answer slot while it waits for its repository's turn on that node
-// — a wait the writer bounds (code.ChecksWritesPerRepo, ChecksWritesPerNode),
-// answering a write past it busy at once, and the lane's width holds
-// ([proposalAnswers]). No actor: the engine's own writes name no principal,
-// and a principal's — a rerun a seat or a person asks for, a person's CI's
-// report — travels inside the request, checked by its Validate on the node
-// that decides, which records it as who asked.
+// — its share of the lane the checks writer's own node-wide count, past which
+// the writer answers busy at once ([proposalAnswers]). No actor: the engine's
+// own writes name no principal, and a principal's — a rerun a seat or a person
+// asks for, a person's CI's report — travels inside the request, checked by its
+// Validate on the node that decides, which records it as who asked.
 //
 // A SEAT'S RERUN JUDGES ITS GRANT from the deciding node's chart — whether it
 // may write the repository or wrote the change the check judges, and
@@ -326,42 +327,46 @@ var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 	judgesGrant(code.ChecksRequest.JudgesChart)
 
 // proposalAnswers is how many proposals a data node answers at once, on the
-// lane they have to themselves ([laneProposals]): 2 112, THE MOST ONE
-// REPOSITORY'S COMMITTER HOLDS — a full queue (code.CommitterInbox) and the
-// batch in flight ahead of it (code.MaxPushesPerRecord); a compaction's
-// proposal takes a place of that same queue, so the figure counts it already
-// — BESIDE THE MOST THE NODE'S TWO OTHER WRITERS ON THE LANE HOLD: its checks
-// writer's (code.ChecksWritesPerNode) and its change writer's
-// (code.ConversationWritesPerNode). A proposal holds its slot while it waits in
-// its repository's queue and its batch runs, so a lane as narrow as
-// [queue.ConcurrentAnswers] would cut a burst to one repository off at
-// sixty-four, the rest waiting unseen in the broker's buffer behind them; as
-// wide as a whole queue, the bound a burst meets is the committer's own,
-// which answers at once — busy past a repository's count or bytes or the
-// node's (code.CommitterNodeBytes), and busy the moment a queued push's
-// attempt runs short — so a slot is held for long only by a push the
-// committer is deciding or will decide inside its asker's attempt. A check
-// write and a conversation write hold their slots while they wait for their
-// repository's or change's turn, so each writer answers a write past its own
-// bounds busy at once as well, and the lane holds both writers' whole bounds
-// beside the committer's queue: a burst of one repository's machine-made
-// check writes — a home queuing a target's checks for every waiting head, a
-// fleet's runners claiming at once — once held every slot, and the node's
-// pushes waited unseen behind it.
+// lane they have to themselves ([laneProposals]): 3 136, EVERY ANSWER THE
+// NODE'S CODE HALF HOLDS AT ONCE, summed over the three that answer on it —
+// what its committer holds across every repository
+// (code.CommitterNodeProposals: one repository's full queue and the batch in
+// flight ahead of it, 1 088), what its change writer holds across every change
+// (code.ChangeWriterNodeWrites, 1 024) and what its checks writer holds across
+// every repository (code.ChecksWriterNodeWrites, 1 024). A request holds its
+// slot for as long as its component holds it — a push while it waits in its
+// repository's queue and its batch runs, a write of a change's conversation or
+// of a repository's checks while it waits for its key's turn and its publish
+// runs — so each component refuses busy AT ONCE past its own node-wide count,
+// and past its bytes (code.CommitterNodeBytes, code.ChangeWriterNodeBytes,
+// code.ChecksWriterNodeBytes) and its per-key bounds before that, and a slot is
+// held for long only by a write its component is deciding or will decide
+// inside its asker's attempt. With the lane as wide as the three counts
+// together, the bound a burst meets is always its component's own, answered at
+// once — never the registration's, past which a request waits unseen in the
+// broker's buffer for a slot — and no component's burst holds a slot another's
+// request needs: a burst of comments on one change, written faster than the
+// change's single flight drains, or queued behind a publish an election holds,
+// is refused busy once its writer is full while every push, compaction and
+// change routed to the node is still answered. The lane's slots are shared by
+// SUMMING the shares rather than by a registration each, so a request finds
+// its slot on the one subject its operation is declared on. A request also
+// holds a slot while the serving node waits for its asker's floor (bounded by
+// statelog.ReadBudget) and while it is refused, each briefly.
 //
-// What a slot costs is a goroutine and the proposal it carries, a kilobyte or
-// two for an ordinary push: a full lane of them is a few megabytes. The
-// largest push the code domain admits weighs about a mebibyte
-// (code.EntryRoom: some six hundred commands at the longest ref JSON spells
-// six times over — a thousand at the longest plain ref, and a full list of
-// the commits it introduced, weigh about 440 KiB), and those the committer
-// bounds by their bytes, so a full lane
-// of large ones holds what code.CommitterNodeBytes admits and answers the
+// What a slot costs is a goroutine and the request it carries, a kilobyte or
+// two for an ordinary push or comment: a full lane of them is some tens of
+// megabytes of stacks. The largest push the code domain admits weighs about a
+// mebibyte (code.EntryRoom: some six hundred commands at the longest ref JSON
+// spells six times over — a thousand at the longest plain ref, and a full list
+// of the commits it introduced, weigh about 440 KiB), and so does the largest
+// write of a conversation (code.MaxConversationBytes, a review with its
+// findings), and those their components bound by their bytes, so a full lane
+// of large ones holds what each component's node bytes admit and answers the
 // rest busy at once. And every proposal is a push some receiving node's
 // receive-pack holds open while it waits, so what reaches the lane at once is
 // bounded by the fleet's transfer lanes as well.
-const proposalAnswers = code.CommitterInbox + code.MaxPushesPerRecord + code.ChecksWritesPerNode +
-	code.ConversationWritesPerNode
+const proposalAnswers = code.CommitterNodeProposals + code.ChangeWriterNodeWrites + code.ChecksWriterNodeWrites
 
 // opCodeResolve is a repository by its name: the host's admission of every git
 // request.
