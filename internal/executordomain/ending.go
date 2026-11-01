@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ENDING: the engine's account of how a turn ended, which a harness's
@@ -87,7 +88,7 @@ type Ending struct {
 // [Ending.fit] cuts it.
 func (e Ending) validate() error {
 	if !e.Outcome.Valid() {
-		return invalid("the ending's outcome %q is not one of %v", e.Outcome, Outcomes)
+		return invalid("the ending's outcome %q is not one of %s", e.Outcome, words.Or(Outcomes))
 	}
 	for _, word := range []struct {
 		field, value string
