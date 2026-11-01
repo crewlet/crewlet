@@ -88,6 +88,14 @@ const MaxNoticeExcerpt = 600
 // where this transaction wrote it — a redelivery writes nothing, and moves
 // nobody's inbox — and, horizon or not, each change's count of them
 // ([countNotices]).
+//
+// AS FEW STATEMENTS AS THE ENGINE'S PARAMETER LIMIT ALLOWS
+// ([store.InsertRowsReturning]), each answering the recipients it wrote, so
+// the movements still name only rows this transaction wrote: the widest
+// record the decide admits writes 3 904 notices (BenchmarkApplyAPushRecord's
+// notices arm), and one statement a row held the write lane 240 ms of
+// statelog.ApplyTxTimeBudget's 250 for them, on every data node (doc.go's
+// measured section).
 func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	payload any) (int, error) {
 
@@ -99,9 +107,11 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, err
 	}
-	record := noticeRecordID(at)
-	excerpt := excerptOf(payload)
-	written := 0
+	type notice struct {
+		Concern
+		kind PartyKind
+	}
+	var kept []notice
 	for _, c := range Concerns(routings) {
 		if !c.Hears() {
 			continue
@@ -113,18 +123,34 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 		if pastHorizon(at, horizon) {
 			continue
 		}
-		res, err := tx.ExecContext(ctx, addNoticeSQL, record, c.Handle, string(kind), repoID, c.Change.ChangeID,
-			c.Change.ChangeRef, string(c.Reason), c.Addressed, c.FallbackOnly, c.FallbackRank, excerpt, at.at(),
-			at.packed, at.position.Stream, int64(at.position.Generation))
-		if err != nil {
-			return 0, fmt.Errorf("code: write the notice of %s for %s at %s: %w", c.Change.ChangeRef, c.Handle,
-				at.position, err)
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			written++
-			a.inboxed.Note(inbox.Note{Record: record, Handle: c.Handle, Subject: c.Change.ChangeID,
+		kept = append(kept, notice{Concern: c, kind: kind})
+	}
+	// ONE ROW A HANDLE: [Concerns] keeps a handle once a record, so the
+	// recipient a statement answers names the one concern it wrote.
+	byHandle := make(map[string]Concern, len(kept))
+	for _, k := range kept {
+		byHandle[k.Handle] = k.Concern
+	}
+	record := noticeRecordID(at)
+	excerpt := excerptOf(payload)
+	written, err := store.InsertRowsReturning(ctx, tx, at.maxVariables, addNoticesSQL, noticeRowSQL,
+		addNoticesTailSQL, len(kept), func(i int) []any {
+			k := kept[i]
+			return []any{record, k.Handle, string(k.kind), repoID, k.Change.ChangeID, k.Change.ChangeRef,
+				string(k.Reason), k.Addressed, k.FallbackOnly, k.FallbackRank, excerpt, at.at(), at.packed,
+				at.position.Stream, int64(at.position.Generation)}
+		}, func(rows *sql.Rows) error {
+			var handle string
+			if err := rows.Scan(&handle); err != nil {
+				return err
+			}
+			c := byHandle[handle]
+			a.inboxed.Note(inbox.Note{Record: record, Handle: handle, Subject: c.Change.ChangeID,
 				Reason: string(c.Reason), Position: at.packed})
-		}
+			return nil
+		})
+	if err != nil {
+		return 0, fmt.Errorf("code: write the notices of the record at %s: %w", at.position, err)
 	}
 	return counted + written, nil
 }
@@ -266,20 +292,21 @@ func changesOf(ctx context.Context, tx *sql.Tx, repoID string) ([]string, error)
 }
 
 // The applier's notice statements, each with a WHERE registered in
-// plan_test.go: the write, a conflict on the key a skip; a change's count of
-// them, by the change's key; the notices of a list of changes removed by
-// code_notifications_change_idx, one seek an element, and the oldest of one
-// change's by a range of it, each answering the rows it deleted; and the
-// changes a repository still holds, read for its final purge by
-// code_changes_number_idx. The sweep's is noticesweep.go's.
+// plan_test.go: the write, in three parts for [store.InsertRowsReturning] —
+// a conflict on the key a skip, and the recipients it wrote its answer; a
+// change's count of them, by the change's key; the notices of a list of
+// changes removed by code_notifications_change_idx, one seek an element, and
+// the oldest of one change's by a range of it, each answering the rows it
+// deleted; and the changes a repository still holds, read for its final
+// purge by code_changes_number_idx. The sweep's is noticesweep.go's.
 const (
-	addNoticeSQL = `INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id,
+	addNoticesSQL = `INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id,
 			change_ref, reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,
-			log_generation)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (record_id, recipient) DO NOTHING`
-	countNoticesSQL  = `UPDATE code_changes SET notices = notices + ? WHERE id = ?`
-	removeNoticesSQL = `DELETE FROM code_notifications WHERE rowid IN (SELECT n.rowid
+			log_generation) VALUES `
+	noticeRowSQL      = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	addNoticesTailSQL = `ON CONFLICT (record_id, recipient) DO NOTHING RETURNING recipient`
+	countNoticesSQL   = `UPDATE code_changes SET notices = notices + ? WHERE id = ?`
+	removeNoticesSQL  = `DELETE FROM code_notifications WHERE rowid IN (SELECT n.rowid
 		FROM json_each(?) AS j CROSS JOIN code_notifications AS n INDEXED BY code_notifications_change_idx
 		WHERE n.change_id = CAST(j.value AS TEXT))
 		RETURNING record_id, recipient, change_id, reason, log_seq`

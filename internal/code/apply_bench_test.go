@@ -373,7 +373,12 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 //     rebased makes;
 //   - group+changes: MaxPushesPerRecord pushes of one command each, each
 //     moving the head of a live change of its own — group commit, where
-//     every push is a change's next revision.
+//     every push is a change's next revision;
+//   - notices: one small push whose routing tells the most handles its rows
+//     leave room for — it merges sixty-one changes, each telling
+//     MaxRoutedParticipants authors of its own — so its apply writes 3 904
+//     notices and counts them on their changes: the notice write at its
+//     widest, on every data node.
 //
 // The two change arms are DECIDED over the rows before they are applied
 // ([estate.decidedRecord]), since what a record writes about changes is what
@@ -457,6 +462,29 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		}
 		return entries
 	}
+	// THE WIDEST ROUTING A RECORD CARRIES: one push merging as many changes
+	// as its rows leave room for, each telling MaxRoutedParticipants authors
+	// of its own that it merged — a notice a handle and the change's count —
+	// held by the decide's own count of them (noticeRows) to what
+	// MaxRecordRows leaves of the push's rows.
+	perMerged := MaxRoutedParticipants + 1
+	merged := (MaxRecordRows - entryRows(one(0)[0])) / perMerged
+	noticing := func(i int) []PushEntry {
+		repo := fmt.Sprintf("repo-%06d", i)
+		entries := one(i)
+		for c := range merged {
+			r := ChangeRouting{ChangeID: fmt.Sprintf("%s-change-%06d", repo, c), ChangeRef: fmt.Sprintf("r!%d", c+1),
+				Merged: true}
+			for a := range MaxRoutedParticipants {
+				r.Authors = append(r.Authors, fmt.Sprintf("author-%03d-%02d", c, a))
+			}
+			entries[0].Routing = append(entries[0].Routing, r)
+		}
+		if rows := entryRows(entries[0]) + noticeRows(entries[0].Routing); rows > MaxRecordRows {
+			b.Fatalf("the widest routing's record counts %d rows, past MaxRecordRows (%d)", rows, MaxRecordRows)
+		}
+		return entries
+	}
 	liveAt := func(changes int) func(e *estate, repo string) {
 		return func(e *estate, repo string) {
 			e.seed(repo, 0, 10_000, 0)
@@ -525,6 +553,12 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 			closed: closes},
 		{name: "group+changes", entries: revising, seed: liveAt(MaxPushesPerRecord), decide: true,
 			revised: MaxPushesPerRecord},
+		// EVERY ROW THE PUSH'S OWN LEAVE A NOTICE OR A COUNT: the widest
+		// routing, against the changes it names.
+		{name: "notices", entries: noticing, seed: func(e *estate, repo string) {
+			e.seed(repo, 0, 10_000, 0)
+			e.seedChangeRows(repo, merged, 1, 1, 0)
+		}, rows: 3 + merged*perMerged},
 	} {
 		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {
@@ -551,6 +585,14 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 					rows = written(entries) + changeRows
 				}
 				e.applyTimed(b, a, pushOf(b, repo, entries...), rows)
+				// EVERY NOTICE ITS ROUTING TELLS, and each change counting
+				// its own.
+				if shape.name == "notices" && (e.num(`SELECT COUNT(*) FROM code_notifications WHERE repo_id = ?`,
+					repo) != int64(merged*MaxRoutedParticipants) || e.num(`SELECT COUNT(*) FROM code_changes
+					WHERE repo_id = ? AND notices = ?`, repo, MaxRoutedParticipants) != int64(merged)) {
+					b.Fatalf("the notices shape's record did not write and count %d notices for each of its %d "+
+						"changes", MaxRoutedParticipants, merged)
+				}
 				// THE CHANGES IT NAMES, each moved as its command says.
 				if shape.decide && (e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND revision = 2
 					AND state = 'open'`, repo) != int64(shape.revised) || e.num(`SELECT COUNT(*) FROM code_changes

@@ -286,7 +286,11 @@ const (
 	// past PruneGrace, fill what the record's own rows leave of it, so a push
 	// record reaches it exactly whenever enough of either is due —
 	// tombstones past RefTombstoneHorizon or past MaxTombstonesPerRepo,
-	// drops past PruneGrace.
+	// drops past PruneGrace. A record's NOTICES are rows of it too, each a
+	// handle its routing tells and each change's count of them
+	// (noticeWrites): at their widest — a push whose routing fills what its
+	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
+	// measured section).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's

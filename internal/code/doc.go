@@ -1580,6 +1580,18 @@
 // statelog.ApplyTxTimeBudget: the horizon is bounded by its rows' share of a
 // record, never by its time (CheckHorizonRows).
 //
+// THE NOTICES A RECORD WRITES (the push record's notices arm, two bounded
+// runs, -benchtime 3x and one count, on two E-cores of a Core Ultra 7 265U,
+// where one small push took 3.6–4.1 ms): a push merging sixty-one changes,
+// each telling [MaxRoutedParticipants] authors of its own — the widest
+// routing the decide admits beside one push, 3 904 notices and the 61 counts
+// of them — held the write lane 240 ms written one statement a row, against
+// statelog.ApplyTxTimeBudget's 250 on every data node; written as few
+// multi-row statements as the parameter limit allows, each answering the
+// recipients it wrote (store.InsertRowsReturning), 143 ms: under 37 µs a
+// notice, each four b-tree entries — its key and the inbox, change and sweep
+// indexes.
+//
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the
 // widest push rows, which [PurgePartBytes] stops at seventy-three (34 MB) —
