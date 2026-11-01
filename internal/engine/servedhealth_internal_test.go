@@ -169,12 +169,19 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	// whose reads took a few seconds the background alone passed it (65
 	// messages against 60, with every read served from memory). What is
 	// left past the background is the reads' own traffic and the start-up
-	// burst the reads may overlap, a score or so of messages; a request per
-	// read would be hundreds.
+	// burst the reads may overlap; a request per read would be hundreds.
+	//
+	// HALF THE READS of allowance for that burst, because the burst is a
+	// start-up's and grows with the logs a node runs, while what this case
+	// exists to catch, a request per read, sends at least reads — twice the
+	// allowance. A fifth of the reads was a score of messages over eight
+	// logs; over the ten a node runs with the assistant's and chat's, CI run
+	// 41343149799 measured 68 sent against 0 idle, every read served from
+	// memory, and the fifth failed it.
 	idle := q.Conn().Stats().OutMsgs
 	time.Sleep(took)
 	idle = q.Conn().Stats().OutMsgs - idle
-	if sent > idle+reads/5 {
+	if sent > idle+reads/2 {
 		t.Errorf("%d reads sent %d messages on the broker connection, against %d sent "+
 			"over as long with nobody reading", reads, sent, idle)
 	}
