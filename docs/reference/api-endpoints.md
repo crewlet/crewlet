@@ -9900,8 +9900,13 @@ deployment control. Refusals:
   store the fleet already uses, or fails the bucket's probe; a node holding no
   copy of the company's records (run it against a data node); and for the
   final pass, a node not in `maintenance` mode, any node still admitted to
-  publish, an estate this node has not applied to the end, or one it holds
-  incomplete.
+  publish, an estate this node has not applied to the end, one it holds
+  incomplete, or rows it cannot read that may name a file: a data node the
+  fleet counts running a state log this build does not, or this node's copy
+  of the estate migrated by a newer build ([What a build cannot
+  see](../concepts/object-store.md#what-a-build-cannot-see)). A final pass
+  copies only what this build's tables name, and the store it leaves behind
+  is deleted after it.
 - **503 `objects_migration_failed`**, with a `Retry-After`: the fleet's store
   or the bucket stopped answering. The body's `report` counts what was copied;
   the stores' own words are in this node's log. Run it again.

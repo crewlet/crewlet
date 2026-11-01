@@ -1540,7 +1540,11 @@ record the move ends with.
   with `crewlet run -mode maintenance`, so that no record naming a new file
   can be written while it runs. It copies what is left, seals the NATS
   bucket so a node not yet restarted cannot store anything there, and moves
-  the fleet's record to the bucket.
+  the fleet's record to the bucket. It refuses while the node cannot read
+  every row that may name a file — a data node running a state log this
+  build does not, or this node's copy of the estate migrated by a newer build
+  ([What a build cannot see](../concepts/object-store.md#what-a-build-cannot-see)):
+  run it from a build that knows every log the fleet runs.
 
 It prints what the pass found: the objects the files name, how many the
 bucket already held and how many were copied, whether the bucket offers
