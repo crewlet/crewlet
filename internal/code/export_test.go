@@ -11,6 +11,11 @@ import (
 // Quiet is quiet, for this package's external benchmarks.
 var Quiet = quiet
 
+// RoutingNoticeRows is the notice rows one routing of the gate's records is
+// charged — the bound a check ending's routing is held to beside the rows its
+// apply writes.
+const RoutingNoticeRows = routingNoticeRows
+
 // ChangeCeilingRefusal is why a seat's write of a change may not be made for
 // whoever c is, for the case that judges the requester ceiling of a change's
 // writes apart from the decides that reach it.
