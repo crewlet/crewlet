@@ -182,16 +182,16 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 			// seat on faith from there is how one unreachable store turns
 			// into two nodes serving one seat, so the grace is bounded by
 			// the same TTL the lease was granted with.
-			elapsed := now.Sub(t.renewedAt)
-			if elapsed < h.ttl {
+			age := elapsed(now, t.renewedAt)
+			if age < h.ttl {
 				log.WarnContext(ctx, "seat_heartbeat_unavailable", "seat", t.handle,
-					"seconds_since_renew", elapsed.Seconds(), "ttl_seconds", h.ttl.Seconds(),
+					"seconds_since_renew", age.Seconds(), "ttl_seconds", h.ttl.Seconds(),
 					"error", err)
 				h.noteAdmission(ctx, t.seat, false)
 				continue
 			}
 			log.ErrorContext(ctx, "seat_dropped_unrenewable", "seat", t.handle,
-				"seconds_since_renew", elapsed.Seconds(), "ttl_seconds", h.ttl.Seconds(),
+				"seconds_since_renew", age.Seconds(), "ttl_seconds", h.ttl.Seconds(),
 				"error", err,
 				"hint", "the lease store has been unreachable for longer than the TTL, so this "+
 					"lease has lapsed whether or not we can see it; dropping the seat rather "+
