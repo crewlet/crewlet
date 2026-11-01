@@ -17,15 +17,19 @@ import (
 )
 
 // serversFixture is a seat's surface holding the engine's own tool and the
-// tools of two of its MCP servers, opened on a bridge that serves every route
-// a box dials: the job's endpoint and each server beneath it.
+// tools of two of its MCP servers ([serversSurface]), opened on a bridge that
+// serves every route a box dials: the job's endpoint and each server beneath
+// it.
 type serversFixture struct {
 	surface  *tools.Surface
 	ledger   *ledger
 	endpoint string
 }
 
-func newServersFixture(t *testing.T) *serversFixture {
+// serversSurface is a seat's surface, bound to its turn, holding the engine's
+// own read_page and the tools of two of its MCP servers: github's two, which
+// the company describes, and jira's one, which it does not.
+func serversSurface(t *testing.T) *tools.Surface {
 	t.Helper()
 	reg := tools.NewRegistry()
 	if err := reg.Register(&stubTool{name: "read_page"}, tools.OriginBuiltin); err != nil {
@@ -39,9 +43,13 @@ func newServersFixture(t *testing.T) *serversFixture {
 		}
 	}
 	reg.DescribeServers(map[string]string{"github": "The company's code host: its repositories, issues and pull requests."})
-	f := &serversFixture{ledger: &ledger{}}
-	f.surface = tools.NewSurface("execute", reg.Snapshot(),
+	return tools.NewSurface("execute", reg.Snapshot(),
 		[]string{"read_page", "create_issue", "search_issues", "create_ticket"}).ForTurn(seatTurn())
+}
+
+func newServersFixture(t *testing.T) *serversFixture {
+	t.Helper()
+	f := &serversFixture{ledger: &ledger{}, surface: serversSurface(t)}
 
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
