@@ -907,10 +907,13 @@ func Catalogue() []Instrument {
 				"was asked to decide — each a record on the change's own " +
 				"subject, never in the repository's committer queue — by `op` " +
 				"(`reviewers`, `comment`, `thread_resolve`, `review`, " +
-				"`finding_resolve`, and two its repository's home git node " +
-				"asks: `revise`, a revision's facts it read, and " +
+				"`finding_resolve`, and three its repository's home git node " +
+				"asks: `revise`, a revision's facts it read, " +
 				"`mergeability`, whether the change's head revision merges " +
-				"into its target's tip) and what became of each, by " +
+				"into its target's tip, and `asks`, the change's asks for " +
+				"review settled with its lifecycle — ended once it closed or " +
+				"merged, asked again once it is reopened) and what became of " +
+				"each, by " +
 				"`outcome`: " +
 				"`applied`, its record landed and the change's conversation " +
 				"holds it; `unchanged`, it asked for what the conversation " +
@@ -926,8 +929,10 @@ func Catalogue() []Instrument {
 				"a target the change has moved from; facts no later than the " +
 				"facts it holds, or matched against path owners changed since; " +
 				"a merge into a tip before the one its mergeability is of, or " +
-				"into the same tip once decided — which " +
-				"decided nothing; `handed_on`, one this node decided nothing of " +
+				"into the same tip once decided; a settling of asks for a " +
+				"change that moved since its home read it, or holds no such " +
+				"ask — which decided nothing; `handed_on`, one this node " +
+				"decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +
 				"or a reviewer by, behind the company's configuration), which " +
 				"the estate asks the repository's runner-up; and `failed`, any " +

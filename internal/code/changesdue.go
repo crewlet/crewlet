@@ -43,9 +43,21 @@ import (
 //     clock less its refresh, so a target that moves on every push asks its
 //     changes' merges again at the home's pace, never at its own.
 //
+// And a change, LIVE OR ENDED, owes its home a SETTLING OF ITS ASKS for
+// review with its lifecycle ([AskSettle]) where its asks no longer match its
+// state: an ended change whose asks still wait (code_conversations.asked),
+// which nobody owes a review any more, and a live one holding asks its end
+// left (code_conversations.ended), reopened since — on an active repository
+// whatever its target, since the settling reads no branch. The change's
+// lifecycle is its repository's records, which write nothing of its
+// conversation, so this is how an ask stops waiting when its change ends:
+// the listing of the changes waiting on a reviewer walks the waiting asks
+// alone, and holds an ended change's only until its home settles them.
+//
 // Every record the home makes takes its change off the list by its own row,
 // so the rows are the work list and nothing else is: a merge and a refresh
-// each store the versions they judged the readiness at.
+// each store the versions they judged the readiness at, and a settling moves
+// the counts its change is found by.
 //
 // A CHANGE ON AN ARCHIVED OR A DELETED REPOSITORY IS NOBODY'S WORK: every write
 // of it would be refused (repo_archived, repo_deleted), and listed it would be
@@ -165,25 +177,59 @@ func (r *Reader) dueRepos(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 	if q.Cursor != "" && !canonicalUUID(q.Cursor) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 	}
-	rows, err := tx.QueryContext(ctx, dueReposSQL, q.Cursor, r.pageRows,
-		store.EncodeTime(q.ChangesDue.RecheckBefore))
+	// TWO WALKS, MERGED: the live changes owing their facts, their merge, a
+	// refresh, a recheck or the asks their end left, by
+	// code_changes_open_idx; and the ended changes whose asks still wait, by
+	// code_conversations_asked_idx — each in its index's order, at most a
+	// page of repositories after the cursor, so the first page's worth of the
+	// two merged is the first page's worth of their union.
+	live, err := reposOf(ctx, tx, dueReposSQL, q.Cursor, r.pageRows, store.EncodeTime(q.ChangesDue.RecheckBefore))
 	if err != nil {
-		return fmt.Errorf("code: list the repositories change work is due in: %w", err)
+		return err
 	}
-	defer func() { _ = rows.Close() }()
+	ended, err := reposOf(ctx, tx, dueAskedReposSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return err
+	}
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("code: list the repositories change work is due in: %w", err)
-		}
+	for _, id := range mergeSorted(live, ended) {
 		out.DueRepos = append(out.DueRepos, id)
 		if pg.add(stringBytes(id) + 1) {
 			out.Next = id
 			break
 		}
 	}
-	return rows.Err()
+	return nil
+}
+
+// reposOf is the repository ids query answers, bound to args.
+func reposOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+	}
+	var ids []string
+	if err := eachID(rows, func(id string) { ids = append(ids, id) }); err != nil {
+		return nil, fmt.Errorf("code: list the repositories change work is due in: %w", err)
+	}
+	return ids, nil
+}
+
+// mergeSorted is the union of two ascending lists of distinct ids, ascending
+// and each id once.
+func mergeSorted(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	for len(a) > 0 || len(b) > 0 {
+		switch {
+		case len(b) == 0 || (len(a) > 0 && a[0] < b[0]):
+			out, a = append(out, a[0]), a[1:]
+		case len(a) == 0 || b[0] < a[0]:
+			out, b = append(out, b[0]), b[1:]
+		default:
+			out, a, b = append(out, a[0]), a[1:], b[1:]
+		}
+	}
+	return out
 }
 
 // dueChanges serves a page of a repository's changes owing their facts or
@@ -221,6 +267,11 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	}
 	out.PathOwners = owners
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - ownersBytes}
+	if q.Cursor == "" {
+		if err := dueAskSettles(ctx, tx, repoID, &pg, out); err != nil {
+			return err
+		}
+	}
 	if q.Cursor == "" && q.ChangesDue.Rechecks > 0 {
 		if err := dueRechecks(ctx, tx, q, &pg, out); err != nil {
 			return err
@@ -248,6 +299,44 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		}
 	}
 	return rows.Err()
+}
+
+// dueAskSettles is a repository's changes whose asks its home owes a settling
+// ([ReadAnswer.AskSettles]), at most [MaxAskSettlesPerRead] — counted against
+// the first page's budget, which they ride: its ENDED changes holding an ask
+// still waiting, each found through code_conversations_asked_idx, which holds
+// the changes with a waiting ask and never the repository's history; and its
+// LIVE changes holding an ask their end left, each found on the walk of the
+// repository's live changes, its conversation's counters read by their key.
+func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out *ReadAnswer) error {
+	// EACH STATEMENT SPELLED AT ITS CALL, a constant the read-index gate
+	// follows to its registered plan.
+	due := func(rows *sql.Rows, err error, state ReviewerState) error {
+		if err == nil {
+			err = eachID(rows, func(id string) {
+				d := AskDue{ChangeID: id, State: state}
+				out.AskSettles = append(out.AskSettles, d)
+				// COUNTED, NEVER A REASON TO STOP, as a recheck is: a few
+				// dozen rows at most, and the page serves its changes after
+				// them.
+				pg.add(stringBytes(id) + len(d.State) + 32)
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("code: list repository %s's asks due a settling: %w", repoID, err)
+		}
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, endedAsksSQL, repoID, MaxAskSettlesPerRead)
+	if err := due(rows, err, ReviewerEnded); err != nil {
+		return err
+	}
+	left := MaxAskSettlesPerRead - len(out.AskSettles)
+	if left <= 0 {
+		return nil
+	}
+	rows, err = tx.QueryContext(ctx, reopenedAsksSQL, repoID, left)
+	return due(rows, err, ReviewerRequested)
 }
 
 // dueRechecks is a repository's changes owing a recheck of their merge, the
@@ -289,6 +378,14 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 //     order and grouped on its leading column, each repository's state by its
 //     key — a change due its facts, its merge, a refresh, or a recheck of its
 //     merge recorded at or before ?3;
+//   - the repositories holding an ended change whose asks for review still
+//     wait, after a cursor, walking code_conversations_asked_idx — which holds
+//     the changes with a waiting ask alone, never a repository's history — in
+//     its order and grouped on its leading column, each change's state and
+//     its repository's by their keys; and, in the walk above, a live change
+//     holding asks its end left, its conversation's counters by their key;
+//   - one repository's ended changes whose asks still wait, and its live
+//     changes holding asks their end left (endedAsksSQL, reopenedAsksSQL);
 //   - one repository's state by its key;
 //   - one repository's changes owing their facts, their merge or a refresh
 //     after a source branch, the index's range, each saying which it owes;
@@ -315,15 +412,40 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
-			AND EXISTS (SELECT 1 FROM code_refs AS t INDEXED BY ` + refsKey + `
+			AND (EXISTS (SELECT 1 FROM code_refs AS t INDEXED BY ` + refsKey + `
 				WHERE t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
 					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
 						OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 							WHERE ` + mergeHeld + `)
 						OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)))
+				OR EXISTS (SELECT 1 FROM code_conversations AS v WHERE v.change_id = c.id AND v.ended > 0))
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = c.repo_id AND r.status = 'active')
 		GROUP BY c.repo_id ORDER BY c.repo_id LIMIT ?2`
+	dueAskedReposSQL = `SELECT v.repo_id FROM code_conversations AS v INDEXED BY ` + askedKey + `
+		WHERE v.repo_id > ?1 AND asked > 0
+			AND EXISTS (SELECT 1 FROM code_changes AS c WHERE c.id = v.change_id AND ` + endedChanges + `)
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = v.repo_id AND r.status = 'active')
+		GROUP BY v.repo_id ORDER BY v.repo_id LIMIT ?2`
+	// endedAsksSQL is one repository's ended changes whose asks still wait,
+	// at most ?2, by the index that holds the changes with a waiting ask —
+	// its partial predicate repeated verbatim, for changesWaitingSQL's reason
+	// — each change's state by its key; reopenedAsksSQL its live changes
+	// holding asks their end left, the live changes' index's range, each
+	// conversation's counters by their key.
+	endedAsksSQL = `SELECT v.change_id FROM code_conversations AS v INDEXED BY ` + askedKey + `
+		WHERE v.repo_id = ?1 AND asked > 0
+			AND EXISTS (SELECT 1 FROM code_changes AS c WHERE c.id = v.change_id AND ` + endedChanges + `)
+		ORDER BY v.change_id LIMIT ?2`
+	reopenedAsksSQL = `SELECT c.id FROM code_changes AS c INDEXED BY code_changes_open_idx
+		WHERE c.repo_id = ?1 AND ` + liveChanges + `
+			AND EXISTS (SELECT 1 FROM code_conversations AS v WHERE v.change_id = c.id AND v.ended > 0)
+		LIMIT ?2`
+	// askedKey is the index of a repository's changes holding an ask that
+	// waits, partial on asked > 0; endedChanges a change, c, that closed or
+	// merged.
+	askedKey      = "code_conversations_asked_idx"
+	endedChanges  = `c.state IN ('closed', 'merged')`
 	dueRepoSQL    = `SELECT status FROM code_repos WHERE id = ?`
 	dueChangesSQL = `SELECT c.id, c.number, c.revision, c.head_oid, c.source_ref, c.target_ref, t.target,
 			t.position,

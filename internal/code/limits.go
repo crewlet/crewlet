@@ -521,8 +521,10 @@ const (
 	// tracker's own bound on the people one item mentions (its MaxMentions),
 	// because a request is a mention that waits for an answer — and the
 	// readers who weigh a change's readiness read each requested reviewer's
-	// latest verdict, so the set they read is bounded by it too. A reviewer
-	// withdrawn no longer counts against it.
+	// latest verdict, so the set they read is bounded by it too. Only an ask
+	// still WAITING counts against it: one withdrawn, one its reviewer's
+	// review answered and one its change's end ended do not
+	// ([ReviewerState]).
 	MaxReviewersPerChange = 32
 
 	// MaxReviewNoteBytes is the longest note a request for review carries —

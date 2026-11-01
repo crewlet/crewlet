@@ -20,6 +20,9 @@ import (
 // what the facts' wide columns weigh, less what the row they replace weighed,
 // so a purge weighs the change's subject's wide rows by its one narrow row.
 //
+// And it asks each reviewer the record asks to look again ([Revise.ReReview])
+// for a review once more, where their review answered their ask.
+//
 // PURE IN THE RECORD, its position and the prior rows, as every apply here:
 // whom the facts ask, skip and wake rides the record, stamped by the writer
 // from its chart, and nothing is judged again.
@@ -62,7 +65,20 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 		}
 		rows += 2
 	}
-	return rows, counts, nil
+	// THE REVIEWERS ASKED TO LOOK AGAIN are waited on again: a reviewer whose
+	// review answered their ask, and whose standing verdict asks for changes
+	// on an earlier revision, owes the change a review of this one — the
+	// re_review the record carries for the wakes. A reviewer nobody asked
+	// gains no ask, and one whose ask was withdrawn keeps that word.
+	again := make([]string, len(r.ReReview))
+	for i, rv := range r.ReReview {
+		again[i] = rv.Handle
+	}
+	reopened, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerReviewed, ReviewerRequested, again)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + reopened, counts, nil
 }
 
 // factsWide is a revision's facts' wide columns as a row keeps them: its

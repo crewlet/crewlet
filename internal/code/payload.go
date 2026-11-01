@@ -1975,6 +1975,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Revise](rec)
 	case kind == KindChange && op == OpMergeability:
 		return decodePayload[Mergeability](rec)
+	case kind == KindChange && op == OpAsks:
+		return decodePayload[AskSettle](rec)
 	case kind == KindChecks && op == OpCheckQueued:
 		return decodePayload[CheckQueued](rec)
 	case kind == KindChecks && op == OpCheckStarted:

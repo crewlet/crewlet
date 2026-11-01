@@ -56,8 +56,9 @@ import (
 // one who may not review the repository — a seat below review — or who is an
 // author of the change, whose review of their own change counts for nothing,
 // is SKIPPED, the record naming each skipped owner and why; an owner whose ask
-// the change holds already — standing, or withdrawn by somebody's word on this
-// change, which no rule overrides — is left as it is; and the change asks at
+// the change holds already — waiting, answered by their review, ended with the
+// change or withdrawn by somebody's word on this change, which no rule
+// overrides — is left as it is; and the change asks at
 // most MaxReviewersPerChange at once, past which the rest are skipped too. A
 // path owner GRANTS NOTHING: its ask is a review request, and whether its
 // review counts is the reviewer's grant's, as any reviewer's.
@@ -590,9 +591,9 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 		d.concern.lead = *j.fallback
 	}
 	d.payload = r
-	// THE FACTS, A ROW EACH REVIEWER ASKED AND A PARTICIPANT ROW EACH, and
-	// the conversation's own.
-	d.rows = 2*len(r.Asked) + 2
+	// THE FACTS, A ROW EACH REVIEWER ASKED AND A PARTICIPANT ROW EACH, the
+	// ask of each reviewer it asks to look again, and the conversation's own.
+	d.rows = 2*len(r.Asked) + len(r.ReReview) + 2
 	return d, nil
 }
 
@@ -697,8 +698,9 @@ func judgeOwners(ctx context.Context, tx *sql.Tx, r Revise, roster Roster, repo 
 			case authors[ro.handle] == ro.kind:
 				why = SkipAuthor
 			case states[ro.handle] != "":
-				// ASKED ALREADY — the ask stands, or somebody withdrew it, which
-				// is their word on this change and no rule's to undo.
+				// ASKED ALREADY — the ask waits, was answered or ended, or
+				// somebody withdrew it, which is their word on this change and
+				// no rule's to undo.
 			case requested+len(j.asked) >= MaxReviewersPerChange:
 				why = SkipTooManyReviewers
 			default:

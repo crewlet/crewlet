@@ -394,6 +394,18 @@ const (
 	// string(OpMergeability)}, with the same companions. It is no gate.
 	OpMergeability OpKind = "mergeability"
 
+	// OpAsks settles a change's asks for review with its lifecycle — ending
+	// the asks still waiting on a change that closed or merged, and asking
+	// again those its end left on one reopened ([AskSettle]) — on the
+	// change's own subject, written by the repository's committing data node
+	// for the home, which asks it and publishes nothing itself.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// asks", Since: 2, Path: []string{"op"}, Equals: string(OpAsks)}, with
+	// the same companions. It is no gate.
+	OpAsks OpKind = "asks"
+
 	// OpCheckQueued queues one attempt of one check of one commit, or records
 	// it skipped ([CheckQueued]), on the repository's CHECKS subject
 	// ([KindChecks]), its apply a join (checks.go).
@@ -554,14 +566,14 @@ const (
 	OpQueueSweep OpKind = "queue_sweep"
 )
 
-// OpKinds are the fifty-two, in the order they are documented.
+// OpKinds are the fifty-three, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk, OpImportDone, OpMirrorSync, OpRename,
 	OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
-	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
+	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability, OpAsks,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
 	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep,
 }
@@ -585,9 +597,11 @@ func ChangeOps() []OpKind {
 // what a [ConversationWrite] may be, each a record of its own on the change's
 // subject ([KindChange]), written by the repository's committing data node
 // ([ChangeWriter]) — a revision's facts and a change's mergeability, which the
-// repository's home git node asks, among them.
+// repository's home git node asks, among them, and its settling of the
+// change's asks with the change's lifecycle.
 func ConversationOps() []OpKind {
-	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability}
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
+		OpAsks}
 }
 
 // Valid reports whether an op off the wire is one this build knows.

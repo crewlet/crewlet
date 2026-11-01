@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -111,6 +112,13 @@ import (
 // recorded nowhere. The chart then judges the change's READINESS over the
 // snapshot with the record's merge ([ReadinessOf]), stamped on the record.
 //
+// THE SETTLING OF A CHANGE'S ASKS WITH ITS LIFECYCLE ([AskSettle]) is the
+// home's too, asked by no principal and judged by no chart: an end takes a
+// change that closed or merged, and an ask again one that is live, and each
+// moves the asks the other direction left — waiting to ended, ended to
+// requested — or is SUPERSEDED, recorded nowhere, for the home's next pass,
+// where the change moved after its home read it or holds no such ask.
+//
 // A write that asks for what the conversation already says — every reviewer
 // it asks already asked and nobody it withdraws still asked, a thread's state
 // it is in, every finding in the state an answer gives it — is ANSWERED
@@ -130,10 +138,10 @@ import (
 
 // Validate refuses a write no change's writer could decide
 // ([ErrInvalidProposal], naming the field), before anything is read: anything
-// but exactly one of the seven records; an operation id this engine does not
+// but exactly one of the eight records; an operation id this engine does not
 // accept (statelog.CheckCallerOpID); an asker that is no principal, or that
-// names a run — and a revise or a mergeability that names any asker, each
-// being the home's own; a Seen that is no position on the code log; a
+// names a run — and a revise, a mergeability or a settling of asks that names
+// any asker, each being the home's own; a Seen that is no position on the code log; a
 // repository id that is no UUID in its canonical spelling; a change id that is no bare
 // UUIDv7; a field the writer stamps — who wrote it, a reviewer's kind, a
 // comment's id or thread, a review's id or a finding's — set by the asker; an
@@ -149,7 +157,8 @@ import (
 // [MaxFindingsPerReview], one twice, an answer no write gives, a commit that
 // is no whole object id or a note its bound refuses; a revise or a
 // mergeability its own rules refuse ([Revise], revise.go; [Mergeability],
-// mergeability.go); and a record past what one write of a conversation may
+// mergeability.go); a settling of asks moving them to no state it may, or
+// naming the asks the writer stamps; and a record past what one write of a conversation may
 // carry ([MaxConversationBytes]). What the
 // repository and the change hold is the decide's to judge, from the rows.
 func (w ConversationWrite) Validate() error {
@@ -191,6 +200,11 @@ func (w ConversationWrite) measure() (int, error) {
 		// THE HOME'S OWN WRITE, which names no asker: what the writer stamps
 		// is the readiness it judges, and a refresh's merge from the row.
 		stamped += stampedMergeabilityBytes(*w.Mergeability) - principalBytes(w.Asker)
+	case w.Asks != nil:
+		// THE HOME'S OWN WRITE too: what the writer stamps is the asks it
+		// moves, at most MaxAsksSettled at the widest handle a seat may
+		// have.
+		stamped += len(`,"reviewers":[]`) + MaxAsksSettled*(len(`"",`)+iam.MaxLogin) - principalBytes(w.Asker)
 	}
 	if stamped > MaxConversationBytes {
 		why := fmt.Sprintf("%d bytes, past the %d one write of a change's conversation may take of its record "+
@@ -232,6 +246,8 @@ func (w ConversationWrite) record() (OpKind, any) {
 		return OpRevise, *w.Revise
 	case w.Mergeability != nil:
 		return OpMergeability, *w.Mergeability
+	case w.Asks != nil:
+		return OpAsks, *w.Asks
 	}
 	return "", nil
 }
@@ -257,6 +273,8 @@ func (w ConversationWrite) RepoID() string {
 		return w.Revise.RepoID
 	case w.Mergeability != nil:
 		return w.Mergeability.RepoID
+	case w.Asks != nil:
+		return w.Asks.RepoID
 	}
 	return ""
 }
@@ -279,6 +297,8 @@ func (w ConversationWrite) ChangeID() string {
 		return w.Revise.ChangeID
 	case w.Mergeability != nil:
 		return w.Mergeability.ChangeID
+	case w.Asks != nil:
+		return w.Asks.ChangeID
 	}
 	return ""
 }
@@ -305,28 +325,28 @@ func (w ConversationWrite) JudgesChart() bool {
 func (w ConversationWrite) validFields() error {
 	set := 0
 	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.Review != nil,
-		w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil} {
+		w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil, w.Asks != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a write of a change's conversation is exactly one of an ask for review, a "+
-			"comment, a thread's resolution, a review, an answer to findings, a revision's facts and a change's "+
-			"mergeability, and this one sets %d", ErrInvalidProposal, set)
+			"comment, a thread's resolution, a review, an answer to findings, a revision's facts, a change's "+
+			"mergeability and a settling of its asks, and this one sets %d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
 	switch why := w.Asker.invalid(); {
-	case w.Revise != nil || w.Mergeability != nil:
-		// THE HOME'S OWN WRITE: a revision's facts and a change's
-		// mergeability are read by the repository's home git node and asked
-		// by no principal, so one naming a principal would be judged as
-		// somebody nobody named.
+	case w.Revise != nil || w.Mergeability != nil || w.Asks != nil:
+		// THE HOME'S OWN WRITE: a revision's facts, a change's mergeability
+		// and the settling of its asks with its lifecycle are the
+		// repository's home git node's, asked by no principal, so one naming
+		// a principal would be judged as somebody nobody named.
 		if w.Asker != (Principal{}) {
-			return badField("asker", "a revision's facts and a change's mergeability are the repository's "+
-				"home git node's own, which no principal asks")
+			return badField("asker", "a revision's facts, a change's mergeability and the settling of its asks "+
+				"are the repository's home git node's own, which no principal asks")
 		}
 	case why != "":
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
@@ -367,6 +387,8 @@ func (w ConversationWrite) validFields() error {
 		return w.Revise.validFields()
 	case w.Mergeability != nil:
 		return w.Mergeability.validFields()
+	case w.Asks != nil:
+		return w.Asks.validFields()
 	}
 	if err := bareUUIDv7("thread_resolve.thread_id", w.ThreadResolve.ThreadID); err != nil {
 		return err
@@ -433,6 +455,21 @@ func (r *Review) validFields() error {
 		return err
 	}
 	return stampedBy("review", r.By)
+}
+
+// validFields holds a settling of a change's asks to
+// [ConversationWrite.Validate]'s rules: the state its asks move to, ended or
+// requested, and none of the asks it moves, which the writer stamps.
+func (a *AskSettle) validFields() error {
+	switch {
+	case a.State != ReviewerEnded && a.State != ReviewerRequested:
+		return badField("asks.state", "%q: a change's asks end with it (%s) or are asked again once it is "+
+			"reopened (%s)", a.State, ReviewerEnded, ReviewerRequested)
+	case len(a.Reviewers) != 0:
+		return badField("asks.reviewers", "the writer stamps the asks it moves from its snapshot, and the home "+
+			"sends none")
+	}
+	return nil
 }
 
 // validFields holds an answer to findings to [ConversationWrite.Validate]'s
@@ -681,6 +718,12 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 			return d, err
 		}
 		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
+	case w.Asks != nil:
+		// THE HOME'S OWN as well, and the chart judges nothing of it: its
+		// rule is the change's state against its asks', and it tells
+		// nobody — an ask ended or asked again is the change's close, merge
+		// or reopen, whose own record told its concerned.
+		return decideAsks(ctx, tx, w, row, named, d)
 	}
 	asker, kind := w.Asker.party()
 	if kind == "" {
@@ -812,8 +855,9 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 	}
 	d.payload = r
 	// THE REVIEW, EVERY FINDING AND ITS TEXT, every finding it supersedes,
-	// its reviewer as a participant, and the conversation's row.
-	d.rows = 1 + 2*len(r.Findings) + len(superseded) + 2
+	// its reviewer as a participant, the ask it answers, and the
+	// conversation's row.
+	d.rows = 1 + 2*len(r.Findings) + len(superseded) + 3
 	return d, nil
 }
 
@@ -1052,6 +1096,62 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 	return d, nil
 }
 
+// decideAsks is a settling of a change's asks with its lifecycle over row: an
+// end takes a change that closed or merged, and an ask again a live one —
+// else SUPERSEDED, recorded nowhere: the change moved after its home read it,
+// and the home's next pass reads the rows again — and either moves the
+// change's asks in the state the other direction leaves them — a waiting ask
+// to ended, an ended one to requested — at most [MaxAsksSettled] of them, by
+// handle, stamped on the record; a change holding none is superseded too.
+func decideAsks(ctx context.Context, tx *sql.Tx, w ConversationWrite, row changeRow, named string,
+	d conversationDecision) (conversationDecision, error) {
+
+	a := *w.Asks
+	from, ends := ReviewerEnded, a.State == ReviewerEnded
+	if ends {
+		from = ReviewerRequested
+	}
+	switch live := row.state.Live(); {
+	case ends && live:
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s is %s, and its asks are owed while it is "+
+			"live", named, row.state))
+	case !ends && !live:
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s is %s, and the asks its end left are "+
+			"asked again only once it is reopened", named, row.state))
+	}
+	held, err := asksIn(ctx, tx, row.id, from, MaxAsksSettled)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	if len(held) == 0 {
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s holds no ask %s", named, from))
+	}
+	a.Reviewers = held
+	d.payload = a
+	// EVERY ASK IT MOVES, and the conversation's row.
+	d.rows = len(held) + 1
+	return d, nil
+}
+
+// asksIn is the handles of changeID's asks in state, by handle, at most limit:
+// one range of the reviewers' key, which leads with the change.
+func asksIn(ctx context.Context, tx *sql.Tx, changeID string, state ReviewerState, limit int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, asksInStateSQL, changeID, string(state), limit)
+	if err != nil {
+		return nil, fmt.Errorf("code: read change %s's asks %s: %w", changeID, state, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var handle string
+		if err := rows.Scan(&handle); err != nil {
+			return nil, fmt.Errorf("code: read change %s's asks %s: %w", changeID, state, err)
+		}
+		out = append(out, handle)
+	}
+	return out, rows.Err()
+}
+
 // reviewRemedy is how a seat below review on a repository comes to review it:
 // its tier, where the chart already relates it to the repository by more than
 // a read and the tier alone caps it; else whoever leads the repository's
@@ -1288,6 +1388,10 @@ const (
 		WHERE r.change_id = ?1 AND r.reviewer = CAST(j.value AS TEXT)`
 	reviewersAskedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_reviewers
 		WHERE change_id = ? AND state = 'requested' LIMIT ?)`
+	// asksInStateSQL is a change's asks in one state, by handle — the
+	// reviewers' key NAMED, for reviewersNamedSQL's reason.
+	asksInStateSQL = `SELECT reviewer FROM code_reviewers INDEXED BY ` + reviewersKey + `
+		WHERE change_id = ? AND state = ? ORDER BY reviewer LIMIT ?`
 	// findingSQL is a finding by its key; standingFindingsSQL a raiser's
 	// standing findings on a change, driven from the list of the standing
 	// states ([standingStates]), one seek of code_findings_raiser_idx a state —

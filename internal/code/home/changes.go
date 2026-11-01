@@ -63,7 +63,8 @@ const WorkerChanges = "changes"
 // recorded again, merging nothing, where what it reads moved since its merge
 // judged it — a review, an ask, an answer to findings, facts, its own row —
 // and, a moved target's changes merged again at the refresh, within a pass's
-// budget.
+// budget; and, for a change live or ended, its asks for review settled with
+// its lifecycle where they no longer match it ([changes.settle]).
 type changes struct {
 	estate  Estate
 	cache   Cache
@@ -92,9 +93,10 @@ func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor strin
 	return a.DueRepos, a.Next, nil
 }
 
-// Work is one repository's due changes, every page, each worked in the order
-// the listing names them ([changes.change]) — a failure of one left for the
-// next pass while the others are worked — and then the merges its moved
+// Work is one repository's due changes: first the asks its first page names
+// due a settling ([changes.settle]), then every page's changes, each worked in
+// the order the listing names them ([changes.change]) — a failure of one left
+// for the next pass while the others are worked — and then the merges its moved
 // targets ask again, the oldest first and no more than what is left of the
 // repository's share of this pass ([recheckBudget]), until they are done or
 // the turn's context ends. A change a step of this turn landed is merged
@@ -118,6 +120,14 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 		}
 		if q.Cursor == "" {
 			again, againAt = a.Rechecks, a.Position
+			for _, due := range a.AskSettles {
+				if err := ctx.Err(); err != nil {
+					return errors.Join(append(failed, err)...)
+				}
+				if err := c.settle(ctx, repoID, due, a.Position); err != nil {
+					failed = append(failed, err)
+				}
+			}
 		}
 		for _, due := range a.DueChanges {
 			if err := ctx.Err(); err != nil {
@@ -410,6 +420,32 @@ func (c *changes) refresh(ctx context.Context, repoID string, due code.ChangeDue
 	}
 	c.log.Debug("code_change_readiness_refreshed", "repo", repoID, "change", due.Number,
 		"revision", due.Revision, "position", res.Position.String())
+	return nil
+}
+
+// settle asks the repository's change writer to settle due's asks for review
+// with its change's lifecycle (code.AskSettle): those still waiting on a change
+// that closed or merged ended, those its end left on a change reopened since
+// asked again — the writer stamping the asks it moves from its own snapshot.
+// An answer that the rows moved since — superseded: the change reopened or
+// ended again, or holding no such ask — is the next pass's to read; one that
+// decided nothing for a reason of the log's is this turn's failure.
+func (c *changes) settle(ctx context.Context, repoID string, due code.AskDue, at statelog.Position) error {
+	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
+		Asks: &code.AskSettle{RepoID: repoID, ChangeID: due.ChangeID, State: due.State}})
+	switch {
+	case err != nil:
+		return fmt.Errorf("home: settle the asks of change %s of repository %s: %w", due.ChangeID, repoID, err)
+	case slices.Contains(undecidedFacts, res.Refusal):
+		return fmt.Errorf("home: settle the asks of change %s of repository %s: %s: %s", due.ChangeID, repoID,
+			res.Refusal, res.Detail)
+	case res.Refusal != "":
+		c.log.Debug("code_change_asks_refused", "repo", repoID, "change", due.ChangeID, "state", due.State,
+			"refusal", res.Refusal, "detail", res.Detail)
+		return nil
+	}
+	c.log.Debug("code_change_asks_settled", "repo", repoID, "change", due.ChangeID, "state", due.State,
+		"position", res.Position.String())
 	return nil
 }
 

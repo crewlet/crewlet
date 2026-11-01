@@ -1335,12 +1335,18 @@ answer that holds every record the code log had committed when it was asked.
   opened; every other listing in the order the records that opened its
   changes landed on the code log.
 - **The changes waiting on a reviewer** are a listing that names a
-  `reviewer` — the changes whose ask of that reviewer still stands, a closed
-  or merged change's among them, since nothing withdraws an ask when a change
-  ends — or `needs=review`, the **live** ones alone, the asker's own where it
-  names no reviewer: what waits on your review, read from the asks themselves
-  rather than from every change the company holds. A credential bound to no
-  seat is nobody's reviewer, and its `needs=review` is refused.
+  `reviewer` — the changes whose ask of that reviewer still **waits** — or
+  `needs=review`, the **live** ones alone, the asker's own where it names no
+  reviewer: what waits on your review, read from the asks themselves rather
+  than from every change the company holds. An ask waits only while its
+  review is owed: the reviewer's review answers it, whatever its verdict,
+  and a change that closes or merges has its waiting asks ended by its
+  [home](#the-homes-change-work) moments later (until then a closed or merged
+  change is still named under `reviewer`, and `needs=review` passes over it).
+  So a listing reads the asks waiting now, never every ask a reviewer was
+  ever given, and its first page holds the oldest change still waiting on
+  them however many have been answered or ended since. A credential bound to
+  no seat is nobody's reviewer, and its `needs=review` is refused.
 - **The changes waiting on their owner's fix** are `needs=fix`: an
   **owner**'s live changes — the asker's own where it names none — whose
   reviewer's standing verdict asks for changes, or that hold a finding none
@@ -1491,8 +1497,8 @@ behind their batches and contend with every push to the repository.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings and revision's facts |
-| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
+| `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings, revision's facts and settling of its asks — and how many of its asks wait and how many its end left, which its [home](#the-homes-change-work) finds a change to settle by |
+| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
 | `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
@@ -1545,8 +1551,15 @@ seat they hold; which is which is read off the chart.
   review the repository, and never an author of the change, whose review of
   their own change would count for nothing. A seat that may not is refused
   `not_permitted`, the sentence naming what it holds and what would admit it.
-- **A change asks at most 32 reviewers at once.** A withdrawn ask no longer
-  counts, and an ask past the bound is refused `too_many_reviewers`.
+- **A change asks at most 32 reviewers at once.** Only an ask still waiting
+  counts — not a withdrawn one, one the reviewer's review answered, or one
+  the change's end ended — and an ask past the bound is refused
+  `too_many_reviewers`.
+- **A review answers its reviewer's ask**, whatever its verdict, and asking
+  them again opens it again. So does a later revision for a reviewer whose
+  standing verdict asks for changes: the facts that ask them to look again
+  ([Recorded on the change](#recorded-on-the-change)) ask for their review
+  once more.
 - **Only a live change is reviewed.** An ask for review of a closed change is
   refused `change_closed`, and of a merged one `change_merged`.
 - **An ask that moves nothing changes nothing.** Asking reviewers who are
@@ -5118,7 +5131,8 @@ the engine's own.
   (`author`), a unit nobody leads (`no_lead`), an owner the chart holds no seat
   of (`no_seat`), and an owner past the 32 reviewers a change asks at once
   (`too_many_reviewers`). An owner whose ask the change holds already —
-  standing, or withdrawn by somebody's word on the change — is left as it is.
+  waiting, answered by their review, ended with the change, or withdrawn by
+  somebody's word on the change — is left as it is.
   A path owner grants nothing: whether its review counts is its grant's, as
   any reviewer's.
 - **The facts say whom else they concern.** A revision's first facts name
@@ -5237,6 +5251,21 @@ it, where the target came to hold its head — and records what the merge did
 review, an ask for review, an answer to its findings, the facts just
 recorded, an edit of the change — **refreshes its readiness**, merging
 nothing.
+
+The home also **settles a change's asks for review with its lifecycle**,
+live or ended, on an active repository whatever its target: a change that
+closed or merged with asks still waiting has them **ended** — nobody owes a
+review of a change that will not merge — and a change reopened since has
+the asks its end left **asked again**. A change's close, merge and reopen
+are records on its repository's subject, which write nothing of its
+conversation, so the settling is a record of its own on the change's
+subject, asked by the home of the change's writer, which moves the asks its
+own snapshot holds — at most 64 a pass, the rest at the next — and is refused
+`superseded`, recorded nowhere, where the change moved after the home read
+it. Until it lands, the ended change's asks still wait, and a listing of the
+changes waiting on a reviewer keeps a live change alone (see [Reading
+changes](#reading-changes)). An archived repository's changes are settled
+by nobody, as they are reviewed by nobody.
 
 Two things put a repository's work in front of its home:
 

@@ -59,6 +59,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID, changeID = p.RepoID, p.ChangeID
 	case Mergeability:
 		repoID, changeID = p.RepoID, p.ChangeID
+	case AskSettle:
+		repoID, changeID = p.RepoID, p.ChangeID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a change (the record at %s)",
 			at.record.Op, at.position)
@@ -109,6 +111,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyRevise(ctx, tx, at, p)
 	case Mergeability:
 		rows, counts, err = applyMergeability(ctx, tx, at, p)
+	case AskSettle:
+		rows, err = applyAsks(ctx, tx, at, p)
 	}
 	if err != nil || rows == 0 {
 		return 0, err
@@ -119,19 +123,43 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
 		return 0, err
 	}
+	if movesAsks(payload) {
+		// THE ASKS COUNTED AGAIN FROM THE CHANGE'S OWN, never moved by a
+		// delta: what waits and what ended are each a range of the
+		// reviewers' key a change's distinct reviewers bound, and a count
+		// read off them stays the rows' whatever this record's ups and downs.
+		if _, err := tx.ExecContext(ctx, countAsksSQL, changeID); err != nil {
+			return 0, fmt.Errorf("code: count change %s's asks at %s: %w", changeID, at.position, err)
+		}
+	}
 	return a.noticed(ctx, tx, at, repoID, payload, rows+1, nil)
 }
 
 // movesReadiness reports a record whose apply moves what the change's
 // readiness reads ([ReadinessOf]): an ask for review — whom an approval waits
-// on — a review — its verdict and its blockers — an answer to findings — its
-// blockers — and a revision's facts — the patch ids an approval is carried
-// by. A comment, a thread's resolution and a mergeability move none of it: a
-// mergeability that moved code_conversations.readiness_version would make
-// its own change due a refresh again at every refresh, for ever.
+// on — a review — its verdict and its blockers, and the ask it answers — an
+// answer to findings — its blockers — a revision's facts — the patch ids an
+// approval is carried by, and the asks it opens again — and a settling of the
+// asks with the change's lifecycle. A comment, a thread's resolution and a
+// mergeability move none of it: a mergeability that moved
+// code_conversations.readiness_version would make its own change due a
+// refresh again at every refresh, for ever.
 func movesReadiness(payload any) bool {
 	switch payload.(type) {
-	case ReviewerRequest, Review, FindingResolve, Revise:
+	case ReviewerRequest, Review, FindingResolve, Revise, AskSettle:
+		return true
+	}
+	return false
+}
+
+// movesAsks reports a record whose apply moves an ask's state
+// (code_reviewers): an ask for review, a review — which answers its
+// reviewer's own — a revision's facts — whose path owners it asks and whose
+// reviewers on request_changes it asks to look again — and a settling of the
+// asks with the change's lifecycle.
+func movesAsks(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Review, Revise, AskSettle:
 		return true
 	}
 	return false
@@ -262,7 +290,15 @@ func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (in
 	if err != nil {
 		return 0, conversationCounts{}, err
 	}
-	return rows + 1 + mentioned, counts, nil
+	// THE REVIEW ANSWERS ITS REVIEWER'S OWN ASK, whatever its verdict: the
+	// review they were asked for is given, so the change waits on them no
+	// longer — until somebody asks again, or a later revision asks them to
+	// look again where their verdict asks for changes (applyRevise).
+	answered, err := moveAsks(ctx, tx, at, r.ChangeID, ReviewerRequested, ReviewerReviewed, []string{by})
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + 1 + mentioned + answered, counts, nil
 }
 
 // addMentioned makes everybody a record's routing names as mentioned a
@@ -440,6 +476,56 @@ func applyThreadResolve(ctx context.Context, tx *sql.Tx, at applyContext, t Thre
 	return 1, nil
 }
 
+// applyAsks settles a change's asks with its lifecycle ([AskSettle]): each ask
+// the record names moves to its state from the one the other direction leaves
+// — a waiting ask to ended, an ended one to requested — where the change still
+// stands, as this transaction reads its row, where the record's decide found
+// it: closed or merged for an end, live for an ask again. A change its
+// repository's records moved since — reopened before its end landed, ended
+// again before its ask again — keeps its asks as they are, and the record is
+// one version of the conversation and nothing else: the decide found
+// something to move, and the home's next pass reads the rows again.
+func applyAsks(ctx context.Context, tx *sql.Tx, at applyContext, a AskSettle) (int, error) {
+	row, found, err := changeRowIn(ctx, tx, a.ChangeID)
+	if err != nil || !found {
+		return 0, err
+	}
+	from, ends := ReviewerEnded, a.State == ReviewerEnded
+	if ends {
+		from = ReviewerRequested
+	}
+	if ends == row.state.Live() {
+		return 1, nil
+	}
+	moved, err := moveAsks(ctx, tx, at, a.ChangeID, from, a.State, a.Reviewers)
+	if err != nil {
+		return 0, err
+	}
+	return max(moved, 1), nil
+}
+
+// moveAsks moves each ask of changeID handles names that is in state from to
+// state to, at the record's position, in one statement driven from the list of
+// the handles, and answers how many moved.
+func moveAsks(ctx context.Context, tx *sql.Tx, at applyContext, changeID string, from, to ReviewerState,
+	handles []string) (int, error) {
+
+	if len(handles) == 0 {
+		return 0, nil
+	}
+	list, err := jsonList(handles)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, moveAsksSQL, string(to), at.packed, changeID, string(from), list)
+	if err != nil {
+		return 0, fmt.Errorf("code: move change %s's asks %s to %s at %s: %w", changeID, from, to, at.position,
+			err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // conversationNotApplied logs a record on a change's subject that applies as
 // nothing, and answers that it wrote no row.
 func conversationNotApplied(ctx context.Context, at applyContext, repoID, changeID, why string) (int, error) {
@@ -505,6 +591,22 @@ const (
 			requested_by_kind = excluded.requested_by_kind, note = excluded.note, position = excluded.position`
 	withdrawReviewerSQL = `UPDATE code_reviewers INDEXED BY ` + reviewersKey + ` SET state = ?, position = ?
 		WHERE change_id = ? AND reviewer = ? AND state = 'requested'`
+	// moveAsksSQL moves a change's asks named in a list from one state to
+	// another, driven from the list, one seek of the reviewers' key a handle
+	// — the key NAMED ([reviewersKey] says why) — as supersedeFindingsSQL
+	// drives a review's supersessions.
+	moveAsksSQL = `UPDATE code_reviewers SET state = ?1, position = ?2
+		WHERE rowid IN (SELECT r.rowid FROM json_each(?5) AS j
+			CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
+			WHERE r.change_id = ?3 AND r.reviewer = CAST(j.value AS TEXT) AND r.state = ?4)`
+	// countAsksSQL counts a change's asks that wait and those its end left
+	// onto its conversation's row, each a range of the reviewers' key.
+	countAsksSQL = `UPDATE code_conversations SET
+			asked = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'requested'),
+			ended = (SELECT COUNT(*) FROM code_reviewers INDEXED BY ` + reviewersKey + `
+				WHERE change_id = ?1 AND state = 'ended')
+		WHERE change_id = ?1`
 	addParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES (?, ?, ?, ?)
 		ON CONFLICT (change_id, handle) DO NOTHING`
 	addCommentSQL = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, finding_id, author,

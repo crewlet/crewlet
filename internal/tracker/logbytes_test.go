@@ -411,6 +411,16 @@ var codeLogNegligible = map[code.OpKind]string{
 		"takes: once a change at most, a record naming the change and a reason, smaller than an edit",
 	code.OpChangeReopen: "a closed change reopened by code_close_change: once a close at most, a " +
 		"record naming the change, smaller than an edit",
+	// A CHANGE'S ASKS SETTLED with its lifecycle: a review settles its own
+	// reviewer's ask on its record, so only a change that closes or merges
+	// with an ask still unanswered — or is reopened holding asks its end
+	// left — takes one, and the reference company's changes are each
+	// reviewed by the reviewer they ask before they merge.
+	code.OpAsks: "a change's asks for review settled by its repository's home git node through the " +
+		"estate's code.conversation — ended once it closed or merged with asks still waiting, asked again " +
+		"once it is reopened holding asks its end left: at most once a close, a merge or a reopen of a " +
+		"change holding an ask, a few hundred bytes each; the reference company's changes are each " +
+		"reviewed by the reviewer they ask before they merge, so none ends with an ask waiting",
 	code.OpChangeLanded: "a change whose target came to hold its head outside a merge record — a " +
 		"person's own push of it — landed by its repository's home git node: once a change at most, " +
 		"in place of the merge record such a change never takes, and smaller than it (no pack and no " +

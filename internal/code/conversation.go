@@ -158,20 +158,43 @@ func ConversationRefusals() []ConversationRefusal {
 // Valid reports a code this build knows.
 func (r ConversationRefusal) Valid() bool { return slices.Contains(ConversationRefusals(), r) }
 
-// ReviewerState is where an ask of a reviewer is (code_reviewers.state).
+// ReviewerState is where an ask of a reviewer is (code_reviewers.state). An
+// ask WAITS — its reviewer's review is owed — only while it is requested:
+// what the listing of the changes waiting on a reviewer walks, what a change's
+// readiness waits on, and what a change's bound on its asks counts
+// ([MaxReviewersPerChange]). Every other state is the ask answered, ended or
+// taken back, kept so the change says who was once asked.
 type ReviewerState string
 
 const (
-	// ReviewerRequested is a reviewer the change asks for a review.
+	// ReviewerRequested is a reviewer the change waits on for a review.
 	ReviewerRequested ReviewerState = "requested"
 	// ReviewerWithdrawn is a reviewer whose ask was withdrawn: kept, so the
 	// change says who was once asked, and asked again by a request naming
 	// them.
 	ReviewerWithdrawn ReviewerState = "withdrawn"
+	// ReviewerReviewed is a reviewer whose review answered the ask — settled
+	// by the review's own record. Asked again by a request naming them, and
+	// by a later revision's first facts where their standing verdict asks
+	// for changes ([Revise.ReReview]): the change is theirs to look at again.
+	//
+	// BASE FORMAT, under the condition [KindChange] states: a value only an
+	// apply writes, from the records' own ops, so a build that knows the ops
+	// knows the value.
+	ReviewerReviewed ReviewerState = "reviewed"
+	// ReviewerEnded is a reviewer whose ask was still waiting when the change
+	// closed or merged — settled by the change's own [AskSettle] record, which
+	// asks it again if the change is reopened.
+	//
+	// BASE FORMAT, under the condition [KindChange] states, as
+	// [ReviewerReviewed].
+	ReviewerEnded ReviewerState = "ended"
 )
 
 // ReviewerStates is the closed set, in this order.
-func ReviewerStates() []ReviewerState { return []ReviewerState{ReviewerRequested, ReviewerWithdrawn} }
+func ReviewerStates() []ReviewerState {
+	return []ReviewerState{ReviewerRequested, ReviewerWithdrawn, ReviewerReviewed, ReviewerEnded}
+}
 
 // Valid reports a state this build knows.
 func (s ReviewerState) Valid() bool { return slices.Contains(ReviewerStates(), s) }
@@ -508,6 +531,40 @@ type FindingResolve struct {
 	// WRITER from its snapshot and chart; an asker sends none.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
+
+// AskSettle settles a change's asks for review with its LIFECYCLE ([OpAsks]):
+// every ask still waiting on a change that closed or merged is ENDED — nobody
+// owes the review of a change that will not merge — and every ask its end left
+// waiting is ASKED AGAIN once the change is reopened. The change's lifecycle is
+// its repository's records, which write nothing of its conversation (a table
+// is written by the records of one subject), so its home git node finds a
+// change whose asks no longer match its state from the rows (the
+// `changes_due` read's [ReadAnswer.AskSettles]) and asks the change's writer
+// for this record on the change's own subject. The home's own write, which no
+// principal asks.
+//
+// Every field is in the base format, under the condition [OpAsks] states.
+type AskSettle struct {
+	RepoID   string `json:"repo_id"`
+	ChangeID string `json:"change_id"`
+	// State is the state the change's asks move to, as its home read the
+	// change: ended, for a closed or merged change's waiting asks;
+	// requested, for a reopened change's ended ones. The decide holds it to
+	// the change's state in its own snapshot.
+	State ReviewerState `json:"state"`
+	// Reviewers is the asks the record moves, by handle, at most
+	// [MaxAsksSettled]. STAMPED BY THE WRITER from its snapshot; the home
+	// sends none.
+	Reviewers []string `json:"reviewers,omitempty"`
+}
+
+// MaxAsksSettled is the most asks one [AskSettle] moves: every ask a change can
+// hold waiting at once — those asked by name or as path owners
+// ([MaxReviewersPerChange]) and those a revision's facts ask to look again
+// ([MaxReReviewers]). A change holding more — only a reopened change asked
+// again beside the asks its end left, can — is settled over more than one
+// record, each its home's next, since the change stays due until none is left.
+const MaxAsksSettled = MaxReviewersPerChange + MaxReReviewers
 
 // ReviewID is the id of the review a write under opID gives, DERIVED from the
 // write's operation id as [CommentID] derives a comment's, so a review asked

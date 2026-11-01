@@ -743,6 +743,24 @@ type ChangeDue struct {
 	Checks *CheckWork `json:"checks,omitempty"`
 }
 
+// AskDue is one change whose asks for review its home owes a settling
+// ([AskSettle]): the change, and the state its asks move to — ended for a
+// closed or merged change's asks still waiting, requested for a reopened
+// change's asks its end left.
+type AskDue struct {
+	ChangeID string        `json:"change_id"`
+	State    ReviewerState `json:"state"`
+}
+
+// MaxAskSettlesPerRead is the most changes one `changes_due` read names whose
+// asks are due a settling ([ReadAnswer.AskSettles]), on its first page: what
+// one pass of the repository's home settles at most — SIXTY-FOUR, the figure
+// a pass's merges are held to (internal/code/home's MergeabilityPerPass),
+// here records of a few hundred bytes each, so a repository whose changes end
+// faster than its home's passes settle them is settled at that pace, the rest
+// at the next pass, since each stays due until it is settled.
+const MaxAskSettlesPerRead = 64
+
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
 // coding run is given — each costs a clone before its coding agent starts,
 // inside its setup budget, and a run that needs more is a task to split — so a
@@ -1406,6 +1424,17 @@ type ReadAnswer struct {
 	DueTips    []TipDue         `json:"due_tips,omitempty"`
 	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
 	PathOwners []PathOwner      `json:"path_owners,omitempty"`
+	// AskSettles is, on the first page of one repository's `changes_due`
+	// read, its changes whose asks for review no longer match the change's
+	// state — an ended change's asks still waiting, a reopened change's asks
+	// its end left — at most [MaxAskSettlesPerRead], each with the state its
+	// asks move to, which its home settles ([AskSettle]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, as [ChangeDue.RefreshDue]
+	// is, under the condition it states: a home of a build without it would
+	// settle no change's asks, and the listing of the changes waiting on a
+	// reviewer still keeps a live change alone.
+	AskSettles []AskDue `json:"ask_settles,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one
 	// attempt as its row stands, or none where the rows hold no such attempt
 	// — and Check a `check` read's one attempt whole. A `checks_running`
@@ -1835,6 +1864,12 @@ type ConversationWrite struct {
 	// [Mergeability]).
 	Revise       *Revise       `json:"revise,omitempty"`
 	Mergeability *Mergeability `json:"mergeability,omitempty"`
+	// Asks settles the change's asks with its lifecycle, which the home asks
+	// with NO Asker too ([AskSettle]).
+	//
+	// AN ESTATE REQUEST'S FIELD: what it carries rides the code log as the
+	// [OpAsks] record, under the condition that op states.
+	Asks *AskSettle `json:"asks,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.

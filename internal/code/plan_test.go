@@ -656,6 +656,18 @@ func registeredStatements() map[string]statement {
 			[]string{reviewerKey + " (change_id=?)"}},
 		"withdraw reviewer": {withdrawReviewerSQL, []any{string(ReviewerWithdrawn), 3000, "repo-1-change-000001",
 			"seat-0"}, []string{reviewerKey + " (change_id=? AND reviewer=?)"}},
+		// A CHANGE'S ASKS MOVED: those in one state, by the reviewers' key's
+		// prefix — a settling's decide; a list of them moved from one state
+		// to another, driven from the list of their handles, one seek of the
+		// key a handle; and the waiting and the ended counted onto the
+		// conversation's row by its key, each a range of the reviewers' key.
+		"asks in state": {asksInStateSQL, []any{"repo-1-change-000001", string(ReviewerRequested), MaxAsksSettled},
+			[]string{reviewerKey + " (change_id=?)"}},
+		"move asks": {moveAsksSQL, []any{string(ReviewerReviewed), 3000, "repo-1-change-000001",
+			string(ReviewerRequested), `["seat-0","seat-2"]`}, []string{"SCAN json_each AS j",
+			reviewerKey + " (change_id=? AND reviewer=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"count asks": {countAsksSQL, []any{"repo-1-change-000001"},
+			[]string{conversationKey + " (change_id=?)", reviewerKey + " (change_id=?)"}},
 		"resolve thread": {resolveThreadSQL, []any{true, "seat-0", "agent", "comment-1", "repo-1-change-000001"},
 			[]string{commentKey + " (id=?)"}},
 		// A CHANGE'S REVIEWS AND FINDINGS: a finding by its key — a decide's
@@ -687,6 +699,19 @@ func registeredStatements() map[string]statement {
 				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
 				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+		// THE ASKS DUE A SETTLING: the repositories holding an ended change
+		// whose asks still wait, after a cursor, walking the index partial on
+		// a waiting ask in its order, each change's state and its
+		// repository's by their keys; one repository's such changes, the
+		// same index's range; and its live changes holding asks their end
+		// left, the live changes' index's range, each conversation by its
+		// key.
+		"due asked repositories": {dueAskedReposSQL, []any{"", MaxSnapshotItems},
+			[]string{askedKey + " (repo_id>?)", changeKey + " (id=?)", repoKey + " (id=?)"}},
+		"ended asks": {endedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
+			[]string{askedKey + " (repo_id=?)", changeKey + " (id=?)"}},
+		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
+			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",

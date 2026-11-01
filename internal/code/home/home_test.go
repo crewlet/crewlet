@@ -39,11 +39,15 @@ const (
 // merged again, oldest first, as many as a read asks — answered at the floor a
 // read names, and the facts of each head. A revise takes its change's facts
 // off the list, a mergeability its merge, and a landing the whole change, as
-// the rows' own would; a change owing nothing more leaves the list.
+// the rows' own would; a change owing nothing more leaves the list. And each
+// repository's changes whose asks are due a settling, which a settling takes
+// off, as its counts would.
 type estate struct {
 	mu       sync.Mutex
 	due      map[string][]code.ChangeDue
 	rechecks map[string][]code.ChangeDue
+	unsettle map[string][]code.AskDue
+	settles  []code.AskSettle
 	owners   map[string][]code.PathOwner
 	facts    map[string]code.RevisionFactsAnswer
 	at       statelog.Position
@@ -57,7 +61,8 @@ type estate struct {
 
 func newEstate() *estate {
 	return &estate{due: map[string][]code.ChangeDue{}, rechecks: map[string][]code.ChangeDue{},
-		owners: map[string][]code.PathOwner{}, facts: map[string]code.RevisionFactsAnswer{},
+		unsettle: map[string][]code.AskDue{}, owners: map[string][]code.PathOwner{},
+		facts:   map[string]code.RevisionFactsAnswer{},
 		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
@@ -85,6 +90,20 @@ func (e *estate) owe(repo string, due code.ChangeDue) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.due[repo] = append(e.due[repo], due)
+}
+
+// owesSettling puts dues among repo's changes whose asks are due a settling.
+func (e *estate) owesSettling(repo string, dues ...code.AskDue) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.unsettle[repo] = append(e.unsettle[repo], dues...)
+}
+
+// settled is every settling of asks the home asked, in the order it asked.
+func (e *estate) settled() []code.AskSettle {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.settles)
 }
 
 // recheck puts due among repo's rechecks, after every recheck already there:
@@ -122,6 +141,11 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 				repos = append(repos, repo)
 			}
 		}
+		for repo, dues := range e.unsettle {
+			if len(dues) > 0 {
+				repos = append(repos, repo)
+			}
+		}
 		slices.Sort(repos)
 		return code.ReadAnswer{DueRepos: slices.Compact(repos), Position: e.at}, nil
 	}
@@ -129,7 +153,7 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	again := e.rechecks[repo]
 	again = slices.Clone(again[:min(len(again), q.ChangesDue.Rechecks)])
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), Rechecks: again, PathOwners: e.owners[repo],
-		Position: e.at}, nil
+		AskSettles: slices.Clone(e.unsettle[repo]), Position: e.at}, nil
 }
 
 func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -162,6 +186,15 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) {
 			d.MergeDue, d.RefreshDue = false, false
 		})
+	case w.Asks != nil:
+		e.settles = append(e.settles, *w.Asks)
+		e.unsettle[w.Asks.RepoID] = slices.DeleteFunc(e.unsettle[w.Asks.RepoID], func(d code.AskDue) bool {
+			return d.ChangeID == w.Asks.ChangeID
+		})
+		select {
+		case e.changed <- struct{}{}:
+		default:
+		}
 	}
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.at}, nil
 }
@@ -718,6 +751,42 @@ func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 	if r := revises[0]; r.BaseTree != oid("3") || r.HeadTree != oid("4") || !reflect.DeepEqual(r.Classes, classed) {
 		t.Errorf("the facts recorded trees %s and %s and classes %+v, want the read's %s, %s and %+v", r.BaseTree,
 			r.HeadTree, r.Classes, oid("3"), oid("4"), classed)
+	}
+}
+
+// A HOME SETTLES THE ASKS ITS LISTING NAMES: a repository whose only due work
+// is a change's asks for review that no longer match its lifecycle — an ended
+// change's still waiting, a reopened change's its end left — is listed, and
+// its home asks the change's writer to settle each, naming the change and the
+// state its asks move to and no asker (the home's own write), nothing more:
+// the writer stamps the asks it moves from its own snapshot.
+//
+// Mutations: drop the settling from Work → no settling is asked, the
+// repository staying due; send the listing's state the other way → the
+// settlings name the wrong states.
+func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	ended := code.AskDue{ChangeID: changeID(repoA, 1), State: code.ReviewerEnded}
+	reopened := code.AskDue{ChangeID: changeID(repoA, 2), State: code.ReviewerRequested}
+	e.owesSettling(repoA, ended, reopened)
+	loopOn(t, "node-a", e, &placement{homes: map[string]string{repoA: "node-a"}}, newNudges(), time.Hour)
+	deadline := time.After(10 * time.Second)
+	for len(e.settled()) < 2 {
+		select {
+		case <-e.changed:
+		case <-deadline:
+			t.Fatalf("the home asked %d settlings in 10 s, want 2: %+v", len(e.settled()), e.settled())
+		}
+	}
+	want := []code.AskSettle{{RepoID: repoA, ChangeID: ended.ChangeID, State: code.ReviewerEnded},
+		{RepoID: repoA, ChangeID: reopened.ChangeID, State: code.ReviewerRequested}}
+	got := e.settled()
+	for i, w := range want {
+		if g := got[i]; g.RepoID != w.RepoID || g.ChangeID != w.ChangeID || g.State != w.State ||
+			len(g.Reviewers) != 0 {
+			t.Fatalf("the home asked the settlings %+v, want %+v", got, want)
+		}
 	}
 }
 

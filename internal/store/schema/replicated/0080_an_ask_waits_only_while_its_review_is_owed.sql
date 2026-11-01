@@ -1,0 +1,49 @@
+-- An ask waits only while its review is owed.
+--
+-- An ask for review (code_reviewers, 0072) used to leave its `requested` state
+-- only by an explicit withdrawal. Its reviewer's review answered it in nothing
+-- the rows said, and its change's close or merge could not, since a change's
+-- lifecycle is its repository's records and its asks are its own subject's
+-- (0072: a table is written by the records of one subject only). So the
+-- requested range of code_reviewers_reviewer_idx — what the listing of the
+-- changes waiting on a reviewer walks (needs=review, needs=me, reviewer=) —
+-- held every ask a reviewer was ever given: a listing cost the reviewer's
+-- whole history, a live change sat behind every newer merged one, a change
+-- the reviewer had reviewed still waited on them, and a change that had asked
+-- 32 reviewers could ask nobody else once all of them had answered.
+--
+-- An ask now WAITS only while its review is owed, in two more states:
+--   - reviewed: its reviewer's review answered it, settled by the review's own
+--     record on the change's subject. An ask for review naming them again
+--     opens it again, and so does a later revision's first facts for a
+--     reviewer whose standing verdict asks for changes (the re_review the
+--     facts' record carries).
+--   - ended: its change closed or merged with the ask still waiting. Settled
+--     by a record on the CHANGE'S subject (`asks`), which the repository's
+--     home asks of the change's writer once it finds the change ended — the
+--     repository's records still write nothing here — and opened again by the
+--     same record once the change is reopened.
+--
+-- code_conversations gains what finds those changes without walking a
+-- repository's history: asked, how many of the change's asks wait
+-- (`requested`), and ended, how many its end left unanswered (`ended`) — each
+-- counted again by every record that moves an ask, from the change's own
+-- asks.
+--
+-- # The index
+--
+-- code_conversations_asked_idx is a repository's changes holding an ask that
+-- waits: the home's search for an ENDED change whose asks still wait, which
+-- it settles. PARTIAL on asked > 0, so it holds only those — the live
+-- changes with an ask outstanding, and an ended one until its home settles
+-- it — never the repository's history. A live change whose asks its end left
+-- unanswered is found by the walk of the repository's live changes the home
+-- already makes (code_changes_open_idx), its counters read by their key.
+--
+-- Class: code_conversations stays reproducible: asked and ended are written
+-- only by the applier, from the records on a change's own subject, and the
+-- index is over its own rows.
+ALTER TABLE code_conversations ADD COLUMN asked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE code_conversations ADD COLUMN ended INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX code_conversations_asked_idx ON code_conversations (repo_id, change_id) WHERE asked > 0;    -- a repository's changes with an ask that waits: the home's search for an ended change whose asks it settles

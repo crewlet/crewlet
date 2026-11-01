@@ -33,7 +33,8 @@ func newestFirst(refs map[string]string, ids ...string) []string {
 // THE CHANGES WAITING ON A REVIEWER ARE THE ONES WHOSE ASK OF THEM STANDS: a
 // listing naming a reviewer reads their standing asks, newest change first and
 // a page at a time, across repositories — a withdrawn ask is none, and a
-// closed change's ask still stands; needs=review keeps the live changes alone,
+// closed change's ask stands until its home settles it (the case below);
+// needs=review keeps the live changes alone,
 // the asker's own where it names no reviewer, a person's by the human seat
 // they hold; and every other filter is tested on the rows a page read.
 //
@@ -103,6 +104,136 @@ func TestTheChangesWaitingOnAReviewerAreTheOnesWhoseAskStands(t *testing.T) {
 				t.Errorf("%s: %d changes came in %d pages of one", name, len(tc.want), pages)
 			}
 		}
+	}
+}
+
+// settling is the home's settling of change's asks with its lifecycle, moving
+// them to state.
+func settling(repo, change string, state code.ReviewerState) code.ConversationWrite {
+	return conversing(code.Principal{}, func(w *code.ConversationWrite) {
+		w.Asks = &code.AskSettle{RepoID: repo, ChangeID: change, State: state}
+	})
+}
+
+// askSettles is the changes of repo whose asks the reader names due a
+// settling, read as a home reads its first page.
+func (n *node) askSettles(repo string) []code.AskDue {
+	n.t.Helper()
+	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+		ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt}}
+	a, err := n.reader.Read(n.t.Context(), q)
+	if err != nil {
+		n.t.Fatalf("read %s's due changes: %v", repo, err)
+	}
+	return a.AskSettles
+}
+
+// THE CHANGES WAITING ON A REVIEWER ARE READ FROM THE ASKS STILL WAITING: a
+// review answers its reviewer's own ask, and a change's end ends the asks
+// still waiting on it once its home settles them — so a reviewer whose every
+// other ask is answered or ended finds their one live, unanswered ask, the
+// OLDEST of them all, on the first page of pages of one, where the walk used
+// to read every newer settled ask first and come back empty; reviewer= names
+// none of the settled. The ended change is due its settling — its repository
+// listed, the change named — until the settling lands, and not after; the
+// settling's decide holds the direction to the change's state, a live
+// change's end and an ended change's ask again superseded; and once the
+// change is reopened its ended ask is due the other way, settled, and waits
+// again.
+//
+// Mutations: drop the review's settling of its own ask → the reviewed change
+// is read first and the first page comes back empty; drop applyAsks's move →
+// the closed change stays listed under reviewer= and stays due; drop the
+// ended listing → the closed change is never named due.
+func TestAReviewersListingWalksOnlyTheAsksStillWaiting(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	web := changeRepo(t, n, "web")
+	refs := map[string]string{}
+	open := func(source string) code.ChangeResult {
+		t.Helper()
+		if source != featureRef && source != releaseRef {
+			n.push(web, entry(uuid.Must(uuid.NewV7()).String(), set(source, code.ZeroOID, oidOf(source))))
+		}
+		res, err := c.ProposeChange(ctx, opening(web, source, mainRef, dev))
+		requireChanged(t, res, err)
+		refs[res.ChangeID] = code.ChangeRef("web", res.Number)
+		return res
+	}
+	converse := func(cw code.ConversationWrite) code.ConversationResult {
+		t.Helper()
+		res, err := w.Converse(ctx, cw)
+		requireConversed(t, res, err)
+		return res
+	}
+	// THE OLDEST CHANGE WAITS, which a reviewer's listing reads last.
+	waiting := open(featureRef)
+	converse(asking(web, waiting.ChangeID, cto, "plat-lead"))
+	reviewed := open(releaseRef)
+	converse(asking(web, reviewed.ChangeID, cto, "plat-lead"))
+	converse(reviewing(web, reviewed.ChangeID, platLead, 1, code.VerdictComment, nil))
+	ended := open("refs/heads/ended")
+	converse(asking(web, ended.ChangeID, cto, "plat-lead"))
+	closed, err := c.ProposeChange(ctx, closing(web, ended.ChangeID, dev, ended.Version))
+	requireChanged(t, closed, err)
+
+	// DUE ITS SETTLING, and the decide holds the direction to its state.
+	if got := n.askSettles(web); len(got) != 1 || got[0] != (code.AskDue{ChangeID: ended.ChangeID,
+		State: code.ReviewerEnded}) {
+		t.Fatalf("the due listing names %+v, want the closed change's asks due their end", got)
+	}
+	if !slices.Contains(n.dueRepos(), web) {
+		t.Fatalf("the due repositories %v leave out web, whose closed change's asks still wait", n.dueRepos())
+	}
+	// A LIVE CHANGE'S ASKS DO NOT END, AND AN ENDED CHANGE'S ARE NOT ASKED
+	// AGAIN: each refused superseded, appending nothing.
+	for _, cw := range []code.ConversationWrite{
+		settling(web, waiting.ChangeID, code.ReviewerEnded),
+		settling(web, ended.ChangeID, code.ReviewerRequested),
+	} {
+		before := n.end()
+		res, err := w.Converse(ctx, cw)
+		requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "")
+	}
+	converse(settling(web, ended.ChangeID, code.ReviewerEnded))
+	if got := n.askSettles(web); len(got) != 0 {
+		t.Fatalf("the due listing still names %+v once the closed change's asks ended", got)
+	}
+
+	// ONE PAGE OF ONE HOLDS THE ONE ASK STILL WAITING.
+	q := code.ReadQuery{Kind: code.ReadChanges, Asker: platLead, Needs: code.NeedReview, Limit: 1, Fresh: stale}
+	a, err := n.reader.Read(ctx, q)
+	switch {
+	case err != nil:
+		t.Fatalf("read what waits on plat-lead's review: %v", err)
+	case len(a.Changes) != 1 || a.Changes[0].Ref != refs[waiting.ChangeID]:
+		t.Fatalf("the first page of one of what waits on plat-lead's review lists %+v, want %s alone",
+			a.Changes, refs[waiting.ChangeID])
+	}
+	if got, _ := listChanges(t, n, code.ReadQuery{Asker: cto, Reviewer: "plat-lead"}, 50); !slices.Equal(got,
+		[]string{refs[waiting.ChangeID]}) {
+		t.Fatalf("plat-lead's waiting asks are %v, want %s alone", got, refs[waiting.ChangeID])
+	}
+
+	// REOPENED, ITS ENDED ASK IS DUE AGAIN THE OTHER WAY, and waits once
+	// settled.
+	reopened, err := c.ProposeChange(ctx, reopening(web, ended.ChangeID, dev, closed.Version))
+	requireChanged(t, reopened, err)
+	if got := n.askSettles(web); len(got) != 1 || got[0] != (code.AskDue{ChangeID: ended.ChangeID,
+		State: code.ReviewerRequested}) {
+		t.Fatalf("the due listing names %+v, want the reopened change's asks due again", got)
+	}
+	converse(settling(web, ended.ChangeID, code.ReviewerRequested))
+	if got := n.askSettles(web); len(got) != 0 {
+		t.Fatalf("the due listing still names %+v once the reopened change's asks wait again", got)
+	}
+	if got, _ := listChanges(t, n, code.ReadQuery{Asker: cto, Reviewer: "plat-lead"}, 50); !slices.Equal(got,
+		newestFirst(refs, waiting.ChangeID, ended.ChangeID)) {
+		t.Fatalf("plat-lead's waiting asks are %v, want the reopened change's and the oldest", got)
 	}
 }
 
