@@ -2893,6 +2893,30 @@ var ACTIONS = {
 		domain: "code",
 		refreshes: [],
 		scope: "person"
+	},
+	code_merge_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_head",
+			"method",
+			"delete_branch",
+			"close_task",
+			"override_reason"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_rerun_checks: {
+		args: [
+			"repo",
+			"change",
+			"all_failed"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
 	}
 };
 //#endregion
@@ -3352,6 +3376,7 @@ function refusalOf(tool, opId, err, floors) {
 		code,
 		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
 		hint: err.hint,
+		hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
 		grants: err.grants,
 		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null
 	};
