@@ -1412,7 +1412,7 @@
 // before the request it serves. While an expunge is open, a second begin is
 // stale and so is a publication (publication.go's rule 6g); a compaction of
 // live packs is decided as ever. A pack row also names WHEN its newest
-// content arrived ([PackRow.Arrived], replicated 0099): a push's and a queue
+// content arrived ([PackRow.Arrived], replicated 0100): a push's and a queue
 // merge's pack its record's broker instant, and every rewrite's output the
 // latest of the rows it retires — the record's own instant where it retires
 // none — so the maintainer's own expunge keeps every pack that arrived within

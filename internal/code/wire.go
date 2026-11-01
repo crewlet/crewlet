@@ -275,7 +275,7 @@ type PackRow struct {
 	// nothing in it reached the repository after it. A push's pack and a
 	// merge's arrived at their own record; every rewrite's output — a
 	// compaction's, an expunge's, a rescue — at the latest of the packs it
-	// replaced, since moving content brings none (replicated 0099). An
+	// replaced, since moving content brings none (replicated 0100). An
 	// expunge on its maintainer's schedule keeps a pack that arrived within
 	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
 	// a pack a cache adopted before a round served its row. A read's
