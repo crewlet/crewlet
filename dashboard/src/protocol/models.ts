@@ -113,7 +113,7 @@ export interface ModelDevice {
 /** One model in an admin's reading. */
 export interface ModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   /** The sign-in the model shares a plan with others on; "" where none. */
@@ -131,7 +131,7 @@ export interface ModelEntry {
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
 export interface MemberModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   sign_in: { route: ModelSignInRoute; resolves: boolean };
@@ -181,7 +181,7 @@ export interface RunnerNodeCell {
   checked_at: string | null;
 }
 
-/** `llm_runners`: where a model's coding runs can happen, and on which nodes each is ready. */
+/** `llm_runners`: where a model's executors can run, and on which nodes each is ready. */
 export interface RunnersAnswer {
   default_run_in: RunnerCellName;
   cells: Record<RunnerCellName, { declared: boolean; ready_on: string[]; not_ready_on: string[] }>;

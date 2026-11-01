@@ -451,8 +451,8 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the seat with this handle has work in flight: a turn running, or a
- * detached coding run it is waiting on.
+ * Whether the seat with this handle has work in flight: a turn running, or
+ * its executor in its box, which that turn waits on.
  */
 export function isWorking(
   handle: string | undefined,

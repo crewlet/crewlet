@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CODING RUN'S QUESTION A PERSON ANSWERED IS ONE OF THEIR ANSWERED DECISIONS
+// AN EXECUTOR'S QUESTION A PERSON ANSWERED IS ONE OF THEIR ANSWERED DECISIONS
 // (ADR-0068), read back from the record of the answer, beside a work item's:
 // what was asked with its options, the option chosen and, where nothing else
 // was written, its label as the answer's words, who answered and when. Only an

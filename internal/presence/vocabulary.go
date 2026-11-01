@@ -79,8 +79,8 @@ func (k RoomKind) typing() bool { return k == RoomChat }
 // agentSlot is which of a seat's members in a room of kind k a touch focused
 // on f is: one per seat in an artifact's room, where the agent's focus moves
 // with its calls, and one per seat PER THREAD in a chat room's, because a seat
-// can be answering in two threads of one room at once (a turn parked behind a
-// coding run keeps its line up while the seat's next turn answers elsewhere),
+// can be answering in two threads of one room at once (a turn parked behind an
+// executor keeps its line up while the seat's next turn answers elsewhere),
 // and taking one down must not take the other with it.
 func (k RoomKind) agentSlot(f Focus) string {
 	if k == RoomChat {

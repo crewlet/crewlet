@@ -52,5 +52,5 @@ and it refuses a role whose name yields nothing rather than deriving an id from
 an empty string.
 
 It does not apply to anything a person creates at runtime: a task, a page, a
-channel and a sandbox run all carry minted uuids on their own rows, because
-none of them has to be computable by a node that has never heard of it.
+channel and an executor's launch all carry minted uuids on their own rows,
+because none of them has to be computable by a node that has never heard of it.

@@ -376,7 +376,7 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
 /** The word after the name, where the row is not a plain question or update. */
 function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
   if (row.kind !== "decision") return null;
-  if (row.subject.kind === "run") return { word: "coding run", danger: false };
+  if (row.subject.kind === "run") return { word: "executor", danger: false };
   if (row.subject.kind === "seat") return { word: "stopped", danger: true };
   return null;
 }
@@ -498,7 +498,7 @@ const InboxItem = memo(function InboxItem({
 
 /**
  * Every text of the question a row is about, open or answered, an ask's or a
- * coding run's, or undefined for a row that is not a question.
+ * executor's, or undefined for a row that is not a question.
  */
 function rowTexts(row: InboxRow): string[] | undefined {
   if (row.kind === "answered") return answeredTexts(row.answered);

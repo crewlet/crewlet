@@ -54,10 +54,10 @@ test("the round can leave the step's label and is still said once", () => {
 
 // THERE IS NO DELIVERY STEP: whether a turn reached anybody is decided as it
 // closes, and a step that could never be current is a promise nothing keeps.
-test("a turn walks three steps, and a parked one is in its coding run", () => {
+test("a turn walks three steps, and a parked one is in Execute, in its box", () => {
   const parked = turnSteps(row(null, { turn: { turn_id: "t", started_at: "", stage: "parked" } }));
   expect(parked.current).toBe("execute");
-  expect(parked.steps.map((s) => s.label)).toEqual(["Context", "Execute · coding run", "Review"]);
+  expect(parked.steps.map((s) => s.label)).toEqual(["Context", "Execute · in its box", "Review"]);
   const onboarding = turnSteps(row({ phase: "onboarding" }));
   expect(onboarding.current).toBe("context");
   expect(onboarding.steps[0]?.label).toBe("Onboarding");

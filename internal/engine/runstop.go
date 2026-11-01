@@ -21,7 +21,7 @@ import (
 //
 // A pause with `stop_running` asks for the seat's work in flight to end. Its
 // running TURN hears it at the next round, through the turn's own fence
-// (seatpause.go). A coding RUN the turn launched has no rounds the engine sees,
+// (seatpause.go). The EXECUTOR the turn launched has no rounds the engine sees,
 // so the node holding the seat ends it through the coordinator
 // ([sandbox.Coordinator.StopSeat]) — at every moment a stop can reach the seat:
 // the pause landing on a watch that holds it ([Engine.applySeatPause]), a
@@ -70,8 +70,8 @@ func (e *Engine) stopSeatRuns(ctx context.Context, seat uuid.UUID, p coord.SeatP
 	}
 	if err := rt.coordinator.StopSeat(ctx, handle, runStopOf(p)); err != nil {
 		log.WarnContext(ctx, "seat_runs_not_stopped", "seat", handle, "by", p.By, "error", err,
-			"detail", "the seat's running coding runs could not be stopped yet; the pause "+
-				"stops them when this node next reads the pauses, or when the seat is acquired")
+			"detail", "the seat's executor could not be stopped yet; the pause "+
+				"stops it when this node next reads the pauses, or when the seat is acquired")
 	}
 }
 

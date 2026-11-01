@@ -98,12 +98,12 @@ export function turnIdOf(row: AgentRow | null | undefined): string {
  * reader who pressed "Watch live" is asking what it is doing NOW, and on the
  * Timeline that is one drifting bar, with its words a tab and a press away.
  *
- * A PARKED TURN IS WATCHED HERE TOO. Its executor launched a detached coding
- * run and suspended, so no phase is in flight — yet the engine still calls the
- * seat working, because the run is the work. The Transcript draws that run's
- * live output above the phases, links the run's own page, and opens the
+ * A PARKED TURN IS WATCHED HERE TOO. Its executor launched in its box and the
+ * turn suspended, so no phase is in flight — yet the engine still calls the
+ * seat working, because the executor is the work. The Transcript draws the
+ * executor's live output above the phases, links its own page, and opens the
  * executor's card it parked in. Sending a parked turn's watch link to the
- * run's page instead would have left the other half dead: a turn that parks
+ * executor's page instead would have left the other half dead: a turn that parks
  * while a reader is already watching this tab is the same page with nothing
  * live on it, and no link is followed to fix that.
  *
@@ -141,7 +141,7 @@ export function watchHref(turnId: string): string {
  * ONE DERIVATION FOR BOTH, because each spelled its own and they named
  * different seats: the sidebar dropped a working seat whose turn has no id
  * before it took [RUNNING_ROWS], Home took the first four as they came, and a
- * seat working only through a coding run no turn record names yet led Home's
+ * seat working only through an executor no turn record names yet led Home's
  * card while the sidebar beside it listed the four after it.
  *
  * THE FILTER COMES BEFORE THE CAP. Every row in either list is a way into its

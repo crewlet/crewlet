@@ -20,7 +20,7 @@ import (
 //
 // # A turn, not a segment
 //
-// A turn that parks on a coding run completes more than once under one run id,
+// A turn that parks on its executor completes more than once under one run id,
 // and each completion charges a row of its own (see the engine's turnspend.go)
 // — so the rows are SEGMENTS and a list of them would show one turn as three
 // cards, the second and third headed by an outcome of "suspended" that is not
@@ -83,7 +83,7 @@ type TaskTurn struct {
 
 	// Outcome is how the turn ended, off its newest segment: the turn's
 	// decision, `failed`, `stopped` where a person's pause ended it, or
-	// `suspended` while a coding run is still out.
+	// `suspended` while its executor is still out.
 	Outcome string `json:"outcome"`
 	// Phases are the phases that ran, in the order each first ran.
 	Phases []string `json:"phases"`

@@ -243,7 +243,7 @@ consequences worth knowing before you script against it:
   no collection of its own, so add the two together with `PUT /config` — and an
   entry or a seat's `llm` that leaves a seat's executor chain with no
   `claude-code` or `opencode` member is refused, at the seat's `llm` or at the
-  `agent` of the entry a seat with none falls to.
+  `harness` of the entry a seat with none falls to.
 - **An unknown field is refused, not dropped.** A body carrying `heders`
   where you meant `headers` is `400 invalid_body` naming the field, exactly as
   the whole-document parser refuses an unknown key. A decoder that ignored what

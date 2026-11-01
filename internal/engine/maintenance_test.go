@@ -352,7 +352,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 // AN IDLE ASK OUTLASTS THE LONGEST SILENCE OF ONE THAT IS STILL OWED.
 //
 // The idle sweep spares every channel whose ask waits somewhere the engine can
-// see it — a coding run's record, an inbox held by a run, a pause or a spent
+// see it — an executor's record, an inbox held by a run, a pause or a spent
 // budget window — and closes the rest once they have been quiet for
 // [maintenance.ChannelIdleTimeout]. What it cannot see is an ask in flight: a
 // delivery a node that died held unacknowledged, invisible for the broker's

@@ -39,8 +39,8 @@ type hostCommand struct {
 // A control command produces a line or two; this exists for the pathological
 // case — a runtime that streams a pull progress bar, an image whose entrypoint
 // floods stderr — where an unbounded buffer would be the engine's memory. The
-// coding job's own output does not come through here at all: it is redirected
-// to files inside the box and read back by the runner.
+// launched job's own output does not come through here at all: it is
+// redirected to files inside the box and read back by the runner.
 const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
@@ -96,7 +96,7 @@ func wholeRunes(b []byte) []byte {
 	return b
 }
 
-// containerCLI is the container runtime's own CLI as this backend drives it:
+// containerCLI is the container runtime's own harness as this backend drives it:
 // the binary [ResolveContainerRuntime] picked, and the variables an operator
 // DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
@@ -122,11 +122,11 @@ type containerCLI struct {
 // and a plugin its own settings — and a fixed list with no
 // way to add to it leaves an operator whose runtime needs one of those with
 // no way to say so. The declared layer wins over the fixed one, because a
-// value an operator wrote down for this CLI is a decision and the host's is a
+// value an operator wrote down for this harness is a decision and the host's is a
 // default.
 //
-// The run environment a coding agent gets is NOT here: it travels as an
-// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// The run environment a harness gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this harness holds
 // is what the runtime needs and nothing a box does. A bare `-e NAME` in
 // `local.run_args` therefore copies only a name this environment carries,
 // which is what the configuration's advisory about one says.
@@ -250,10 +250,10 @@ var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
 // childEnv is the allowlisted host environment plus the box's home, its
 // temporary directory and the run env.
 //
-// Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
+// Allowlisted for the same reason the harness backend allowlists: the engine's
 // environment holds the org's chat token, its collector credential
 // (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
-// the coding agent has any business reading.
+// the harness has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
@@ -331,7 +331,7 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	})
 }
 
-// StartBackground spawns the detached coding job in its own session.
+// StartBackground spawns a launch's detached job in its own session.
 //
 // Spawned directly rather than backgrounded inside a throwaway shell, because
 // the pid has to be usable for three different things and only a direct spawn
@@ -720,7 +720,7 @@ func (b *containerBox) explain(path, rel string, err error) error {
 // file it named, or with a named pipe whose open never returned.
 //
 // Rewritten per call rather than kept: extra differs between the setup steps
-// and the coding job, and a stale file would hand one phase another's
+// and the launched job, and a stale file would hand one phase another's
 // environment.
 func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	merged := make(map[string]string, len(b.env)+len(extra))
@@ -781,7 +781,7 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
 //
-// `docker exec` would otherwise block for the whole length of a coding job;
+// `docker exec` would otherwise block for the whole length of a launched job;
 // backgrounding and echoing $! lets the exec return at once while the job
 // keeps running under the container's PID 1. That PID 1 is started with
 // --init precisely so it reaps the job when it finishes — an unreaped process

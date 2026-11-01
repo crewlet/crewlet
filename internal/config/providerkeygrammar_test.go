@@ -20,7 +20,7 @@ func providerKeysDoc(keys ...string) string {
 func yamlQuote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
 
 // A PROVIDER KEY NAMES A DIRECTORY AND A VARIABLE, so it is held to a grammar
-// both can carry. The default state_dir joins the key under the CLI home, so a
+// both can carry. The default state_dir joins the key under the harness home, so a
 // `/` nested one entry's login inside another's and `..` left the home; the
 // bundle variable upper-cases it, so `Fast` and `fast` were two keys with one
 // bundle. Refused on a write, warned on apply: the entry still runs.

@@ -68,7 +68,10 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queries.Sources{Coord: backend, Company: companySource(t, cfg)}
+	return queries.Sources{
+		Coord: backend, Company: companySource(t, cfg),
+		Builtins: func() []queries.ToolRow { return catalogueBuiltins() },
+	}
 }
 
 // mcpFleet is two reporting nodes and one whose last heartbeat carried no
@@ -443,6 +446,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 		cells = append(cells, rowsOf(t, s["nodes"])...)
 	}
 	holdShape(t, "McpServerNode", cells, false)
+	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
 
 	got, err := clientsource.Union(clientsource.Tree(t), "McpServerState")
 	if err != nil {

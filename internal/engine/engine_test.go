@@ -221,10 +221,10 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 
 func TestAProviderBuildsWithoutALogin(t *testing.T) {
 	// It must BUILD without credentials: the call then fails with the
-	// vendor's own "not authenticated", which names the CLI, while a
+	// vendor's own "not authenticated", which names the harness, while a
 	// constructor that refused to exist would take the whole company down
 	// at boot over one provider's login.
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -232,7 +232,7 @@ providers:
   llm:
     local:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -251,7 +251,7 @@ roles:
 // directory would prune each other's seat homes.
 func TestStateDirsAreDerivedPerProviderKey(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, root)
+	t.Setenv(config.HarnessHomeEnv, root)
 
 	var entry config.LLMProvider
 	opus, err := entry.ResolvedStateDir("opus-sub")
@@ -266,18 +266,18 @@ func TestStateDirsAreDerivedPerProviderKey(t *testing.T) {
 		t.Fatalf("two provider keys derived one state dir %q", opus)
 	}
 	if !strings.HasPrefix(opus, root) {
-		t.Errorf("state dir %q is not under %s=%q", opus, config.CLIHomeEnv, root)
+		t.Errorf("state dir %q is not under %s=%q", opus, config.HarnessHomeEnv, root)
 	}
 
 	// An explicit state_dir is honoured verbatim — that is how two entries
 	// deliberately share one login.
-	shared := config.LLMProvider{StateDir: "/var/lib/crewlet/llm-cli/claude"}
+	shared := config.LLMProvider{StateDir: "/var/lib/crewlet/llm-harness/claude"}
 	for _, key := range []string{"opus-sub", "sonnet-sub"} {
 		got, err := shared.ResolvedStateDir(key)
 		if err != nil {
 			t.Fatalf("ResolvedStateDir: %v", err)
 		}
-		if got != "/var/lib/crewlet/llm-cli/claude" {
+		if got != "/var/lib/crewlet/llm-harness/claude" {
 			t.Errorf("ResolvedStateDir(%q) = %q, want the configured directory", key, got)
 		}
 	}
@@ -289,7 +289,7 @@ func TestStateDirsAreDerivedPerProviderKey(t *testing.T) {
 // up a ${VAR} by hand for a value `crewlet llm login -capture-token` just
 // wrote into the store itself.
 func TestAnEntryReadsItsConventionalTokenWhenItNamesNone(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-from-the-convention")
 
 	c, err := config.ParseCompany([]byte(`
@@ -299,7 +299,7 @@ providers:
   llm:
     subscription:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -308,9 +308,9 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
+	built, err := engine.BuildHarness("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := built.SignInState(t.Context()); got != "token" {
 		t.Errorf("SignInState = %q, want token — the conventional variable was not read", got)

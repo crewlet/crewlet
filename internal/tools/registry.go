@@ -534,7 +534,7 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // registration order, or "" when there is nothing to discover.
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — as a tool of the CLI's `crewlet` MCP
+// reaches the model with every request — as a tool of the harness's `crewlet` MCP
 // server, over the tool bridge to the executor's run in its box and over its
 // phase's tool session for every phase on this host — and a second copy of its
 // description in the system prompt is the same words paid for twice. On the

@@ -626,8 +626,8 @@ at warning, on every launch.
   that name it, which is where the agent acts with it.
 - **Issued only while GitHub is enabled.** Switching `integrations.github` off
   stops every token at the next read: the seat's tool servers stop for want of
-  their credential, the next coding run starts without one (said as
-  `sandbox_env_unresolved`), and a running job's token file is no longer
+  their credential, the executor's next launch starts without one (said as
+  `sandbox_env_unresolved`), and a running launch's token file is no longer
   renewed.
 
 #### How long a token lasts where it is used
@@ -638,21 +638,21 @@ engine renews it wherever something holds one:
 | Where | What it is handed | How it stays good |
 |---|---|---|
 | The seat's tool servers on the engine host | a token with at least 10 minutes left | the seat's servers are passed again when it reaches 10 minutes, and each one carrying it is restarted with a fresh token, as a rotated secret restarts it |
-| A coding run's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a run longer than 50 minutes reads the token from a file |
-| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the job runs; and a job that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a job that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
-| A tool server rendered into the box | the run's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
+| An executor's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a launch longer than 50 minutes reads the token from a file |
+| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the launch runs; and a launch that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a launch that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
+| A tool server rendered into the box | the launch's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
 
 The [git-auth recipe](../concepts/code-sandbox.md#the-git-auth-recipe) reads the
-file at every git and `gh` call, which is what lets a coding job run for hours
+file at every git and `gh` call, which is what lets an executor work for hours
 as the agent's own app.
 
 #### When there is no token to give
 
 | The seat's app | What a value naming the token does |
 |---|---|
-| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run starts without it, said as `sandbox_env_unresolved`: its environment lacks the token, and a setup file whose whole body is the token is not written. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again; a running job's token file is written by the first poll after the app can issue a token, and the wait before that is said once for the job (`sandbox_token_waiting`) |
-| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) | **Fails, with GitHub's reason**, and keeps failing until somebody fixes the agent's app — its key, its installation or the permissions it asks for — which is what the failure says, rather than that the token is asked for again. GitHub is still asked on the restart schedule — 15 seconds, doubling to 5 minutes — so the first ask after the fix issues it. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running job's token file is written by the first poll after GitHub issues a token, and a coding run's environment carries one from the seat's next launch after that. A running job says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a job that holds a token keeps it until it expires, and a job launched without one is told so, and that the first poll after GitHub issues a token writes it |
-| Installed, and GitHub can't be reached or answers that it can't issue one just now (408, its rate limit, a 5xx) | **Fails, with GitHub's reason**, and says the token is asked for again, which it is: on the same restart schedule, its answer held for each wait as a refusal's is, so the first ask after GitHub answers issues it, and a running job says the failure as it says a refusal |
+| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and an executor's launch starts without it, said as `sandbox_env_unresolved`: its environment lacks the token, and a setup file whose whole body is the token is not written. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again; a running launch's token file is written by the first poll after the app can issue a token, and the wait before that is said once for the launch (`sandbox_token_waiting`) |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) | **Fails, with GitHub's reason**, and keeps failing until somebody fixes the agent's app — its key, its installation or the permissions it asks for — which is what the failure says, rather than that the token is asked for again. GitHub is still asked on the restart schedule — 15 seconds, doubling to 5 minutes — so the first ask after the fix issues it. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running launch's token file is written by the first poll after GitHub issues a token, and an executor's environment carries one from the seat's next launch after that. A running launch says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a launch that holds a token keeps it until it expires, and one launched without one is told so, and that the first poll after GitHub issues a token writes it |
+| Installed, and GitHub can't be reached or answers that it can't issue one just now (408, its rate limit, a 5xx) | **Fails, with GitHub's reason**, and says the token is asked for again, which it is: on the same restart schedule, its answer held for each wait as a refusal's is, so the first ask after GitHub answers issues it, and a running launch says the failure as it says a refusal |
 | `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
 
 ### Running locally, with no public address
@@ -680,9 +680,11 @@ reaches the engine perfectly well.
   through their apps, and which setting makes events arrive.
 
 What counts as reachable depends on where GitHub runs. github.com reaches only
-the public internet: a loopback, private, link-local or unspecified address, a
-single-label name and the `localhost`, `.local`, `.internal`, `.lan` and
-`.home.arpa` names are not reachable. An Enterprise Server runs inside the
+the public internet: an address it does not route (loopback, private,
+link-local, unspecified, carrier-grade NAT such as a tailnet's `100.x`
+addresses, and the documentation and other reserved ranges), a single-label
+name and the `localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` names
+are not reachable. An Enterprise Server runs inside the
 company's network, so there only the server's own loopback, an unspecified
 address and `localhost` are refused.
 

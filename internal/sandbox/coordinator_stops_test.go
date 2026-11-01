@@ -413,7 +413,7 @@ func TestEveryStatusHasAPlacement(t *testing.T) {
 	}
 }
 
-// jobFinished queues the result a finished coding job comes back with, so a
+// jobFinished queues the result a launch's finished job comes back with, so a
 // completion has something to collect.
 func jobFinished(_ *testing.T, rig *coordRig) {
 	rig.runner.Finish(Result{Success: true, Text: "done"})
@@ -545,9 +545,9 @@ func answersOnControl(t *testing.T, rig *coordRig) {
 	rig.fireRetries()
 }
 
-// answerByTurnOnTheRow is the answer answer_run gives t1, naming the question
-// the row is on now, as answer_run names it off the row it checked, whatever
-// status the row was placed in.
+// answerByTurnOnTheRow is the answer answer_executor gives t1, naming the
+// question the row is on now, as answer_executor names it off the row it
+// checked, whatever status the row was placed in.
 func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.ExecutorAnswerGiven {
 	t.Helper()
 	run, _, _ := rig.pending.Get(t.Context(), "t1")

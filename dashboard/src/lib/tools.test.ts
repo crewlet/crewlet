@@ -6,7 +6,7 @@ import {
   hintsAdvertised,
   schemaFields,
 } from "./tools.ts";
-import type { ToolAnnotations, ToolRow } from "~/protocol/types.ts";
+import type { ToolAnnotations, ToolRow } from "~/contract/tools.ts";
 
 function ann(over: Partial<ToolAnnotations> = {}): ToolAnnotations {
   return {
@@ -25,6 +25,8 @@ function tool(over: Partial<ToolRow> = {}): ToolRow {
     source: "builtin",
     annotations: ann(),
     delivers: "",
+    group: "",
+    gate: "",
     ...over,
   };
 }

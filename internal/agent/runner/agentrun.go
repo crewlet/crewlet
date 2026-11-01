@@ -22,24 +22,24 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The executor, run by its coding CLI's own agentic loop.
+// The executor, run by its harness's own agentic loop.
 //
-// # What is the CLI's, and what stays the engine's
+// # What is the harness's, and what stays the engine's
 //
-// Every seat's executor is its coding CLI's own run, in a box: its own loop,
+// Every seat's executor is its harness's own run, in a box: its own loop,
 // its own shell, its own edits and commits. The seat's tools reach it over the
 // MCP bridge, which dispatches through the SAME tools.Surface every
-// engine-driven phase calls. So what the CLI owns is how the executor's work
+// engine-driven phase calls. So what the harness owns is how the executor's work
 // happens; everything around it stays the engine's, and each of those is a
 // deliberate refusal to fork:
 //
 //   - The PROMPT is the seat's: identity, chart, memory, skills and workers,
-//     built once here and handed to the CLI as an appended system prompt and
+//     built once here and handed to the harness as an appended system prompt and
 //     the brief it runs.
 //   - The SURFACE is built the same way as every phase's, with the same skill
 //     guard. The bridge executes against it, so a tool denied to the seat is
 //     denied to its run.
-//   - The SUBMISSION is the same tool. The CLI ends its run by calling
+//   - The SUBMISSION is the same tool. The harness ends its run by calling
 //     submit_work over the bridge, so the outcome vocabulary and the rescue
 //     path are the engine's.
 //   - The REVIEWER is the engine's own loop. The point of a reviewer is that
@@ -56,7 +56,7 @@ import (
 // start, since a turn sent back for another iteration launches its next run
 // from the segment that collected this one.
 
-// AgentLauncher starts the executor as its coding CLI's own agentic run.
+// AgentLauncher starts the executor as its harness's own agentic run.
 //
 // Declared by the consumer, and narrow on purpose: the runner knows what the
 // executor should be asked to do and which tools it may use; the engine knows
@@ -90,9 +90,9 @@ type Launched struct {
 	LaunchID string
 }
 
-// AgentRunRequest is one executor handed to its coding CLI's agent loop.
+// AgentRunRequest is one executor handed to its harness's agent loop.
 //
-// THE PROMPT ARRIVES IN TWO HALVES, because the CLIs take it in two: Claude
+// THE PROMPT ARRIVES IN TWO HALVES, because the harnesses take it in two: Claude
 // Code appends a file to its own system prompt, OpenCode adds an instruction
 // file to its default agent's. Both keep the vendor's harness prompt — the
 // part that teaches its shell, editor and loop, which the run is FOR — and put
@@ -107,12 +107,12 @@ type AgentRunRequest struct {
 
 	// Brief is the turn's own ask — with its earlier rounds, every note a
 	// person sent the turn that it has already read, and then Notes — and
-	// the whole of what the CLI is prompted with.
+	// the whole of what the harness is prompted with.
 	Brief string
 
 	// Notes are the notes this brief is the FIRST to read, in the order the
 	// brief renders them ([SteerSource.Brief]): the launch records them read
-	// by the job it opens, in the write that opens it, so the job's own CLI
+	// by the job it opens, in the write that opens it, so the job's own harness
 	// never takes them again.
 	Notes []steer.Note
 
@@ -141,7 +141,7 @@ type AgentRunRequest struct {
 
 	// Continue is set when this launch CARRIES ON a run that parked on a
 	// person's question, now answered, or whose job was lost with its host —
-	// the same round, relaunched: the asking run's CLI session, and the
+	// the same round, relaunched: the asking run's harness session, and the
 	// prompt that continues it, which the launch uses where it runs in the
 	// asking run's box (a lost job's session is never continued, and names
 	// none). Brief is then what a fresh run is told instead, the question and
@@ -163,7 +163,7 @@ type AgentRunRequest struct {
 // Continuation is how a launch carries on an asking run — see
 // [AgentRunRequest.Continue].
 type Continuation struct {
-	// SessionID is the asking run's CLI session; Brief its next prompt —
+	// SessionID is the asking run's harness session; Brief its next prompt —
 	// the answer, and the notes [AgentRunRequest.Notes] carries: only those,
 	// because the session already holds every note it read before it asked.
 	SessionID string
@@ -193,7 +193,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 
 	// The submission tool is on the surface because it is how the executor
-	// says what it did. The CLI calls it over the bridge, and the value it
+	// says what it did. The harness calls it over the bridge, and the value it
 	// captures here is read only when the resume happens in THIS process —
 	// otherwise the resume rebuilds it from the run's durable bridged-call
 	// log.
@@ -203,7 +203,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
-	// ITS OWN METER: every call this surface serves is the CLI's, made
+	// ITS OWN METER: every call this surface serves is the harness's, made
 	// over the bridge after this segment has suspended and charged what it
 	// spent — see [BridgedSpend].
 	bridged := NewBridgedSpend()
@@ -236,12 +236,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// it was asked.
 	//
 	// The surface travels too, whose definitions are NOT in the prompt
-	// below: they reach the CLI over the MCP bridge, where the CLI's own
+	// below: they reach the harness over the MCP bridge, where the harness's own
 	// model is billed for every one of them. See [emitter.promptSize].
 	//
 	// ONE ROUND OF ONE, the cap the collected record states too: the
 	// engine's whole exchange with the run is this launch and its answer,
-	// and the CLI's own turns inside it are bounded by the run's turn cap
+	// and the harness's own turns inside it are bounded by the run's turn cap
 	// (`max_turns`) rather than by anything the engine states here. See
 	// [agentRunResult].
 	emit := r.emitter()
@@ -596,13 +596,13 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 // bridge wrote rather than from the surface: the process that resumes may not
 // be the one that launched, so the surface here is rebuilt as the run left it
 // ([Runner.rebuiltSurface]) and has served no call of its own. That log is
-// also where the submission is: the CLI ended its run by calling submit_work
+// also where the submission is: the harness ended its run by calling submit_work
 // over the bridge, and replaying that call through a fresh submission tool is
 // what recovers the outcome it declared.
 //
 // An absent submission is NOT a value. A run that stopped without saying what
 // it did is rescued as incomplete and judged on its record, rather than having
-// a delivery inferred from the prose the CLI happened to end with.
+// a delivery inferred from the prose the harness happened to end with.
 //
 // `history` is the turn's closed rounds, which its submission's citations read
 // beside the run's own calls — see [turn.Record] — and `bridged` the run's
@@ -641,7 +641,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	run := r.cfg.Resume.Run
 	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
 	// THE NOTES THE ROUND'S RUN READ, off the record every read is written
-	// on: in its briefs, and at the boundaries of its CLI's own loop — the
+	// on: in its briefs, and at the boundaries of its harness's own loop — the
 	// reads of this round's jobs, at the run's one round, each with where it
 	// was read.
 	res.RunSteers = runReads(r.cfg.Resume.Steered, state.Round)
@@ -682,11 +682,11 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // count — it is the honest one. A round is an iteration of the ENGINE's
 // exchange with a model: one request, one answer. For the executor the engine
 // made a single request — the launch — and got a single answer back, however
-// many turns the CLI took inside its own loop to produce it. The bridge's call
+// many turns the harness took inside its own loop to produce it. The bridge's call
 // log carries no round of its own and inventing one per call would claim a
 // structure nobody observed, splitting one run into thirty rounds of one call
 // each. So the record's cap is that one round too: the engine allowed the
-// run one request, and its turns are bounded by the CLI's own cap
+// run one request, and its turns are bounded by the harness's own cap
 // (`max_turns`), which is the run's fact rather than this phase's.
 //
 // THE ROUND IS TIMED, from the launch (launchedAt, the phase's first instant)
@@ -701,7 +701,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 //
 // EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
 // in the order the run made them: the bridge is where a run's calls are
-// measured, since they ran inside the CLI's own loop and not one of the
+// measured, since they ran inside the harness's own loop and not one of the
 // engine's.
 //
 // THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
@@ -732,7 +732,7 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 	if strings.TrimSpace(answer) != "" {
 		// The run's own last word, on the round its calls are on, so the
 		// ledger reads as one block rather than as prose beside orphaned
-		// tool rows. There is no separate reasoning to report: a CLI's
+		// tool rows. There is no separate reasoning to report: a harness's
 		// thinking stays inside its own loop.
 		res.Narration = []toolloop.Narration{{Round: runRound, Content: answer}}
 	}
@@ -798,8 +798,8 @@ func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
 }
 
 // inAdmissionOrder is a run's bridged calls in the order the bridge admitted
-// them — the order the CLI made them in — where the row holds them in the
-// order they FINISHED: each is appended once it returns, and a CLI that makes
+// them — the order the harness made them in — where the row holds them in the
+// order they FINISHED: each is appended once it returns, and a harness that makes
 // several calls at once finishes them in whatever order their tools take. The
 // record states the order the run acted in, and the replay below reads a
 // submission made after another as the correction, whichever returned first.
@@ -811,7 +811,7 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 }
 
 // replaySubmission feeds the run's own submit_work call back through a fresh
-// submission tool, so the outcome the CLI declared is the one the turn reports.
+// submission tool, so the outcome the harness declared is the one the turn reports.
 //
 // LAST WRITE WINS, which is the submission contract everywhere else: a second
 // call is a correction, and replaying in the order the run made its calls is

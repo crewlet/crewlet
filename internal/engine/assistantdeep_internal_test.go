@@ -25,7 +25,7 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -37,13 +37,13 @@ import (
 // deepCompany is a company whose deep work runs on a Claude Code entry, in the e2b cell it configures, signed in by an API key.
 func deepCompany(t *testing.T) *Company {
 	t.Helper()
-	deep, err := cliagent.New(cliagent.Config{
-		Key: "deep", Agent: "claude-code", Model: "sonnet",
+	deep, err := harness.New(harness.Config{
+		Key: "deep", Harness: "claude-code", Model: "sonnet",
 		StateDir: t.TempDir(), Timeout: time.Minute,
-		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
+		Auth: harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "deep", Provider: deep}})
 	if err != nil {
@@ -55,8 +55,8 @@ func deepCompany(t *testing.T) *Company {
 			Name: "Acme",
 			Providers: config.Providers{
 				LLM: map[string]config.LLMProvider{"deep": {
-					Agent: config.CLIClaudeCode, Model: "sonnet",
-					Auth: config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
+					Harness: config.HarnessClaudeCode, Model: "sonnet",
+					Auth: config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
 				}},
 				Sandbox: &config.SandboxProvider{E2B: &config.E2BSandbox{}},
 			},
@@ -125,8 +125,8 @@ func (r deepRig) started(t *testing.T) sandbox.RunRequest {
 	return sandbox.RunRequest{}
 }
 
-// A RUN IS A CODING RUN OF THE DEEP ENTRY, REACHING CREWLET ONLY THROUGH THE
-// TURN'S SURFACE: its job is the entry's CLI on the entry's model with the
+// A RUN IS THE DEEP ENTRY'S HARNESS'S OWN RUN, REACHING CREWLET ONLY THROUGH THE
+// TURN'S SURFACE: its job is the entry's harness on the entry's model with the
 // brief and standing instructions it was handed, the bridge its one MCP
 // server; a call over that bridge reaches the surface decided as NOBODY, so
 // the request's identity reaches none of it; the attachments are in its
@@ -327,7 +327,7 @@ func TestAnUnconfinableHostRefusesDeepWork(t *testing.T) {
 }
 
 // THE HOST'S CONFINEMENT DENIES EVERY PATH THE ENGINE KEEPS: its config files,
-// its store and estate, its stream store, its log, every CLI login, every
+// its store and estate, its stream store, its log, every harness login, every
 // seat's boxes and every deep-work box — under the company's box root now and
 // under one an earlier revision named — and the operator's home. Mutation:
 // leave the roots this process built cells under out of the deny list, and
@@ -484,7 +484,7 @@ func TestADeepWorkBoxIsReachedAfterItsBoxRootMoves(t *testing.T) {
 	moved.Config.Providers.Sandbox.Local = &config.LocalSandbox{StateDir: after}
 	moved.catalogue = catalogue
 	rig.deep.e.epoch.current.Store(moved)
-	kept := assistant.DeepBox{Placement: string(sandbox.Direct), Sandbox: made.ID(), Agent: "claude-code"}
+	kept := assistant.DeepBox{Placement: string(sandbox.Direct), Sandbox: made.ID(), Harness: "claude-code"}
 	if err := rig.deep.Keep(t.Context(), kept); err != nil {
 		t.Fatalf("a box made under the earlier box root was not kept: %v", err)
 	}

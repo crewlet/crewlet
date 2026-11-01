@@ -34,7 +34,7 @@ import (
 //
 // BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one place
 // every reader of a seat's tool environment takes it from: the engine starting
-// a seat's server, a coding run's box, [MCPServer.Grants] and the org
+// a seat's server, an executor's box, [MCPServer.Grants] and the org
 // projection.
 
 // SeatCredential is one seat credential a per-seat server reads, as an

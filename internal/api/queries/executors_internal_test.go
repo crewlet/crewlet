@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY KEY A CODING RUN'S ROW CARRIES IS CLASSIFIED, in both directions, and
+// EVERY KEY AN EXECUTOR'S ROW CARRIES IS CLASSIFIED, in both directions, and
 // what a run was asked, asked back and answered is its seat's BODY (ADR-0033).
 //
 // The row is the board everybody reads, so a key added to [runRow] reaches
@@ -93,7 +93,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 // WHAT BECAME OF AN ANSWER IS ON THE RUN'S ROW: the answer recorded on it (by
 // its deliveries, who gave it and when) and the answers its question let go
 // of. A person who answered reads their own answer's fate there, by the id
-// answer_run gave them, and the first recorded answer is shown as the one
+// answer_executor gave them, and the first recorded answer is shown as the one
 // that won. Ids and names only, never what anybody wrote.
 //
 // WHO GAVE IT, AS ITS SEAL SAYS: the answerer is sealed with the answer and

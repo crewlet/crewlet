@@ -810,21 +810,21 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // this seat": one node has nobody to fence against and re-claims everything
 // at boot, so an in-process table is the honest implementation there. The
 // fleet store holds RECORDS — the token counter, an open agent-to-agent ask,
-// a claimed scheduled fire, a detached coding run, the company's secrets —
+// a claimed scheduled fire, a detached executor, the company's secrets —
 // and every one of those has to outlive the PROCESS, on one node as much as
 // on four.
 //
 // It did not, and the consequences were silent: a company's token spend for
 // the current window reset to zero on every restart, a redelivered trigger after a restart was worked twice, and a detached
-// sandbox run — a BILLED box — was forgotten by the process that launched it.
+// executor, in a BILLED box, was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
 //
 // # AND THE FENCING COUNTER IS A RECORD, whatever the coordination slot says
 //
 // The in-process lease table is right about OWNERSHIP and was wrong about the
-// TOKEN. A seat's epoch is written into fleet records (a sandbox run's
-// owner_epoch) and compared with later, so it has to outlive the process as
+// TOKEN. A seat's epoch is written into fleet records (the owner_epoch on an
+// executor's row) and compared with later, so it has to outlive the process as
 // those records do. Counted beside the in-process leases, it restarted at 1 on
 // every boot, and after a graceful restart the seat's new holder was refused
 // as older than its own previous self on every run that self had parked: an
@@ -876,7 +876,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 }
 
 // floorSeatEpochs raises each seat's fencing counter above every epoch its
-// sandbox run records carry, BEFORE this node claims a seat.
+// executors' rows carry, BEFORE this node claims a seat.
 //
 // The counter is the only source of tokens, so a row should never carry one
 // above it, and on a deployment that has only ever minted from this bucket none

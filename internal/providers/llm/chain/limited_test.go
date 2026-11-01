@@ -14,7 +14,7 @@ import (
 func limitedAt(model string, retry, reset time.Time) *fake {
 	return &fake{model: model, err: &llm.Error{
 		Kind: llm.KindRateLimit, Provider: "p", Model: model, RetryAt: retry, ResetsAt: reset,
-		Agent: "claude-code", Subscription: true,
+		Harness: "claude-code", Subscription: true,
 		Err: errors.New("You've hit your 5-hour limit"),
 	}}
 }
@@ -85,9 +85,9 @@ func TestAChainIsLimitedOnlyWhenEveryMemberIs(t *testing.T) {
 			if limit.Said != "You've hit your 5-hour limit" {
 				t.Errorf("said %q, want the head's own sentence", limit.Said)
 			}
-			if limit.Agent != "claude-code" || !limit.Subscription {
-				t.Errorf("limit names %q (subscription %v), want the head's CLI on a plan",
-					limit.Agent, limit.Subscription)
+			if limit.Harness != "claude-code" || !limit.Subscription {
+				t.Errorf("limit names %q (subscription %v), want the head's harness on a plan",
+					limit.Harness, limit.Subscription)
 			}
 		})
 	}

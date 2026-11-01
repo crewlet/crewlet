@@ -164,7 +164,7 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 //   - A KEY MOVES. A cross-project move re-keys the task (ENG-7 becomes OPS-3),
 //     and keyed on the key its conversation started over under the new one:
 //     the ledger of every turn the seat had taken on it was filed where its
-//     next turn never looked, and a coding run parked on a question asked
+//     next turn never looked, and an executor parked on a question asked
 //     from the task could not be matched by the answer posted on it.
 //
 // The id is the one name a task never shares and never gives up. The key was

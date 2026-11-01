@@ -38,7 +38,7 @@ type played struct {
 }
 
 // results is every answer the run's calls were given, in order — what its
-// CLI read back over the bridge.
+// harness read back over the bridge.
 func (p played) results() []string {
 	out := make([]string, 0, len(p.bridged))
 	for _, c := range p.bridged {
@@ -94,7 +94,7 @@ func runTurn(t *testing.T, prov *scriptedProvider, runs ...run) (turn.Result, []
 }
 
 // sawResult reports whether any call of any run was answered with text
-// carrying want — what its CLI read back over the bridge.
+// carrying want — what its harness read back over the bridge.
 func sawResult(plays []played, want string) bool {
 	for _, p := range plays {
 		for _, out := range p.results() {
@@ -454,7 +454,7 @@ func TestGoldenEveryPhaseRunsOnItsOwnConfiguredModel(t *testing.T) {
 	t.Parallel()
 	// Per-phase resolution, the runner's chain construction and the loop
 	// all have to agree, and a crossed wire is invisible: the seat still
-	// works, on the wrong model. The executor's run is its CLI's, so the
+	// works, on the wrong model. The executor's run is its harness's, so the
 	// executor's entry is asked nothing here — the reviewer's entry, and
 	// only it, serves the turn's model calls.
 	byPhase := map[string]*scriptedProvider{}
@@ -481,7 +481,7 @@ func TestGoldenEveryPhaseRunsOnItsOwnConfiguredModel(t *testing.T) {
 		}
 	}
 	if n := len(byPhase["executor"].allRuns()); n != 0 {
-		t.Errorf("the executor's entry served %d engine runs; its run is the CLI's own", n)
+		t.Errorf("the executor's entry served %d engine runs; its run is the harness's own", n)
 	}
 }
 

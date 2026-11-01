@@ -96,10 +96,10 @@ func (c *clock) advance(d time.Duration) {
 // ONE MINT AN HOUR PER INSTALLATION, however many readers ask, and a new one
 // exactly when the held token can no longer promise what the reader needs.
 //
-// The seat's tool servers, its coding runs, the poll keeping a long run's
-// token current and the inbound participant lookup all read the same token,
-// so minting per read would spend a request per delivery, per poll and per
-// launch to learn something good for an hour.
+// The seat's tool servers, its executor's launches, the poll keeping a long
+// run's token current and the inbound participant lookup all read the same
+// token, so minting per read would spend a request per delivery, per poll and
+// per launch to learn something good for an hour.
 func TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort(t *testing.T) {
 	t.Parallel()
 	c := &clock{at: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
@@ -467,6 +467,16 @@ func TestADeliverableAddressIsOneGitHubReaches(t *testing.T) {
 		{"https://crewlet.lan", false, false},
 		{"https://crewlet.home.arpa", false, false},
 		{"https://93.184.215.14", false, true},
+		{"https://[2606:4700::1]", false, true},
+		// The ranges the public internet does not route beyond the private
+		// ones: carrier-grade NAT (a tailnet's addresses), documentation,
+		// and an IPv4 loopback written in IPv6 form. An Enterprise Server
+		// inside the network may reach the first.
+		{"http://100.101.102.103:8200", false, false},
+		{"http://100.101.102.103:8200", true, true},
+		{"https://198.51.100.7", false, false},
+		{"https://[2001:db8::1]", false, false},
+		{"http://[::ffff:127.0.0.1]:8200", true, false},
 		{"ftp://hooks.example.com", false, false},
 		{"", false, false},
 		{"not a url", false, false},

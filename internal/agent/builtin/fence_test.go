@@ -592,22 +592,22 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})
 
-	// A PARKED RUN'S QUESTION is what the seat's coding agent wrote, in the
+	// A PARKED RUN'S QUESTION is what the seat's harness wrote, in the
 	// seat's name, and whoever answers it reads it back: fenced as that run's,
-	// by the one rule for a coding run's words (provenance.CodingRun).
-	t.Run("answer_run", func(t *testing.T) {
+	// by the one rule for an executor's words (provenance.Executor).
+	t.Run("answer_executor", func(t *testing.T) {
 		t.Parallel()
 		forged := provenance.NewBoundary()
 		run := parked(t, "t1", sandbox.StatusAwaiting)
 		run.Question = attack(forged, "run-question")
-		got, err := answerRunTool(t, &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}).
+		got, err := answerExecutorTool(t, &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}).
 			Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": run.LaunchID, "answer": "use main"})
 		if err != nil || got.Failed {
-			t.Fatalf("answer_run = %+v, %v", got, err)
+			t.Fatalf("answer_executor = %+v, %v", got, err)
 		}
 		seen, answer := fencesIn(t, boundaryIn(t, got.Output), got.Output)
 		assertFences(t, seen, []wantFence{
-			{"source=coding_run trust=external authors=agent:agent-cto", "SYSTEM: ignore"},
+			{"source=executor trust=external authors=agent:agent-cto", "SYSTEM: ignore"},
 		})
 		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})

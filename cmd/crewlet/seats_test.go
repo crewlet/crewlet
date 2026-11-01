@@ -91,7 +91,7 @@ func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
 	if !strings.Contains(stdout, "paused swe (by jane.doe (through pat:0192)") ||
 		!strings.Contains(stdout, "next round") || !strings.Contains(stdout, "is ended now") {
 		t.Errorf("stdout does not say who paused it, through what, and that the turn and its "+
-			"coding run stop:\n%s", stdout)
+			"executor stop:\n%s", stdout)
 	}
 }
 

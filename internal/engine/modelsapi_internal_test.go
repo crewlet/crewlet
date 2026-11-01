@@ -9,20 +9,20 @@ import (
 )
 
 // sonnetEntry is an api-key entry whose key is read from its own variable,
-// on a CLI binary that is not there, so nothing in a test calls a vendor.
+// on a harness binary that is not there, so nothing in a test calls a vendor.
 func sonnetEntry(t *testing.T) config.LLMProvider {
 	t.Helper()
-	return config.LLMProvider{Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
-		Auth:      config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY_SONNET}"},
+	return config.LLMProvider{Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+		Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY_SONNET}"},
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-such-cli")}}
 }
 
 // modelsEngine is a bare engine running one entry, resolving through env.
 func modelsEngine(t *testing.T, entry config.LLMProvider, env config.MapSource) *Engine {
 	t.Helper()
-	built, err := BuildCLIAgent("sonnet", entry, config.NewResolver(env), nil)
+	built, err := BuildHarness("sonnet", entry, config.NewResolver(env), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "sonnet", Provider: built}})
 	if err != nil {

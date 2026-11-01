@@ -188,8 +188,8 @@ func (f *fixture) open(t *testing.T) string {
 	return f.bridge.Open(t.Context(), f.session)
 }
 
-// dial connects an MCP client the way a coding agent's own client would —
-// re-reading the tool list when the server says it changed, as the CLIs that
+// dial connects an MCP client the way a harness's own client would —
+// re-reading the tool list when the server says it changed, as the harnesses that
 // run in a box do, so an activation's held answer is let go by the re-list.
 func dial(t *testing.T, url string) *mcp.ClientSession {
 	t.Helper()
@@ -604,7 +604,7 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 }
 
 // A CALL THAT COULD NOT RUN AT ALL IS TOLD IN WORDS OF ITS OWN: the turn the
-// run belongs to was torn down, and the bridge answered the coding agent in
+// run belongs to was torn down, and the bridge answered the harness in
 // the box, a model, with the Go error's text whole.
 //
 // Mutation: put the error's text back into the refused answer and this fails.
@@ -621,7 +621,7 @@ func TestACallThatCouldNotRunIsToldInWordsNotItsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a call that could not run failed the protocol: %v", err)
 	}
-	if said := text(res); !strings.Contains(said, "the turn this coding run belongs to has ended") ||
+	if said := text(res); !strings.Contains(said, "the turn you are working for has ended") ||
 		strings.Contains(said, "context canceled") || strings.Contains(said, "toolloop") {
 		t.Errorf("a call that could not run was told %q", said)
 	}
@@ -641,14 +641,14 @@ func (*statusTool) Parameters() map[string]any {
 // AN EXECUTOR RUN'S CALL IS HELD TO ITS TOOL'S SCHEMA OVER THE BRIDGE
 // (ADR-0059), by the surface's one path ([tools.Invoke]) and no check of the
 // bridge's own: the tool reads a closed set's member as its schema spells it;
-// a call answered outside its schema carries the note to the CLI and onto the
+// a call answered outside its schema carries the note to the harness and onto the
 // run's durable record, which a collected run's record is read from; and a
 // value the tool would misread is refused before it runs, the refusal on the
 // record too. The record keeps the spelling the model sent, which a resume
 // reads back canonically (internal/agent/runner's seedCalls).
 //
 // Mutation: answer a bridged call with the tool's own output rather than the
-// surface's rendered one and the note reaches neither the CLI nor the record;
+// surface's rendered one and the note reaches neither the harness nor the record;
 // call the tool directly from the surface and the misread runs.
 func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
 	t.Parallel()
@@ -673,7 +673,7 @@ func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
 	const note = "\n\nNote: set_status ran, but these arguments are outside its schema"
 	if got := text(res); !strings.HasPrefix(got, "set_status ok"+note) ||
 		!strings.Contains(got, "`tittle` is not an argument") {
-		t.Errorf("the CLI was answered %q, want the output and the note on the unknown argument", got)
+		t.Errorf("the harness was answered %q, want the output and the note on the unknown argument", got)
 	}
 
 	refused := callTool(t, sess, "set_status", map[string]any{"note": map[string]any{"x": 1}})
@@ -723,7 +723,7 @@ func TestEveryBridgedCallIsRecordedWhereAResumeCanReadIt(t *testing.T) {
 }
 
 // A LOST LEDGER ROW COSTS ONE LINE OF EVIDENCE. Failing the call instead would
-// tell a coding agent to retry work that has already happened — the
+// tell a harness to retry work that has already happened — the
 // duplicate-side-effect failure the whole delivery machinery exists to stop.
 func TestALedgerFailureDoesNotFailTheCall(t *testing.T) {
 	t.Parallel()
@@ -856,7 +856,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 }
 
 // A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A detached run goes on
-// calling for as long as its CLI runs, and the node it dials can restart in
+// calling for as long as its harness runs, and the node it dials can restart in
 // the meantime: the new process holds no session until it takes the run's
 // seat back, and then it opens the run's JOB again — and the token the box
 // already holds, signed under the fleet's keyring, resolves to it. Nothing the
@@ -1120,7 +1120,7 @@ func (f *fixture) token(t *testing.T, runID string) string {
 
 // TestTheBridgeAdvertisesTheHintsTheRegistryHolds is the finding. Every tool
 // the bridge served carried a name, a description and a schema and nothing
-// else — so a coding agent's own MCP client saw `read_page` and
+// else — so a harness's own MCP client saw `read_page` and
 // `post_message` as identically unannotated, with nothing to ask a person on
 // before an irreversible call. The registry had carried both decisions the
 // whole time; the edge that hands the catalogue out dropped them.

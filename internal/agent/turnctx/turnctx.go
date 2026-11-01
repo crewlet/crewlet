@@ -159,7 +159,7 @@ type Turn struct {
 
 	// Depth is the delegation depth this turn inherited, and Chain is who
 	// it came through. Both travel on the work this turn starts — an A2A
-	// ask, a detached coding run — so the turn that work wakes inherits
+	// ask, a detached executor — so the turn that work wakes inherits
 	// them and is refused at the cap before it runs, rather than the loop
 	// being discovered at runtime. A delegate worker is not a turn and
 	// inherits neither: it is a leaf that contacts nobody, which is what
@@ -189,7 +189,7 @@ type Turn struct {
 	// thread, the issue, the page — or empty for a trigger that has none.
 	//
 	// It travels because work this turn STARTS can outlive it and still owe
-	// that conversation an answer: a detached coding run is resumed in
+	// that conversation an answer: a detached executor is collected in
 	// another process, days later, and what it reports has to land where
 	// the task came from. The resume cannot recover this by looking at the
 	// trigger, which may be long gone, so the launch writes it onto the
@@ -228,10 +228,10 @@ type Turn struct {
 	// engine it is carried through.
 	//
 	// Both travel for the same reason the two conversation values do: work
-	// this turn STARTS can outlive it. A detached coding run is resumed in another
-	// process, days later, with no trigger left to re-read — so the launch
-	// writes both onto the run's row, and without them the resumed turn
-	// would come back with no brief and free to end in silence on a
+	// this turn STARTS can outlive it. A detached executor is collected in
+	// another process, days later, with no trigger left to re-read — so the
+	// launch writes both onto the run's row, and without them the resumed
+	// turn would come back with no brief and free to end in silence on a
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
@@ -240,7 +240,7 @@ type Turn struct {
 	// asked, in its trigger's own words and with no fence (the turn's
 	// record of it, [types.TurnCompleted.Ask]), or where the trigger stated
 	// no ask, the line a feed shows the trigger by ([types.Trigger.Summary]).
-	// A coding run the turn launches is listed under it (the run's
+	// The executor the turn launches is listed under it (the run's
 	// description and its label), on the dashboard and in its announcement
 	// alike, where [Turn.Task], the model's brief, would show a person the
 	// fence lines and the escapes that are written for a model alone. A
@@ -249,7 +249,7 @@ type Turn struct {
 
 	// Requester is the handle of the seat whose message, notice or ask woke
 	// this turn, and empty when no seat did — a schedule, a sender the org
-	// does not know. Carried for the reason Task and Reply are: a coding run
+	// does not know. Carried for the reason Task and Reply are: an executor
 	// this turn detaches can stop to ask "the requester" a question days
 	// later, on another node, and the launch is the only frame that can put
 	// who that is on the run's row. A handle is immutable (ADR-0013), so the
@@ -390,14 +390,14 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
 //
 // One caller, and the shape of the problem it solves is the reason it exists:
-// every executor hands its tool surface to its coding CLI over the bridge, and
-// the CLI goes on calling those tools after the segment that launched it has
+// every executor hands its tool surface to its harness over the bridge, and
+// the harness goes on calling those tools after the segment that launched it has
 // ended and charged what it spent. Tallied on that segment's
 // tally, every one of those calls was added to a number nothing read again.
 // A copy, for [Turn.InPhase]'s reason; nil in, nil out.
 //
 // [Turn.Budget] is KEPT: the counters are the seat's and the company's
-// whichever segment pays, and the workers the CLI delegates to already charge
+// whichever segment pays, and the workers the harness delegates to already charge
 // the launching segment's meter, so its auxiliary calls are judged by the same
 // meter rather than by none.
 func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
@@ -499,7 +499,7 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // MaxWritten is how many distinct work items [Written] lists before it stops
 // listing them and records only that there were more.
 //
-// PAST THE DEFAULT RUN CAP (96 CLI turns, providers.sandbox's
+// PAST THE DEFAULT RUN CAP (96 harness turns, providers.sandbox's
 // default_max_turns), which is the bound on how many steps one executor run
 // takes: a turn whose run wrote a different item on every one of its turns is
 // still listed in full, with room left for what the onboarding pass wrote

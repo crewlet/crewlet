@@ -32,14 +32,14 @@ var modelVendorSDKs = []string{
 }
 
 // embeddingsClient is the one place a model vendor's SDK is imported, and
-// the one SDK it may import: no CLI computes an embedding (ADR-0045).
+// the one SDK it may import: no harness computes an embedding (ADR-0045).
 const (
 	embeddingsClient = "internal/providers/embeddings"
 	embeddingsSDK    = "github.com/openai/openai-go"
 )
 
 // NO MODEL IS REACHED OVER A VENDOR'S HTTP API. Every providers.llm entry is
-// a coding CLI, and a client to a vendor's API beside it is the shape
+// a harness, and a client to a vendor's API beside it is the shape
 // ADR-0045 records the cost of: a second, permanently trailing copy of the
 // vendor's own harness, and an entry whose behaviour depends on which of two
 // backends it named. So no package imports a model vendor's SDK, except the
@@ -82,7 +82,7 @@ func TestNoModelIsReachedOverAVendorsHTTPAPI(t *testing.T) {
 					continue
 				}
 				t.Errorf("%s imports %s, a model vendor's SDK: every model is reached "+
-					"through its vendor's coding CLI as a providers.llm entry, and only "+
+					"through its vendor's harness as a providers.llm entry, and only "+
 					"%s imports %s (ADR-0045)", rel, imported, embeddingsClient, embeddingsSDK)
 			}
 			return nil

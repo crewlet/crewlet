@@ -42,7 +42,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
+  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
 };
 
 /** A reader who holds the tracker and the knowledge base but not Admin. */

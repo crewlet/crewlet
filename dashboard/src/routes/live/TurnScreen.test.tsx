@@ -777,8 +777,8 @@ test("a turn with only its opening record is headed by its seat and its wake", a
 });
 
 /**
- * A RESUMED SEGMENT DOES NOT RENAME THE TURN. A parked coding run publishes a
- * start per segment under one id, and a segment's wake is the box's completion
+ * A RESUMED SEGMENT DOES NOT RENAME THE TURN. A turn parked on its executor
+ * publishes a start per segment under one id, and a segment's wake is the box's completion
  * rather than what asked for the work — so where both are held, the header is
  * the dispatch's.
  */
@@ -912,7 +912,7 @@ test("a running turn says so beside its title, and a parked one says what it wai
   expect(await screen.findByText(/^Running/)).toBeTruthy();
   cleanup();
   onTurn("parked");
-  expect(await screen.findByText(/^Parked on a coding run/)).toBeTruthy();
+  expect(await screen.findByText(/^Parked while its executor runs/)).toBeTruthy();
 });
 
 // NEITHER RUNNING NOR ENDED IS A STATE, and the header says it. A turn whose
@@ -1179,7 +1179,7 @@ test("a live phase that completes keeps its card, open", async () => {
 // A parked turn, watched
 // ---------------------------------------------------------------------------
 
-/** The seat's push while its turn is parked on a coding run: working, no call. */
+/** The seat's push while its turn is parked on its executor: working, no call. */
 function parkedSeat() {
   return {
     id: "ceo",
@@ -1201,7 +1201,7 @@ function launched(at: string, launchId = "L1") {
       turn_id: TURN,
       launch_id: launchId,
       started_at: at,
-      coding_agent: "claude-code",
+      harness: "claude-code",
     },
   });
 }
@@ -1225,27 +1225,27 @@ const TAIL = {
   },
 };
 
-// A PARKED TURN'S LIVE WORK IS ITS CODING RUN, and a watch link — every one of
-// them lands on this tab — finds it here: the run's live output, the way to
-// the run's own page, and the executor's card it parked in. The page had no
-// phase live, so it was a Transcript with nothing moving on it and no way to
-// the thing that was.
-test("a parked turn's transcript draws its coding run live, with a way to the run", async () => {
+// A PARKED TURN'S LIVE WORK IS ITS EXECUTOR, and a watch link — every one of
+// them lands on this tab — finds it here: the executor's live output, the way
+// to the executor's own page, and the executor's card it parked in. The page
+// had no phase live, so it was a Transcript with nothing moving on it and no
+// way to the thing that was.
+test("a parked turn's transcript draws its executor live, with a way to its page", async () => {
   mountWatching(
     parkedSeat(),
     [phase("2026-09-13T10:01:30Z", 90_000), launched("2026-09-13T10:01:20Z")],
     TAIL,
   );
   expect(await screen.findByText("running go test ./provisioner/...")).toBeTruthy();
-  const run = screen.getByText("Coding run").closest(".crewlet-card") as HTMLElement;
+  const run = screen.getByText("Executor").closest(".crewlet-card") as HTMLElement;
   expect(run.textContent).toContain("claude-code");
-  expect(within(run).getByRole("link", { name: "Open the run" }).getAttribute("href")).toBe(
-    "#/live/runs/t-77",
+  expect(within(run).getByRole("link", { name: "Open the executor" }).getAttribute("href")).toBe(
+    "#/live/executors/t-77",
   );
 });
 
 // THE PHASE IT PARKED IN IS OPEN, which is not the first card on a later
-// iteration: the executor that launched the run is the newest execute.
+// iteration: the executor that launched is the newest execute.
 test("a parked turn on its second iteration opens the executor it parked in", async () => {
   mountWatching(
     parkedSeat(),
@@ -1261,11 +1261,12 @@ test("a parked turn on its second iteration opens the executor it parked in", as
   expect(cards().map((c) => c.open)).toEqual([true, false, true]);
 });
 
-// A RUN WHOSE ANNOUNCEMENT HAS NOT BEEN READ YET is still said to be out: the
-// stage moves on the push, and the answer naming the run is a refetch behind.
-test("a parked turn whose run is not announced yet says it is reading it", async () => {
+// A LAUNCH WHOSE ANNOUNCEMENT HAS NOT BEEN READ YET is still said to be out:
+// the stage moves on the push, and the answer naming the launch is a refetch
+// behind.
+test("a parked turn whose launch is not announced yet says it is reading it", async () => {
   mountWatching(parkedSeat(), [phase("2026-09-13T10:01:30Z", 90_000)]);
-  expect(await screen.findByText("Finding its coding run…")).toBeTruthy();
+  expect(await screen.findByText("Finding its launch…")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------

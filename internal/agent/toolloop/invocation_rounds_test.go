@@ -7,14 +7,14 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// EVERY CLI RUN NAMES THE ROUNDS IT MADE, observed or not, so a reader groups
+// EVERY HARNESS RUN NAMES THE ROUNDS IT MADE, observed or not, so a reader groups
 // a phase's rounds under the run that made them by the round number the
 // rounds, the calls and the narration already join on — never by placing
 // them in time, which an unobserved run's round has no instant for.
 //
-// Two runs of a CLI whose record shows each request: the first makes a call
+// Two runs of a harness whose record shows each request: the first makes a call
 // and then ends in prose, which the loop corrects in a second run. And the
-// same phase on a CLI whose record shows none, where each run is one round.
+// same phase on a harness whose record shows none, where each run is one round.
 //
 // Mutation: leave the run's first round where the previous run's ended (drop
 // the mark [toolloop.Invocation.FirstRound] counts from), and the second run

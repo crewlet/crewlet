@@ -1,12 +1,12 @@
 // Package sandbox is the executor runtime: every agent seat's executor is its
-// coding CLI's own run, inside a box placed in one of the catalogue's cells.
+// harness's own run, inside a box placed in one of the catalogue's cells.
 //
 // The shape that matters is that a run is DETACHED. The launch starts it, the
 // turn SUSPENDS, and the engine RESUMES the same turn with the run's report
 // when the run completes — possibly minutes later, possibly in a different
 // process after a restart, possibly on a different node. Nothing
 // here parks a goroutine on a running job: a goroutine cannot survive a
-// restart, and a coding agent legitimately runs for longer than a deployment
+// restart, and a harness legitimately runs for longer than a deployment
 // window.
 //
 // A run that stops to ask a person something is that same shape one step
@@ -151,22 +151,22 @@ type ExecResult struct {
 	Stderr   string
 }
 
-// Limits are the caps handed to a coding agent.
+// Limits are the caps handed to a harness.
 //
 // Zero means UNSET for each field, and the runner falls back to the agent's own
 // default. Note what is not here: a run deadline. The engine imposes no
-// wall-clock limit on a coding job — it runs as long as it needs, and
+// wall-clock limit on a launched job — it runs as long as it needs, and
 // completion is detected by tracking the job rather than by a clock. There WAS
 // a TimeoutSec here, read by nobody, contradicting the paragraph above it.
 //
 // MaxTurns comes from the resolved [Spec] — providers.sandbox.default_max_turns
 // overlaid with role.sandbox.max_turns — and is the only engine-side bound on
-// a runaway coding agent, since a job is deliberately never stopped on a clock.
+// a runaway harness, since a job is deliberately never stopped on a clock.
 //
 // MAXBUDGETUSD IS SET BY NOBODY, deliberately. The fleet's own token meter
 // already post-charges a collected run against the seat's budget, and a second
 // cap denominated in the operator's dollars would fight it: two ceilings on one
-// spend, disagreeing, with the CLI's the one that silently wins.
+// spend, disagreeing, with the harness's the one that silently wins.
 type Limits struct {
 	MaxTurns     int
 	MaxBudgetUSD float64
@@ -175,7 +175,7 @@ type Limits struct {
 // Spec is what it takes to mint and drive one box.
 //
 // The REPO IS NOT HERE. Which repository to work in is task context the executor
-// puts in the brief, and the coding agent clones it with the token the config
+// puts in the brief, and the harness clones it with the token the config
 // injects — a spec field for it would make one repo per role a structural fact
 // when it is a per-turn one.
 //
@@ -194,8 +194,8 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// CodingAgent names the runner: "claude-code", "opencode", …
-	CodingAgent string
+	// Harness names the runner: "claude-code", "opencode", …
+	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
 	// engine's host records it in its own directory, which is how that
@@ -215,7 +215,7 @@ type Spec struct {
 	// pushed branch instead.
 	PauseTTLSec float64
 
-	// MaxTurns caps the agentic rounds a coding run may take. 0 is
+	// MaxTurns caps the agentic rounds a launch may take. 0 is
 	// uncapped, and is the default.
 	//
 	// Resolved here rather than passed alongside, because it is settled the
@@ -231,7 +231,7 @@ type Spec struct {
 	// token. The engine never names a tool-specific variable itself.
 	Env map[string]string
 
-	// CredentialFiles is a subscription-CLI login: a path relative to the
+	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
 	// Each provider decides what to do with it, and they decide differently
@@ -256,7 +256,7 @@ type RunHandle struct {
 	SessionID string
 }
 
-// Result is one coding run's outcome.
+// Result is one launch's outcome.
 type Result struct {
 	Text    string
 	Success bool
@@ -264,7 +264,7 @@ type Result struct {
 	// InputTokens is the run's WHOLE prompt count, its cached share
 	// included, and CacheReadTokens / CacheWriteTokens are the share of it
 	// the provider's prompt cache served and stored — the same convention
-	// every engine provider reports on its completion, so a coding run's
+	// every engine provider reports on its completion, so a launch's
 	// tokens fold into the spend rollup beside the phases the engine ran
 	// itself. A breakdown, never an addition: the total is input + output.
 	InputTokens      int
@@ -274,10 +274,10 @@ type Result struct {
 	CostUSD          float64
 	SessionID        string
 
-	// Turns is how many model turns the run's CLI says its own loop took —
+	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
-	// where the CLI reported none. It is what the launch's own record counts
-	// as its calls (tokens.LaunchCalls): a run whose CLI said nothing counts
+	// where the harness reported none. It is what the launch's own record counts
+	// as its calls (tokens.LaunchCalls): a run whose harness said nothing counts
 	// as one, the one call the engine knows it asked for.
 	//
 	// AS REPORTED, never estimated: Claude Code states it on its result
@@ -301,19 +301,19 @@ type Result struct {
 
 	Error string
 
-	// Event is how the CLI said its run ended IN FIELDS, beside the words of
+	// Event is how the harness said its run ended IN FIELDS, beside the words of
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the
 	// sentence beside it is worded. It is what an executor's ending is
-	// classified by first, as a call's is (cliagent.Provider.RunEnded), and
-	// nothing else reads it. Set on a run that did not succeed, by a CLI that
+	// classified by first, as a call's is (harness.Provider.RunEnded), and
+	// nothing else reads it. Set on a run that did not succeed, by a harness that
 	// prints such an event; empty otherwise, and wherever the line is past
 	// [MaxRunEventBytes] ([boundBox]).
 	Event string
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
-	// output, or its stderr where the CLI streams nothing better. It is the
+	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
 	// own. A runner returns it WHOLE and redacted; the coordinator holds it
 	// to the record's bound ([Coordinator.fitResult]) and redacts it again
@@ -338,7 +338,7 @@ type Result struct {
 // usageFloored is r with every count of what the run spent made non-negative,
 // and whether any had to be.
 //
-// A RUN REPORTS ITS OWN USAGE, parsed out of the coding CLI's last line of
+// A RUN REPORTS ITS OWN USAGE, parsed out of the harness's last line of
 // output — and that line is printed inside a box the run's own agent can run
 // any command in. A negative count there is a REFUND: the charge would
 // subtract it from the seat's budget counter, and the launch's record from
@@ -421,7 +421,7 @@ type Sandbox interface {
 	// clipped report reads as a finished one. Empty on missing: a poll for a
 	// marker that is not written yet is not an error.
 	//
-	// NEVER FOR A MACHINE STREAM. A coding agent's event log and its stderr
+	// NEVER FOR A MACHINE STREAM. A harness's event log and its stderr
 	// grow with the run and have no size a whole read could honestly refuse
 	// at — the engine keeps a bounded share of them in the end — so they
 	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
@@ -432,7 +432,7 @@ type Sandbox interface {
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
-	// once in bounded memory: a coding agent's event log, read at
+	// once in bounded memory: a harness's event log, read at
 	// collection a line at a time. Nothing is refused for its size, since
 	// the reader holds one piece at a time and decides itself what to keep.
 	// A missing file is a reader that yields nothing, as ReadFile's empty
@@ -626,7 +626,7 @@ type Provider interface {
 	Kill(ctx context.Context, sandboxID string) error
 }
 
-// Runner runs one coding agent inside a box against a brief.
+// Runner runs one harness inside a box against a brief.
 //
 // TWO SHAPES, ONE RUNNER: the inline Run (start, block, result — for tests and
 // short jobs) and the detached Start/Poll/Collect triple the engine drives
@@ -658,23 +658,23 @@ type Runner interface {
 	Follow(handle RunHandle) LiveReading
 }
 
-// RunRequest is one coding run's inputs.
+// RunRequest is one launch's inputs.
 //
 // NEVER PERSISTED: a run is started once, by the node that launched it, and
 // everything a later collection or resume needs is on the run's row and in the
 // box. So a field added here changes no record a peer of another build reads.
 type RunRequest struct {
 	// System is the run's standing instructions, which the runner hands its
-	// CLI on the channel that ADDS to the CLI's own system prompt rather than
+	// harness on the channel that ADDS to the harness's own system prompt rather than
 	// replacing it: the vendor's prompt is what teaches the harness this run
 	// exists to use. A runner adds its own standing instruction to it — the
 	// report the run writes before it stops, at the box's path for it.
 	System string
 
-	// Brief is the task: the prompt the CLI runs, and nothing standing.
+	// Brief is the task: the prompt the harness runs, and nothing standing.
 	Brief string
 
-	// Resume is the CLI's own session the run CONTINUES, as an earlier run in
+	// Resume is the harness's own session the run CONTINUES, as an earlier run in
 	// the same box reported it ([Result.SessionID]): the conversation, its
 	// tool results and its working files are where that run left them, and
 	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
@@ -683,12 +683,12 @@ type RunRequest struct {
 	// assistant's deep work, where its run parked on a proposal and the
 	// approval has come. Empty starts a new session.
 	//
-	// THE CLI'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
+	// THE HARNESS'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
 	// knew what it had read, tried and decided, and a fresh conversation
 	// told only the question and the answer starts that work again. It holds
 	// only in the box the session lives in, which is why a seat's launch
 	// sets it only where the job continues in the asking job's box
-	// ([LaunchRequest.Continue]). A runner whose CLI cannot continue a
+	// ([LaunchRequest.Continue]). A runner whose harness cannot continue a
 	// session refuses a run that asks it to, rather than start a new
 	// conversation its caller believes is the old one.
 	Resume string
@@ -697,12 +697,12 @@ type RunRequest struct {
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
-	// CLI the runner drives: the seat's providers.llm entry's model exactly
-	// as its runs on the engine host hand it to that same CLI, which is the
-	// only CLI the engine lets reach this runner. Empty leaves the agent's
+	// harness the runner drives: the seat's providers.llm entry's model exactly
+	// as its runs on the engine host hand it to that same harness, which is the
+	// only harness the engine lets reach this runner. Empty leaves the agent's
 	// own choice.
 	//
-	// NO ENDPOINT AND NO KEY: an entry talks to its CLI's own vendor, and its
+	// NO ENDPOINT AND NO KEY: an entry talks to its harness's own vendor, and its
 	// sign-in rides the run env, so nothing secret is written into a file
 	// inside the box.
 	Model string
@@ -714,7 +714,7 @@ type RunRequest struct {
 	// than a control.
 	MCPServers map[string]MCPServer
 
-	// Steer is how the run's CLI reaches a person's notes to its turn while
+	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a
 	// run with no tool bridge — the assistant's deep work — has. NEVER
@@ -735,7 +735,7 @@ type RunRequest struct {
 // run that wrote it.
 //
 // GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
-// runs on every commit the run makes (internal/sandbox/codingagent's
+// runs on every commit the run makes (internal/sandbox/executor's
 // attribution.go), so the credit is there whether or not the agent remembered
 // an instruction — and only on a commit whose author is the identity the run
 // commits as, so a person's commit the run amends, cherry-picks or rebases is
@@ -748,10 +748,10 @@ type CommitAttribution struct {
 	Run string
 }
 
-// SteerWiring is where a run's CLI asks for its turn's notes: one tool of the
+// SteerWiring is where a run's harness asks for its turn's notes: one tool of the
 // MCP server the run's tool bridge is ([RunRequest.MCPServers]), which a hook
-// of the CLI's calls between its steps, and the URL of the bridge's notes
-// route, which a CLI that admits notes from a plugin of its own polls. The
+// of the harness's calls between its steps, and the URL of the bridge's notes
+// route, which a harness that admits notes from a plugin of its own polls. The
 // engine fills it from the same names its bridge serves, so the box and the
 // bridge cannot disagree about them (internal/api/mcpbridge).
 type SteerWiring struct {
@@ -766,7 +766,7 @@ type SteerWiring struct {
 	URL string
 }
 
-// Set reports whether the wiring names anything a CLI could reach.
+// Set reports whether the wiring names anything a harness could reach.
 func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // Run is the inline shape: start, wait, collect.

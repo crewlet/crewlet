@@ -270,7 +270,7 @@ type ListQuery struct {
 
 	// AnsweredBy selects the answers ONE person gave, by the `answered_by`
 	// every record of an answer carries (executor_answered names who
-	// answered a coding run's question): the promoted column schema/0053
+	// answered an executor's question): the promoted column schema/0053
 	// ships, and its partial index. It is what a person's answered
 	// decisions ask ([types.ExecutorAnswered]): the answers they gave,
 	// rather than every answer in the window read and kept in memory.
@@ -278,7 +278,7 @@ type ListQuery struct {
 
 	// Suspended selects by whether a completion record PARKED its turn — the
 	// `suspended` flag a turn's segment carries when it launched a detached
-	// coding run ([types.AgentTurnCompleted.Suspended]) — and nil means every
+	// executor ([types.AgentTurnCompleted.Suspended]) — and nil means every
 	// row. THREE-VALUED, like the turn list's `failed`, because the absent
 	// case is the ordinary one: false is "not a suspension", which every row
 	// that carries no such flag is, so `Type: agent_turn_completed` with
@@ -323,7 +323,7 @@ type ListQuery struct {
 	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — and never by
 	// its key, which a move rewrites. Every turn-level record carries the
 	// item it was charged to, so this is "everything that happened on this
-	// item": each turn's start, its phases, its completion, a coding run it
+	// item": each turn's start, its phases, its completion, an executor it
 	// launched. Backed by the partial index schema/0033 ships; the column
 	// is filled from the same payload field as the row's `work_item` tag.
 	WorkItem string
@@ -605,9 +605,9 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 	// SPEND, so it reads one event type and returns nil for the rest — which
 	// is right for the rollup and wrong for identity: reading one turn means
 	// every row it touched, and a tool skill loaded, a refused call, a
-	// prompt measurement or a coding run carries a turn id without carrying a
-	// token count. Scoped to the column that is an identifier so a non-phase
-	// row cannot acquire a phase's numbers.
+	// prompt measurement or `executor_launched` carries a turn id without
+	// carrying a token count. Scoped to the column that is an identifier so
+	// a non-phase row cannot acquire a phase's numbers.
 	//
 	// WHAT THIS CANNOT DO is give a turn id to an event that does not carry
 	// one. This reads the promoted TAG, which internal/store's own extractor

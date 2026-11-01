@@ -19,7 +19,7 @@ providers:
   sandbox: {fake: true}
   llm:
     sub:
-      agent: custom
+      harness: custom
       model: m
       state_dir: %q
       overrides:
@@ -43,8 +43,8 @@ roles:
 }
 
 // `crewlet llm status` LEADS WITH THE ENGINE'S READING and follows it with the
-// CLI's own words: one line a script can read (signed in, how and as whom),
-// then the text form a person reads; signed out exits non-zero, as the CLI's
+// harness's own words: one line a script can read (signed in, how and as whom),
+// then the text form a person reads; signed out exits non-zero, as the harness's
 // own status command does.
 //
 // Mutation: print Status alone (no reading line), or exit 0 when signed out,

@@ -204,7 +204,8 @@ func (rl *Relay) answer(ctx context.Context, raw []byte) ([]byte, error) {
 		return reply(v, "")
 	}
 	if !rl.start(q.Exchange, req, cancel) {
-		// STARTED BY A REPEAT that raced this one, or the relay stopped.
+		// STARTED BY A REPEAT that raced this one, or CLOSED while it was
+		// admitted: its entry gave it up, and its request never runs.
 		cancel()
 	}
 	return reply(Serve, "")
@@ -258,9 +259,20 @@ func (rl *Relay) rebuild(in *Request) (*http.Request, context.CancelFunc, error)
 }
 
 // cancel ends one exchange this process is answering, at its entry's word.
+//
+// ONE NOT STARTED YET IS ENDED TOO: a CLOSE can overtake its OPEN, which is
+// still being admitted when the client hangs up and the entry gives up on it.
+// The id is remembered as ended, so the OPEN finds it [Relay.known] or
+// [Relay.start] refuses it, and a request whose client has gone never runs.
 func (rl *Relay) cancel(id string) {
 	rl.mu.Lock()
 	ex := rl.served[id]
+	if ex == nil {
+		rl.forgetLocked()
+		if _, done := rl.ended[id]; !done {
+			rl.ended[id] = rl.now()
+		}
+	}
 	rl.mu.Unlock()
 	if ex != nil {
 		ex.cancel()
@@ -277,11 +289,14 @@ type exchange struct {
 }
 
 // start runs one admitted request and pushes its response. It reports false
-// when the exchange was already started.
+// when the exchange was already started, or has ended: answered, or closed
+// by its entry before it started ([Relay.cancel]).
 func (rl *Relay) start(id string, req *http.Request, cancel context.CancelFunc) bool {
 	ex := &exchange{id: id, w: newWriter(req.Context()), cancel: cancel}
 	rl.mu.Lock()
-	if _, dup := rl.served[id]; dup {
+	_, dup := rl.served[id]
+	_, done := rl.ended[id]
+	if dup || done {
 		rl.mu.Unlock()
 		return false
 	}

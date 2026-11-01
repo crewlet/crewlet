@@ -186,7 +186,7 @@ func run(t *testing.T, cfg toolloop.Config) (*toolloop.Result, error) {
 
 // --- the cases -------------------------------------------------------------
 
-// A PHASE ENDS AT ITS TERMINATOR, and the CLI makes no request after it: the
+// A PHASE ENDS AT ITS TERMINATOR, and the harness makes no request after it: the
 // submission's answer is withheld until the run is stopped, so the model never
 // reads it and asks again — and a second submission, which is what a model that
 // read it would make, never runs.
@@ -218,7 +218,7 @@ func TestThePhaseEndsAtItsTerminatorWithNoFurtherRequest(t *testing.T) {
 		t.Errorf("the text carries a response made after the terminator: %q", res.Text)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI made %d model request(s) after the phase was decided", late)
+		t.Errorf("the harness made %d model request(s) after the phase was decided", late)
 	}
 	if len(res.Invocations) != 1 || res.Invocations[0].Outcome != toolloop.OutcomeStopped {
 		t.Errorf("invocations %+v, want one the engine stopped", res.Invocations)
@@ -278,7 +278,7 @@ func TestARunEndingInProseIsCorrectedInTheNextRun(t *testing.T) {
 // A DETACHED TOOL PARKS THE PHASE WITH ITS CALL UNANSWERED: exactly one
 // dangling call in the conversation, which is what a resume checks — zero is
 // nothing to resume into, two a model that answers one and strands the other —
-// and it is the call the CLI named, under the id the resume answers.
+// and it is the call the harness named, under the id the resume answers.
 func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("propose_change", "submit_work")
@@ -383,14 +383,14 @@ func TestAClosedFenceStopsTheNextCall(t *testing.T) {
 				t.Errorf("the surface ran %v after the fence closed", got)
 			}
 			if late := prov.Late(); late != 0 {
-				t.Errorf("the CLI asked its model %d time(s) after the fence closed", late)
+				t.Errorf("the harness asked its model %d time(s) after the fence closed", late)
 			}
 		})
 	}
 }
 
 // THE FENCE RUNS BEFORE ANYTHING IS SPENT: a node whose lease moved stops before
-// it starts a CLI — no tokens, no tools.
+// it starts a harness — no tokens, no tools.
 func TestTheFenceRunsBeforeAnythingIsSpent(t *testing.T) {
 	t.Parallel()
 	lost := errors.New("seat lost")
@@ -403,7 +403,7 @@ func TestTheFenceRunsBeforeAnythingIsSpent(t *testing.T) {
 		t.Fatalf("err = %v, want the caller's own sentinel unwrapped", err)
 	}
 	if n := len(prov.Seen()); n != 0 {
-		t.Errorf("the CLI was started %d times past a closed fence", n)
+		t.Errorf("the harness was started %d times past a closed fence", n)
 	}
 	if m.spent != 0 || len(surf.calls()) != 0 {
 		t.Errorf("%d tokens spent and %v run past a closed fence", m.spent, surf.calls())
@@ -455,7 +455,7 @@ func (m *refusingMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 }
 
 // THE ROUND BUDGET IS THE MODEL'S REQUESTS: on the last round it allows, the
-// calls run and the run ends before the CLI can ask again — exhausted, for the
+// calls run and the run ends before the harness can ask again — exhausted, for the
 // caller's judge to extend or rescue.
 //
 // Mutation: deliver the last round's answers instead of ending the run, and
@@ -510,7 +510,7 @@ func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 	}
 	got := prov.Results()
 	if len(got) != 3 || !got[0].Failed || !strings.Contains(got[0].Output, "was NOT run") {
-		t.Errorf("the CLI was answered %+v, want the refusal saying why", got)
+		t.Errorf("the harness was answered %+v, want the refusal saying why", got)
 	}
 	if first := res.Executions[0]; first.Name != "post" || !first.Failed ||
 		!strings.Contains(first.Output, "is a list where an object belongs") || !first.StartedAt.IsZero() {
@@ -522,13 +522,13 @@ func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 	}
 }
 
-// ARGUMENTS A CLI REPLACED ARE ANSWERED, NOT RUN, TOO. Claude Code calls its
+// ARGUMENTS A harness REPLACED ARE ANSWERED, NOT RUN, TOO. Claude Code calls its
 // server with an array's elements as an object — the model wrote `["a","b"]`
 // and the server reads `{"0":"a","1":"b"}` — so the session reads a perfectly
-// good object, and only the CLI's record, which keeps the array, shows that
+// good object, and only the harness's record, which keeps the array, shows that
 // the model never wrote it. Read from there, the call is refused exactly as
 // one the session could not read.
-func TestArgumentsTheCLIReplacedAreAnsweredNotRun(t *testing.T) {
+func TestArgumentsTheHarnessReplacedAreAnsweredNotRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("post")
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -545,7 +545,7 @@ func TestArgumentsTheCLIReplacedAreAnsweredNotRun(t *testing.T) {
 	}
 	got := prov.Results()
 	if len(got) != 2 || !got[0].Failed || !strings.Contains(got[0].Output, "was NOT run") {
-		t.Errorf("the CLI was answered %+v, want the refusal saying why", got)
+		t.Errorf("the harness was answered %+v, want the refusal saying why", got)
 	}
 	if first := res.Executions[0]; !first.Failed || !strings.Contains(first.Output, "not one JSON object") ||
 		!first.StartedAt.IsZero() {
@@ -637,13 +637,13 @@ func (b *noteBox) Waiting() bool {
 }
 
 // A SUBMISSION IS JUDGED AFTER THE DELIVERY BESIDE IT, AND THE DELIVERY RUNS IN
-// EITHER ORDER — on a CLI that issues a response's calls at once and on one
+// EITHER ORDER — on a harness that issues a response's calls at once and on one
 // that waits on each answer before its next call. Issued together, the
 // submission waits for the delivery, whatever order the model wrote them in, so
 // it is judged against what the phase delivered. Issued in turn, the
 // submission's answer goes back so the delivery is made — the model asked for
 // it in the same breath — and the run ends after it. Either way both are run
-// and recorded, the phase is finished, and the CLI asks its model nothing more.
+// and recorded, the phase is finished, and the harness asks its model nothing more.
 //
 // The cases issued at once race, so each is tried repeatedly.
 //
@@ -691,7 +691,7 @@ func TestASubmissionBesideADeliveryRunsAfterIt(t *testing.T) {
 						i, res.RoundsUsed, len(prov.Seen()), res.ExhaustedRounds)
 				}
 				if late := prov.Late(); late != 0 {
-					t.Errorf("attempt %d: the CLI asked its model %d time(s) after the phase was decided", i, late)
+					t.Errorf("attempt %d: the harness asked its model %d time(s) after the phase was decided", i, late)
 				}
 				for id, m := range toolResults(res.Messages) {
 					if m.Failed {
@@ -703,8 +703,8 @@ func TestASubmissionBesideADeliveryRunsAfterIt(t *testing.T) {
 	}
 }
 
-// A CALL THAT MUST RUN ALONE WAITS ONLY FOR CALLS THE CLI COULD BE MAKING
-// BESIDE IT. A CLI that makes one call at a time — or, beside anything but a
+// A CALL THAT MUST RUN ALONE WAITS ONLY FOR CALLS THE HARNESS COULD BE MAKING
+// BESIDE IT. A harness that makes one call at a time — or, beside anything but a
 // read-only tool, one at a time — sends the response's next call only once this
 // one is answered, so holding a submission for a sibling listed after it holds
 // it for the whole of the join wait and gains nothing; while a read-only
@@ -753,19 +753,19 @@ func TestACallThatRunsAloneWaitsOnlyForCallsThatCanArriveBesideIt(t *testing.T) 
 				}
 				if !tc.waits && took >= toolloop.JoinWait {
 					t.Errorf("attempt %d: the run took %s — the submission was held for a call the "+
-						"CLI makes only once it is answered", i, took)
+						"harness makes only once it is answered", i, took)
 				}
 			}
 		})
 	}
 }
 
-// A CALL'S ID IS READ UNDER THE KEY ITS CLI DECLARED AND NO OTHER: a CLI that
-// puts something else in `_meta` under a key another CLI uses for ids is not
-// read as naming a call. Played on a CLI whose record shows no requests, so the
+// A CALL'S ID IS READ UNDER THE KEY ITS HARNESS DECLARED AND NO OTHER: a harness that
+// puts something else in `_meta` under a key another harness uses for ids is not
+// read as naming a call. Played on a harness whose record shows no requests, so the
 // `_meta` is the only place an id could come from — one joined to a record
 // takes the record's.
-func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
+func TestACallsIDIsReadOnlyUnderTheKeyItsHarnessDeclared(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, declared string
@@ -789,17 +789,17 @@ func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
 				t.Fatalf("executions %+v, want the one call", res.Executions)
 			}
 			if got := res.Executions[0].CallID == "cli-7"; got != tc.read {
-				t.Errorf("the call is recorded as %q; read the CLI's id = %v, want %v",
+				t.Errorf("the call is recorded as %q; read the harness's id = %v, want %v",
 					res.Executions[0].CallID, got, tc.read)
 			}
 		})
 	}
 }
 
-// THE CLI'S WAIT ENDS WITH ITS ANSWER: a call answered "still running" goes on,
-// but the CLI has its answer and is working — or has been stopped — so the
+// THE HARNESS'S WAIT ENDS WITH ITS ANSWER: a call answered "still running" goes on,
+// but the harness has its answer and is working — or has been stopped — so the
 // backend is told the run's last call ended then, not when the call returns.
-// Told late, the clock that bounds the CLI's own work stayed stopped, and its
+// Told late, the clock that bounds the harness's own work stayed stopped, and its
 // login unchecked, for as long as the parked call ran.
 func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 	t.Parallel()
@@ -830,7 +830,7 @@ func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 			t.Fatal("a second start was announced with no second call")
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the run was never told its call ended, though the CLI was answered still running")
+		t.Fatal("the run was never told its call ended, though the harness was answered still running")
 	}
 	close(surf.hold)
 	if err := <-done; err != nil {
@@ -838,8 +838,8 @@ func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 	}
 }
 
-// A REQUEST'S ID NAMES IT WITHIN ITS RUN ONLY: a CLI's ids are its own, unique
-// within one process at most, and a backend that numbers a CLI's requests
+// A REQUEST'S ID NAMES IT WITHIN ITS RUN ONLY: a harness's ids are its own, unique
+// within one process at most, and a backend that numbers a harness's requests
 // itself numbers each run's from one. Read across runs, the next run's first
 // request was merged into the last run's, and the phase lost a round.
 func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
@@ -875,11 +875,11 @@ func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
 	}
 }
 
-// A CLI WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN IS NEVER WAITED FOR, and
+// A HARNESS WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN IS NEVER WAITED FOR, and
 // its calls still land on the request that asked for them. Gemini CLI and
 // OpenCode write a response down once its calls are answered, so holding a
 // call for its response's record held every call for the whole join wait.
-func TestACLIThatRecordsCallsLateIsNotWaitedFor(t *testing.T) {
+func TestAHarnessThatRecordsCallsLateIsNotWaitedFor(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("search", "post")
 	prov := &llmtest.Script{LateRecord: true, Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -934,9 +934,9 @@ func TestAToolThatPanicsEndsThePhaseAsAPanic(t *testing.T) {
 	}
 }
 
-// AN ACTIVATION ON A CLI THAT NEVER RE-LISTS ENDS THE RUN, and the next one
+// AN ACTIVATION ON A HARNESS THAT NEVER RE-LISTS ENDS THE RUN, and the next one
 // starts with the new tool listed — it would otherwise never see it.
-func TestAnActivationOnACLIThatNeverRelistsEndsTheRun(t *testing.T) {
+func TestAnActivationOnAHarnessThatNeverRelistsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("activate_tool")
 	surf.activates = "activate_tool"
@@ -959,7 +959,7 @@ func TestAnActivationOnACLIThatNeverRelistsEndsTheRun(t *testing.T) {
 	}
 }
 
-// A CLI WHOSE RECORD SHOWS NO REQUESTS IS COUNTED A ROUND PER RUN, with the
+// A HARNESS WHOSE RECORD SHOWS NO REQUESTS IS COUNTED A ROUND PER RUN, with the
 // run's whole cost on it.
 func TestAnUnobservedRunIsOneRound(t *testing.T) {
 	t.Parallel()
@@ -988,7 +988,7 @@ func TestAnUnobservedRunIsOneRound(t *testing.T) {
 }
 
 // A RUNNING CALL IS NAMED ON THE LIVE VIEW while it runs, beside any other —
-// a CLI may run a response's calls at once.
+// a harness may run a response's calls at once.
 func TestRunningCallsAreNamedWhileTheyRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow", "submit_work")

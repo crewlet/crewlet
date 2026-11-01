@@ -28,7 +28,7 @@ subcommand below is served by it.
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
-| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and a coding run it has out at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
@@ -1540,7 +1540,11 @@ record the move ends with.
   with `crewlet run -mode maintenance`, so that no record naming a new file
   can be written while it runs. It copies what is left, seals the NATS
   bucket so a node not yet restarted cannot store anything there, and moves
-  the fleet's record to the bucket.
+  the fleet's record to the bucket. It refuses while the node cannot read
+  every row that may name a file — a data node running a state log this
+  build does not, or this node's copy of the estate migrated by a newer build
+  ([What a build cannot see](../concepts/object-store.md#what-a-build-cannot-see)):
+  run it from a build that knows every log the fleet runs.
 
 It prints what the pass found: the objects the files name, how many the
 bucket already held and how many were copied, whether the bucket offers
@@ -1656,7 +1660,7 @@ under its own login.
 A paused seat starts no new turn, its incoming mail waits on its inbox in
 order, and its scheduled runs are recorded `skipped_paused` rather than sent.
 The turn it is on finishes first unless `-stop` is given, which ends that turn
-at its next round and a coding run it has out at once, its box reclaimed and
+at its next round and its executor in its box at once, the box reclaimed and
 what it had spent charged; what was stopped is not run again. `-reason` is one line
 (at most 500 characters), shown on the seat and in the feed. Pausing a paused
 seat changes nothing — except that `-stop` adds the stop — and resuming a seat
@@ -3044,7 +3048,7 @@ holds one — so a logout killed part way never leaves one file of the login it
 was removing, and a settings file the CLI keeps beside it, holding none, stays
 — and
 **records the logout** in the CLI's share of the state directory
-(`<state_dir>/<agent>/logged-out`), so the configured bundle below is not
+(`<state_dir>/<harness>/logged-out`), so the configured bundle below is not
 restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that
@@ -3082,7 +3086,7 @@ is keyed by the entry: one exported before the entry moved to another CLI
 names the old CLI, so a restore into the new CLI's empty directory refuses it
 and writes nothing — even where the two CLIs keep a login file under one name,
 as six keep an `auth.json` — at boot and apply as
-`cli_agent_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
+`harness_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
 and in `import`, until the new CLI is signed in and its own bundle exported in
 its place. A bundle that names no CLI is refused the same way: see [an entry
 moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).

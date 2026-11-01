@@ -43,7 +43,7 @@ import (
 //
 // # A completion is not always an end
 //
-// A turn whose executor launches a detached coding run PARKS: the segment
+// A turn that launches its detached executor PARKS: the segment
 // that launched it publishes `turn_completed` with `suspended: true`, and the
 // same turn id completes again — possibly on another node, possibly after a
 // restart — when the run is collected and the loop resumes. So one turn can
@@ -228,7 +228,7 @@ type Turn struct {
 	// end says which is more likely, and the event list says for certain.
 	Complete bool `json:"complete"`
 
-	// Parked is whether the turn is waiting on a detached coding run: its
+	// Parked is whether the turn is waiting on its detached executor: its
 	// newest completion record is a suspension, so it will complete again
 	// when the run is collected. Never true beside Complete — the newest
 	// completion is one or the other.
@@ -273,7 +273,7 @@ type Turn struct {
 	ErrorKind string `json:"error_kind,omitempty"`
 
 	// Stopped is whether a PERSON ended the turn — a pause with
-	// `stop_running` reached it at a round, or ended the coding run it was
+	// `stop_running` reached it at a round, or ended the executor it was
 	// parked on — read off its completion's `stopped` flag. Not a failure,
 	// and never counted as one: a stopped turn's completion carries no
 	// `failed`, so Failed says only what else went wrong in it.
@@ -555,7 +555,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 //
 // A turn's events are written to the event log of the node that PUBLISHED
 // them, and a turn is not always published by one node: a turn parked on a
-// detached coding run resumes wherever its seat is held when the run is
+// detached executor resumes wherever its seat is held when the run is
 // collected, which after a restart or a placement move is another node. So
 // the fleet's row for that turn is spread across two logs, and folding each
 // half into a finished [Turn] loses exactly what the whole needs — whether a

@@ -13,9 +13,9 @@
  * A live row animates, which sells motion — so a round that has not moved in
  * eleven minutes looked exactly like one that started two seconds ago. The
  * row carries `lib/seats.ts`' own staleness mark beside its elapsed time,
- * SUPPRESSED while the turn is parked: a detached coding run is silent on
- * purpose for as long as it runs, and an alarm on its silence is an alarm on
- * every legitimate run.
+ * SUPPRESSED while the turn is parked: its executor, running in its box, is
+ * silent on purpose for as long as it runs, and an alarm on its silence is an
+ * alarm on every executor doing its work.
  *
  * # The row is the way into the turn
  *

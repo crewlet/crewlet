@@ -51,7 +51,7 @@ type keptWork struct{ *stubWork }
 func (keptWork) Kept() error { return nil }
 
 // WHAT WAITS ON A PERSON IS STILL ANSWERED WHERE THE TRACKER IS NOT THE
-// ENGINE'S: their coding runs parked on a question to them are sandbox state,
+// ENGINE'S: the executors parked on a question to them are sandbox state,
 // which every backend has. Where the tracker is kept its asks are read beside
 // them; where it is not, it is left out and never read; and where this node
 // cannot say yet, the question is unavailable rather than answered short.

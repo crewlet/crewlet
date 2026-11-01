@@ -24,17 +24,17 @@
 //
 // # The engine states only what the model cannot know
 //
-// A seat's phase runs inside a vendor's coding CLI, whose own harness and
+// A seat's phase runs inside a vendor's harness, whose own harness and
 // whose model already know how to be an agent. So the prompt carries what
 // nothing else can: the seat's identity and chart, the company's own words,
 // what the engine prefetched for this turn, and the phase's contract — and
 // each rule once. A tool's semantics are its description and a field's are
 // its schema, both of which reach the model with the tool on every round, so
 // a rule about a tool or a field lives there and not here as well. The
-// executor is the CLI's own agentic run in a box, its seat's tools reaching
-// it over the tool bridge; every other phase is the same CLI's own loop on
+// executor is the harness's own agentic run in a box, its seat's tools reaching
+// it over the tool bridge; every other phase is the same harness's own loop on
 // this host, its tools reaching it as one MCP server. The one protocol fact
-// no harness can teach — that the CLI's final text reaches nobody, so an
+// no harness can teach — that the harness's final text reaches nobody, so an
 // action is a tool call and prose performs nothing — is stated here, once.
 // Generic agent behaviour, worked examples and restated emphasis are
 // not: a second copy of a rule is two texts that drift, and a model reads

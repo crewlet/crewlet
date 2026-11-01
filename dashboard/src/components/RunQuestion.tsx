@@ -1,8 +1,8 @@
 /**
- * A coding run's question, as a reading heads it and as a line names it.
+ * An executor's question, as a reading heads it and as a line names it.
  *
- * ONE RULE ON EVERY SCREEN: a run's question is its title, whole, and what it
- * says beside it is its context (`question_context`), the run's own. Nothing
+ * ONE RULE ON EVERY SCREEN: an executor's question is its title, whole, and
+ * what it says beside it is its context (`question_context`), its own. Nothing
  * is split out of the question. An older build's free-text question was, at
  * its first sentence, and a question with a full stop inside it ("Should I
  * drop the legacy flag (e.g. ...") was cut there into a title of half a

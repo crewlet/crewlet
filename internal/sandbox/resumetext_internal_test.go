@@ -13,11 +13,11 @@ func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	t.Parallel()
 	failed := runReport(Result{
 		Text:  "Outcome: partial — the migration is written, the tests were not run",
-		Error: "the coding agent exited with status 137",
+		Error: "the harness exited with status 137",
 	})
 	if !strings.Contains(failed, "did NOT fully succeed") ||
 		!strings.Contains(failed, "Outcome: partial") ||
-		!strings.Contains(failed, "Why it did not succeed: the coding agent exited with status 137") {
+		!strings.Contains(failed, "Why it did not succeed: the harness exited with status 137") {
 		t.Errorf("a failed run with a report reads:\n%s", failed)
 	}
 
@@ -34,8 +34,8 @@ func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	}
 
 	// And a run with no report says its error, as it always did.
-	bare := runReport(Result{Error: "the coding agent produced no output"})
-	if !strings.Contains(bare, "Error: the coding agent produced no output") {
+	bare := runReport(Result{Error: "the harness produced no output"})
+	if !strings.Contains(bare, "Error: the harness produced no output") {
 		t.Errorf("a run with only an error reads:\n%s", bare)
 	}
 }

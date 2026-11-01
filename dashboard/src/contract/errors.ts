@@ -79,7 +79,7 @@ export type QueryErrorCode =
  * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
  * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
  * with a `detail`, which it writes only in a person's words (ADR-0060), is
- * shown in that `detail`, as a coding run's question somebody already
+ * shown in that `detail`, as an executor's question somebody already
  * answered names who did and a spent token budget names whose it was; and a
  * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
  * gives way to the engine's own sentence for the code where the answer

@@ -167,7 +167,7 @@ const (
 	EvidencePage EvidenceKind = "page"
 	// EvidenceTurn is an agent turn, by id.
 	EvidenceTurn EvidenceKind = "turn"
-	// EvidenceRun is a coding run, by id.
+	// EvidenceRun is an executor's run, by id.
 	EvidenceRun EvidenceKind = "run"
 	// EvidenceURL is anything else, as an https URL.
 	EvidenceURL EvidenceKind = "url"
@@ -284,7 +284,7 @@ const FieldPrefix = "decision."
 
 // ValidateAt is [Decision.Validate] naming each field under prefix, the path
 // its caller's arguments carry the decision at: `decision.` on a work item's
-// ask, and nothing on a coding run's, whose arguments carry the decision's
+// ask, and nothing on an executor's, whose arguments carry the decision's
 // fields at their top (`options[0].label`, `recommended`). A refusal names a
 // field the way the caller wrote it, or the caller is told to fix an argument
 // it never sent.

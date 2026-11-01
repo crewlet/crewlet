@@ -740,9 +740,10 @@ describe("what a seat is doing", () => {
     );
   });
 
-  test("a parked run is a coding run while working, and says so", () => {
-    // A detached run parks the turn while the box works: no model call is in
-    // flight, so the phase has nothing to say and the line names the run.
+  test("a parked turn is its executor while working, and says so", () => {
+    // The executor parks the turn while it works in its box: no model call is
+    // in flight, so the call's phase has nothing to say and the line is
+    // Execute's.
     expect(
       stateLine(
         {
@@ -755,7 +756,7 @@ describe("what a seat is doing", () => {
         },
         { now },
       ),
-    ).toBe("Coding run on ENG-9");
+    ).toBe("Executing ENG-9");
     expect(
       labelOf(
         {
@@ -767,7 +768,7 @@ describe("what a seat is doing", () => {
         },
         now,
       ),
-    ).toBe("Needs you · run parked");
+    ).toBe("Needs you · executor parked");
   });
 
   test("a seat with no handle prints none, rather than a bare @", () => {
@@ -956,7 +957,7 @@ describe("staleness", () => {
   });
 
   test("a parked turn is silent on purpose, and is never called stalled", () => {
-    // A detached coding run stops the round by design for as long as the run
+    // An executor in its box stops the round by design for as long as it
     // takes; the alarm keyed on "no update" fired on every one of them.
     const old = new Date(now - STALLED_MS - 1).toISOString();
     expect(staleness(old, now, "parked")).toBe("");
@@ -1169,7 +1170,7 @@ test("a turn's item key is its call's, then its turn's, else none", () => {
 });
 
 // LONGEST-RUNNING FIRST, AND A SEAT WITH NO READABLE START LAST. The engine
-// calls a seat working while its coding run is out even when no turn record
+// calls a seat working while its executor is in its box even when no turn record
 // names it, and the record that arrives on resume is stamped with the resume
 // instant — the newest — so last is where it lands. Read as 0, it led every
 // list of running turns and then jumped to the bottom.

@@ -253,7 +253,7 @@ type writeSeams struct {
 // kind of party and the credential ([iam.ActorFor]), and the identity
 // estate's writer judges the gesture's authority — admin — on the party's
 // own grants, at the record rather than only at the route, because a gate
-// record can be published by a CLI, a test and a duty as well as through
+// record can be published by a harness, a test and a duty as well as through
 // one.
 type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 	readmit bool) (statelog.Result, error)

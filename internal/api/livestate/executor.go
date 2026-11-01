@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 )
 
-// The in-flight coding runs.
+// The in-flight executors.
 //
 // TWO SOURCES, and neither is enough alone. The lifecycle EVENTS are what make
 // the panel live — a run appears the moment it starts and flips the moment it
@@ -80,7 +80,7 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 			Role:        str(payload, "role"),
 			AgentHandle: str(payload, "agent_handle"),
 			AgentID:     str(payload, "agent_id"),
-			CodingAgent: str(payload, "coding_agent"),
+			Harness:     str(payload, "harness"),
 			ProviderKey: str(payload, "provider_key"),
 			Model:       str(payload, "model"),
 			SandboxID:   str(payload, "sandbox_id"),
@@ -104,7 +104,7 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 				Role:        str(payload, "role"),
 				AgentHandle: str(payload, "agent_handle"),
 				AgentID:     str(payload, "agent_id"),
-				CodingAgent: str(payload, "coding_agent"),
+				Harness:     str(payload, "harness"),
 				SandboxID:   str(payload, "sandbox_id"),
 				StartedAt:   env.Timestamp,
 				WorkItem:    workItemOf(payload),

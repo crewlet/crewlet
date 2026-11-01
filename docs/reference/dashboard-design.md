@@ -40,7 +40,7 @@ a fourth use of colour with three hues of its own, and the design system
 removed that family in `@crewlethq/tokens` 0.5.0: beside a state badge the
 state has to be the one coloured thing on the row. Inside a figure a phase is a
 series like any other, drawn in the hue of the **band** the engine folds it
-into (`tokens.PhaseBand`: execute and a coding run are Execute, review is
+into (`tokens.PhaseBand`: execute and the executor's launches are Execute, review is
 Review, delegated workers are Workers, and the rest are Auxiliary), so one
 phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
@@ -131,7 +131,7 @@ A seat's badge takes one of three **status glyphs**, or none, from what it is DO
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
 `activity` (`working`, `needs`, `stopped` or `idle`) and, when stopped, a
 `stopped_reason` (`paused`, `unplaced`, `budget` or `provider`), computed once
-by the live projection from the seat's turn, its coding runs' durable record,
+by the live projection from the seat's turn, its executor's durable record,
 its pause, its placement across the fleet and its budget windows (see
 [Agent States](../concepts/agent-runtime.md#agent-states)). `lib/seats.ts`
 maps the word to a status, a pill's tone, a label and a state line and folds nothing in: the
@@ -161,8 +161,8 @@ before it, and the sentence beside it says what they are doing.
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
-| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), or a parked run ("Coding run on ENG-9") — which is what it says for as long as the run works, workers it delegated to included: a seat's workers run under its executor's run, whose calls the engine does not stream |
-| `needs` (`warning`) | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
+| `working` (`info`) | `working`: mid-turn, or its executor is running in its box | "Working"; the state line names the phase and the item ("Executing ENG-412") — a parked turn's too, with no round, for as long as its executor works in its box, workers it delegated to included: a seat's workers run under its executor, whose calls the engine does not stream |
+| `needs` (`warning`) | `needs`: its executor waits on a question only a person can answer | "Needs you", "Needs you · executor parked" |
 | `stopped` (`danger`) | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
 
@@ -172,9 +172,9 @@ why no markup prints `@{handle}` itself: every handle goes through
 `handleLabel` in `lib/seats.ts`, and `app/source.test.ts` refuses JSX text
 ending in `@` before an expression and a template inside markup that does the
 same. A live round that has not moved in two minutes
-is called stale, in ten stalled — except while the turn is **parked** on a
-detached coding run, which is silent by design for as long as the run takes:
-the executor's phase card then reads "parked on its coding run", because the
+is called stale, in ten stalled — except while the turn is **parked** on its
+executor in its box, which is silent by design for as long as it takes:
+the executor's phase card then reads "running in its box", because the
 stage travels with the live call off the seat's own turn.
 
 A failed last turn does not colour a seat. The seat takes its next wake like
@@ -720,7 +720,7 @@ row, and the workspace row containing it gives the mark up), and **Running**, on
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
 and a link that WATCHES the turn (its Transcript, the phase it is on open, or
-a parked turn's coding run live above its phases; see
+a parked turn's executor live above its phases; see
 [the turn trace](#the-turn-trace-four-tabs-one-clock)). It is the way to a
 running turn from every screen, where it was the Agents row, the chart, a
 card, the profile and a tab. It is the same set as the figure on Live and in
@@ -838,7 +838,7 @@ in `nav.ts`, over three kinds of section (ADR-0033). The reader's own, their
 Account, needs nothing. The OVERVIEW needs nothing beyond being signed in:
 Home, Company › Principles and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
-Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
+Executors, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work, Worklet and Settings ›
 Expensive tasks need Worklet, and Doclet needs Doclet, and every
@@ -1248,9 +1248,9 @@ a screen, and every workspace and section the code declares is below.
 | `#/chatlet/browse` | **Chatlet › Browse rooms**: every room you can read, to join or open | |
 | `#/chatlet/new` | **Chatlet › New message**: a conversation with the people or agents you name, the one you already share with them if there is one | `to=` (handles, comma-separated) |
 | `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `message=` (the message a link landed on, flashed, then left) · `pane=thread:{room}:{root}` · `pane=details:{room}:about\|members\|shared\|notifications` · `pane=profile:{handle}` · `pane=catchup:{room}` · `pane=summarize:{room}` (ONE pane at a time, beside the conversation or over it; any place may carry one) |
-| `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
+| `#/live` | **Live › Now running** — the running turns, the executors waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
-| `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
+| `#/live/executors` · `#/live/executors/{turn_id}` | **Executors** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
@@ -1290,7 +1290,7 @@ a screen, and every workspace and section the code declares is below.
 redirect whose old path is now a live route sends every reader of that route
 somewhere else, permanently, with the address bar agreeing with them — which is
 strictly worse than the dead link it exists to avoid, because a dead link is
-visible. It happened once, to an address that had meant a coding run before a
+visible. It happened once, to an address that had meant an executor before a
 workspace took it over. No `v*` tag
 has ever shipped a route from this tree, so there is nobody holding an old link:
 an address from before the one-sidebar rebuild (one under the retired
@@ -1696,7 +1696,7 @@ four clauses that travel together because each one was got wrong separately:
   answer nothing gave. Inside a row that is itself a link, `SeatLabel` draws
   the same badge and name with no anchor of its own, so a seat column is never
   a processor glyph where every other surface draws the seat's badge. The two places that pass a literal `agent` are the
-  ones where the chart cannot be wrong — a turn's seat and a coding run's seat,
+  ones where the chart cannot be wrong — a turn's seat and an executor's seat,
   which the engine RUNS, and it never runs a human seat — and they say so at
   the call rather than leaving the default to stand for a kind nobody threaded. A
   badge drawn BESIDE the printed name is decorative, or the row reads "Ada
@@ -2856,10 +2856,10 @@ company did.** That is Home until its reader arranges it (see
   reply `{answers, body}`; the engine wakes the asker with either. An answered
   ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
   anyway" or "Answered “the reply”", until the card is drawn afresh; there is
-  no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
-  by its turn (`answer_run`), with how long its box is still held: its row shows
+  no undo, because the asker is woken the moment the answer lands. An executor parked on a question is answered
+  by its turn (`answer_executor`), with how long its box is still held: its row shows
   the question's one sentence, never the context under it, and its **Answer**
-  dialog draws the run's ask as the Inbox does, its options as buttons. A seat the
+  dialog draws the executor's ask as the Inbox does, its options as buttons. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
@@ -2877,7 +2877,7 @@ company did.** That is Home until its reader arranges it (see
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
   charged to, never a work key), how long, where it is in context → execute →
-  review ("Execute · coding run"), and the last call it made, each a way
+  review ("Execute · in its box"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
@@ -2995,7 +2995,7 @@ is the kit's (`InboxList` and `ReadingPane` in `@crewlethq/ui`); the screen
 only places them.
 
 **One list, in a fixed order, with no filter bar.** **Needs you** leads: the
-asks put to this person and the coding runs parked on a question to them
+asks put to this person and the executors parked on a question to them
 (`decisions`, the read Home's figure counts), the seats the engine stopped on
 a spent token budget, and the conditions a person decides (`lib/attention.ts`,
 the subjects whose home is `seat`). **Updates** follows: what reached them and
@@ -3025,7 +3025,7 @@ itself (`system`) names nobody and reads "The engine", with the engine's mark;
 never as the credential a change came through (`operator_id`). What, in up to
 three lines, never cut at the edge: the question, the stop ("The daily token budget
 is spent", with **stopped** after the name in the danger ink), a run's
-question (with **coding run** after the name), or what an update did ("Mentioned
+question (with **executor** after the name), or what an update did ("Mentioned
 you", "Changed its status") with its excerpt after it in the quiet ink. And
 the task it is about, as a quiet link of its own under the row: its key and
 title (one `work_items{key}` read resolves the titles of every row that names
@@ -3043,8 +3043,8 @@ says who is asking, what is asked of the reader and on which task ("CTO asks
 for your approval on LEAD-12 Q4 release plan"); the time is on the row, so it
 is not repeated. The question follows in large type, then its context, then
 the asker's reasoning on an inset ground ("CTO recommends **Hold release**")
-with the evidence it cites under it: a task, a page, a turn trace, a coding
-run or a link. An update's pane names what it did as its heading, quotes a
+with the evidence it cites under it: a task, a page, a turn trace, an
+executor or a link. An update's pane names what it did as its heading, quotes a
 comment whole under it, and says why it reached the reader where the heading
 does not ("· you follow this task", from the reason of an update that only
 informs, or "· snoozed until …").
@@ -3059,13 +3059,13 @@ opens the field in their place and sends the answer in words
 from the start. Where the ask promised a channel (`decision.inform`) the line
 under the answer says "Your answer is also posted to #channel": the engine
 holds the asker to it (`ExternalNotification.owes`), and an ask that promised
-nothing draws no such line. A parked coding run's pane is drawn as a
+nothing draws no such line. A parked executor's pane is drawn as a
 question is (ADR-0068): its one-sentence question heads it with its inline
 references placed, its context follows as Markdown, its recommendation sits with
 the reasoning and the evidence it cites, and its options are buttons, the
 recommended one first and filled, with "Something else" to answer in words. An
 open question is answered in its field. It says how long the box is still held
-and answers by its turn (`answer_run`). A question from an older build, one
+and answers by its turn (`answer_executor`). A question from an older build, one
 free-text block, draws its first sentence as the heading and the rest as
 Markdown; nothing is ever quoted verbatim. A stopped
 seat's names the window that is spent and offers the two ways out: raise the
@@ -3087,13 +3087,13 @@ read or snoozed update shows its new state, and 700 ms later (`ADVANCE_MS`)
 the next item after it opens, unless the reader has moved on first.
 
 **What was answered before waits in a closed group.** The asks put to the
-reader and closed in the last week, and the coding runs' questions the reader
+reader and closed in the last week, and the executors' questions the reader
 answered themselves (`answered_decisions`), are an **Answered**
 group after Updates, closed and counted ("Answered 4"): its label is a
 disclosure button inside the heading, so a reader moving by heading lands on
 it and Enter opens it. Each row names who asked, the question, and who
 answered and how ("Maya Ops chose **Ship anyway**"), since a colleague may
-answer a question put to you. A coding run's question the reader answered is
+answer a question put to you. An executor's question the reader answered is
 a row of the same group, drawn the same way: its pane reads the run's ask in
 full (the question, its context, its options with the chosen one marked) and
 links to the run, with no conversation, since a run's question has no thread.
@@ -3312,11 +3312,11 @@ a line of its own read from the left, its wall time and tokens and **Trace**. Th
 so the newest card and the cost panel agree. While a seat's turn is running on
 this task — joined on the item the engine charges it to, and only while the
 seat is `working` — the foot of the timeline is the live row in the working
-state's own ground ("SWE is on turn 3 · coding run · for 2m",
+state's own ground ("SWE is on turn 3 · executing · for 2m",
 with a pulse that is static under reduced motion) linking to the live trace.
 The words after the turn are the task card's strip's own, from one derivation
 — the round counted from one, as the stepper counts it, and the phase named
-("reading context", "reviewing", "coding run") — so the
+("reading context", "reviewing", "executing") — so the
 card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
 seat, optionally with two to six options, the one recommended and whether the
@@ -3386,7 +3386,7 @@ says what it is doing in the engine's word, behind the state's dot
 The word is one of a few short ones on purpose: a node is as wide as its name,
 and a caption that grew with the engine's state line would relay the whole
 chart twice a tool-loop round. That line ("Executing ENG-412", "3 workers on
-ENG-405", "Needs you · run parked", "Stopped · budget", "Idle · last turn 24m
+ENG-405", "Needs you · executor parked", "Stopped · budget", "Idle · last turn 24m
 ago") is the node's title, and it is read after the node's name. **A seat's
 dot shows what it is doing**: the dot and the word are the only state hue on a
 node, and an agent's colour is its own look (see "The one rule"). The legend at
@@ -3524,8 +3524,8 @@ tabs draw). Those sections, and Schedules, open on their work, with no
 introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
-tinted by the state — the line, how long the turn has run, "Turn 2 · coding
-run in progress", where the turn number is the task's own count
+tinted by the state — the line, how long the turn has run, "Turn 2 ·
+executing", where the turn number is the task's own count
 (`work_item_turns`, asked by the task's id — see [An item's
 address](#an-items-address)) — then Reports to, Model (the phase chain from
 the org projection, which carries it only to an admin —
@@ -3639,7 +3639,7 @@ have taken the open dialog, and the link it shows only once, with it.
 
 **While the seat is working, the page bar leads with Watch live** — the
 running turn's watch link (its Transcript, the phase it is on open, or the
-coding run a parked turn waits on drawn live above its phases) — and the
+executor a parked turn waits on drawn live above its phases) — and the
 **Turns** tab carries the kit's pulsing info dot, the steady-state mark of a
 state still happening, with its words read after the tab's name ("Turns,
 running now"), because a dot is never the only carrier; folded into the
@@ -3665,7 +3665,7 @@ for a reader who cannot make it:
   holds still offers eight it could be handed.
 - **Pause** (agents only) asks why, and whether to **also stop the current
   turn**: without it the turn the seat is on finishes first, and only a ticked
-  box sends `stop_running`, which also ends a coding run the turn has out (see [pausing a
+  box sends `stop_running`, which also ends the seat's executor in its box (see [pausing a
   seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**.
 
@@ -3682,7 +3682,7 @@ equality the display name never matched. On a phone the bar keeps
 rest into the same More menu (Watch live first, while there is a turn to
 watch), each disabled there with the sentence its inline control is held with. A notice under the tab strip, above whichever tab is
 open, carries what stops the seat or waits on somebody, in the state's own
-tone: its last error, a pause, another stop, or a coding run parked on a
+tone: its last error, a pause, another stop, or its executor parked on a
 question — answerable from the notice.
 
 **The Overview is the seat's week and its charter.** Four figures, all ONE
@@ -3696,7 +3696,7 @@ has no ceiling of its own — "company cap 60M/day +1" (and "no seat cap" on hov
 company's own budget caps a window, because that ceiling binds every seat (one
 line in the tile, the whole sentence on hover). A shortened token count carries
 no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where the turn is — Context, Execute
-("coding run" once the turn parks on its run), Review; there is no
+("in its box" once the turn parks on its executor), Review; there is no
 delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
 turn's own task, by its id — see [An item's address](#an-items-address) —
@@ -3835,7 +3835,7 @@ lived in a different screen:
 
 | Condition | Where it used to live |
 |---|---|
-| a coding run parked on a question | a badge — and a run whose box had been reclaimed appeared **nowhere at all** |
+| an executor parked on a question | a badge — and one whose box had been reclaimed appeared **nowhere at all** |
 | a seat the engine stopped | a card among the healthy ones |
 | a budget refusing charges | a bar on one seat's page |
 | an engine with **no active configuration**, dropping every inbound webhook | a line in a popover |
@@ -3852,7 +3852,7 @@ twice and none nowhere:
 |---|---|---|
 | `seat`: the Inbox's "Needs you", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
 | `engine`: the sidebar's engine panel and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
-| `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
+| `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every executor parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; an executor waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
 On Home the queue is COUNTED, not drawn: the `seat` conditions that are not
 the reader's own decisions — a seat stopped for a reason other than its
@@ -3927,7 +3927,7 @@ list's checkboxes are disabled — this surface performs no writes, and a box a
 reader could tick would report a change that never reached the page.
 
 **A model's words are markdown too**, and this page used to say they were
-not. A round's speech and a coding run's report were a `pre-wrap`
+not. A round's speech and an executor's report were a `pre-wrap`
 block on the rule that a model's line breaks are load-bearing and it does not
 write markdown — and a round that wrote a fenced JSON block printed three
 backticks, a language tag and a wall of braces. The line breaks *are*
@@ -3969,7 +3969,7 @@ plain-text flattening alike, over the whole text, so a run's neighbour is the
 character really beside it.
 
 `.prose` on its own stays a `pre-wrap` block, for text whose every space and
-break is the record — a coding run's activity log. Rendered markdown carries
+break is the record — a launch's activity log. Rendered markdown carries
 `.prose.md`.
 
 **A fenced block wraps rather than scrolling**, and it took a wrong class name
@@ -4118,7 +4118,7 @@ leading zero, inside a word, a path or an entity, or in code is never one.
 Inbox row, an answer's option, a link's own label) a link would be invalid or
 steal the press, so those draw marks and swatches alone (`renderTokens`).
 Where the words were written by an agent or a model that may have read
-anything (Ask Crewlet's answers, the Inbox and a coding run's question,
+anything (Ask Crewlet's answers, the Inbox and an executor's question,
 `links: "checked"`), a link
 is live only where the dashboard built it, from parts it checked, to a place
 that is the company's: a key's, a room's and a handle's routes, a reference
@@ -4141,8 +4141,8 @@ request the reader may open unfurls into a preview the engine resolved as the
 reader (`chat_unfurls`, with an address the engine built), an address of an app
 the dashboard knows unfurls into its mark, name and reference, every other is
 the address token, and one whose scheme the allowlist refuses is its words.
-A coding run's question is read so wherever it is answered: its Answer dialog
-(`components/writes.tsx`), opened from Live › Runs, a seat's page and every
+An executor's question is read so wherever it is answered: its Answer dialog
+(`components/writes.tsx`), opened from Live › Executors, a seat's page and every
 decision row, reads the run's context and reasoning `checked`.
 An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown
@@ -4320,8 +4320,8 @@ Objects only: anything the sidebar
 already lists is left out, because a recents list repeating the
 navigation beside it costs a reader a scan and tells them nothing. The label
 stored is the one the **screen** resolved, which lands a render after the route
-— so a recents row says what a turn did, what a trace began at, what a coding
-run was asked for, and falls back to the id only where nothing has named the
+— so a recents row says what a turn did, what a trace began at, what an
+executor was asked for, and falls back to the id only where nothing has named the
 object yet. See [A screen publishes what the chrome needs](#the-frame).
 
 **One reader, so one order: most recently visited first.** The palette is
@@ -4781,7 +4781,7 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, launch_id, choice}` / `answer_run{turn_id, launch_id, answer}` |
+| An option · Something else and Send answer | A parked executor in the Inbox's pane, and its Answer dialog | `answer_executor{turn_id, launch_id, choice}` / `answer_executor{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
@@ -5095,7 +5095,7 @@ rules fix it, and each one names a specific mechanism:
    the model's words in a block detached from the calls they were about. So
    the engine sends the split it already knows, at the point
    the round's assistant message is appended, and the card reads the rounds
-   from that alone — the joined string is rendered only as a coding run's
+   from that alone — the joined string is rendered only as an executor's
    report, whose rounds happened in its box.
 
    **A round that answered in prose where a call was owed says what became of
@@ -5585,12 +5585,12 @@ replaced the info rail the card was meant to carry.
 ## Live › Now running and the turn list
 
 **What a seat is doing is everybody's; what it SAID is its trail.** Now
-running, Coding runs, the org chart's state lines and a seat's page are the
+running, Executors, the org chart's state lines and a seat's page are the
 overview, open to every signed-in reader, and the engine splits what it sends
 them into a status half and a body half ([the API's
 rule](api-endpoints.md#a-status-reader-never-receives-a-transcript)): a call's
-prompt, its answer, a tool's arguments and a coding run's task, question and
-reply go to an admin, to whoever leads the seat, and — for a run's parked
+prompt, its answer, a tool's arguments and an executor's task, question and
+reply go to an admin, to whoever leads the seat, and — for an executor's parked
 question — to the person it is put to. Anybody else is sent the status with
 `body_withheld: true`, and the dashboard draws each withheld value as **Not
 shown to you** (`WITHHELD_WORDS`, `lib/access.ts`) — a run's question as *Its
@@ -5608,8 +5608,8 @@ be read at a glance:
   Home's Live now draws (`LiveTurnRow`): what it is doing and on what — the
   item's key, or on a turn charged to no item the trigger's own summary
   ("Executing · Drafting the 2.4 launch brief") rather than a bare verb —
-  where the turn is (Context → Execute "coding run" → Review, and "round 1
-  of 1" from the executor's opening frame, while its run is being launched;
+  where the turn is (Context → Execute "in its box" → Review, and "round 1
+  of 1" from the executor's opening frame, while it is being launched;
   on a phone the round leads the call line instead, so Review keeps its place
   on the stepper's one line),
   how long it has run from the turn's own start —
@@ -5619,18 +5619,18 @@ be read at a glance:
   **Watch** are the ones that open its Transcript on the running phase (see
   [the turn trace](#the-turn-trace-four-tabs-one-clock)). A round with no update
   for two minutes is marked **no update**, for ten **stalled**, in the
-  caution and failure tones — and never while the turn is parked, because a
-  detached coding run is silent on purpose.
-- **Waiting on a person** — every coding run parked on a question: whose, the
+  caution and failure tones — and never while the turn is parked, because an
+  executor in its box is silent on purpose.
+- **Waiting on a person** — every executor parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, launch_id, choice}` for an option or
-  `answer_run{turn_id, launch_id, answer}` for words, as the person reading,
+  which sends `answer_executor{turn_id, launch_id, choice}` for an option or
+  `answer_executor{turn_id, launch_id, answer}` for words, as the person reading,
   naming the question it drew.
-- **In a box** — the rest of the detached runs in flight, eight before it
-  says how many more. Empty, it says *Finished runs are on their turn’s
-  trace*: a settled run's row is deleted, so the sentence it replaced,
-  promising every finished run under Runs, was false.
+- **In a box** — the rest of the executors in flight, eight before it
+  says how many more. Empty, it says *What a finished one did is on its
+  turn’s trace*: a settled executor's row is deleted, so the sentence it
+  replaced, promising every finished run under Runs, was false.
 - **Activity** — the engine's own count of events over the window
   (`event_series`, minute bars summed exactly into the strip's cells) and the
   latest seven events, each the time and ONE line: the actor, then what
@@ -5665,7 +5665,7 @@ finished while the reader was down the list waits behind the button.
 
 **Turns** (`#/live/turns`) opens on the axis, and the axis is the ENGINE's:
 `event_series` over `agent_turn_completed` with `suspended=false` — the turns
-that ENDED, one completion each, since a turn that parks on a coding run
+that ENDED, one completion each, since a turn that parks on its executor
 writes a completion for the segment that parked it — over the whole window,
 on every node, with each bar's failed share drawn at its foot. It was folded
 from the page of rows the screen held, which drew a week from the newest two
@@ -6632,13 +6632,14 @@ list's tokens for the same turn. The reflection after the turn is never in
 it: that is the seat's learning rather than the work's cost, and it is drawn
 in the Timeline's Reflection lane instead.
 
-**And a launch of the executor's run sits inside its round.** Each
+**And a launch of the executor sits inside its round.** Each
 `executor_collected` — one launch, as its collection read it off the box — is
 no phase but the work of the `execute` round that launched it, so
 `groupTurns` files it under that round's record and the round's `PhaseCard`
-draws it inside, under **Its run**: the CLI it ran as, how it ended, what it
-spent, the report it wrote and its **Activity** fold. One round is one card
-however many launches it took (an answer carries a parked run on; a launch
+draws it inside, under **Its launch** (or **Its N launches**): the CLI it ran
+as, how it ended, what it spent, the report it wrote and its **Activity** fold.
+One round is one card however many launches it took (an answer carries a
+parked executor on; a launch
 lost with its host is relaunched), and its header's token figure is the
 round's — the executor's own record carries none — which is also what the
 Tokens fact counts as the turn's own. A launch whose round has no record in
@@ -6843,11 +6844,12 @@ is one of the rules on this page applied to a tracker.
   predicate that decides restates each mark's own emptiness rule — the price of
   asking BEFORE rendering — so a mark that gains a field adds it there. The
   last row is a STATE and the only part of a card with a hue: blue while a
-  seat's turn is on the task ("SWE · coding run · 6m"), amber
-  while a coding run on it is parked waiting for the READER. The turn is joined
+  seat's turn is on the task ("SWE · executing · 6m"), amber
+  while an executor on it is parked waiting for the READER ("Waiting on you ·
+  executor parked"). The turn is joined
   on the item the engine CHARGES it to (`live_call.work_item`), never on the
-  trigger's `work_key`, which names whatever a webhook mentioned; and a run
-  waiting on somebody else is a fact on the task page, not a call to this
+  trigger's `work_key`, which names whatever a webhook mentioned; and an
+  executor waiting on somebody else is a fact on the task page, not a call to this
   person. Labels, "blocks N", the open questions and the tokens are opt-in row
   facts (`fields=`) the board asks for and no agent's listing carries.
 - **A status is coloured by its GROUP.** Somebody is on it — `in_progress` and
@@ -7152,14 +7154,14 @@ phase the turn is on is drawn OPEN with its rounds arriving. Landing on the
 Timeline, a reader who pressed Watch saw one drifting bar and had to find the
 tab, then open the phase, to read a word of it.
 
-**A parked turn is watched on the same tab.** Its executor launched a detached
-coding run and suspended, so no phase is in flight while the engine still
+**A parked turn is watched on the same tab.** Its executor launched in its
+box and the turn suspended, so no phase is in flight while the engine still
 calls the seat working — for most of the turn, and for hours on a long
 one. So while the turn is parked the Transcript
-leads with a **Coding run** card: the run's live output (the same
-`executor_tail` poll the Timeline's run span opens, read off the waterfall's
-own open run span), the coding agent, and **Open the run** to the run's page
-(`#/live/runs/{turn_id}`); the executor's card it parked in is drawn open
+leads with an **Executor** card: its live output (the same
+`executor_tail` poll the Timeline's launch span opens, read off the
+waterfall's own open launch span), the coding agent, and **Open the executor**
+to its page (`#/live/executors/{turn_id}`); the executor's card it parked in is drawn open
 beneath it. A turn that parks while a reader watches therefore keeps
 something live on the page, which sending a parked turn's watch link
 elsewhere could not have done.
@@ -7184,7 +7186,7 @@ that can.
   see [An item's address](#an-items-address)). Off a task it is the lead
   of what the turn did. The agent crumb leads to *Live* narrowed to that seat.
 - **The status is state, beside the title.** *Running · 6m 12s* off the turn's
-  own start, *Parked on a coding run* while a detached run holds it, how it
+  own start, *Parked while its executor runs* while its executor holds it, how it
   ended in the reviewer's or the executor's word, or *not settled* for a turn
   no seat is running that published no closing record (its node stopped
   before it ended — the turns list's *Not settled*) — plus the attempt, the
@@ -7204,17 +7206,17 @@ that can.
   can push away from it.
 - **The actions are the turn's.** *Steer* sends a note the turn reads at its
   next step (`steer_turn`) — offered on every turn still going, a turn parked
-  on its coding run included, whose note waits on the run's record, and held,
+  on its executor included, whose note waits on the executor's record, and held,
   with the reason, only on a turn that has ended. The toast says when the turn
-  reads it, from the answer's `reads`: *at its next step*, or, for a run waiting
-  on a question, *once that is answered* (`lib/steer.ts`). What became of a note
+  reads it, from the answer's `reads`: *at its next step*, or, for an executor
+  waiting on a question, *once that is answered* (`lib/steer.ts`). What became of a note
   is the turn's own `agent_turn_steered`, drawn under the waterfall and where it
   was read — at the round (*read at round 2 of Review*), or for a read inside a
-  coding run on the run's bar, in the words of its step, owned by the phase
-  whose run it was: *read by the coding run of Execute in its brief*, *after a
+  launch on the launch's bar, in the words of its step, owned by the phase
+  whose executor it was: *read by the executor in Execute, in its brief*, *after a
   tool batch*, *as it was finishing*, *at its next step*; a step a newer build
-  names and this one does not is *read by the turn in Execute*, on the run's
-  bar where its record names the run and never drawn or said as a round — or
+  names and this one does not is *read by the turn in Execute*, on the launch's
+  bar where its record names the launch and never drawn or said as a round — or
   *expired — the turn finished before it read the note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another
@@ -7225,7 +7227,7 @@ that can.
   else folds into the frame's *More*.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each
-  tool call, a phase, the prefetch, a coding run — and the model only arranges
+  tool call, a phase, the prefetch, an executor's launch — and the model only arranges
   them: a phase's CLI runs under it, each a **CLI run N** span from its launch
   to its exit (`invocations[]`) and its rounds under it — the entry that served
   it, the rounds it made, whether its CLI's record showed them, how it ended and
@@ -7234,8 +7236,8 @@ that can.
   a round's tool calls after its model call (a
   call the engine timed but did not stamp is run serially from the model's
   answer and says it was *placed*), a delegate's workers and the round-cap
-  judge under the round that spawned them (`host_round`), each coding run as
-  its own span keyed by its job's `launch_id`, the reflection pass after the
+  judge under the round that spawned them (`host_round`), each launch of the
+  executor as its own **Launch** span keyed by its `launch_id`, the reflection pass after the
   last phase — its workers drawn from what each SPENT, one span per
   `auxiliary_spend` record of the `reflection` stage from its first call to
   its last, marked where a call failed — and *review pending* while an executor has finished and no
@@ -7275,16 +7277,16 @@ that can.
   {agent} called it** — the narration of the ROUND that asked for it, labelled
   *from round N*, and *this round asked for K calls* where it asked for more
   than one, because a sentence quoted under one of four calls would otherwise
-  read as that call's alone; a coding run's box facts, and its transcript once
+  read as that call's alone; a launch's box facts, and its transcript once
   collected.
-- **A running coding run is watched, not replayed.** While its span is open
-  the trace asks the node that can read the run's box for its live output
+- **An executor running in its box is watched, not replayed.** While its
+  launch's span is open the trace asks the node that can read the box for its live output
   every three seconds (`executor_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
-  closing the span or the job stopping ends the poll — and only
-  `not_running` is stopping: a job still being set up (`launching`), a box
+  closing the span or the executor stopping ends the poll — and only
+  `not_running` is stopping: a launch still being set up (`launching`), a box
   paused before its record moves on (`box_paused`), a box gone before its
-  record moves on, the job recorded lost and its round carried on in a
+  record moves on, the launch recorded lost and its round carried on in a
   fresh one (`box_gone`), a silent node and a failed read all keep asking,
   and keep what is on screen. The one failed read that
   ends the poll is a refusal the engine says no wait clears (`unavailable`
@@ -7298,7 +7300,7 @@ that can.
     says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
     is that hook, and not `useQuery`, because the cursor moves with every
     answer and a cursor in a query's parameters re-runs its effect the moment
-    an answer lands. It holds at most what the run's record will
+    an answer lands. It holds at most what the launch's record will
     (`LIVE_OUTPUT_MAX_BYTES` in `contract/executor.ts`, the engine's
     `sandbox.MaxRunTextBytes`, held to it by a gate), dropping its FRONT on a
     line past that, and the caption says how much earlier output it no longer
@@ -7341,44 +7343,46 @@ that can.
   so the asks at those two moments read them.
 
 
-## Coding runs, agent-to-agent, traces and the event log
+## Executors, agent-to-agent, traces and the event log
 
 The four Live screens beside Now running and the turns are each a list and a
-page, and each page draws ITS OBJECT ALONE: `#/live/runs/{turn_id}` and
+page, and each page draws ITS OBJECT ALONE: `#/live/executors/{turn_id}` and
 `#/live/a2a/{id}` used to draw the whole list with the object tacked on under
 it, so a link to one run landed on a board with the run below the fold.
 
-- **Coding runs** reads the durable run record (`executors`) merged with
+- **Executors** reads the executors' durable record (`executors`) merged with
   the live projection, on ONE poll, `RUNS_POLL_MS` (20 s) in `lib/runs.ts` —
-  the board, a run's page and rail, and the attention queue Home and the Inbox
+  the board, an executor's page and rail, and the attention queue Home and the Inbox
   draw all name it, so the board and the Inbox cannot disagree about whether
   anybody is being waited on (a source test holds every reader to it).
-  - A parked run's banner says what it asked, **who it is put to** (the
-    audience the engine resolved when the run parked, by name, and the lead
+  - A parked executor's banner says what it asked, **who it is put to** (the
+    audience the engine resolved when it parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer**: `answer_run{turn_id, launch_id, choice}` for
+    held, and carries **Answer**: `answer_executor{turn_id, launch_id, choice}` for
     an option, or `{turn_id, launch_id, answer}` for words, which reaches
-    a run whatever launched it. `pending` is the ordinary outcome: the answer
-    is on the seat's inbox and the node holding the seat resumes the run.
-  - A running run's page polls its live output from the node that owns it
+    it whatever launched it. `pending` is the ordinary outcome: the answer
+    is on the seat's inbox and the node holding the seat launches the executor
+    again with it.
+  - A running executor's page polls its live output from the node that owns it
     (`executor_tail`, by the `launch_id` the row names, every 3 s while the page
     is open — the same `LiveOutput` the turn trace draws). The view is keyed
-    on the turn AND the launch, so a later job starts a view of its own rather
-    than appending its output to the last job's; an answer naming the job
-    `replaced` reads the board again at once, so the page follows the job the
+    on the turn AND the launch, so a later launch starts a view of its own rather
+    than appending its output to the last one's; an answer naming the launch
+    `replaced` reads the board again at once, so the page follows the launch the
     row holds now rather than waiting out `RUNS_POLL_MS`.
-  - A run is collected when its record is deleted, and its page still
-    answers: it reads the turn and draws every `executor_collected` its
-    launches published — what the job reported, what it delivered, its tokens
-    and its transcript — named by the task its `executor_launched` carried.
+  - An executor's row is deleted once its launch is collected, and its page
+    still answers: it reads the turn and draws every `executor_collected` its
+    launches published — under *What the executor did*, or *What launch N of M
+    did* — what each reported, what it delivered, its tokens and its transcript,
+    named by the task its `executor_launched` carried.
   - Beside a peek the board keeps the seat and the task and drops the coding
     agent, the placement and the box, in that order, saying so in its footer.
-  - The page reads two sources, and "no run" needs BOTH: only when the run
-    record and the turn both answered and neither holds a run does it say
-    there is none, headed **No coding run**. A source that could not be read is
+  - The page reads two sources, and "none" needs BOTH: only when the
+    executor's record and the turn both answered and neither holds one does it
+    say there is none, headed **No executor**. A source that could not be read is
     named in a warning over whatever the other one holds, never folded into
-    "none"; "No task was recorded" heads only a real run whose launch carried
-    no task.
+    "none"; "No task was recorded" heads only a real executor whose launch
+    carried no task.
 - **Agent-to-agent**: a channel is an authorization record — the pair, the
   count and the window — so its page reads the words from the log: the
   channel's own events (`events{channel_id}`), oldest first, a conversation
@@ -8982,7 +8986,7 @@ model and every repoint as one revision.
 **Adding and editing a model is one wizard**, a page of its own in place of the
 list: the name and the coding CLI (fixed once the model exists), how it signs
 in, the model (the CLI's aliases and the public catalogue's models, or any name
-as text), where its coding runs (for a CLI with a runner), what it is used for,
+as text), where it runs a seat's executor (for a CLI with a runner), what it is used for,
 its limits, a test call and a review of exactly what changes. A pasted
 credential is tested before anything is stored and sealed before the document
 that names it is written; the document is checked with a dry run against the
@@ -9484,10 +9488,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 379 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under |
+| The initial load: the entry, its static imports and the linked stylesheet | 379 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose executor is in its box measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and an executor's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 5254 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB |
+| The whole of `static/dashboard`, which every binary and image carries | 5254 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's executor and steering a turn whose executor is in its box took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and an executor's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -9534,7 +9538,7 @@ brings that carries a design-system rule.
   stores, so a namesake never claims another's entry. `{}`, a node running no
   company, is an empty company.
 - **A seat is never paired by its name.** A seat's name is prose and two
-  seats may share one. The roster row, every `agents` overlay, a sandbox run,
+  seats may share one. The roster row, every `agents` overlay, an executor's row,
   a phase record, a turn row and a spend row all carry the seat's `agent_id`
   — derived from its handle, which no namesake shares — and the store merges an overlay onto its row by that id
   alone (`protocol/store.ts`), dropping one for a seat the roster does not

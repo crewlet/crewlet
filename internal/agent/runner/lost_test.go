@@ -47,7 +47,7 @@ func lostRound(t *testing.T, before run, lost runner.Lost, opts buildOpts,
 // and the fresh run is told what happened and where to look for the work.
 //
 // Mutation: collect a lost job as resumeAgentRun does, and the turn files the
-// truncated run as the round's result; continue its session, and the CLI is
+// truncated run as the round's result; continue its session, and the harness is
 // resumed from a conversation cut off mid-call.
 func TestALostJobsRoundIsCarriedOnInAFreshSession(t *testing.T) {
 	t.Parallel()

@@ -141,8 +141,8 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		def, field string
 		want       []string
 	}{
-		{"LLMProvider", "agent", strs(CLIAgentNames)},
-		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
+		{"LLMProvider", "harness", strs(Harnesses)},
+		{"HarnessAuth", "mode", strs(HarnessAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		{"SandboxProvider", "default_run_in", strs(Placements)},
 		{"LLMProvider", "run_in", strs(Placements)},
@@ -516,10 +516,10 @@ providers:
       auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY}"}
     sub:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
       max_concurrent: 2
     oc:
-      agent: opencode
+      harness: opencode
       model: anthropic/claude-sonnet-5
       run_in: direct
       env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}
@@ -1249,7 +1249,7 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
 	// full-stack one every integration block, the subscription one a
-	// signed-in CLI, the cell its entry's `run_in` places executor runs in
+	// signed-in harness, the cell its entry's `run_in` places executor runs in
 	// and the company-wide round cap.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {

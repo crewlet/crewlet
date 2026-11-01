@@ -12,7 +12,7 @@ import (
 )
 
 // The open asks put to one person, newest first — the tracker's half of
-// `decisions`, which the API merges with the coding runs parked on a question
+// `decisions`, which the API merges with the executors parked on a question
 // for the same person.
 //
 // The same rows as [MyWork]'s `asked_of_me`, read through the same function

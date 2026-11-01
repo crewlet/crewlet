@@ -13,7 +13,7 @@
  */
 
 import type { Tone } from "~/ui/primitives.tsx";
-import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/types.ts";
+import type { ToolAnnotations, ToolHint, ToolRow } from "~/contract/tools.ts";
 
 /** What a tool is allowed to do, as one word for a chip. */
 export type Capability = "reads" | "writes" | "destroys" | "unknown";

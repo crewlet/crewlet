@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The executors answer: the detached coding runs the engine still holds.
+// The executors answer: every detached executor the engine still holds.
 //
 // THE LIVE PROJECTION IS THE WRONG SOURCE for this question, in two ways. It
 // is in memory, so it starts empty after a restart; and it sweeps an entry
@@ -58,7 +58,7 @@ type PendingRuns interface {
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
-// ExecutorTails answers a running coding run's live output from the node that
+// ExecutorTails answers a running executor's live output from the node that
 // owns it — the one method this surface calls of [sandbox.TailReader].
 type ExecutorTails interface {
 	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
@@ -80,7 +80,7 @@ type ExecutorTails interface {
 // lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
 // name otherwise.
 //
-// DECIDED ON THE RUN'S SEAT, as its trail: what a coding agent prints is its
+// DECIDED ON THE RUN'S SEAT, as its trail: what a harness prints is its
 // transcript, so it is read by whoever reads the seat's trail — its lead, or
 // an admin — and never by everybody the run's status reaches. See
 // [Sources.mayTail].
@@ -242,7 +242,7 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 	return map[string]any{"runs": out}, nil
 }
 
-// runReach is what the asking principal may read of each coding run: its
+// runReach is what the asking principal may read of each executor: its
 // seat's body where the authority table's `audit.seat.read` admits them to
 // the run's seat — an admin, or its lead — through [Sources.reach], the one
 // decision a seat's live call, its turns and its memory are read under; its
@@ -314,7 +314,7 @@ func (s Sources) audienceOf(ctx context.Context, asked string) (string, error) {
 	return owner, nil
 }
 
-// runShown is who one key of a coding run's row is shown to.
+// runShown is who one key of an executor's row is shown to.
 type runShown uint8
 
 const (
@@ -338,7 +338,7 @@ const (
 	runConfig
 )
 
-// runKeys is THE SPLIT of a coding run's row, declared once: every key
+// runKeys is THE SPLIT of an executor's row, declared once: every key
 // [runRow] writes, classified. [serialiseRun] withholds by it, and a walk
 // (TestEveryExecutorRowKeyIsClassified) fails the build on a key nobody
 // classified — which is what keeps a field added to the row from reaching
@@ -358,7 +358,7 @@ var runKeys = map[string]runShown{
 	"launch_id":           runStatus,
 	"role":                runStatus,
 	"status":              runStatus,
-	"coding_agent":        runStatus,
+	"harness":             runStatus,
 	"provider_key":        runConfig, // which entry's plan the job spends: the company's configuration
 	"model":               runStatus, // the model it runs under: what it is doing
 	"placement":           runStatus,
@@ -391,7 +391,7 @@ var runKeys = map[string]runShown{
 	"body_withheld":       runStatus,
 }
 
-// serialiseRun is one coding run's row as reader r receives it: [runRow],
+// serialiseRun is one executor's row as reader r receives it: [runRow],
 // with every key [runKeys] does not show them left out — absent rather than
 // empty, because an empty task is a value a board would draw — and
 // `body_withheld` saying whether the body was.
@@ -428,7 +428,7 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) 
 	return row
 }
 
-// runRow is every fact a coding run's row carries, whoever reads it — see
+// runRow is every fact an executor's row carries, whoever reads it — see
 // [serialiseRun] for what each reader is shown of it. answeredBy is who gave
 // the run's recorded answer, as its seal opens ([Sources.answeredBy]).
 func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
@@ -455,10 +455,10 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// by: a turn can launch more than one, and the run's own page polls
 		// the live output of the job it is showing rather than of whichever
 		// replaced it.
-		"launch_id":    run.LaunchID,
-		"role":         run.Role,
-		"status":       run.Status,
-		"coding_agent": run.CodingAgent,
+		"launch_id": run.LaunchID,
+		"role":      run.Role,
+		"status":    run.Status,
+		"harness":   run.Harness,
 		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
 		// fallback at launch makes it other than the chain's head, and
 		// which entry's plan a job is spending is the first thing an admin
@@ -499,7 +499,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
 		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
-		// arrived in (answer_run answers it as `answer_id`): a person who
+		// arrived in (answer_executor answers it as `answer_id`): a person who
 		// answered is told from here that the run could not take their
 		// answer and is waiting on its question again, rather than left
 		// looking at a question that never changes. Always an array.
@@ -531,7 +531,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		"bridge_calls":        nonNil(run.BridgeCalls),
 		"bridge_calls_elided": run.BridgeCallsElided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
-		// somebody else's system: the coding CLI's own session, the
+		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led
 		// here.
 		"session_id":       run.SessionID,

@@ -2,8 +2,8 @@
  * What needs a person.
  *
  * Every one of these conditions was already known to the dashboard and each
- * lived in a different screen: a sandbox run parked on a question was a badge
- * on the board (and a run whose box had been reclaimed appeared NOWHERE at
+ * lived in a different screen: an executor parked on a question was a badge
+ * on the board (and one whose box had been reclaimed appeared NOWHERE at
  * all), a seat the engine stopped was a card among the healthy ones, a budget
  * refusing charges was a bar on one seat's page, and an engine with no active
  * configuration — refusing every inbound webhook — was a line in a popover.
@@ -64,7 +64,7 @@ export type Subject = "engine" | "budget" | "run" | "seat" | "round";
 export const SUBJECTS: Record<Subject, string> = {
   engine: "the engine and this node's link to it",
   budget: "the company's and every seat's token budget",
-  run: "every coding run waiting on an answer",
+  run: "every executor waiting on an answer",
   seat: "every seat's own state",
   round: "every round still in flight",
 };
@@ -79,12 +79,12 @@ export const SUBJECTS: Record<Subject, string> = {
  *  - `engine`: the sidebar's engine row and Home's status sentence, which
  *    are what a reader sees on every screen; an engine condition is a fact
  *    about the product they are looking at, not an item in anybody's queue.
- *  - `live`: Live › Now running, BESIDE the rounds and runs it is about — a
- *    quiet round is marked on its own running-turn row (`LiveTurnRow`), and a
- *    parked run is a row of Waiting on a person with its Answer. A round that
- *    has not moved is watched, not decided, and a coding run parked on a
- *    question already reaches the person it asks through their own decisions
- *    (`decisions`), so the company-wide list of them is live.
+ *  - `live`: Live › Now running, BESIDE the rounds and executors it is about
+ *    — a quiet round is marked on its own running-turn row (`LiveTurnRow`),
+ *    and a parked executor is a row of Waiting on a person with its Answer. A
+ *    round that has not moved is watched, not decided, and an executor parked
+ *    on a question already reaches the person it asks through their own
+ *    decisions (`decisions`), so the company-wide list of them is live.
  *
  * TOTAL OVER [Subject], so a new subject is a type error until it has a home.
  */
@@ -182,7 +182,7 @@ export interface AttentionInput {
    */
   agents: AgentRow[];
   /**
-   * The DURABLE coding-run rows, which is what is still waiting.
+   * The executors' DURABLE rows, which is what is still waiting.
    *
    * THE WAITING ROW NEEDS THE RECORD, not the live entry: how long a person
    * has left to answer is the run's pause window (`pause_ttl_seconds`)
@@ -314,7 +314,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     });
   }
 
-  // --- coding runs ---------------------------------------------------------
+  // --- executors -----------------------------------------------------------
   // FROM THE DURABLE ROWS, not from the projection: see `runs` above.
   for (const run of runs) {
     // THE ENGINE'S OWN WORDS. `awaiting_input` is not one of them, so this
@@ -329,9 +329,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
-      // screen stopped reading when a run became an object with an address.
-      path: ["live", "runs", run.turn_id],
+      // THE RUN'S OWN PATH. It was a `?run=` query on the board's list,
+      // which the board stopped reading when a run became an object with an
+      // address.
+      path: ["live", "executors", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.
@@ -505,7 +506,7 @@ function waitingDetail(run: ExecutorRow, now: number): string {
     (run.question ?? "").trim() ||
     (questionWithheld(run)
       ? `${QUESTION_WITHHELD}.`
-      : "A coding run needs your answer to continue.");
+      : "Its executor needs your answer to continue.");
   if (run.status === "reseed") return `${asked} Answering restarts the work.`;
   const ttl = run.pause_ttl_seconds;
   const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;

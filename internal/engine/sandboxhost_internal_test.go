@@ -101,14 +101,14 @@ func runOnHost(t *testing.T, store sandbox.PendingStore, host *hostNode, turnID 
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", CodingAgent: "claude-code",
+		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Harness: "claude-code",
 		LaunchNode: host.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(sandbox.Direct),
-		CodingAgent: "claude-code",
+		Harness: "claude-code",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

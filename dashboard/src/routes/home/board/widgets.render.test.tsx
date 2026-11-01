@@ -46,7 +46,7 @@ const ADMIN = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
+  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
 };
 
 /** A reader holding the tracker and the knowledge base, and not Admin. */
@@ -452,7 +452,7 @@ const NO_GAP: Record<string, string> = {
   "home.figure":
     "its first choice is the agents working now, the live push; the tracker's figures are held in Kpis.test.tsx",
   "home.shortcut": "a link, which reads nothing",
-  "live.runs": "the runs' answer and the push carry no flag",
+  "live.executors": "the executors' answer and the push carry no flag",
   "settings.nodes": "the fleet's answer carries no flag",
   "integrations.connected": "its coverage is the traffic counts', which the card does not draw",
   "settings.mcp-servers": "the servers' answer carries no flag",

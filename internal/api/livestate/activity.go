@@ -13,7 +13,7 @@ import (
 // projection sent a `state` word folded from the events alone (idle, working,
 // afk, terminated); the dashboard's sidebar counted `working` off that word,
 // its live screen folded the running-runs panel in on top of it, and the seat
-// library folded it in a third way — so a seat parked on a coding run's
+// library folded it in a third way — so a seat parked on an executor's
 // question was "working" on one screen, "sandbox" on another and "needs you"
 // on a third, and a run parked past the old twelve-hour age-out vanished from
 // every ring at once. A seat a PEER held had no state at all, because the only
@@ -26,8 +26,8 @@ import (
 // disagree:
 //
 //	working — a turn is running on the seat (a parked turn's work is its
-//	          run's), or a coding run it launched is launching or running;
-//	needs   — a coding run it launched is waiting on a person
+//	          run's), or an executor it launched is launching or running;
+//	needs   — an executor it launched is waiting on a person
 //	          (awaiting_clarification, or reseed: the box is gone and only the
 //	          question survives);
 //	stopped — the seat cannot take work, and `stopped_reason` says why;
@@ -56,10 +56,10 @@ import (
 type Activity string
 
 const (
-	// ActivityWorking — a turn is running on the seat, or a coding run it
+	// ActivityWorking — a turn is running on the seat, or an executor it
 	// launched is launching or running.
 	ActivityWorking Activity = "working"
-	// ActivityNeeds — a coding run the seat launched is waiting on a
+	// ActivityNeeds — an executor the seat launched is waiting on a
 	// person.
 	ActivityNeeds Activity = "needs"
 	// ActivityStopped — the seat cannot take work; [StoppedReason] says
@@ -190,7 +190,7 @@ func (s *LiveState) unplaced(agentID string) bool {
 	return listed && !held
 }
 
-// runsOf reports whether the seat has a coding run in flight and whether it has
+// runsOf reports whether the seat has an executor in flight and whether it has
 // one waiting on a person, from the running-runs set — matched on the agent id
 // the run carries, never its `role`, which is the name the seat had when the
 // run started.

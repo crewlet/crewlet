@@ -10,7 +10,7 @@ import (
 )
 
 // A DEEP RUN'S BRIEF FENCES THE SCREEN UNDER THE TURN'S TOKEN. Deep work is a
-// coding CLI's run, and the brief the assistant launches it with carries the
+// harness's run, and the brief the assistant launches it with carries the
 // screen the person asked from: names other people chose (a title, labels),
 // which reach the run inside a fence of the assistant turn's token as the
 // page's own words, never as an instruction, and nothing of the screen opens

@@ -51,7 +51,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["answer_run"],
+  acts: ["answer_executor"],
 };
 
 /** Two unit seats stamped from ONE template: two seats, and the phases they
@@ -439,8 +439,8 @@ test("a collected launch is listed as the executor's row", async () => {
       role: "Engineer",
       agent_id: "id-search",
       model: "scripted",
-      coding_agent: "claude-code",
-      cli_turns: 31,
+      harness: "claude-code",
+      harness_turns: 31,
       total_tokens: 9_700,
       response: "Fixed the flake.\nThe pull request is open.",
     },
@@ -507,12 +507,12 @@ test("Event log links to the log, with the seat when one is chosen", async () =>
 });
 
 // THE EMPTY BOX SAYS WHAT IS TRUE. It promised every finished run was "still
-// in the record under Runs" — a settled run's row is deleted; its record is
-// its turn's trace.
-test("an empty In a box says where a finished run's record is", async () => {
+// in the record under Runs" — a settled executor's row is deleted; its record
+// is its turn's trace.
+test("an empty In a box says where a finished executor's record is", async () => {
   mount();
   const card = cardOf("In a box");
-  expect(card.textContent).toContain("Finished runs are on their turn’s trace.");
+  expect(card.textContent).toContain("What a finished one did is on its turn’s trace.");
   expect(card.textContent).not.toMatch(/still in the record/);
 });
 
@@ -537,7 +537,7 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             pause_ttl_seconds: 7_200,
             task_description: "fleet map",
             placement: "remote",
-            coding_agent: "claude",
+            harness: "claude",
             box_exists: true,
           },
         ],

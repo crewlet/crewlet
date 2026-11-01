@@ -22,7 +22,7 @@ import (
 
 // A BUSY SEAT'S MAIL WAITS ON THE BROKER, AND NOTHING CIRCLES, on BOTH backends.
 //
-// What used to spin: while a detached coding run held a seat, every delivery to
+// What used to spin: while a detached executor held a seat, every delivery to
 // it was PARKED — requeued onto the inbox it had just been fetched from, then
 // acked — and nothing stopped the consumer, so the copy was the next thing it
 // fetched. For the length of the run each waiting message went round fetch,
@@ -156,7 +156,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 			WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 			ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", Reply: "tool"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -182,7 +182,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("the busy seat requeued its mail %d times while its job ran", n)
 	}
 	if ran := ordinary.ran(); len(ran) != 0 {
-		t.Fatalf("a turn ran beside the coding job: %q", ran)
+		t.Fatalf("a turn ran beside the executor's launch: %q", ran)
 	}
 
 	// THE JOB COMPLETES: its completion resumes the turn, the seat stops
@@ -193,7 +193,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("Get: %v", err)
 	}
 	completed := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: "swe", RoleName: run.Role,
-		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, Harness: run.Harness}
 	if err := coordinator.OnCompleted(ctx, completed, events.New(completed, events.TraceContext{})); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}

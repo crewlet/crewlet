@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// What a running coding run has said so far, pulled from the node that owns it.
+// What a running executor has said so far, pulled from the node that owns it.
 //
 // # Why a pull, and why from the owner
 //

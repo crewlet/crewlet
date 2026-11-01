@@ -557,10 +557,10 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		// so an acked publish survives this process crashing and does NOT
 		// survive the host losing power — up to two minutes of acked
 		// events, and with them the coordination KV that rides this same
-		// server: the completion ledger, claimed scheduled fires, a
-		// detached (billed) sandbox run, a just-written secret. Losing
-		// those replays a trigger already worked and forgets a box still
-		// running.
+		// server: the completion ledger, claimed scheduled fires, the
+		// record of a detached (billed) executor, a just-written secret.
+		// Losing those replays a trigger already worked and forgets a box
+		// still running.
 		//
 		// So a SOLO member fsyncs every write. There is no peer to recover
 		// from, which makes its disk the only copy, and the cost is

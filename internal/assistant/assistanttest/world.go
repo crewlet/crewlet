@@ -16,7 +16,7 @@ const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
 // World is a small company as the routes a write's preview reads answer it,
 // by request path and in each route's own shape: a task with a decision on its
-// thread, a person's priorities, an agent, a parked coding run, a page, an
+// thread, a person's priorities, an agent, a parked executor, a page, an
 // artifact, and a private chat room with a message in it. Every proposing tool
 // called with its [ProposalArgs] previews against it.
 func World() map[string]any {
@@ -134,7 +134,7 @@ var ProposalArgs = map[string]map[string]any{
 	"pause_agent":               {"handle": "pm", "reason": "Too many hand-offs.", "stop_running": true},
 	"resume_agent":              {"handle": "pm"},
 	"steer_turn":                {"turn_id": RecordID, "note": "Use the staging branch."},
-	"answer_coding_run":         {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
+	"answer_executor":           {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
 	"create_page":               {"title": "Onboarding", "body": "Welcome."},
 	"edit_page":                 {"page": RecordID, "base_version": float64(2), "body": "Step one, then two."},
 	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},

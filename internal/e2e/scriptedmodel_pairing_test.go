@@ -78,7 +78,7 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 	}
 }
 
-// post sends one request the way the scripted CLI does, carrying the given
+// post sends one request the way the scripted harness does, carrying the given
 // system prompt and no tools — a text function's request, which is the shape
 // both branches under test take.
 // IT TAKES THE SERVER, not its URL: sixty goroutines post concurrently here

@@ -18,10 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS CODING RUN INCLUDED.
+// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS EXECUTOR INCLUDED.
 //
 // The seat's turn hears a stop at its next round; the run that turn launched is
-// its coding CLI's own process, with no rounds the engine sees, and it used to
+// its harness's own process, with no rounds the engine sees, and it used to
 // run on to its end. These cases hold the engine to the rest of the promise:
 // every way a stop reaches a seat this node holds ends its running run, and
 // the turn that was waiting on the run is closed as stopped — the same records

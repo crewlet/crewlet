@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// RunLister is the durable record of the fleet's coding runs. Satisfied by
+// RunLister is the durable record of the fleet's executors. Satisfied by
 // *sandbox.CoordStore.
 type RunLister interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
@@ -148,7 +148,7 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.ExecutorRecord {
 		started := run.Launch.StartedAt
 		entry := livestate.ExecutorEntry{
 			TurnID: run.TurnID, Role: run.Role, AgentHandle: run.AgentHandle,
-			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,
+			AgentID: run.AgentID, Harness: run.Harness, SandboxID: run.SandboxID,
 			// THE MEMBER THAT TOOK THE JOB, as the launch recorded it.
 			ProviderKey: run.Launch.ProviderKey, Model: run.Launch.Model,
 			// The label the announcement carried, kept on the record for

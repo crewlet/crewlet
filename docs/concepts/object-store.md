@@ -368,8 +368,11 @@ passes:
    ```
 
    It refuses unless the node is in maintenance mode, no node is still
-   admitted to publish, and the node has applied the company's records to the
-   end. It copies what is left, **seals** the NATS bucket (read, and never
+   admitted to publish, the node has applied the company's records to the
+   end, and it can see every row that may name a file (see [What a build
+   cannot see](#what-a-build-cannot-see)): it copies the objects this build's
+   tables name, and the store it leaves behind is yours to delete. It copies
+   what is left, **seals** the NATS bucket (read, and never
    written again, so a node not yet restarted cannot store a file where no node
    will look for it), and moves the fleet's record of its store to the bucket.
 5. **Give every node the bucket's `store.objects` block and restart it** with
@@ -560,6 +563,32 @@ deleting an object that is already gone is not an error. An artifact's
 carry names only an object the same artifact still names, checked where the
 carry is applied. The decision is
 [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-deletion-from-the-shared-store-needs-no-lock.md).
+
+### What a build cannot see
+
+The tables a collection reads are the ones **its own build** declares, and a
+newer build can add a domain whose rows name objects. So before it judges
+anything, a collection asks whether a row it cannot read may name a file, and
+**deletes nothing while one may**, reporting why on the pass:
+
+- **A data node the fleet counts runs a state log this build does not** — a
+  newer build, part of the way through a rolling upgrade. Counted as the
+  log trim counts a log's readers: a node that is merely offline holds
+  collection back, and one an operator evicted does not. Collection resumes
+  once every data node runs a build that knows every log, so a rollout that
+  finishes within the day's grace costs nothing.
+- **This node's own copy of the estate was migrated by a newer build** — the
+  node was rolled back. The migration runner steps over a version this build
+  does not carry, so the node boots, but it cannot read the tables that
+  version made, and its own row names only the logs it runs now: on a fleet
+  with one data node, its copy is the only witness. Collection resumes when a
+  build that carries those versions runs on it again, or after you restore a
+  [backup](../guides/backup.md) this build took.
+
+An answer the node cannot get (the coordination store unreachable, its copy
+of the estate not open) is a failed pass, tried again, never one that went
+ahead. A final pass of [`crewlet objects migrate`](#moving-the-files-to-a-bucket)
+asks the same question and refuses on the same answer.
 
 ---
 

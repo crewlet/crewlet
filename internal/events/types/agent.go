@@ -182,7 +182,7 @@ type PhaseRound struct {
 	// ToolCalls is how many calls the model asked for this round.
 	ToolCalls int `json:"tool_calls"`
 	// StopReason is why the model stopped writing this round's response:
-	// `end`, `tool_use`, or `cap` — the CLI's own turn cap ended its run at
+	// `end`, `tool_use`, or `cap` — the harness's own turn cap ended its run at
 	// this request with the model still working. Absent where the backend
 	// reported none — absent is "not reported", never "ended normally" as
 	// a fact.
@@ -192,7 +192,7 @@ type PhaseRound struct {
 // RunningCall is one tool call a phase is running RIGHT NOW, on the live
 // progress frame only: listed by the frame published immediately before the
 // call is handed to its tool, and gone from the frame after it returns. A
-// coding CLI may run a response's calls at once, so a frame lists every call
+// harness may run a response's calls at once, so a frame lists every call
 // in flight, in the order the calls arrived.
 //
 // Its own list rather than rows in `tool_executions`, for the reason
@@ -216,11 +216,11 @@ type RunningCall struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
-// PhaseInvocation is one CLI run of a phase: one process driving its own loop
+// PhaseInvocation is one harness run of a phase: one process driving its own loop
 // over the phase's tools, from launch to exit.
 //
-// The unit the engine observes for EVERY CLI. A [PhaseRound] is one model
-// request, which a CLI's own record shows for most CLIs and not for all; a run
+// The unit the engine observes for EVERY HARNESS. A [PhaseRound] is one model
+// request, which a harness's own record shows for most harnesses and not for all; a run
 // is what the engine starts and ends itself.
 //
 // A RUN NAMES ITS ROUNDS (FirstRound, LastRound) rather than leaving a reader
@@ -237,7 +237,7 @@ type PhaseInvocation struct {
 	ProviderKey string `json:"provider_key,omitempty"`
 	Model       string `json:"model,omitempty"`
 	// Outcome is how the run ended: `end` (its model stopped), `cap` (its
-	// CLI's own turn cap), `stopped` (the engine ended it — the phase
+	// harness's own turn cap), `stopped` (the engine ended it — the phase
 	// finished, parked, paused, ran out of rounds or was stopped) or
 	// `failed`.
 	Outcome string `json:"outcome"`
@@ -247,7 +247,7 @@ type PhaseInvocation struct {
 	// before it asked.
 	FirstRound int `json:"first_round"`
 	LastRound  int `json:"last_round"`
-	// RequestsObserved is false for a run whose CLI's record showed no
+	// RequestsObserved is false for a run whose harness's record showed no
 	// model requests: the whole run is then ONE round, which nothing timed
 	// on its own — its span is the run's.
 	RequestsObserved bool `json:"requests_observed"`
@@ -265,8 +265,8 @@ type PhaseInvocation struct {
 //
 // Keyed on the round number `rounds[]`, `tool_executions[]` and
 // `round_narration[]` share, so a reader puts the note beside the round it
-// changed. A coding run's record is one round of the engine's, so every note
-// the run read — in its brief, or at a boundary of its own loop — is at round 1,
+// changed. An executor's record is one round of the engine's, so every note
+// it read — in its brief, or at a boundary of its own loop — is at round 1,
 // and its Boundary is what tells them apart ([SteerBoundary]): every read
 // records one.
 type PhaseSteer struct {
@@ -402,7 +402,7 @@ type AgentTurnCompleted struct {
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
 	// Stopped is true when a PERSON ended the turn — a pause that asked to
-	// stop the running turn reached its next round, or ended the coding run
+	// stop the running turn reached its next round, or ended the executor
 	// the turn was parked on ([ExecutorStopped]) — rather than the turn
 	// finishing or failing. Never both: a stop is not a failure, and read as
 	// one it would list a turn somebody deliberately ended among the ones
@@ -584,8 +584,8 @@ type TurnCompleted struct {
 type TurnTally struct {
 	// DurationMS is every segment's own span summed — each from its start
 	// to its end, the time it held a seat — and so not the wall clock from
-	// the first start to the last end, which would count the coding run's
-	// park as work.
+	// the first start to the last end, which would count the turn's park
+	// on its executor as work.
 	DurationMS int `json:"duration_ms"`
 	// Failed is whether the turn failed: an error, or a failed decision,
 	// and never a person's stop — the rule [AgentTurnCompleted.Failed]
@@ -744,7 +744,7 @@ type AgentPhaseCompleted struct {
 	// [ExecutorCollected] record). Absent on a phase that ran no loop in
 	// this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
-	// Invocations are the phase's CLI runs, in order — see
+	// Invocations are the phase's harness runs, in order — see
 	// [PhaseInvocation]. Every phase that offered tools has at least one.
 	Invocations []PhaseInvocation `json:"invocations,omitempty"`
 	// Steers is every person's note this phase read, with the round that
@@ -775,13 +775,13 @@ type AgentPhaseCompleted struct {
 	// DurationMS below covers both — so StartedAt is deliberately NOT
 	// "published minus duration": that instant is when the first segment
 	// began, possibly days earlier and on another node, and the gap
-	// between the two segments was a coding run rather than this phase.
-	// Absent on a record that measured no start.
+	// between the two segments was the executor's run in its box rather
+	// than this phase. Absent on a record that measured no start.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// WorkItem is the item the turn is charged to, as the turn knew it
 	// when this record was published — see [AgentTurnStarted.WorkItem].
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// LaunchID names the detached coding run a resumed phase collected —
+	// LaunchID names the executor's launch a resumed phase collected —
 	// the job [ExecutorFinished.LaunchID] names, which the pending-run
 	// row held when the resume claimed it. A turn can launch more than
 	// once, so one segment of a phase is (turn_id, phase, iteration,
@@ -804,7 +804,7 @@ type AgentPhaseCompleted struct {
 	//
 	// On a collected execute phase it is the phase's two SEGMENTS — the
 	// launch and the collection — and not the run between them: the
-	// executor's turns happen inside its CLI's own loop, in its box, and
+	// executor's turns happen inside its harness's own loop, in its box, and
 	// the segment that collects the run replays what that run already did.
 	// Each launch's own wall clock is on its [ExecutorCollected] record and
 	// on executor_launched / executor_finished, which is where a reader
@@ -815,7 +815,7 @@ type AgentPhaseCompleted struct {
 	// reasoning and stopped.
 	//
 	// Here rather than as an event of its own because this is the record
-	// that already knows the seat, the phase and the model. The cli-agent
+	// that already knows the seat, the phase and the model. The harness
 	// backend used to raise a transport error on that round, which walked
 	// the fallback chain and could end the turn as llm_unavailable; it now
 	// hands back an empty completion and the tool loop corrects it, so a
@@ -841,7 +841,7 @@ type AgentPhaseCompleted struct {
 	// with every first-party tool and NO MCP tool, because sending full
 	// schemas for every server's catalogue is what made a turn expensive; a
 	// tool it activates through discovery joins the list from that round on.
-	// On the execute phase that collects a coding run it is what the run held
+	// On the execute phase that collects its executor it is what the run held
 	// when it ended: a tool it activated over the bridge is here, and not in
 	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
@@ -851,7 +851,7 @@ type AgentPhaseCompleted struct {
 	// prompt names only by server. Disjoint from ToolsAvailable. Empty for
 	// every phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
-	// CodingAgent is the CLI an executor ran as, and SandboxID the box it ran
+	// Harness is the harness an executor ran as, and SandboxID the box it ran
 	// in: on the execute record that collected a run, and empty on every
 	// other — a phase that ran on this host, and an executor whose launch
 	// never opened a box.
@@ -861,11 +861,11 @@ type AgentPhaseCompleted struct {
 	// once restated it, and was one more value for a publisher to get wrong.
 	//
 	// NOR WHAT THE RUN COST, OR WHAT IT DID IN ITS BOX: each launch's tokens,
-	// its CLI's price, its turns and its activity transcript are on that
+	// its harness's price, its turns and its activity transcript are on that
 	// launch's own [ExecutorCollected] record, which a launch that parked on
 	// a question also gets — the resumed executor's record never had one.
-	CodingAgent string `json:"coding_agent"`
-	SandboxID   string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
+	SandboxID string `json:"sandbox_id"`
 	// DeliveredRefs are the branches and pull requests the collected run
 	// reported, and DeliveredRefsElided how many more it reported than
 	// DeliveredRefs lists: refs are read from the whole report with no count
@@ -920,8 +920,8 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 	if head := upperFirst(subject(actor, e.Phase)); head != "" {
 		parts = append(parts, head)
 	}
-	if e.CodingAgent != "" || e.SandboxID != "" {
-		agent := e.CodingAgent
+	if e.Harness != "" || e.SandboxID != "" {
+		agent := e.Harness
 		if agent == "" {
 			agent = "?"
 		}
@@ -990,17 +990,17 @@ type AgentTurnProgress struct {
 	// carries it, published the moment that round's provider call is made,
 	// so a start later than every entry in Rounds is a round in flight.
 	RoundStartedAt time.Time `json:"round_started_at,omitzero"`
-	// RunStartedAt is when the CLI run in flight was launched — the run
+	// RunStartedAt is when the harness run in flight was launched — the run
 	// whose rounds are past every entry in Invocations, which lists only
 	// the runs that have ended. Absent between runs, so a reader draws the
 	// run in flight from its launch rather than from the first round it
 	// happens to have timed.
 	RunStartedAt time.Time `json:"run_started_at,omitzero"`
 	// RunningCalls are the tool calls in flight, in the order they arrived
-	// — see [RunningCall]. A LIST because a coding CLI may run a
+	// — see [RunningCall]. A LIST because a harness may run a
 	// response's calls at once. Absent whenever no call is running.
 	RunningCalls []RunningCall `json:"running_calls,omitempty"`
-	// Invocations are the phase's CLI runs that have ENDED so far — see
+	// Invocations are the phase's harness runs that have ENDED so far — see
 	// [PhaseInvocation]. The run in flight is not on it until it ends, so
 	// the rounds past every entry's LastRound are that run's.
 	Invocations []PhaseInvocation `json:"invocations,omitempty"`

@@ -45,10 +45,10 @@
 //     previous one is still using.
 //
 //     What is actually fenced BY THE WRITE is every coordination write here
-//     and the sandbox run state, whose rows carry an owner_epoch a lower
-//     one cannot outrank. A seat-scoped SQL write is not: those are made
-//     safe by being keyed on the work rather than on the writer, and the
-//     per-table inventory is in docs/concepts/seat-ownership.md rather
+//     and each executor's row in the sandbox runs bucket, whose owner_epoch
+//     a lower one cannot outrank. A seat-scoped SQL write is not: those are
+//     made safe by being keyed on the work rather than on the writer, and
+//     the per-table inventory is in docs/concepts/seat-ownership.md rather
 //     than restated here. What stops the zombie MAKING them is the seat
 //     fence — [seat.Host.Fence], checked at the top of every tool-loop
 //     round and before each of that round's calls — which is a different

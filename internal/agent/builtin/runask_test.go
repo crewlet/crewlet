@@ -309,7 +309,7 @@ func (g *gatedTool) Call(context.Context, map[string]any) (tools.Result, error) 
 // A JOB THAT ASKED IS PARKED, AND ITS RUN IS TOLD SO IF IT SUBMITS. Once the
 // job's question is on its row, a `submit_work` it makes is refused with the
 // instruction to end its turn and never reaches the submission: accepted, the
-// CLI read it as delivered and ended believing so while the turn waited on a
+// harness read it as delivered and ended believing so while the turn waited on a
 // person (ADR-0068). A job that has not asked, and a call no job makes, submit
 // as before; a row that cannot be read refuses the call as the node's fault,
 // so the run calls again.

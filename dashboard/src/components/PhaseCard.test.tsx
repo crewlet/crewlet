@@ -63,10 +63,10 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -523,7 +523,7 @@ describe("an executor round's launches", () => {
   const LAUNCH = phase({
     key: "turn-1|execute|1|job-1",
     launch: true,
-    codingAgent: "claude-code",
+    harness: "claude-code",
     launchId: "job-1",
     model: "claude-sonnet-5",
     response: "Fixed the flake and opened the pull request.",
@@ -531,13 +531,13 @@ describe("an executor round's launches", () => {
     inputTokens: 9_000,
     outputTokens: 700,
     totalTokens: 9_700,
-    cliTurns: 31,
+    harnessTurns: 31,
     at: "2026-09-02T10:05:00Z",
   });
 
   test("the round's card holds its launch's report and activity", () => {
     render(
-      <PhaseCard record={phase({ codingAgent: "claude-code" })} launches={[LAUNCH]} defaultOpen />,
+      <PhaseCard record={phase({ harness: "claude-code" })} launches={[LAUNCH]} defaultOpen />,
     );
     expect(screen.getByText("Report")).toBeDefined();
     expect(screen.getByText(/Fixed the flake/)).toBeDefined();
@@ -562,9 +562,7 @@ describe("an executor round's launches", () => {
       totalTokens: 200,
     });
     render(<PhaseCard record={phase()} launches={[LAUNCH, second]} />);
-    expect(screen.getByTitle("total tokens, its run's launches included").textContent).toBe(
-      "9,900",
-    );
+    expect(screen.getByTitle("total tokens, its launches included").textContent).toBe("9,900");
   });
 
   // A LAUNCH WHOSE ROUND HAS NO RECORD IN HAND is drawn on its own, and says
@@ -587,7 +585,7 @@ describe("an executor round's launches", () => {
       launchId: "job-2",
       failed: true,
       error: "the coding agent exited with status 1",
-      errorKind: "coding_run_failed",
+      errorKind: "launch_failed",
     });
     render(<PhaseCard record={phase()} launches={[asked, broke]} defaultOpen />);
     expect(screen.getByText("stopped to ask: which branch?")).toBeDefined();
@@ -602,7 +600,7 @@ describe("an executor round's launches", () => {
   // loses its badge; drop the box half, and a record naming only its box
   // does.
   test("badges the run a record names, and nothing that ran on the host", () => {
-    render(<PhaseCard record={phase({ codingAgent: "claude-code", sandboxId: "box-7" })} />);
+    render(<PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} />);
     expect(screen.getByText("claude-code")).toBeDefined();
     cleanup();
     render(<PhaseCard record={phase({ sandboxId: "box-7" })} />);
@@ -669,11 +667,11 @@ describe("the link to the phase's own event", () => {
   });
 });
 
-// A PARKED TURN'S CALL IS SILENT ON PURPOSE. The executor suspended into a
-// detached coding run, and its round does not move until the run comes back —
-// which can be hours, or days while a question waits on a person. The card
-// used to read only its own `at`, so every legitimately silent run was drawn
-// stalled.
+// A PARKED TURN'S CALL IS SILENT ON PURPOSE. The executor launched in its box,
+// and its round does not move until that launch is collected — which can be
+// hours, or days while a question waits on a person. The card used to read
+// only its own `at`, so every executor legitimately silent in its box was
+// drawn stalled.
 describe("a live call's staleness", () => {
   const OLD = { live: true, at: "2020-01-01T00:00:00Z", startedAt: "2020-01-01T00:00:00Z" };
 
@@ -682,10 +680,10 @@ describe("a live call's staleness", () => {
     expect(screen.getByText("no update in 10m")).toBeDefined();
   });
 
-  test("a call on a turn parked on its coding run is not", () => {
+  test("a call on a turn whose executor is running in its box is not", () => {
     render(<PhaseCard record={phase({ ...OLD, stage: "parked" })} />);
     expect(screen.queryByText(/no update in/)).toBeNull();
-    const tag = screen.getByText("parked on its coding run").closest(".crewlet-tag");
+    const tag = screen.getByText("running in its box").closest(".crewlet-tag");
     // Drawn as the work in progress it is — never the stalled danger, nor the
     // amber that is kept for a seat that needs a person.
     expect(tag?.className).toContain("crewlet-tag--info");
@@ -792,7 +790,7 @@ describe("a round that answered in prose", () => {
 });
 
 /**
- * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, a coding run's
+ * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, an executor's
  * report — read by a model's habits rather than a document's.
  */
 describe("a model's words", () => {
@@ -842,7 +840,7 @@ describe("a model's words", () => {
     expect(ledger.querySelector(".md-heading")?.textContent).toBe("Summary");
   });
 
-  test("a coding run's report renders the same way", () => {
+  test("an executor's report renders the same way", () => {
     render(
       <PhaseCard
         record={phase({
@@ -995,14 +993,14 @@ describe("a failed phase", () => {
         record={phase({
           failed: true,
           errorKind: "rate_limit",
-          error: "cli-agent/claude-code: sitting out until 14:05",
+          error: "harness/claude-code: sitting out until 14:05",
         })}
         defaultOpen
       />,
     );
     expect(container.querySelector(".phase-head")?.textContent).toContain("Rate limited");
     expect(container.querySelector(".phase-body")?.textContent).toContain(
-      "cli-agent/claude-code: sitting out until 14:05",
+      "harness/claude-code: sitting out until 14:05",
     );
     cleanup();
     const { container: whole } = render(<PhaseCard record={phase()} defaultOpen />);

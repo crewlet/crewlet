@@ -108,7 +108,7 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   },
   container: { label: "Container", pathOf: (id) => ["doclet", id], mono: true },
   turn: { label: "Turn", pathOf: (id) => ["live", "turns", id], mono: true },
-  run: { label: "Coding run", pathOf: (id) => ["live", "runs", id], mono: true },
+  run: { label: "Executor", pathOf: (id) => ["live", "executors", id], mono: true },
   event: { label: "Event", pathOf: (id) => ["live", "events", id], mono: true },
   node: { label: "Node", pathOf: (id) => ["settings", "nodes", id], mono: true },
   schedule: {

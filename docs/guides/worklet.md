@@ -341,22 +341,22 @@ task has been reopened four times.
 **One turn, one task.** A turn is charged to the one work item it is on, or to
 nothing — never split. The item is the one its wake was about (a task
 notification, or a Jira, GitHub or GitLab event about one issue), the one the
-colleague who asked for help was on, or the one a coding run it resumes was
-launched on; failing all three, the one task its own writes touched, if they
+colleague who asked for help was on, or the one its executor was launched on
+when it resumes from it; failing all three, the one task its own writes touched, if they
 touched exactly one. A chat message that leads to no task write is charged to
 nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
 attributed on its events and adds to no row here.
 
 **What a turn's tokens include.** Its own phases, the workers it delegated to,
-the round-cap judge, the coding runs it detached, and the **auxiliary** model
+the round-cap judge, its executor's launches, and the **auxiliary** model
 calls it made along the way — the turn-start memory filter, knowledge query and
 episode summary, every rewrite its ledgers and tools needed, and the
 condensing of its card — in input and output, with the prompt cache's share of
-the input beside them. That includes what the engine spends on a coding run
-while no part of the turn is running: an executor run's calls through the
+the input beside them. That includes what the engine spends on its executor
+while no part of the turn is running: the executor's calls through the
 tool bridge (the rewrites its tools ask for, the workers it delegates to) and
-the condensing of a collected run's report, failure or question, which the part
-of the turn that resumes from the run pays. Learning afterwards (reflection,
+the condensing of a collected launch's report, failure or question, which the part
+of the turn that resumes from it pays. Learning afterwards (reflection,
 diary, skills, the conversation ledger's account of the turn) is the seat's own
 and is not charged to the task; it is still on the seat's day in the [spend
 history](budgets-and-spend.md#auxiliary-spend).
@@ -364,11 +364,11 @@ Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
 how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
 returned the work for another pass.
 
-**A turn that parks is charged per segment.** A turn that launches a coding run
-completes once when it parks and again each time a run it launched is
+**A turn that parks is charged per segment.** A turn that launches its executor
+completes once when it parks and again each time a launch is
 collected — often minutes later, on another node. Each segment adds what it
 spent, and only the first counts as a turn, so a turn that parked twice is
-still one turn on the task. The segment that collects a run pays for that run.
+still one turn on the task. The segment that collects a launch pays for it.
 A turn charged only because of what it wrote is charged when it ends, for
 every segment before it too.
 
@@ -1538,7 +1538,7 @@ drawn for everybody and held with that reason for anybody without it.
   ends in **Load more** and how many of how many are loaded, so no task is
   past the end of a page. A card says what it has cost in **tokens**, what it
   blocks, its labels and — while a seat's turn is on it — who is doing what
-  ("SWE · coding run", "SWE · reviewing · round 2 of 4"), matched on the
+  ("SWE · executing", "SWE · reviewing · round 2 of 4"), matched on the
   task the engine charges that turn to. A card's labels give way to a "+N"
   before its mark row wraps, so the token count keeps its place.
 
@@ -1562,7 +1562,7 @@ drawn for everybody and held with that reason for anybody without it.
   and what the reviewer asked for, the tools it called,
   how long it took and how many tokens, and a link to its trace. While a seat's
   turn is running on the task, the foot of the activity says so ("SWE is on
-  turn 3 · coding run") with a way to watch it live. Each
+  turn 3 · executing") with a way to watch it live. Each
   announced change has **Who this reached**: the people it woke and why. The
   three histories are read a page at a time, and **Earlier activity** reads
   further back — the merged list only ever shows a stretch of time that is
@@ -2001,7 +2001,7 @@ question never says it, since an answer expects no reply.
 **What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
 kept under, the seat they hold (every person holds one), or a token's own
-login where the identity directory binds it to none — beside the coding runs parked on a question to
+login where the identity directory binds it to none — beside the executors parked on a question to
 them, with how many there are in all and when the longest one began. With no
 `handle` it is the caller's own (your own asks are listed whether or not you
 hold `worklet`, since [you may answer what you were asked](#who-may-do-what)),
@@ -2015,9 +2015,9 @@ the choice as the answer, and a parked run is answered by its turn.
 closed in the last seven days, newest closing first, each with who closed it
 (a colleague may answer for you), when, the option chosen or the words, and
 the asker's first record on the task since, which says whether the answer has
-been acted on. A coding run's question is listed beside them for the person
+been acted on. An executor's question is listed beside them for the person
 who answered it, and only for them (it may have been put to a whole team), in
-the same shape: what the run asked, its options and the one chosen,
+the same shape: what the executor asked, its options and the one chosen,
 and when ([Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)).
 It takes the same scope rule. The dashboard's Inbox keeps
 these in a closed **Answered** group at the end of the list; an answer older
@@ -2228,7 +2228,7 @@ tomorrow, it is offered once), or a moment you pick, and only the ones inside
 the engine's bound: the person answer serves `max_snooze_ahead`, so a preset
 the write would refuse is never shown. *Mark all read* is `read_through` at the
 newest notice the screen LOADED, so a notice that arrived after you looked is
-still unread. A question, a parked coding run, a stopped seat and a condition
+still unread. A question, a parked executor, a stopped seat and a condition
 carry none of these: each leaves the list when it is answered or cleared, and
 answering a question in the Inbox marks the notices that asked it read, so it
 does not come back as an update.

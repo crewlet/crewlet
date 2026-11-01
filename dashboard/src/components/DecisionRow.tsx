@@ -11,8 +11,8 @@
  *    a free-text ask a Reply that sends words (`{answers, body}`), with the
  *    line saying what the answer sets off: the asker is woken with it, and
  *    posts it to the channel it promised where the ask carries an `inform`;
- *  - a CODING RUN parked on a question: whose, the question's title quoted,
- *    and how long its box is still held; answered by its turn (`answer_run`),
+ *  - an EXECUTOR parked on a question: whose, the question's title quoted,
+ *    and how long its box is still held; answered by its turn (`answer_executor`),
  *    with one of its options where it asked to choose;
  *  - a SEAT the engine STOPPED for its token budget: which window is spent,
  *    the item it was on, and the two ways out — raise the ceiling, or hand
@@ -549,7 +549,7 @@ function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: n
     <Row
       who={who}
       status="needs"
-      title="Coding run parked on a question"
+      title="Executor parked on a question"
       sub={sub}
       meta={joined([relTime(since, now)])}
       line={holdLine(run, now)}

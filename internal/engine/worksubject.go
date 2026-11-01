@@ -21,8 +21,8 @@ import (
 //     wake, or a Jira, GitHub or GitLab webhook about one issue.
 //  2. ASKED_BY — the turn answers a colleague's ask, and inherits the item the
 //     ASKING turn was on. Help given on a task is work on that task.
-//  3. RESUME — the turn re-enters a parked coding run, whose row recorded the
-//     item it was on when it parked.
+//  3. RESUME — the turn resumes from its parked executor, whose row recorded
+//     the item it was on when it parked.
 //  4. SOLE_WRITE — nothing above named an item, and the turn's own writes
 //     committed to exactly one. Resolved AT COMPLETION ONLY, because only then
 //     is "exactly one" a fact rather than a guess; see [completedWorkItem].

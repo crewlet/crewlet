@@ -74,8 +74,8 @@ const defaultNakDelay = time.Second
 // provider that just answered "slow down" receives.
 //
 // Doubling from a second to this spends the budget over about ten minutes,
-// which covers the minute an LLM entry sits out after its CLI reports a spent
-// plan or a rate limit (internal/providers/llm/cliagent, bench.go)
+// which covers the minute an LLM entry sits out after its harness reports a spent
+// plan or a rate limit (internal/providers/llm/harness, bench.go)
 // several times over while still retrying a momentary blip within a second or
 // two. A failure that outlasts
 // that window is not transient, and holding a seat's mailbox behind it is

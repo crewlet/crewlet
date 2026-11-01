@@ -1,11 +1,11 @@
-// Package llmtest is a coding CLI for tests: a provider that, handed a request
-// with tools, connects to the tool host's session exactly as a CLI's MCP client
+// Package llmtest is a harness for tests: a provider that, handed a request
+// with tools, connects to the tool host's session exactly as a harness's MCP client
 // does and plays a scripted model against it — each response's prose, then the
 // calls it makes, then the next response — until the script ends, a response
 // calls nothing, or the host ends the run.
 //
 // THROUGH THE REAL SESSION, never around it. A double that called the host's
-// dispatcher directly would test a path no CLI takes: the socket, the MCP
+// dispatcher directly would test a path no harness takes: the socket, the MCP
 // server, the tool list, the withheld answers and the release are all on the
 // way of every real call, and they are on the way of this one.
 package llmtest
@@ -30,7 +30,7 @@ type Response struct {
 	Text  string
 	Calls []Call
 
-	// Parallel issues the response's calls at once, as several CLIs do.
+	// Parallel issues the response's calls at once, as several harnesses do.
 	Parallel bool
 
 	// Usage is what the response cost; zero takes [DefaultUsage].
@@ -39,13 +39,13 @@ type Response struct {
 	// Model names the model that answered; empty takes the script's.
 	Model string
 
-	// Streamed is the part of Text the CLI already streamed before the
+	// Streamed is the part of Text the harness already streamed before the
 	// response was played (a case that sends its own fragments while the
 	// model writes): only the rest of Text is streamed with it.
 	Streamed string
 
-	// Trailing is prose the CLI streams for this response AFTER its record
-	// has shown it, as a CLI whose record opens a request before its text
+	// Trailing is prose the harness streams for this response AFTER its record
+	// has shown it, as a harness whose record opens a request before its text
 	// is written does — streamed with the request's id.
 	Trailing string
 
@@ -58,7 +58,7 @@ type Response struct {
 
 // Call is one call a response makes.
 type Call struct {
-	// ID is the CLI's id for the call; empty mints one.
+	// ID is the harness's id for the call; empty mints one.
 	ID   string
 	Name string
 
@@ -66,29 +66,29 @@ type Call struct {
 	// write some that do not parse. Empty is `{}`.
 	Args string
 
-	// Handed is what the CLI hands the host's session for the arguments in
-	// place of Args, where it does not hand Args: a CLI that turns what its
+	// Handed is what the harness hands the host's session for the arguments in
+	// place of Args, where it does not hand Args: a harness that turns what its
 	// model wrote into something else (Claude Code sends an array's elements
 	// as an object). The record still shows Args.
 	Handed string
 
-	// Native makes the call one of the CLI's OWN tools — its web search,
+	// Native makes the call one of the harness's OWN tools — its web search,
 	// its fetch — which its record shows and which it runs itself: it never
 	// reaches the host's session.
 	Native bool
 
-	// Sent is the name the CLI calls the host's session with, where it is
-	// not Name: a CLI that rewrites a name its list does not hold to one it
+	// Sent is the name the harness calls the host's session with, where it is
+	// not Name: a harness that rewrites a name its list does not hold to one it
 	// does, and runs that with the model's arguments.
 	Sent string
 
-	// GiveUp is how long the CLI waits for this call before it gives up on
+	// GiveUp is how long the harness waits for this call before it gives up on
 	// it — its own tool timeout — and cancels its request; its model is
 	// told the call failed and the script goes on. Zero waits for the
 	// answer.
 	GiveUp time.Duration
 
-	// Exit makes the CLI die once GiveUp has passed instead: it closes its
+	// Exit makes the harness die once GiveUp has passed instead: it closes its
 	// end of the session — EOF, to the host — and its run fails.
 	Exit bool
 
@@ -108,11 +108,11 @@ type Run struct {
 	Err error
 
 	// Stop is the stop reason the run ends with; empty is [llm.StopEnd].
-	// [llm.StopCap] is a CLI whose own turn cap ended it.
+	// [llm.StopCap] is a harness whose own turn cap ended it.
 	Stop llm.StopReason
 }
 
-// relist re-reads the tool list when the server says it changed, as a CLI that
+// relist re-reads the tool list when the server says it changed, as a harness that
 // re-lists does — and as the host waits for before it answers the call that
 // changed it.
 func relist(ctx context.Context, req *mcp.ToolListChangedRequest) {
@@ -135,7 +135,7 @@ func (s *Script) callIDMeta() string {
 
 // KillLatency is how long the script takes to be stopped once the host ends
 // its run: far longer than an answer takes to cross the session, as a real
-// CLI's signal, grace and exit are.
+// harness's signal, grace and exit are.
 var KillLatency = 100 * time.Millisecond
 
 // DefaultUsage is what a response costs when its case does not say.
@@ -150,47 +150,47 @@ type Script struct {
 	// ModelName is the model every response names by default.
 	ModelName string
 
-	// Unobserved makes the CLI one whose record shows no requests: the host
+	// Unobserved makes the harness one whose record shows no requests: the host
 	// is told nothing per response, and the whole run's cost at the end.
 	Unobserved bool
 
-	// NoRelist makes the CLI one that never re-lists its tools mid-run.
+	// NoRelist makes the harness one that never re-lists its tools mid-run.
 	NoRelist bool
 
-	// ToolTimeout is the CLI's own per-call timeout, told to the host.
+	// ToolTimeout is the harness's own per-call timeout, told to the host.
 	ToolTimeout time.Duration
 
-	// Concurrency is which calls the CLI says it makes side by side, told
+	// Concurrency is which calls the harness says it makes side by side, told
 	// to the host. What the script actually does is each response's
 	// Parallel; a case sets both to say one thing.
 	Concurrency llm.CallConcurrency
 
 	// Before, when set, is called before each call with its name — a call
-	// to one of the CLI's own tools included, which then takes as long as
+	// to one of the harness's own tools included, which then takes as long as
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
 
-	// LateRecord makes the CLI one whose record shows a response — its prose,
+	// LateRecord makes the harness one whose record shows a response — its prose,
 	// its calls, its cost — only once the response's calls have run, as
 	// Gemini CLI's and OpenCode's do, and says so to the host.
 	LateRecord bool
 
-	// NumberedRequests makes the CLI one whose requests are numbered from one
-	// in every run — as a backend numbers the requests of a CLI whose record
+	// NumberedRequests makes the harness one whose requests are numbered from one
+	// in every run — as a backend numbers the requests of a harness whose record
 	// carries no id — rather than given ids no other run shares.
 	NumberedRequests bool
 
 	// OnCall, when set, is told what the host tells a backend's
-	// [llm.ServeOptions.OnCall]: when the first call the CLI is waiting on
+	// [llm.ServeOptions.OnCall]: when the first call the harness is waiting on
 	// starts and the last one ends, for the run of index run.
 	OnCall func(run int, busy bool)
 
 	// CallIDMeta is the `_meta` key the script tells the host it sends call
 	// ids under; empty takes [CallIDKey], the key it always sends them
-	// under. A case names another to play a CLI the host must not read.
+	// under. A case names another to play a harness the host must not read.
 	CallIDMeta string
 
-	// NoCallIDs makes the CLI one that sends no id of its own with a call,
+	// NoCallIDs makes the harness one that sends no id of its own with a call,
 	// as most do: the host joins each call to the response that asked for it
 	// by its name and arguments.
 	NoCallIDs bool
@@ -229,7 +229,7 @@ func (s *Script) Seen() []llm.Request {
 }
 
 // Late is how many model requests the script made after the host had decided
-// the run must end — each one a request a real CLI would have been billed
+// the run must end — each one a request a real harness would have been billed
 // for, made after the phase was decided.
 func (s *Script) Late() int {
 	s.mu.Lock()
@@ -297,7 +297,7 @@ func (s *Script) modelOf(r Response) string {
 	return s.Model()
 }
 
-// play runs one scripted CLI run against the request's host.
+// play runs one scripted harness run against the request's host.
 func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*llm.Completion, error) {
 	host := req.Tools
 	served, err := host.Serve(ctx, llm.ServeOptions{
@@ -312,10 +312,10 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	if err != nil {
 		return nil, err
 	}
-	// THE CLI IS STOPPED WHEN THE HOST SAYS SO — killed, and then released,
-	// which is what a backend does once its CLI has exited and what lets a
+	// THE HARNESS IS STOPPED WHEN THE HOST SAYS SO — killed, and then released,
+	// which is what a backend does once its harness has exited and what lets a
 	// call whose answer the host withheld return. Until it is killed it
-	// behaves as a CLI does: it reads each answer and asks its model again,
+	// behaves as a harness does: it reads each answer and asks its model again,
 	// whatever the host has decided — it is not told.
 	var once sync.Once
 	release := func() { once.Do(func() { served.Release() }) }
@@ -327,8 +327,8 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		select {
 		case <-host.Done():
 			// A KILL TAKES TIME: a signal, a grace, a process exiting. An
-			// answer the host did not withhold reaches the CLI first, and
-			// the CLI asks its model again — which is what the host's
+			// answer the host did not withhold reaches the harness first, and
+			// the harness asks its model again — which is what the host's
 			// withholding exists to prevent, and what [Script.Late]
 			// counts.
 			time.Sleep(KillLatency)
@@ -371,7 +371,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		default:
 			if ended(host) {
 				// A REQUEST AFTER THE DECISION: the host ended the run
-				// and this CLI was not stopped before asking again.
+				// and this harness was not stopped before asking again.
 				s.mu.Lock()
 				s.late++
 				s.mu.Unlock()
@@ -472,7 +472,7 @@ func ended(host llm.ToolHost) bool {
 }
 
 // call makes one response's calls, one after another or at once, and answers
-// the error the run fails with when the CLI died during one ([Call.Exit]).
+// the error the run fails with when the harness died during one ([Call.Exit]).
 func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn, r Response) error {
 	var exitMu sync.Mutex
 	var exited error
@@ -487,7 +487,7 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 			}
 		}
 		if c.Native {
-			// The CLI's own tool: it runs it itself — for as long as
+			// The harness's own tool: it runs it itself — for as long as
 			// Before takes — and the host never hears of it beyond the
 			// record.
 			return
@@ -510,7 +510,7 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 		res, err := s.callOne(ctx, cs, conn, c, params)
 		if c.Exit && c.GiveUp > 0 {
 			exitMu.Lock()
-			exited = fmt.Errorf("llmtest: the CLI exited during %s: %w", name, err)
+			exited = fmt.Errorf("llmtest: the harness exited during %s: %w", name, err)
 			exitMu.Unlock()
 		}
 		got := Result{Name: name, Err: err}
@@ -554,7 +554,7 @@ func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Co
 		defer cancel()
 		return cs.CallTool(cctx, params)
 	}
-	// THE CLI DIES MID-CALL: its end of the session closes under the call,
+	// THE HARNESS DIES MID-CALL: its end of the session closes under the call,
 	// which the host reads as EOF.
 	type answer struct {
 		res *mcp.CallToolResult
@@ -578,7 +578,7 @@ func (s *Script) callOne(ctx context.Context, cs *mcp.ClientSession, conn net.Co
 	return nil, a.err
 }
 
-// argsOf decodes a call's arguments for the record a CLI reports, which
+// argsOf decodes a call's arguments for the record a harness reports, which
 // carries them decoded; arguments that do not parse are reported as none.
 func argsOf(raw string) (map[string]any, string) {
 	if strings.TrimSpace(raw) == "" {

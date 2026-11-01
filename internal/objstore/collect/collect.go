@@ -52,6 +52,15 @@
 //     record this node could not decode might be the one naming the
 //     object, so a pass that meets one stops judging. What it deleted
 //     before is reported beside why it stopped.
+//   - Nothing this node CANNOT SEE may name it ([Options.Unseen]). Every
+//     declared table a build reads is its own build's declaration, so a
+//     domain it has never heard of — a state log a newer build runs on
+//     another data node during a rolling upgrade, or tables a newer build
+//     migrated this node's own copy to before a rollback — may name any
+//     object in the store, and no record of it is one this node met and
+//     failed to decode. So the pass asks first, and judges nothing while
+//     anything is unseen: this build is the older peer of the next one,
+//     and the next one's objects are not this build's to delete.
 //
 // THE GRACE IS AN UPLOAD'S, NEVER A REPLACED VERSION'S. Both instants date
 // the object's upload, and nothing records when a row stopped naming it: an
@@ -304,6 +313,20 @@ type Options struct {
 	Store *objstore.Store
 	// References is every source of object references ([Sources]).
 	References References
+
+	// Unseen says what may name an object that this node cannot read beyond
+	// [Options.References], in a sentence, or "" where there is nothing: a
+	// state log a data node the fleet counts runs and this build does not
+	// register (a newer build's, during a rolling upgrade), or tables a newer
+	// build migrated this node's copy of the estate to (before it was rolled
+	// back). Asked once per collection, at its first judgement, and a pass
+	// judges nothing while it answers anything — a sentence or an error —
+	// because every declared table a build reads is its own build's
+	// declaration, and a domain it has never heard of may name any object in
+	// the store. Nil asks nothing, which only a caller that knows the whole
+	// fleet is its own build may leave it.
+	Unseen func(ctx context.Context) (string, error)
+
 	// Now is the clock the grace is measured on, injected for tests.
 	Now func() time.Time
 }
@@ -409,6 +432,14 @@ func (e errPin) Unwrap() error { return e.err }
 // errIncomplete stops a pass that met an estate it cannot call complete.
 var errIncomplete = errors.New("a record this node could not apply may refer to objects in the store")
 
+// errUnseen stops a pass that met rows it cannot read at all ([Options.Unseen]):
+// it judges nothing, and reports what it could not see.
+type errUnseen struct{ why string }
+
+func (e errUnseen) Error() string {
+	return "this node cannot read every row that may name an object, so nothing is deleted: " + e.why
+}
+
 func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff time.Time) error {
 	// THE ESTATE IS PINNED AT THE FIRST JUDGEMENT, not before the listing:
 	// a pass that finds nothing past the grace decides nothing, and a
@@ -428,6 +459,21 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		}
 		defer func() { batch = batch[:0] }()
 		if !pinned {
+			// WHAT THIS BUILD CANNOT SEE is asked before the pin, with
+			// the pin's own reason to be late: a pass with nothing past
+			// the grace asks nothing. An answer that could not be had is
+			// a failed pin — tried again in ten minutes — never a pass
+			// that went ahead.
+			if c.opts.Unseen != nil {
+				why, uerr := c.opts.Unseen(ctx)
+				if uerr != nil {
+					return errPin{fmt.Errorf("reading what this node cannot "+
+						"see that may name an object: %w", uerr)}
+				}
+				if why != "" {
+					return errUnseen{why}
+				}
+			}
 			at, perr := c.opts.References.pin(ctx)
 			if perr != nil {
 				return errPin{perr}
@@ -489,6 +535,10 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 	}
 	if errors.Is(err, errIncomplete) {
 		r.Skipped = err.Error()
+		return nil
+	}
+	if ue := (errUnseen{}); errors.As(err, &ue) {
+		r.Skipped = ue.Error()
 		return nil
 	}
 	if err != nil {

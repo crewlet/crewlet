@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/catalog.TestTwoReadsOfOneToolAreToldApart`, `internal/assistant/catalog.TestAChatReadSaysTheRoomAsPeopleWriteIt`, `internal/assistant/catalog.TestAChatReadIsToldApartByWhatItAsks`, `internal/api/queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`), `lib/markdown.test.tsx` (`prose`), `routes/chatlet/Room.test.tsx` (`a message's links`) and `routes/live/Runs.test.tsx` (`a parked run's question opens only what the dashboard built`)
+- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/catalog.TestTwoReadsOfOneToolAreToldApart`, `internal/assistant/catalog.TestAChatReadSaysTheRoomAsPeopleWriteIt`, `internal/assistant/catalog.TestAChatReadIsToldApartByWhatItAsks`, `internal/api/queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`), `lib/markdown.test.tsx` (`prose`), `routes/chatlet/Room.test.tsx` (`a message's links`) and `routes/live/Executors.test.tsx` (`a parked run's question opens only what the dashboard built`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 
@@ -30,7 +30,7 @@ checked by the dashboard as every card's was.
 
 **No address the model writes is opened; a link the dashboard builds is.** The
 answer's words are read with `links: "checked"` (`lib/inlineTokens.ts`,
-`LinkMode`), the rule the Inbox reads an agent's words by too, a coding run's
+`LinkMode`), the rule the Inbox reads an agent's words by too, an executor's
 Answer dialog its question, and Chatlet a message's links, whoever wrote the
 message: a link is live only where the dashboard BUILT it, from parts it
 checked, to a place that is the company's. A key whose project is the
@@ -51,10 +51,10 @@ The threat is a prompt injection that has the model write
 host's owner, where a click on a link the dashboard built carries only a
 validated name or number to the company's own place.
 
-**Deliberately, the assistant, the Inbox, a coding run's question and a chat
+**Deliberately, the assistant, the Inbox, an executor's question and a chat
 message's links only.** A run's question is read so wherever it is answered:
-its Answer dialog (`components/writes.tsx`), opened from Live › Runs, a seat's
-page and every decision row, draws its context and the run's reasoning
+its Answer dialog (`components/writes.tsx`), opened from Live › Executors, a
+seat's page and every decision row, draws its context and the run's reasoning
 `checked`. Doclet pages, a work item's description and comments read anywhere
 but the Inbox still open any safe address as written (`links: "anchor"`);
 whether those surfaces read `checked` too is an open question for the owner,

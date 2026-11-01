@@ -39,10 +39,10 @@ export function ModelStep({
 }) {
   const params = useMemo(
     () => ({
-      agent: draft.agent,
-      ...(draft.agent === "opencode" ? { provider: draft.provider } : {}),
+      harness: draft.harness,
+      ...(draft.harness === "opencode" ? { provider: draft.provider } : {}),
     }),
-    [draft.agent, draft.provider],
+    [draft.harness, draft.provider],
   );
   const listing = useQuery("llm_models", params);
   const answer = listing.data;
@@ -68,7 +68,7 @@ export function ModelStep({
   }, [answer, draft.model]);
 
   const naming =
-    draft.agent === "opencode"
+    draft.harness === "opencode"
       ? `Sent as ${modelId({ ...draft, model: draft.model || "<model>" })}.`
       : "In the CLI's own naming.";
   const source = listing.loading
@@ -106,7 +106,7 @@ export function ModelStep({
           label="Suggested models"
           mono
           value={draft.model}
-          placeholder={draft.agent === "opencode" ? "claude-sonnet-5-5" : "claude-opus-5-5"}
+          placeholder={draft.harness === "opencode" ? "claude-sonnet-5-5" : "claude-opus-5-5"}
           onValueChange={(next) => {
             onChange(next);
             setOpen(options.length > 0);

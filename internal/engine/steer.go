@@ -19,7 +19,7 @@ import (
 //
 // # One box per first segment, and only its node answers
 //
-// A turn that has not launched its coding run yet holds its notes in a
+// A turn that has not launched its executor yet holds its notes in a
 // [steer.Box], filed here under the turn's run id for as long as its first
 // segment runs. Every node serves [topics.SeatSteer]; a note scattered there
 // names a turn, and the one node whose desk holds that turn answers — every
@@ -29,7 +29,7 @@ import (
 //
 // # From the launch on, the run's record holds the turn's notes
 //
-// Once the turn's coding run has launched, its notes wait on the run's record
+// Once the turn has launched its executor, its notes wait on the run's record
 // in the coordination store, which every node reads (runsteer.go): the asking
 // node files a note there itself, and asks nobody. The launch HANDS THE BOX
 // OVER IN THE WRITE THAT CREATES THE RECORD ([steerDesk.handOver]): the box's
@@ -537,7 +537,7 @@ func (e *Engine) stopSteer(ctx context.Context) {
 //
 // Filed only once the runner exists, so a turn whose runner could not be built
 // never answers a note it could not have read. A segment that resumes a turn
-// from its coding run files no box: its notes are on the run's record.
+// from its executor files no box: its notes are on the run's record.
 func (e *Engine) openSteer(runID, handle string, box *steer.Box,
 	r *runner.Runner,
 ) func(context.Context) {

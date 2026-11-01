@@ -15,7 +15,7 @@ import (
 )
 
 // restartRig is one single node's disk, booted as many times as a case needs,
-// with the swe seat's coding run carried across the boots.
+// with the swe seat's executor carried across the boots.
 type restartRig struct {
 	dir  string
 	seat string

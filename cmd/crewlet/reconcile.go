@@ -362,7 +362,7 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	// file until an apply does, after it has landed. A company valid on
 	// paper can still fail to build here — a ${VAR} that resolves to
 	// nothing where a backend refuses an empty value (an E2B key), a coding
-	// CLI whose profile or directory cannot be had, a sandbox cell this
+	// harness whose profile or directory cannot be had, a sandbox cell this
 	// host cannot run — and written first it would be the fleet's company,
 	// refused by this node's every apply. The engine booted on the file
 	// once, which made the same refusal the boot's with nothing written;

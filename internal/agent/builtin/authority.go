@@ -316,11 +316,11 @@ var subjectOf = map[string]subject{
 	// asks that node first (a probe that offers nothing). And a run's
 	// answer is decided on the run's own row: its requester through the
 	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
-	// answerrun.go.
-	PauseSeatTool:  {kind: authz.KindPerson, inTool: true},
-	ResumeSeatTool: {kind: authz.KindPerson, inTool: true},
-	SteerTurnTool:  {kind: authz.KindPerson, inTool: true},
-	AnswerRunTool:  {kind: authz.KindPerson, inTool: true},
+	// answerexecutor.go.
+	PauseSeatTool:      {kind: authz.KindPerson, inTool: true},
+	ResumeSeatTool:     {kind: authz.KindPerson, inTool: true},
+	SteerTurnTool:      {kind: authz.KindPerson, inTool: true},
+	AnswerExecutorTool: {kind: authz.KindPerson, inTool: true},
 
 	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
 	// whether an agent owns it), which no argument states, and inside a
@@ -687,8 +687,8 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 	// here is only the personal default — whose record an unnamed verb is
 	// about — and a read that answers nothing leaves the owner empty,
 	// which is exactly what [Authorizer] is about to refuse on.
-	subject := subjectOf[g.Name()]
-	if subject.inTool {
+	about := subjectOf[g.Name()]
+	if about.inTool {
 		// THE TOOL ASKS, with the same action and the object it resolved
 		// — see [subject.inTool]. Deciding here as well, on an object the
 		// arguments do not state, would refuse everybody the tool is
@@ -696,7 +696,7 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 		return nil
 	}
 	principal, _ := iam.From(ctx)
-	object := subject.objectFor(principal, args)
+	object := about.objectFor(principal, args)
 	return g.authorize(ctx, authz.Action(g.Name()), object)
 }
 
@@ -726,11 +726,11 @@ func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 	if authorize == nil {
 		return ErrNoAuthorizer
 	}
-	subject := subjectOf[tool]
-	object := authz.Object{Kind: subject.kind, Owner: unresolvedName, Unresolved: true}
-	if !subject.inTool {
+	about := subjectOf[tool]
+	object := authz.Object{Kind: about.kind, Owner: unresolvedName, Unresolved: true}
+	if !about.inTool {
 		principal, _ := iam.From(ctx)
-		object = subject.objectFor(principal, nil)
+		object = about.objectFor(principal, nil)
 	}
 	err := authorize(ctx, authz.Action(tool), object)
 	if errors.Is(err, authz.ErrUnresolved) {

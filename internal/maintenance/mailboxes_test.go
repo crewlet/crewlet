@@ -399,10 +399,10 @@ func TestARemovedSeatsMailboxSurvivesTheGracePeriod(t *testing.T) {
 	if got := h.queue.deletes.Load(); got != 0 {
 		t.Fatalf("%d subscriptions were deleted inside the grace period", got)
 	}
-	// Nor were the seat's coding runs ended: a seat restored within the
-	// grace comes back to its parked questions and running jobs.
+	// Nor was the seat's executor ended: a seat restored within the grace
+	// comes back to its parked questions and running launches.
 	if calls := h.runs.recorded(); len(calls) != 0 {
-		t.Fatalf("a removed seat's coding runs were ended inside the grace period: %+v", calls)
+		t.Fatalf("a removed seat's executor was ended inside the grace period: %+v", calls)
 	}
 }
 

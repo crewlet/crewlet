@@ -185,7 +185,7 @@ test("a category the document split by hand reads back half-checked", () => {
 test("a CLI that cannot code refuses a seat's coding box, says why once, and lets a ticked one off", () => {
   const uses = noUses();
   for (const job of CATEGORY_JOBS.coding) uses.jobs[job] = ["qa"];
-  render(<Harness company={split} start={{ agent: "codex", intent: "custom", uses }} />);
+  render(<Harness company={split} start={{ harness: "codex", intent: "custom", uses }} />);
   const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
   const coding = CATEGORY_WORDS.coding.label;
   expect(box(`Product Manager ${coding}`).disabled).toBe(true);
@@ -193,7 +193,7 @@ test("a CLI that cannot code refuses a seat's coding box, says why once, and let
   expect(box(`Product Manager ${CATEGORY_WORDS.reviews.label}`).disabled).toBe(false);
   // The grid says why under itself, and the section says it once, whatever the number of seats.
   const section = screen.getByRole("region", { name: "Customise per seat" });
-  expect(within(section).getAllByText(/but coding|cannot run coding/)).toHaveLength(1);
+  expect(within(section).getAllByText(/but coding|cannot run a seat's executor/)).toHaveLength(1);
   fireEvent.click(box(`Quality Lead ${coding}`));
   for (const job of CATEGORY_JOBS.coding) expect(latest.uses.jobs[job]).toEqual([]);
 });

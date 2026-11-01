@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -113,7 +115,7 @@ func (r engineRuntime) Work() WorkState {
 // for one row of the agent screen and wrong for the rest. The shared surface
 // is the one every seat has, which is the honest answer to "what does this
 // company run".
-func (r engineRuntime) Tools() []ToolInfo {
+func (r engineRuntime) Tools() []queries.ToolRow {
 	company := r.engine.Company()
 	if company == nil || company.Tools == nil {
 		return nil
@@ -129,49 +131,42 @@ func (r engineRuntime) Tools() []ToolInfo {
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
 	delivers := snapshot.Deliveries()
-	out := make([]ToolInfo, 0, len(entries))
+	out := make([]queries.ToolRow, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, toolInfo(entry, delivers[entry.Name()]))
+		out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
 	}
 	return out
 }
 
-// toolInfo is one registry entry as the catalogue carries it.
+// Builtins is the engine's own tools as this node's seats are offered them:
+// the registry's built-ins, and the discovery pair.
 //
-// A FUNCTION RATHER THAN A LOOP BODY so it can be exercised without an engine.
-// The mapping had a defect nothing could reach: it re-spelled the origin
-// instead of passing the registry's own, and every reader of the prefix — the
-// screen's origin column, its per-origin counts, the published reference —
-// silently read a company running MCP servers as one running none.
-func toolInfo(entry tools.Entry, delivers string) ToolInfo {
-	return ToolInfo{
-		Name:        entry.Name(),
-		Description: entry.Tool.Description(),
-		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
-		// re-spelled: `builtin`, or `mcp:` and the bare server name.
-		// This stripped the prefix and sent the server's name alone,
-		// which disagreed with every reader of it — the screen's
-		// origin column splits on the colon and rendered the server
-		// as if it were the grammar's own word, its "from MCP
-		// servers" count tested for the prefix and therefore read
-		// zero on a company running servers, and the published API
-		// reference documents the prefixed form.
-		Source: entry.Origin,
-		Annotations: ToolAnnotations{
-			Title:       entry.Annotations.Title,
-			ReadOnly:    entry.Annotations.ReadOnly.String(),
-			Destructive: entry.Annotations.Destructive.String(),
-			Idempotent:  entry.Annotations.Idempotent.String(),
-			OpenWorld:   entry.Annotations.OpenWorld.String(),
-		},
-		Delivers: delivers,
-		// The schema the MODEL is offered, read rather than rebuilt. The
-		// map is the tool's own and this path only serialises it; an MCP
-		// server restarting replaces the whole Tool rather than writing
-		// into its schema, so there is nothing here for a running turn to
-		// race with.
-		InputSchema: entry.Tool.Parameters(),
+// THE REGISTRY'S BUILT-INS, not a list of every tool the engine could offer,
+// because a company on Jira holds no Worklet tool and a catalogue listing one
+// would tell a reader its agents can call what they are never offered.
+//
+// THE PAIR READ OFF THE RUNNER, which builds it, bound to no surface: this
+// reads each one's name, description and schema and calls nothing, and a
+// second description of either written here would drift from the one the
+// model is shown.
+func (r engineRuntime) Builtins() []queries.ToolRow {
+	company := r.engine.Company()
+	if company == nil || company.Tools == nil {
+		return nil
 	}
+	snapshot := company.Tools.Snapshot()
+	delivers := snapshot.Deliveries()
+	var out []queries.ToolRow
+	for _, entry := range snapshot.Entries() {
+		if entry.Origin == tools.OriginBuiltin {
+			out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
+		}
+	}
+	for _, tool := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
+		out = append(out, queries.CatalogueRow(
+			tools.Entry{Tool: tool, Origin: tools.OriginBuiltin}, ""))
+	}
+	return out
 }
 
 // ShuttingDown is the engine's own flag, which is set at the first moment of

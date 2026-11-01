@@ -39,7 +39,7 @@ import (
 //
 // # Why the streaming call is drained rather than followed
 //
-// The engine's own model of a coding run is DETACHED: a job is started, the
+// The engine's own model of a launch is DETACHED: a job is started, the
 // turn suspends, and something later reads a result file. So nothing here
 // needs to watch output arrive — a foreground command is run to completion
 // and its frames are folded into one [ExecResult], and a background command
@@ -59,7 +59,7 @@ const e2bEnvdUser = "user"
 //
 // NOT A RUN DEADLINE — the engine imposes none, and this is measured between
 // FRAMES rather than over the call. The distinction is the whole point: a
-// coding agent's foreground command legitimately runs for many minutes, so an
+// harness's foreground command legitimately runs for many minutes, so an
 // overall timeout would kill working jobs, while a stream that has gone
 // completely silent is indistinguishable from a wedged envd holding the
 // request open for ever.
@@ -261,7 +261,7 @@ type connectEnd struct {
 //
 // The command is run THROUGH A SHELL, deliberately: every caller here hands
 // over a shell line — pipes, redirects, `&&` — because that is what a setup
-// step and a coding-agent invocation are. envd's own API takes an argv, so
+// step and a harness invocation are. envd's own API takes an argv, so
 // the shell is named explicitly rather than left to a runtime that has none.
 type startRequest struct {
 	Process struct {
@@ -412,7 +412,7 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 			if background {
 				// The pid is the whole answer for a detached start.
 				// Reading on would block this turn for the length of
-				// the coding run.
+				// the job.
 				return out, nil
 			}
 		case frame.Event.Data != nil:
@@ -487,7 +487,7 @@ var boxSignals = map[string]int{
 
 // maxEnvdFrame caps one streamed message.
 //
-// A coding agent's output is the largest thing that comes through here and it
+// A harness's output is the largest thing that comes through here and it
 // is line-shaped; 32 MiB is far past any real frame and small enough that a
 // desynced length cannot exhaust the process.
 const maxEnvdFrame = 32 << 20

@@ -278,7 +278,7 @@ units:
 The `providers.llm` map takes named entries (roles select one via `role.llm`;
 `default` is the fallback). **Every entry is a coding CLI** the engine drives —
 the vendor's own harness, signed in with your plan or your key — and its fields
-are that CLI's settings: which CLI (`agent`), which model in its grammar, and
+are that CLI's settings: which CLI (`harness`), which model in its grammar, and
 how it signs in (`auth`):
 
 ```yaml
@@ -297,13 +297,13 @@ providers:
     #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
     #   a seat's executor
     gpt:
-      agent: codex
+      harness: codex
       model: gpt-5
       auth: { mode: api-key }           # CODEX_API_KEY; leave it out for a ChatGPT login
 
     # Open models through OpenCode — on OpenRouter here, or any provider it speaks to
     open:
-      agent: opencode
+      harness: opencode
       model: openrouter/qwen/qwen3-coder  # <provider>/<model>
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
@@ -613,7 +613,7 @@ it.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
-transcript, with the phase it is on open, or the coding run it is parked on
+transcript, with the phase it is on open, or the executor it is parked on
 drawn live above its phases. `g r` does the same for the one running turn, and
 opens Live's *Now running* when several are running (or none).
 
@@ -702,7 +702,7 @@ queue, inbox and pins, the trash, the board drag, the chat's furniture — makin
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question and answering a
+steering a running turn, answering an executor's question and answering a
 question from the company's knowledge.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's

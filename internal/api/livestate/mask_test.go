@@ -42,7 +42,7 @@ var callFamily = map[string]class{
 	"cache_write_tokens": status, "node": status, "in_progress": status,
 	"failed": status, "error": status, "updated_at": status, "started_at": status,
 	"versions": status, "body_withheld": status,
-	// A CLI RUN IS STATUS: when it ran, on whose entry, how it ended and
+	// A harness RUN IS STATUS: when it ran, on whose entry, how it ended and
 	// what it spent are what the seat is doing, like a round's timing.
 	"invocations": status,
 	// THE RUNNING CALLS ARE STATUS WITHOUT THEIR ARGUMENTS: which tools are
@@ -78,7 +78,7 @@ var turnFields = map[string]class{
 // is what it is doing.
 var sandboxFields = map[string]class{
 	"turn_id": status, "role": status, "agent_handle": status, "agent_id": status,
-	"coding_agent": status, "provider_key": config, "model": status,
+	"harness": status, "provider_key": config, "model": status,
 	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
 	"body_withheld": status,
@@ -105,7 +105,7 @@ var nested = map[reflect.Type]map[string]class{
 	reflect.TypeFor[Paused](): {"by": status, "by_kind": status,
 		"operator_id": status, "at": status, "reason": status, "stop_running": status},
 	reflect.TypeFor[ProviderLimit](): {"parked": status, "resets_at": status,
-		"since": status, "cli": status, "subscription": status},
+		"since": status, "harness": status, "subscription": status},
 }
 
 // jsonField is one field a type puts on the wire.
@@ -231,7 +231,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 	t.Parallel()
 	families := map[string]map[string]class{
 		"the call family": callFamily, "the overlay family": overlayFamily,
-		"the live turn": turnFields, "the coding run": sandboxFields,
+		"the live turn": turnFields, "the executor": sandboxFields,
 	}
 	roots := []struct {
 		typ    reflect.Type
@@ -243,7 +243,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 		{reflect.TypeFor[Overlay](), "the overlay family"},
 		{reflect.TypeFor[overlayView](), "the overlay family"},
 		{reflect.TypeFor[LiveTurn](), "the live turn"},
-		{reflect.TypeFor[ExecutorEntry](), "the coding run"},
+		{reflect.TypeFor[ExecutorEntry](), "the executor"},
 	}
 	delegatedTo := map[string][]reflect.Type{
 		"live_call": {reflect.TypeFor[*LiveCall](), reflect.TypeFor[any]()},
@@ -334,7 +334,7 @@ func fullCall() *LiveCall {
 		Rounds:         []any{map[string]any{"round": 1}},
 		Invocations: []any{map[string]any{"first_round": 1, "last_round": 1,
 			"outcome": "stopped"}},
-		// Two calls of one response running side by side, as a CLI runs
+		// Two calls of one response running side by side, as a harness runs
 		// them.
 		RunningCalls: []any{
 			map[string]any{"id": "call-1", "round": 2, "name": "read_file",
@@ -560,7 +560,7 @@ func TestAnOverlayViewStatesLiveCallAndTurnAlways(t *testing.T) {
 	noBody(t, "a masked overlay's call", call)
 }
 
-// A CODING RUN SHOWS ITS QUESTION TO THE PEOPLE IT IS PUT TO.
+// AN EXECUTOR SHOWS ITS QUESTION TO THE PEOPLE IT IS PUT TO.
 //
 // What the run was asked and what it asked back are its seat's trail, and a
 // reader the trail is not open to is told the run's status and that the rest
@@ -594,10 +594,10 @@ func TestACodingRunShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
 	}
 	if entry.Task != "fix the build" || entry.Question != "which branch?" ||
 		entry.WorkItem == nil {
-		t.Error("masking a coding run wrote through to the entry it was handed")
+		t.Error("masking an executor wrote through to the entry it was handed")
 	}
 	if strings.Contains(string(mustJSON(t, entry)), "dana") {
-		t.Error("a coding run puts the people its question is put to on the wire")
+		t.Error("an executor puts the people its question is put to on the wire")
 	}
 }
 

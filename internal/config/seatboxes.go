@@ -47,7 +47,7 @@ type BoxStep struct {
 // order [Company.EachRole] walks them, placed as the engine places each one.
 //
 // ONE BOX PER SEAT PER CELL ITS EXECUTOR CAN LAND IN. Every agent seat's
-// executor is its coding CLI's own run, and a launch takes the first member of
+// executor is its harness's own run, and a launch takes the first member of
 // the seat's executor chain that can run it and is not sitting out on its
 // node — so any runner-capable member may be the one launched, and each is
 // placed by its own `run_in`, else the catalogue's default

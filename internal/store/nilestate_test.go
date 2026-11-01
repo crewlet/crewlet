@@ -88,6 +88,13 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 			_, err := d.AppliedMigrations(ctx)
 			wantErrNoEstate(t, err)
 		},
+		"ForeignMigrations": func(t *testing.T) {
+			foreign, err := d.ForeignMigrations(ctx)
+			wantErrNoEstate(t, err)
+			if len(foreign) != 0 {
+				t.Errorf("a handle that is not open named %v as foreign", foreign)
+			}
+		},
 		"EncodeVector": func(t *testing.T) {
 			_, err := d.EncodeVector([]float32{1, 2, 3})
 			wantErrNoEstate(t, err)
@@ -376,6 +383,17 @@ func TestAReplicatedHandleWithNothingOpenAnswers(t *testing.T) {
 				}))
 				if got := r.Caps(); !reflect.DeepEqual(got, store.Capabilities{}) {
 					t.Errorf("the reader's Caps() = %+v, want the zero probe", got)
+				}
+			},
+			// THE COLLECTOR'S QUESTION, whose answer licenses a deletion: a
+			// replicated estate that is not open is ErrNoEstate, which the
+			// collector reads as a pass that judges nothing, never as an
+			// estate a newer build never migrated.
+			"ForeignMigrations": func(t *testing.T) {
+				foreign, err := h.Reader().ForeignMigrations(ctx)
+				wantErrNoEstate(t, err)
+				if len(foreign) != 0 {
+					t.Errorf("a replicated estate that is not open named %v as foreign", foreign)
 				}
 			},
 		}

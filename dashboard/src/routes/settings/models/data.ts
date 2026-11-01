@@ -7,7 +7,7 @@
  * NOTHING HERE DECIDES A CONDITION OR A USE. Whether a model is ready, which
  * seat runs which job on it and what its alarms say are the engine's answer:
  * the page names them. The document is read only for what the engine does
- * not report and an edit must keep (where its coding runs, its limits, its
+ * not report and an edit must keep (where it runs executors, its limits, its
  * web tools, the fields the wizard does not hold).
  *
  * KEPT CURRENT three ways, because each misses what the others catch: every
@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_CLI_AGENTS } from "~/contract/models.ts";
+import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -47,9 +47,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 /** One model as the page draws it: the engine's reading, and for an admin the document's entry. */
 export interface ModelView {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
-  /** Whether its CLI can run a seat's coding (`EXECUTOR_CLI_AGENTS`, held to the engine). */
+  /** Whether its CLI can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
   entry: ModelEntry | MemberModelEntry;
@@ -57,7 +57,7 @@ export interface ModelView {
   admin: ModelEntry | null;
   /** What runs on it now, from the engine's `used_by`. */
   uses: Uses;
-  /** Where its coding runs, as written; null for the company default. */
+  /** Where it runs executors, as written; null for the company default. */
   runIn: string | null;
   timeoutSeconds: number | null;
   maxConcurrent: number | null;
@@ -122,9 +122,9 @@ export function modelViews(
     const overrides = raw && isRecord(raw.overrides) ? raw.overrides : {};
     return {
       key: entry.key,
-      agent: entry.agent,
+      harness: entry.harness,
       model: entry.model,
-      executor: (EXECUTOR_CLI_AGENTS as readonly string[]).includes(entry.agent),
+      executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),

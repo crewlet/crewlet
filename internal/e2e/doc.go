@@ -10,7 +10,7 @@
 // So the tests here run the real thing: a real engine on a real embedded
 // stream, the real API in front of it, a real turn driven by a scripted model,
 // and the dashboard's OWN modules consuming the frames that come out. Nothing
-// is stubbed except the model itself: the CLI every model call goes through is
+// is stubbed except the model itself: the harness every model call goes through is
 // a real backend launching a real process — this test binary, re-executed,
 // driving its own loop as Claude Code does, calling the seat's tools over the
 // real relay and session and asking the script for each model response — and

@@ -16,7 +16,7 @@ import (
 // Where a bridged run's tool calls are kept.
 //
 // An engine phase's calls sit on a surface in memory, and the turn writes them
-// when it ends. An executor's run cannot: its calls are made by its coding CLI,
+// when it ends. An executor's run cannot: its calls are made by its harness,
 // a process outside the engine, over the bridge, minutes or hours apart, and
 // the run can outlive the node that started it. So each one is appended to the run's own row in
 // the coordination store, which is the same row the resume reads — and without
@@ -181,7 +181,7 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			"launch_id", launch, "tool", call.Name)
 		return nil
 	}
-	// THE RUN'S WORK IS IN, or its question is asked, and its CLI is about
+	// THE RUN'S WORK IS IN, or its question is asked, and its harness is about
 	// to end its turn and exit: the waiter that drives it polls it now
 	// rather than at its next pass ([sandbox.Waiter.Nudge]). After the call
 	// is on the row, so the poll that finds the run done collects a log

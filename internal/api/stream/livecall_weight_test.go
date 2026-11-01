@@ -22,10 +22,10 @@ const leadSeat = "agent-1"
 
 // longPhase is the frames one long executor phase publishes, as the runner
 // builds them: an opening frame carrying a 30 KB system prompt and an 8 KB
-// task, then thirty rounds over three CLI runs, each round streamed for eight
+// task, then thirty rounds over three harness runs, each round streamed for eight
 // seconds at the loop's five frames a second, committed with its narration,
 // and followed by its tool calls — run side by side where a round asked for
-// two, as a CLI runs them, each announced as it starts and listed as it
+// two, as a harness runs them, each announced as it starts and listed as it
 // returns with its result's tail — and each run listed once it has ended.
 //
 // BUILT ONCE per test binary and shared by every case that replays it. The
@@ -55,7 +55,7 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		content     = 1800
 		argBytes    = 400
 		resultBytes = 3000
-		perRun      = 10 // rounds a CLI run makes before a note ends it
+		perRun      = 10 // rounds a harness run makes before a note ends it
 	)
 	system := strings.Repeat("You are the lead engineer. ", 30_000/27)
 	task := strings.Repeat("Fix the flaky test in the payments suite. ", 8_000/42)

@@ -74,7 +74,7 @@ type Deps struct {
 	// Deep runs deep work; nil is a node that offers none (ADR-0054).
 	Deep DeepWork
 
-	// Sessions is where a turn serves its tools to its model's CLI, as the
+	// Sessions is where a turn serves its tools to its model's harness, as the
 	// one MCP server `crewlet` (ADR-0049): this process's tool-session host.
 	Sessions *toolsession.Host
 
@@ -896,7 +896,7 @@ func (s *Service) stopRunner(ctx context.Context, t *turn) wire.TurnState {
 
 // stopWait is how long a Stop waits for the runner to record its end before
 // answering: long enough for the loop to notice its cancelled context, which
-// ends a model call in progress (a CLI is signalled at once).
+// ends a model call in progress (a harness is signalled at once).
 const stopWait = 5 * time.Second
 
 // Stream writes one of the owner's turns of conversation to w from after seq

@@ -16,7 +16,7 @@ import (
 
 // The process-wide log sink for this package's tests.
 //
-// TestMain owns it, which is the ONLY legitimate owner besides the CLI. What
+// TestMain owns it, which is the ONLY legitimate owner besides the harness. What
 // happens when `run` installs a writer it was handed instead: 29 parallel tests
 // pointing the global at their own buffers, a data race, and one test's lines
 // in another's output. The single-engine cases here run in parallel with each
@@ -37,27 +37,27 @@ import (
 //   - the relay to a seat's tools, `<binary> mcp-relay <socket>`, which the
 //     engine names its own executable as ([mcprelay.DispatchIfRelay]) — this
 //     binary, under `go test`. Dispatched on ARGV, and BEFORE the scripted
-//     CLI's variable: the scripted CLI starts the relay, and hands it its own
+//     harness's variable: the scripted harness starts the relay, and hands it its own
 //     environment, that variable included.
-//   - the scripted model's CLI ([scriptedCLIEnv]).
-//   - the executor's coding CLI in its box ([codingCLIEnv]).
+//   - the scripted model's harness ([scriptedHarnessEnv]).
+//   - the executor's harness in its box ([harnessEnv]).
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
-	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
-		os.Exit(runScriptedCLI(endpoint))
+	if endpoint := os.Getenv(scriptedHarnessEnv); endpoint != "" {
+		os.Exit(runScriptedHarness(endpoint))
 	}
-	if endpoint := os.Getenv(codingCLIEnv); endpoint != "" {
-		os.Exit(runCodingCLI(endpoint))
+	if endpoint := os.Getenv(harnessEnv); endpoint != "" {
+		os.Exit(runHarness(endpoint))
 	}
 	binary, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: this binary cannot name its own path, and every "+
-			"company here runs it as its model's CLI: %v\n", err)
+			"company here runs it as its model's harness: %v\n", err)
 		os.Exit(1)
 	}
-	scriptedCLIBinary = binary
+	scriptedHarnessBinary = binary
 	if scriptedShape, err = claudeCodeRun(binary); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: every company here runs its model's CLI as Claude Code "+
+		fmt.Fprintf(os.Stderr, "e2e: every company here runs its model's harness as Claude Code "+
 			"runs: %v\n", err)
 		os.Exit(1)
 	}

@@ -35,6 +35,7 @@ import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import type { ToolRow } from "~/contract/tools.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -339,7 +340,7 @@ describe("routing", () => {
     const routes = [
       ["live", "turns", "11111111-1111-4111-8111-111111111111"],
       ["live", "traces", "22222222-2222-4222-8222-222222222222"],
-      ["live", "runs", "33333333-3333-4333-8333-333333333333"],
+      ["live", "executors", "33333333-3333-4333-8333-333333333333"],
       ["live", "events", "44444444-4444-4444-8444-444444444444"],
       ["live", "a2a", "55555555-5555-4555-8555-555555555555"],
       ["company", "schedules", "role", "ceo", "standup"],
@@ -420,9 +421,25 @@ describe("routing", () => {
       idempotent: "yes",
       open_world: "no",
     } as const;
-    const catalogue = [
-      { name: "servers", description: "", source: "mcp:acme", annotations, delivers: "" },
-      { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
+    const catalogue: ToolRow[] = [
+      {
+        name: "servers",
+        description: "",
+        source: "mcp:acme",
+        annotations,
+        delivers: "",
+        group: "",
+        gate: "",
+      },
+      {
+        name: "create_issue",
+        description: "",
+        source: "mcp:github",
+        annotations,
+        delivers: "",
+        group: "",
+        gate: "",
+      },
     ];
 
     location.hash = "#/settings/mcp-tools/servers";

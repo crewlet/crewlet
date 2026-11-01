@@ -65,7 +65,7 @@ var links = map[string]screen{
 	"live":             {address: "#/live", label: "Now running"},
 	"turns":            {address: "#/live/turns", label: "Turns"},
 	"turn":             {address: "#/live/turns/{id}", noun: "turn"},
-	"runs":             {address: "#/live/runs/{turn_id}", noun: "coding run"},
+	"executors":        {address: "#/live/executors/{turn_id}", noun: "executor"},
 	"doclet":           {address: "#/doclet", app: iam.GrantDoclet, label: "Doclet"},
 	"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
 	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},

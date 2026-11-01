@@ -84,7 +84,7 @@ class InertWebSocket {
 
 const EVERY_TOOL = [
   "comment_on_work_item",
-  "answer_run",
+  "answer_executor",
   "update_work_item",
   "mark_inbox",
   "write_page",
@@ -1240,7 +1240,7 @@ describe("the pane", () => {
     };
     // THE ENGINE'S ANSWER AND ITS RECORD: pending, then recorded on the run.
     actAnswers = {
-      answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+      answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
     };
     mount({
       answers: {
@@ -1252,7 +1252,7 @@ describe("the pane", () => {
         executors: () =>
           Promise.resolve({
             runs: [
-              posted.some((p) => p.tool === "answer_run")
+              posted.some((p) => p.tool === "answer_executor")
                 ? { ...run, status: "answered", answer_ids: ["a1"] }
                 : run,
             ],
@@ -1260,7 +1260,7 @@ describe("the pane", () => {
       },
     });
     await settle();
-    fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the executor" }), {
       target: { value: "Yes, but keep the golden files." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
@@ -1495,10 +1495,12 @@ describe("the pane", () => {
     mount({ answers: { decisions: decisionsOf(run) } });
     await settle();
     expect(
-      screen.getByRole("heading", { name: "This run is waiting on a question you can’t see." }),
+      screen.getByRole("heading", {
+        name: "This executor is waiting on a question you can’t see.",
+      }),
     ).toBeTruthy();
     expect(screen.getByText("Its lead or an admin can answer it.")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "Your answer to the run" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Your answer to the executor" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
   });
 
@@ -1547,7 +1549,7 @@ describe("the pane", () => {
         },
       });
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
@@ -1557,7 +1559,7 @@ describe("the pane", () => {
           executors: () =>
             Promise.resolve({
               runs: [
-                posted.some((p) => p.tool === "answer_run")
+                posted.some((p) => p.tool === "answer_executor")
                   ? { ...run.run, status: "resumed", answer_ids: ["a1"] }
                   : run.run,
               ],
@@ -1568,7 +1570,7 @@ describe("the pane", () => {
       expect(
         screen.getByRole("heading", { name: "May I delete the fixtures directory?" }),
       ).toBeTruthy();
-      expect(byline()).toBe("CTO’s coding run asks for your approval on LEAD-12");
+      expect(byline()).toBe("CTO’s executor asks for your approval on LEAD-12");
       // THE CONTEXT IS MARKDOWN, never a verbatim quote of the question.
       expect(lead()?.querySelector("strong")?.textContent).toBe("make fixtures");
       expect(lead()?.querySelectorAll("li")).toHaveLength(2);
@@ -1582,12 +1584,12 @@ describe("the pane", () => {
       // THE OPTIONS, the recommended one first.
       const options = within(screen.getByRole("group", { name: "Answers" })).getAllByRole("button");
       expect(options[0]!.textContent).toBe("Delete it Recommended");
-      expect(screen.queryByRole("textbox", { name: "Your answer to the run" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Your answer to the executor" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: /Delete it/ }));
       await settle();
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", choice: "delete" } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", choice: "delete" } },
       ]);
       expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
         "Answered Delete it (Recommended)",
@@ -1612,14 +1614,14 @@ describe("the pane", () => {
       fireEvent.click(screen.getByRole("button", { name: "Something else" }));
       await settle();
       expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
-      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the executor" }), {
         target: { value: "Move it under testdata instead." },
       });
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       expect(posted).toEqual([
         {
-          tool: "answer_run",
+          tool: "answer_executor",
           args: { turn_id: "turn-7", launch_id: "q1", answer: "Move it under testdata instead." },
         },
       ]);
@@ -1636,7 +1638,7 @@ describe("the pane", () => {
       expect(
         screen.getByRole("heading", { name: "Which retry ceiling should the client use?" }),
       ).toBeTruthy();
-      expect(byline()).toBe("CTO’s coding run on LEAD-12");
+      expect(byline()).toBe("CTO’s executor on LEAD-12");
       // A TURN'S TASK IS OPENED BY ITS ID: the turn's reference carries no
       // collision flag, and a key another task claimed first opens that task.
       const by = document.querySelector(".crewlet-reading-pane__byline") as HTMLElement;
@@ -1644,13 +1646,13 @@ describe("the pane", () => {
       expect(lead()?.querySelector("strong")?.textContent).toBe("five");
       expect(document.querySelector("blockquote")).toBeNull();
       expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
-      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the executor" }), {
         target: { value: "Three." },
       });
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", answer: "Three." } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", answer: "Three." } },
       ]);
     });
 
@@ -1769,7 +1771,7 @@ describe("the pane", () => {
         },
       });
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
@@ -1800,9 +1802,12 @@ describe("the pane", () => {
         question_context: "The **golden files** move with them.",
       });
       actAnswers = {
-        answer_run: { refused: 409, body: { error: "stale_version", tool: "answer_run" } },
+        answer_executor: {
+          refused: 409,
+          body: { error: "stale_version", tool: "answer_executor" },
+        },
       };
-      const sent = () => posted.some((p) => p.tool === "answer_run");
+      const sent = () => posted.some((p) => p.tool === "answer_executor");
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -1811,14 +1816,14 @@ describe("the pane", () => {
         },
       });
       await settle();
-      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the executor" }), {
         target: { value: "Yes." },
       });
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", answer: "Yes." } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", answer: "Yes." } },
       ]);
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
       expect(strip).toBe(ACT_ERRORS.stale_version);
@@ -1831,7 +1836,7 @@ describe("the pane", () => {
 
   // AN ANSWER TO A PARKED RUN IS SENT, NOT ANSWERED, UNTIL THE RUN SAYS SO.
   //
-  // `answer_run` answers `pending`: the answer is on its way to the node that
+  // `answer_executor` answers `pending`: the answer is on its way to the node that
   // holds the run's seat. The pane drew that as "Answered" and dropped the
   // question, and a person whose answer never reached the run was told it had
   // while the question kept coming back. The pane now says what the run's own
@@ -1865,7 +1870,7 @@ describe("the pane", () => {
         receipt: { launch_id: "q1", answer_id: "a1" },
       },
     ) => {
-      actAnswers = { answer_run: press };
+      actAnswers = { answer_executor: press };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -1874,7 +1879,7 @@ describe("the pane", () => {
           executors: () =>
             Promise.resolve({
               runs: [
-                ...(!posted.some((p) => p.tool === "answer_run")
+                ...(!posted.some((p) => p.tool === "answer_executor")
                   ? [parked]
                   : after.gone
                     ? []
@@ -1885,7 +1890,7 @@ describe("the pane", () => {
         },
       });
       await settle();
-      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the executor" }), {
         target: { value: "Yes, delete it." },
       });
       runsAskedAtPress = asked.filter((a) => a.kind === "executors").length;
@@ -1903,17 +1908,17 @@ describe("the pane", () => {
       expect(
         document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
       ).toBe("pending");
-      expect(outcome()).toBe("Answer sent. Waiting for CTO’s run to take it.");
+      expect(outcome()).toBe("Answer sent. Waiting for CTO’s executor to take it.");
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
-    test("says the run ended, not that it was answered, when its record goes away", async () => {
+    test("says the executor ended, not that it was answered, when its record goes away", async () => {
       await answerRun({ gone: true });
       expect(
         document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
       ).toBe("pending");
-      expect(outcome()).toBe("Answer sent. CTO’s run has ended.");
+      expect(outcome()).toBe("Answer sent. CTO’s executor is no longer running.");
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
@@ -1939,7 +1944,7 @@ describe("the pane", () => {
         document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
       ).toBe("pending");
       expect(outcome()).toBe(
-        "Answer recorded. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
+        "Answer recorded. The Senior Backend Engineer is busy executing GP-4 and picks this up next.",
       );
     });
 
@@ -1961,7 +1966,7 @@ describe("the pane", () => {
         [],
         {
           refused: 409,
-          body: { error: "already_answered", tool: "answer_run", detail: said },
+          body: { error: "already_answered", tool: "answer_executor", detail: said },
         },
       );
       await settle();
@@ -1996,7 +2001,7 @@ describe("the pane", () => {
           answered_at: "2026-09-30T11:35:00Z",
         },
         [],
-        { refused: 409, body: { error: "already_answered", tool: "answer_run" } },
+        { refused: 409, body: { error: "already_answered", tool: "answer_executor" } },
       );
       await settle();
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
@@ -2025,7 +2030,7 @@ describe("the pane", () => {
       expect(outcome()).toBeUndefined();
       expect(
         screen.getByText(
-          "CTO’s run could not use your answer and is waiting on its question again. Answer it again.",
+          "CTO’s executor could not use your answer and is waiting on its question again. Answer it again.",
         ),
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Send answer" })).toBeTruthy();
@@ -2366,15 +2371,15 @@ describe("what was answered", () => {
     expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
   });
 
-  // A CODING RUN'S QUESTION, ONCE ANSWERED, IS READ BACK AS AN ASK IS. The
+  // AN EXECUTOR'S QUESTION, ONCE ANSWERED, IS READ BACK AS AN ASK IS. The
   // engine lists it in `answered_decisions` beside the work items' asks, and
-  // the Inbox drew none of it: the row read the item's `ask`, which a run's
-  // carries none of. It is the same row and the same pane, with the run's
-  // options in place of a conversation it never had.
+  // the Inbox drew none of it: the row read the item's `ask`, which an
+  // executor's carries none of. It is the same row and the same pane, with
+  // the executor's options in place of a conversation it never had.
   //
   // Mutation: key a run's answered row by its turn alone, drop its options
   // or their mark, or draw the reply box, and a case below fails.
-  describe("a coding run's question", () => {
+  describe("an executor's question", () => {
     function answeredRun(answer: Record<string, unknown> = {}) {
       return {
         at: new Date(Date.now() - 60 * 60_000).toISOString(),
@@ -2426,7 +2431,7 @@ describe("what was answered", () => {
       fireEvent.click(row);
       await settle();
       expect(location.hash).toBe("#/inbox?row=run%3Aturn-7%3Aq1");
-      expect(byline()).toBe("CTO’s coding run asked for your approval on LEAD-12");
+      expect(byline()).toBe("CTO’s executor asked for your approval on LEAD-12");
       expect(
         screen.getByRole("heading", { name: "Which branch should the fix target?" }),
       ).toBeTruthy();
@@ -2451,8 +2456,8 @@ describe("what was answered", () => {
       expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
         "You chose Target main (Recommended)",
       );
-      expect(screen.getByRole("link", { name: "Open the run" }).getAttribute("href")).toBe(
-        "#/live/runs/turn-7",
+      expect(screen.getByRole("link", { name: "Open the executor" }).getAttribute("href")).toBe(
+        "#/live/executors/turn-7",
       );
       // NO CONVERSATION AND NO REPLY BOX: a run's question has no thread.
       expect(screen.queryByText("Replies to this question")).toBeNull();
@@ -2601,9 +2606,9 @@ describe("what was answered", () => {
         },
       };
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
-      const sent = () => posted.some((p) => p.tool === "answer_run");
+      const sent = () => posted.some((p) => p.tool === "answer_executor");
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -2649,7 +2654,7 @@ describe("what was answered", () => {
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
       await settle();
       expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
-      expect(byline()).toBe("CTO’s coding run asked for your approval on LEAD-12");
+      expect(byline()).toBe("CTO’s executor asked for your approval on LEAD-12");
       const answered = screen.getByRole("region", { name: "Answered, 1" });
       expect(answered.querySelector(".crewlet-inbox-row--selected")?.textContent).toContain(
         "You chose Target main",
@@ -2679,7 +2684,7 @@ describe("what was answered", () => {
       );
     });
 
-    // ASKED ON EVERY COMPANY: a coding run's question is answered here
+    // ASKED ON EVERY COMPANY: an executor's question is answered here
     // whatever runs the tracker, and so is read back here.
     test("is listed where the company runs another tracker", async () => {
       mount({
@@ -2705,7 +2710,7 @@ describe("a burst of live pushes", () => {
     parked: true,
     resets_at: "2026-10-27T23:30:00Z",
     since: "2026-10-27T23:16:00Z",
-    cli: "claude-code",
+    harness: "claude-code",
     subscription: true,
   };
   function failed(n: number) {

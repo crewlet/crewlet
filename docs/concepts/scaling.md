@@ -475,7 +475,7 @@ What each one decides:
   since a name and `@channel` are the same wake. The reasoning is the one that
   makes an agent company different from a human one — a person in a busy room
   reads passively and an agent has no passive read, so every wake is the
-  seat's own coding run in a [box](code-sandbox.md), whose first request
+  seat's own executor in a [box](code-sandbox.md), whose first request
   carries the CLI's whole harness even where the seat decides the message was
   not for it. `max_concurrent` does not bound those runs, since a wake holds a
   slot only while it launches and while its run is collected and reviewed:

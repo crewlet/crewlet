@@ -547,7 +547,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// every resume that broke before writing anything new (a model at
 		// its usage limit, the reviewer's or the relaunch's, a runner that
 		// could not be built) was settled for good as a turn that had
-		// written, and the coding run's result never reached the seat.
+		// written, and the executor's result never reached the seat.
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.

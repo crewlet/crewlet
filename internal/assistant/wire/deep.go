@@ -11,7 +11,7 @@ import (
 )
 
 // DEEP WORK AND FILES (ADR-0054): the values the drawer reads about a turn that
-// escalated into a coding CLI's own harness, and about the files a person
+// escalated into a harness, and about the files a person
 // attaches and a run delivers.
 //
 // A deep run is ONE STEP of its turn ([StepEvent.Deep]), re-sent as it
@@ -36,7 +36,7 @@ const (
 	// DeepStopped is a run the person stopped.
 	DeepStopped DeepState = "stopped"
 	// DeepFailed is a run that ended without its report: a limit reached, a
-	// box that could not start, a CLI that failed.
+	// box that could not start, a harness that failed.
 	DeepFailed DeepState = "failed"
 )
 

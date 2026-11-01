@@ -11,7 +11,7 @@ import (
 )
 
 // THE MODELS SCREEN WAITS AS LONG AS THE ENGINE WORKS. A test, a credential's
-// test and a retry each run a CLI, and the engine bounds each by its own
+// test and a retry each run a harness, and the engine bounds each by its own
 // budget, well past the dashboard's ordinary request deadline: the route's
 // for a check and a credential's test, and the engine's own probe budget for
 // a retry, the one bound a retry is held to. The page waits

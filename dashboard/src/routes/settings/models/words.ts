@@ -9,7 +9,7 @@
  */
 
 import {
-  CLI_PRODUCTS,
+  HARNESS_PRODUCTS,
   type RunnerCellName,
   type ModelAlarmKind,
   type ModelCheckName,
@@ -66,7 +66,7 @@ export const CHECK: Record<ModelCheckName, string> = {
   smoke: "Answers a call",
   shell: "Shell and files",
   web: "Web tools",
-  executor: "Coding runs",
+  executor: "Executor",
 };
 
 /** Where a device sign-in is, as its panel says it. */
@@ -167,11 +167,11 @@ export function isFastModel(model: string): boolean {
 }
 
 /** A CLI's product name, or its key for a custom one. */
-export function product(agent: string): string {
-  return CLI_PRODUCTS[agent] ?? agent;
+export function product(harness: string): string {
+  return HARNESS_PRODUCTS[harness] ?? harness;
 }
 
-/** Where a model's coding runs happen, as the wizard's choice and the model's page both name it. */
+/** Where a model's executors run, as the wizard's choice and the model's page both name it. */
 export const RUN_IN: Record<RunnerCellName, string> = {
   direct: "On this engine's host",
   container: "In a container",

@@ -16,7 +16,7 @@
  * also marks the notices that asked it read, so an answered question does not
  * come back as an update.
  *
- * WHAT WAS DONE STAYS ON SCREEN FOR A MOMENT: an answer, a run's answer, a read
+ * WHAT WAS DONE STAYS ON SCREEN FOR A MOMENT: an answer, an executor's answer, a read
  * or a snooze tells the screen (`onSettled`), which shows the outcome here and
  * then opens the next row.
  */
@@ -306,7 +306,7 @@ function OpenPane({
 
 /**
  * "Answered Exact search (Recommended)", where the controls that answered it
- * were: an ask's, or a coding run's once the run took it.
+ * were: an ask's, or an executor's once it took the answer.
  */
 function answeredWith(answer: AskAnswer): ReactNode {
   return (
@@ -451,7 +451,7 @@ const WAS_ASKED: Readonly<Record<string, string>> = {
 
 /**
  * An answered question, read in full: the page it was answered on with the
- * buttons replaced by the answer, an ask's or a coding run's alike.
+ * buttons replaced by the answer, an ask's or an executor's alike.
  *
  * WHO ANSWERED IS SAID, because it is not always the reader: a colleague may
  * answer a question put to you, and the line under the answer says so and
@@ -464,10 +464,10 @@ const WAS_ASKED: Readonly<Record<string, string>> = {
  * record on the task since (`followed_up`). A person who asked has no seat
  * state to read, so their steps stop at the answer.
  *
- * A CODING RUN'S has no thread and no record on a task to follow, so the
- * reading is the run's ask itself: its context, and the options it offered
- * with the chosen one marked, as `RunPane` draws them once it is answered
- * there, then the way to the run.
+ * AN EXECUTOR'S has no thread and no record on a task to follow, so the
+ * reading is its ask itself: its context, and the options it offered with the
+ * chosen one marked, as `RunPane` draws them once it is answered there, then
+ * the way to the executor.
  */
 function AnsweredPane({
   answered,
@@ -495,7 +495,7 @@ function AnsweredPane({
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
-            {run ? `’s coding run ${asked}` : ` ${asked}`}
+            {run ? `’s executor ${asked}` : ` ${asked}`}
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
@@ -597,13 +597,13 @@ function AskFollowThrough({
   );
 }
 
-/** The way from a coding run's question to the run, after what is said of its hold. */
+/** The way from an executor's question to its page, after what is said of its hold. */
 function RunLink({ turnId, hold = "" }: { turnId: string; hold?: string }) {
   return (
     <Text as="p" variant="caption">
       {hold ? `${hold}. ` : ""}
-      <Link href={href(["live", "runs", turnId])} size="inherit">
-        Open the run
+      <Link href={href(["live", "executors", turnId])} size="inherit">
+        Open the executor
       </Link>
     </Text>
   );
@@ -697,10 +697,10 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
       return (
         <ButtonLink
           {...look}
-          href={href(["live", "runs", evidence.ref])}
+          href={href(["live", "executors", evidence.ref])}
           leadingIcon={<SquareTerminalGlyph size="sm" />}
         >
-          {evidence.label || "Coding run"}
+          {evidence.label || "Executor"}
         </ButtonLink>
       );
     case "url":
@@ -826,13 +826,13 @@ function Conversation({
 }
 
 /**
- * A coding run parked on a question, read as an ask is: its question as the
- * title (`RunQuestion`), its context as Markdown, the run's recommendation
- * with the evidence it cites, then the answer. A run that asked to choose is
- * answered with one press of an option (`answer_run{turn_id, launch_id,
+ * An executor parked on a question, read as an ask is: its question as the
+ * title (`RunQuestion`), its context as Markdown, the executor's
+ * recommendation with the evidence it cites, then the answer. A question that
+ * asked to choose is answered with one press of an option (`answer_executor{turn_id, launch_id,
  * choice}`), the recommended one first and filled, through the same buttons
  * an ask's options are (`AnswerChoices`); "Something else", and an open
- * question from the start, answers in words (`answer_run{turn_id, launch_id,
+ * question from the start, answers in words (`answer_executor{turn_id, launch_id,
  * answer}`). Every answer names the question this pane drew by its launch.
  */
 function RunPane({
@@ -846,13 +846,13 @@ function RunPane({
   frame: Frame;
   now: number;
   /**
-   * The answer given here before, which the run took ([PaneProps.answered]):
+   * The answer given here before, which the executor took ([PaneProps.answered]):
    * drawn as taken, with no controls and nothing left to follow.
    */
   answered: AskAnswer | undefined;
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
-  const write = useAct("answer_run");
+  const write = useAct("answer_executor");
   const [text, setText] = useState("");
   // "SOMETHING ELSE" OPENED THE FIELD in the options' place.
   const [open, setOpen] = useState(false);
@@ -860,7 +860,7 @@ function RunPane({
   const [chosen, setChosen] = useState<string | null>(null);
   // THE ANSWER THE ENGINE ACCEPTED, and what it said back about it: the
   // question it answers and the answer's own id. `pending` is all the press
-  // can say; the run's own record says the rest (see `answerFate`).
+  // can say; the executor's own record says the rest (see `answerFate`).
   const [given, setGiven] = useState<GivenAnswer | null>(null);
   // WHY THE LAST ANSWER WAS NOT USED, said until the person answers again.
   const [unused, setUnused] = useState<string | null>(null);
@@ -870,16 +870,17 @@ function RunPane({
   // whether it said so in its own sentence (`worded`), the refusal's
   // `detail`, which names who answered. An older node may send none, and
   // the dashboard's sentence for the code, which names nobody, is drawn.
-  // When it was answered is said beside it off the run's record, on the
+  // When it was answered is said beside it off the executor's record, on the
   // reader's own clock.
   const [refusedAnswered, setRefusedAnswered] = useState<{ worded: boolean } | null>(null);
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
-  // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
-  // is read as the run finishing with it rather than as the run ending.
+  // WHETHER THIS ANSWER WAS SEEN ON THE EXECUTOR'S RECORD, so a record that
+  // then goes away is read as the executor finishing with it rather than as
+  // its ending.
   const seenTaken = useRef(false);
   // WHAT THE PANE SAYS WAS ANSWERED: the answer sent from it, or the one the
-  // run took before it opened, which has no fate left to follow.
+  // executor took before it opened, which has no fate left to follow.
   const said = given?.answer ?? answered ?? null;
   const fate = given
     ? answerFate(given, record, runs.data !== undefined, seenTaken.current)
@@ -898,8 +899,8 @@ function RunPane({
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
   // asked for an answer to a question it never showed.
   const hidden = questionWithheld(run);
-  // THE RUN'S OWN TASK AND THE RUN ITSELF ARE NOT EVIDENCE of anything: the
-  // byline names the one and the line at the end opens the other.
+  // THE EXECUTOR'S OWN TASK AND THE EXECUTOR ITSELF ARE NOT EVIDENCE of
+  // anything: the byline names the one and the line at the end opens the other.
   const evidence = (decision?.evidence ?? []).filter(
     (ev) =>
       !(ev.kind === "task" && (ev.ref === run.work_item?.id || ev.ref === run.work_item?.key)) &&
@@ -925,7 +926,7 @@ function RunPane({
     if (told.current === given.answerId + fate) return;
     told.current = given.answerId + fate;
     if (fate === "recorded") {
-      // RECORDED ON THE RUN, its resume waiting for the seat: answered, and
+      // RECORDED ON THE EXECUTOR, its resume waiting for the seat: answered, and
       // kept open, saying what the seat is doing first.
       onSettled("Answered", given.answer, true);
       return;
@@ -935,28 +936,29 @@ function RunPane({
       return;
     }
     if (fate === "ended") {
-      // NEITHER ANSWERED NOR REFUSED: the run is over, and that is all the
-      // record says. Kept open, as sent, with the run's end said beside it.
+      // NEITHER ANSWERED NOR REFUSED: the executor is no longer running, and
+      // that is all the record says. Kept open, as sent, with that said
+      // beside it.
       return;
     }
     // NOT USED, so the person is told so and why, never left looking at
-    // "Sent" for an answer the run will not read.
+    // "Sent" for an answer the executor will not read.
     if (fate === "superseded") {
       setUnused("Your answer was not used: another answer was recorded first.");
       setSuperseded(true);
     } else {
       setUnused(
         fate === "declined"
-          ? `${frame.name}’s run could not use your answer and is waiting on its question again. Answer it again.`
-          : `${frame.name}’s run moved on to a new question before your answer reached it. Answer the question above.`,
+          ? `${frame.name}’s executor could not use your answer and is waiting on its question again. Answer it again.`
+          : `${frame.name}’s executor moved on to a new question before your answer reached it. Answer the question above.`,
       );
     }
     setGiven(null);
     onSettled(null, undefined, true);
   }, [fate, given, frame.name, onSettled, record, now]);
 
-  // THE SEAT'S OTHER JOB, while this answer waits for it: another of the
-  // seat's coding runs holding the seat.
+  // THE SEAT'S OTHER WORK, while this answer waits for it: its executor on
+  // another turn holding the seat.
   const busyOn = runs.data?.runs.find(
     (r) =>
       r.agent_handle === run.agent_handle &&
@@ -967,18 +969,18 @@ function RunPane({
   // ONE SEND for a choice and for words: the press differs only in what it
   // carries, and the answer's fate is read the same way after it.
   const send = async (args: { choice: string } | { answer: string }, said: AskAnswer) => {
-    // THE QUESTION THIS PANE DREW rides the answer, so a run that moved on to
-    // another one refuses it rather than taking it as that one's answer.
+    // THE QUESTION THIS PANE DREW rides the answer, so an executor that moved
+    // on to another one refuses it rather than taking it as that one's answer.
     const result = await write.run(
       { turn_id: run.turn_id, launch_id: run.launch_id, ...args },
-      { done: `Sent your answer to ${frame.name}’s coding run` },
+      { done: `Sent your answer to ${frame.name}’s executor` },
     );
     // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered and
-    // conflict (the run asks another question now) are codes that look again
-    // at what the press would have moved (protocol/writeOutcome.ts),
+    // conflict (the executor asks another question now) are codes that look
+    // again at what the press would have moved (protocol/writeOutcome.ts),
     // executors and decisions among it. Who answered and when arrive
-    // without a read of this pane's own, and so does the question the run
-    // asks now, which this pane then draws under the engine's sentence.
+    // without a read of this pane's own, and so does the question the
+    // executor asks now, which this pane then draws under the engine's sentence.
     setRefusedAnswered(
       result?.kind === "refused" && result.code === "already_answered"
         ? { worded: result.detail !== "" }
@@ -994,7 +996,7 @@ function RunPane({
         answerId: typeof receipt.answer_id === "string" ? receipt.answer_id : "",
       });
       // SENT, NOT ANSWERED: the row stays open, marked as sent, until the
-      // run's record says the answer was taken or why it was not.
+      // executor's record says the answer was taken or why it was not.
       onSettled("Sent", said, true);
     }
   };
@@ -1028,7 +1030,7 @@ function RunPane({
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
-            {"’s coding run"}
+            {"’s executor"}
             {decision && ASKED[decision.role] ? ` ${ASKED[decision.role]}` : ""}
             {frame.task && <> on {frame.task}</>}
           </>,
@@ -1038,8 +1040,8 @@ function RunPane({
         ) : (
           <ReadingPaneTitle>
             {hidden
-              ? "This run is waiting on a question you can’t see."
-              : "The run paused on a question"}
+              ? "This executor is waiting on a question you can’t see."
+              : "The executor paused on a question"}
           </ReadingPaneTitle>
         )}
         {context && (
@@ -1063,8 +1065,8 @@ function RunPane({
           chips
         )}
         {said !== null && decision && (
-          // THE OPTIONS STAY, THE ONE CHOSEN MARKED, as an answered run's
-          // pane reads them once it has left Needs you.
+          // THE OPTIONS STAY, THE ONE CHOSEN MARKED, as an answered
+          // executor's pane reads them once it has left Needs you.
           <AnsweredChoices
             options={options}
             recommended={decision.recommended}
@@ -1072,20 +1074,22 @@ function RunPane({
           />
         )}
         {said !== null ? (
-          // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
-          // success check a used answer gets.
+          // PENDING UNTIL THE EXECUTOR TOOK IT: sent, recorded or ended is
+          // never the success check a used answer gets.
           <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
             {fate === "taken" ? (
               answeredWith(said)
             ) : fate === "recorded" ? (
               <>
                 Answer recorded.{" "}
-                {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
+                {busyOn
+                  ? busyLine(busyOn, frame.name)
+                  : `${frame.name}’s executor picks it up next.`}
               </>
             ) : fate === "ended" ? (
-              <>Answer sent. {frame.name}’s run has ended.</>
+              <>Answer sent. {frame.name}’s executor is no longer running.</>
             ) : (
-              <>Answer sent. Waiting for {frame.name}’s run to take it.</>
+              <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
             )}
           </ReadingPaneOutcome>
         ) : superseded ? (
@@ -1109,10 +1113,10 @@ function RunPane({
             {inWords ? (
               <>
                 {/* THE FIELD TAKES THE FOCUS only when a press opened it:
-                    stepping onto a run with j or k must not drop the reader
-                    into a field. */}
+                    stepping onto a question with j or k must not drop the
+                    reader into a field. */}
                 <Field
-                  label="Your answer to the run"
+                  label="Your answer to the executor"
                   value={text}
                   onChange={setText}
                   onSubmit={sendWords}
@@ -1163,7 +1167,7 @@ function RunPane({
               />
             )}
             {/* BESIDE THE REFUSAL'S SENTENCE, when the question was
-                answered, on the reader's clock, off the run's record, naming
+                answered, on the reader's clock, off the executor's record, naming
                 who answered only where nothing above it does ([answererNamed]). */}
             {refusedAnswered && record?.answered_at && (
               <Text as="p" variant="caption">
@@ -1192,12 +1196,13 @@ function answeredAt(record: ExecutorRow, now: number, who: boolean): string {
 }
 
 /**
- * What a seat busy on another coding run is doing, for an answer waiting on it:
- * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
+ * What a seat whose executor is busy on another turn is doing, for an answer
+ * waiting on it: "The Senior Backend Engineer is busy executing GP-4 and picks
+ * this up next."
  */
 function busyLine(busy: ExecutorRow, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
-  const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";
+  const on = busy.work_item?.key ? `executing ${busy.work_item.key}` : "executing another turn";
   return `${who} is busy ${on} and picks this up next.`;
 }
 

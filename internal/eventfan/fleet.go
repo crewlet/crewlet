@@ -145,7 +145,7 @@ type TurnDetail struct {
 
 	// Nodes is every node that PUBLISHED any of this turn's events, sorted —
 	// where the turn RAN. More than one for a turn resumed on another node
-	// after a restart, or one whose seat moved while a coding run was out.
+	// after a restart, or one whose seat moved while its executor was out.
 	//
 	// READ OFF THE ROWS ([store.EventRecord.Node]), never off which node
 	// answered: a node without the `data` role keeps no event log, and the

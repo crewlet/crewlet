@@ -3185,7 +3185,7 @@ export function targetLabel(day: string): string {
 /**
  * What a decision says beside its question, as the texts a reader reads with
  * it: the asker's reasoning, then each option's label and detail. ONE COPY
- * for a work item's ask and a coding run's, whose `TokenScope` both read it.
+ * for a work item's ask and an executor's, whose `TokenScope` both read it.
  */
 export function decisionTexts(decision: WorkDecision | undefined): string[] {
   if (!decision) return [];

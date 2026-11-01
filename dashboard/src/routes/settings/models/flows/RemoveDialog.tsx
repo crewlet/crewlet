@@ -60,7 +60,7 @@ function pathOf(segments: readonly (string | number)[]): string {
     .join("");
 }
 
-/** The models a reference may move to: a coding job needs a CLI that runs one, the assistant a model that denies web tools. */
+/** The models a reference may move to: a seat's executor needs a CLI that can run one, the assistant a model that denies web tools. */
 export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
   return models.filter(
     (m) =>

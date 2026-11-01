@@ -47,7 +47,7 @@ type FleetAsker interface {
 // SteerDeps are steer_turn's dependencies.
 type SteerDeps struct {
 	// Asker reaches every node, one of which runs a turn that has not
-	// launched its coding run yet. Nil omits the tool.
+	// launched its executor yet. Nil omits the tool.
 	Asker FleetAsker
 
 	// Wire signs every request the tool scatters and verifies every reply,
@@ -59,7 +59,7 @@ type SteerDeps struct {
 	// not verify could name whichever seat the caller leads.
 	Wire *signedask.Channel[steer.Request, steer.Reply]
 
-	// Runs is where a turn's notes wait once it has launched its coding run:
+	// Runs is where a turn's notes wait once it has launched its executor:
 	// the run's record, which every node reads ([RunSteers]). Required with
 	// Asker — a surface that asked only the scatter would send every note to
 	// a turn whose run is out to nobody.
@@ -74,7 +74,7 @@ type SteerDeps struct {
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 }
 
-// RunSteers is where a turn's notes wait from the launch of its coding run to
+// RunSteers is where a turn's notes wait from the launch of its executor to
 // the turn's end: the run's own record in the coordination store, sealed
 // (internal/engine, runsteer.go, and ADR-0067). Declared here, by the consumer.
 type RunSteers interface {
@@ -117,7 +117,7 @@ type RunFiled struct {
 // # Where the note goes
 //
 // A turn's notes wait in one of two places, one after the other. Once the turn
-// has launched its coding run, on the RUN'S RECORD, which every node reads: the
+// has launched its executor, on the RUN'S RECORD, which every node reads: the
 // tool reads it first, and files the note there itself. Before that, in the box
 // the turn's first segment holds on the node running it, which nothing here can
 // read — so the note is SCATTERED to the fleet ([steer.Request]), and the node
@@ -145,7 +145,7 @@ type RunFiled struct {
 //
 // `pending`: the turn took the note, and `reads` says when it will be read —
 // `next_step`, at the turn's next step, or `after_answer`, once the person its
-// coding run asked has answered and whatever resumes the turn reads it. What
+// executor asked has answered and whatever resumes the turn reads it. What
 // became of it is recorded where the turn reads it, as `agent_turn_steered` —
 // `delivered` where it was read, or `expired` if the turn ended first. This node
 // sees no further.
@@ -179,9 +179,10 @@ func (t *steerTurn) Description() string {
 	return "Send a short note to an agent's turn while it is running. The turn " +
 		"reads it at its next step, as a correction or addition to the work it " +
 		"has in hand, and keeps to it for the rest of the turn: a note sent while " +
-		"the turn's coding run works reaches the run between its steps, and is read by the review " +
-		"that judges the run and by every run the turn launches after it; one sent while the run " +
-		"waits on a person's answer is read once the turn resumes. Use it to " +
+		"the turn's executor works in its box reaches it between its steps, and is read by " +
+		"the review that judges its work and by every launch the turn makes after it; one " +
+		"sent while the executor waits on a person's answer is read once the turn resumes. " +
+		"Use it to " +
 		"redirect work you can see going the wrong way; for anything longer than " +
 		"a paragraph, or for work the turn has not started, write on the work " +
 		"item instead. Find running turns and their ids on the live view. Only " +
@@ -312,7 +313,7 @@ func (t *steerTurn) file(ctx context.Context, turnID string, note steer.Note) (t
 				"error", err.Error())
 		}
 		return nodeFailure(ctx, SteerTurnTool, err, fmt.Sprintf("Could not file the note on "+
-			"the record of turn %s's coding run", clip(turnID)), ""), nil
+			"the record of turn %s's executor", clip(turnID)), ""), nil
 	}
 	return t.answered(turnID, note.ID, filed.Status, filed.Reads, filed.AgentHandle)
 }
@@ -367,7 +368,7 @@ func (t *steerTurn) runSeat(ctx context.Context, turnID string) (RunSeat, bool, 
 				"error", err.Error())
 		}
 		return RunSeat{}, false, refusalOf(nodeFailure(ctx, SteerTurnTool, err,
-			fmt.Sprintf("Could not read the record of turn %s's coding run", clip(turnID)),
+			fmt.Sprintf("Could not read the record of turn %s's executor", clip(turnID)),
 			"Nothing was sent."))
 	}
 	return seat, recorded, nil
@@ -404,7 +405,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, r
 		owner, named := t.seatOf(seat.Agent, seat.Handle)
 		if !named {
 			return refusalOf(refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("The "+
-				"record of turn %s's coding run names no seat, so whether you may steer it "+
+				"record of turn %s's executor names no seat, so whether you may steer it "+
 				"cannot be decided. Nothing was sent.", clip(turnID))))
 		}
 		return askAuthority(ctx, t.authorize, authz.ActionTurnSteer,
@@ -566,16 +567,16 @@ func unopenedRefusal(turnID string, unverified error) tools.Result {
 	switch {
 	case errors.Is(unverified, steer.ErrSeatKeyUnknown):
 		return refusedBy(tools.RefusalUnavailable, unverified, "Whose turn this is cannot "+
-			"be decided: its coding run's record names its seat under a key this node "+
+			"be decided: its executor's record names its seat under a key this node "+
 			"doesn't hold, so nothing was sent, and sending it again won't change that. "+
 			"Tell the person steering that an administrator needs to give the fleet's "+
 			"nodes the same keys.")
 	case errors.Is(unverified, steer.ErrSeatUnnamed):
 		return refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose turn %s "+
-			"is cannot be decided: its run's record names no seat. Nothing was sent.",
+			"is cannot be decided: its executor's record names no seat. Nothing was sent.",
 			clip(turnID)))
 	}
 	return refusedBy(tools.RefusalUnavailable, waitless(), fmt.Sprintf("Whose turn %s is "+
-		"cannot be decided: the seat its run's record names does not verify. Nothing was "+
+		"cannot be decided: the seat its executor's record names does not verify. Nothing was "+
 		"sent.", clip(turnID)))
 }

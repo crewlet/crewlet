@@ -1,7 +1,7 @@
 // Package procgroup addresses a child process TREE with one signal.
 //
 // Every long-running child this engine starts is launched through something
-// that forks: an MCP server behind `uvx` or `npx`, a coding CLI behind a Node
+// that forks: an MCP server behind `uvx` or `npx`, a harness behind a Node
 // or Bun runtime, a sandbox command behind a shell. Signalling the process
 // Go started reaches the launcher and nothing beneath it, so the real worker
 // survives its parent, keeps the inherited stderr descriptor open, and goes
@@ -39,7 +39,7 @@ func Set(cmd *exec.Cmd) { set(cmd) }
 //   - No controlling terminal, so a Ctrl-C in the operator's shell does not
 //     reach into a running job.
 //   - Reparenting to init if the engine dies, which is what lets a detached
-//     coding run survive a restart and be collected by the next engine.
+//     executor survive a restart and be collected by the next engine.
 //
 // A session leader also leads its own process group, so everything [Kill],
 // [Terminate], [Stop] and [Continue] do for a Set child works here too.
@@ -48,7 +48,7 @@ func Detach(cmd *exec.Cmd) { detach(cmd) }
 // Stop suspends every process in the group led by pid (SIGSTOP).
 //
 // Uncatchable by design: it is the pause a sandbox takes while it waits for a
-// human to answer a coding agent's question, and a job that could decline to
+// human to answer a harness's question, and a job that could decline to
 // pause would go on spending the seat's budget.
 func Stop(pid int) error { return signal(pid, sigStop) }
 
@@ -87,7 +87,7 @@ func Kill(pid int) error { return signal(pid, sigKill) }
 // below would address the caller's own group, which is every process in the
 // engine's session. One is the sharper case: kill(-1, sig) is the BROADCAST
 // form, delivered to every process the caller has permission to signal, so a
-// SIGKILL "to the group led by pid 1" takes down the engine, every coding job
+// SIGKILL "to the group led by pid 1" takes down the engine, every executor
 // and, on a workstation, the operator's whole login. No child this package
 // addresses can be pid 1: init holds it for the life of the pid namespace,
 // the engine's own included when it runs as a container's first process.

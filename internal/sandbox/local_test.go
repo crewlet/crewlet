@@ -158,7 +158,7 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 		t.Fatalf("the run env did not reach the child: %q", parts[1])
 	}
 	if parts[2] != "" {
-		t.Fatal("the engine's own API key reached the coding agent")
+		t.Fatal("the engine's own API key reached the harness")
 	}
 	if !strings.HasPrefix(parts[3], box.Home()) {
 		t.Fatalf("TMPDIR = %q, want it inside the box", parts[3])
@@ -213,7 +213,7 @@ func TestThePerCommandEnvOverridesTheRunEnv(t *testing.T) {
 // Connect, and the box it gets back holds no environment of its own: so a
 // credential replaced between the two launches reaches the second job, and one
 // the new sign-in no longer names (a token swapped for a key) is gone from it
-// rather than lingering beside the new one, where a CLI that prefers the old
+// rather than lingering beside the new one, where a harness that prefers the old
 // variable would sign in with a credential the vendor already refused. That is
 // what lets a job refused on a replaced sign-in be relaunched in its own box
 // and sign in with the new one.
@@ -457,7 +457,7 @@ func TestClosingABoxKillsTheWholeProcessTree(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	if !procgrouptest.AwaitGone(t, child, 10*time.Second) {
-		t.Fatal("the coding agent's own child survived teardown")
+		t.Fatal("the harness's own child survived teardown")
 	}
 }
 
@@ -717,7 +717,7 @@ func TestTheLoginIsSeededInAndARefreshedOneIsWrittenBack(t *testing.T) {
 	if got, err := os.ReadFile(seeded); err != nil || string(got) != `{"token":"first"}` {
 		t.Fatalf("the login was not seeded into the box: %q, %v", got, err)
 	}
-	// The coding agent rotates its token mid-run.
+	// The harness rotates its token mid-run.
 	if err := os.WriteFile(seeded, []byte(`{"token":"rotated"}`), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -957,7 +957,7 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 }
 
 // THE COMPARISON AND THE WRITE ARE ONE STEP against every other writer of the
-// shared directory: a write-back takes the directory's lock, which the CLI
+// shared directory: a write-back takes the directory's lock, which the harness
 // backend's seats and `crewlet llm` commands take for theirs, so it waits for
 // a writer that holds it rather than comparing against a login being replaced.
 //
@@ -1468,7 +1468,7 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 	}
 	blob, _ := os.ReadFile(box.layout.envFile())
 	if strings.Contains(string(blob), "SETUP_ONLY") {
-		t.Fatalf("the coding job inherited the setup phase's environment: %q", blob)
+		t.Fatalf("the executor's launch inherited the setup phase's environment: %q", blob)
 	}
 }
 
@@ -1571,7 +1571,7 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 	}
 }
 
-// `docker run` spawning a stuck child is precisely the case: killing the CLI
+// `docker run` spawning a stuck child is precisely the case: killing the harness
 // alone would leave it behind.
 //
 // THE FIXTURE IS WAITED FOR, NOT RACED. This ran the tree under a 1s timeout
@@ -1703,7 +1703,7 @@ func TestAHostCommandWithNoEnvironmentIsNotStarted(t *testing.T) {
 	}
 }
 
-// THE CONTAINER RUNTIME'S CLI SEES NONE OF THE ENGINE'S SECRETS, and every
+// THE CONTAINER RUNTIME'S HARNESS SEES NONE OF THE ENGINE'S SECRETS, and every
 // setting of its own.
 //
 // Every `docker run`, `exec`, `pause`, `rm`, `ps` and `info` was started with

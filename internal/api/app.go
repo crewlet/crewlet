@@ -596,7 +596,7 @@ type Options struct {
 	// beside its probes, to its own host's boxes alone ([Probes]).
 	OtelReceiver *sandbox.OtelReceiver
 
-	// Bridge serves a running seat's tool surface to a coding agent over
+	// Bridge serves a running seat's tool surface to a harness over
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
@@ -762,7 +762,7 @@ func New(opts Options) (*App, error) {
 		// live projection over the placement below.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
-		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
+		Tools:  func() any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
@@ -870,6 +870,9 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
+	// And which built-ins a seat is offered: the registry the engine
+	// applied, and the pair its runner adds, which only the engine holds.
+	sources.Builtins = opts.Runtime.Builtins
 	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
 	// serves and the same authority every one of its tools is decided by:
 	// a list computed anywhere else would be a second opinion about which

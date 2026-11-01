@@ -18,7 +18,7 @@ export type Flow = "add" | "remove" | "test" | "retry" | "device" | "edit";
 
 /** The wizard's steps, in the order a person walks them, by the `step` parameter. */
 export const WIZARD_STEPS = [
-  "cli",
+  "harness",
   "signin",
   "model",
   "runs",
@@ -231,7 +231,7 @@ export function credentialAction(
 ): { flow: Flow; label: string; at?: WizardAt } | null {
   const signIn = model.admin?.sign_in;
   if (!signIn) return null;
-  if (model.agent === "codex" && signIn.mode !== "api-key")
+  if (model.harness === "codex" && signIn.mode !== "api-key")
     return { flow: "device", label: "Sign in with a device code" };
   if (signIn.route === "credentials")
     return {
@@ -273,7 +273,11 @@ export function EntryMenu({
               },
             ]
           : []),
-        { key: "edit", label: "Edit", onSelect: () => onFlow("edit", model.key, { step: "cli" }) },
+        {
+          key: "edit",
+          label: "Edit",
+          onSelect: () => onFlow("edit", model.key, { step: "harness" }),
+        },
         ...(model.executor
           ? [
               {

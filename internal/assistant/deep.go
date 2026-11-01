@@ -25,7 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// DEEP WORK (ADR-0054): a turn that hands its task to a coding CLI running its
+// DEEP WORK (ADR-0054): a turn that hands its task to a harness running its
 // own harness, whose only way into Crewlet is this turn's own surface.
 //
 // # One step, and every call it makes is the turn's
@@ -43,7 +43,7 @@ import (
 // # Suspending around an approval
 //
 // A proposal cannot suspend a vendor's loop the way it suspends the engine's,
-// so the run is told its change is waiting and to end; its box and its CLI
+// so the run is told its change is waiting and to end; its box and its harness
 // session are kept ([DeepWork.Keep]) and the turn parks on the run's step with
 // the box named on the parked record. The person's decision resumes the turn,
 // which continues the run in the same box and session with the decision as
@@ -53,7 +53,7 @@ import (
 // # Its limits
 //
 // A run's wall clock is its config's, never past the turn's read grant (every
-// call it makes is sent on that grant); its Crewlet calls and its CLI's rounds
+// call it makes is sent on that grant); its Crewlet calls and its harness's rounds
 // are capped by its steps, and its tokens by its token cap, all three counted
 // across the continuations of one task. Its tokens are charged to the turn's
 // meter when it ends, and a Stop of the turn kills it.
@@ -72,7 +72,7 @@ const DeepMinRun = time.Minute
 const DeepWrapUp = 3 * time.Minute
 
 // deepShowEvery bounds how often a run's step is re-sent while it works: once
-// a second, which a person reads as live, against a CLI that may write many
+// a second, which a person reads as live, against a harness that may write many
 // lines a second.
 const deepShowEvery = time.Second
 
@@ -375,7 +375,7 @@ func deepEnding(o DeepOutcome, files int) (wire.DeepState, wire.StepState, strin
 
 // deepReport is the label a run's report is read under, decided once for the
 // fence the model reads it in and for the taint every proposal after it
-// carries: a coding CLI's own words, written after it read pages and files
+// carries: a harness's own words, written after it read pages and files
 // nobody in the company wrote (ADR-0054), which nobody in the company vouches
 // for.
 var deepReport = provenance.Label{Source: provenance.SourceDeepWork, Trust: provenance.TrustExternal}

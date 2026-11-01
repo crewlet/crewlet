@@ -47,8 +47,9 @@ import (
 // attribution in its signature is what makes it impossible to call without
 // saying whose cost the call is. What is charged elsewhere: the turn loop's
 // own rounds through meterFor's meter, the round-cap extension judge and a
-// delegated worker's rounds through that same meter, and a coding run when its
-// spend is collected — each of which reaches its event as a phase record.
+// delegated worker's rounds through that same meter, and an executor's launch
+// when its spend is collected — each of which reaches its event as a phase
+// record, except the launch, whose record is its own (executor_collected).
 //
 // A CALL A TURN MAKES IS CHARGED THROUGH THAT SAME METER, which its
 // attribution carries ([auxspend.Use.Budget]): the counters are the seat's and

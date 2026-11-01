@@ -28,7 +28,7 @@ import (
 // seat, and there is nobody here for the answer to come back to), and
 // `lookup_colleague` — which would be useful, but resolves against the turn's
 // own org and has no other source. A run a seat parked on a question IS a
-// person's to answer, though, which is `answer_run`.
+// person's to answer, though, which is `answer_executor`.
 //
 // What is left is the surface an operator's assistant actually needs — and
 // the dashboard, which makes every change it makes through this catalogue
@@ -76,7 +76,7 @@ type OperatorDeps struct {
 	// four differently.
 	Authorize Authorizer
 
-	// Runs answers a parked coding run by its turn — see answerrun.go.
+	// Runs answers a parked executor by its turn — see answerexecutor.go.
 	// A nil desk omits the tool.
 	Runs RunDeps
 
@@ -159,10 +159,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
 			deps.Knowledge != nil && deps.Org != nil},
-		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
-		// person's to answer, and a seat that could answer its own run's
-		// question would be one guessing on its own behalf.
-		{&answerRun{deps: deps.Runs, authorize: deps.Authorize},
+		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
+		// person's to answer, and a seat that could answer its own
+		// executor's question would be one guessing on its own behalf.
+		{&answerExecutor{deps: deps.Runs, authorize: deps.Authorize},
 			deps.Runs.Desk != nil},
 		// NOR THESE: whether a seat works is a person's decision about it,
 		// and a seat that could pause a colleague — or resume itself —

@@ -189,10 +189,10 @@ func (r ChargeRequest) Validate() error {
 // back off the company whenever the seat's write failed, and almost nothing
 // that records spend asks again: the engine's meter stops the round on the
 // error, an auxiliary call's record is logged and dropped, and a collected
-// coding run is offered again only when its resume fails. So the company was
-// left short of spend the vendor had already been paid for — room handed to
-// the next round that the failed write had used, on the counter every seat in
-// the company is judged against.
+// executor launch is offered again only when its resume fails. So the
+// company was left short of spend the vendor had already been paid for — room
+// handed to the next round that the failed write had used, on the counter
+// every seat in the company is judged against.
 //
 // The seat's counter is short by Tokens in the windows the spend was cut for,
 // until they turn over: its own ceiling then judges less than the seat spent,
@@ -498,10 +498,11 @@ type Budgets interface {
 	//
 	// Charge is the gate: it records a round AND decides whether what the
 	// round asked for may follow. Some spend has nothing waiting on a
-	// verdict — a detached coding run is collected minutes or hours after
-	// it started, possibly on another node, and the work it bought is done
-	// — so it is recorded without one. The windows are the ones the spend
-	// is COLLECTED in, which is the only instant the store is told about.
+	// verdict — a detached executor launch is collected minutes or hours
+	// after it started, possibly on another node, and the work it bought is
+	// done — so it is recorded without one. The windows are the ones the
+	// spend is COLLECTED in, which is the only instant the store is told
+	// about.
 	//
 	// It leaves both scopes' refusal stamps alone, because it is not a
 	// decision about room: it neither says the gate turned a call away nor
@@ -576,7 +577,7 @@ type Budgets interface {
 	// read before their first call. Each is a refusal like a charge's, and
 	// the charge that would have stamped it is the one never made, so the
 	// caller records it here. A context assembly that took a seat past its
-	// day, a coding run's post-charge, a person's answers filling the
+	// day, an executor launch's post-charge, a person's answers filling the
 	// company's day: before this verb, each left a window refusing
 	// everything sent its way and saying it had refused nothing.
 	//

@@ -251,7 +251,7 @@ var unmannedHints = map[placement.NodeRole]string{
 	placement.RoleSeats: "no live node runs agents, so every trigger queues up unread. " +
 		"Give a node the 'seats' role.",
 	placement.RoleWorkers: "no live node runs the company-wide duties, so nothing fires on " +
-		"a schedule, no sandbox run is ever collected, and the retention " +
+		"a schedule, no executor's launch is ever collected, and the retention " +
 		"sweeps do not run. Give a node the 'workers' role.",
 }
 

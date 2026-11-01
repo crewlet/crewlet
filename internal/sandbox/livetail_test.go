@@ -66,7 +66,7 @@ func newTailRigOn(t *testing.T, launchNode string) *tailRig {
 	}
 	ctx := t.Context()
 	run := PendingRun{
-		TurnID: "t1", AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
 		SandboxID: box.ID(), Placement: string(Direct), CommandID: "cmd-1",
 		LaunchNode: launchNode,
 	}
@@ -282,7 +282,7 @@ func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
-		TurnID: "t2", AgentHandle: "swe", CodingAgent: "claude-code", Placement: string(Direct),
+		TurnID: "t2", AgentHandle: "swe", Harness: "claude-code", Placement: string(Direct),
 	}, Fence{}); err != nil {
 		t.Fatal(err)
 	}

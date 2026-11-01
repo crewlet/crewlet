@@ -41,7 +41,7 @@ import (
 //     part of?" The conversation ledger keys on it, the turn telemetry
 //     carries it into the event store's conversation_key tag and the
 //     episodes column, the API's answerable-in-chat predicate reads it, and
-//     a parked sandbox run matches a person's answer back to the question
+//     a parked executor matches a person's answer back to the question
 //     that asked it on it — because a person answers on the conversation,
 //     which for a direct message is not the batch their reply lands in.
 //
@@ -252,7 +252,7 @@ func ConversationIdentityOfAll(evs []*events.Event) string {
 // Derived reports whether a key names a real conversation somebody could reply
 // into, as opposed to the per-event fallback.
 //
-// The question a parked sandbox run asks: a run started by a schedule tick or
+// The question a parked executor asks: a run started by a schedule tick or
 // an A2A wake stored a fallback key, which no inbound message can ever
 // reproduce, so telling somebody to "reply in the thread" would send them to a
 // thread that does not exist.

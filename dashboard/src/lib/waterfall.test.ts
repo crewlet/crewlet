@@ -544,7 +544,7 @@ describe("buildWaterfall", () => {
     expect(w.untimed.map((u) => `${u.kind}:${u.label}`)).toEqual(["phase:Execute"]);
   });
 
-  test("a turn that parked on a coding run is one turn: its phase spans the run it waited on", () => {
+  test("a turn that parked on its executor is one turn: its phase spans the launch it waited on", () => {
     // The executor's ONE record, published after the resume, carries its
     // rounds from before the park and after it.
     const execute = phaseRecord({
@@ -581,7 +581,7 @@ describe("buildWaterfall", () => {
       key: "turn-1|execute|1|L1",
       launch: true,
       launchId: "L1",
-      codingAgent: "claude-code",
+      harness: "claude-code",
       clockStart: iso(3_000),
       durationMs: 55_000,
     });
@@ -590,7 +590,7 @@ describe("buildWaterfall", () => {
       event("executor_launched", 3_000, {
         launch_id: "L1",
         started_at: iso(3_000),
-        coding_agent: "claude-code",
+        harness: "claude-code",
       }),
       event("agent_turn_started", 58_500, { started_at: iso(0), resumed: true }),
     ];

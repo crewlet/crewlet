@@ -25,7 +25,7 @@ const NOUN_WORDS: Record<AssistantRecordNoun, string> = {
   artifact: "artifact",
   page: "page",
   turn: "turn",
-  run: "coding run",
+  run: "executor",
   room: "room",
 };
 
@@ -39,7 +39,7 @@ const KIND_WORDS: Record<AssistantResourceRef["kind"], string> = {
   container: "space",
   artifact: "artifact",
   turn: "turn",
-  run: "coding run",
+  run: "executor",
   schedule: "schedule",
   view: "view",
   room: "room",

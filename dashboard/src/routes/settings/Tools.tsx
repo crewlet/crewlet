@@ -66,7 +66,7 @@ import {
   hintsAdvertised,
   schemaFields,
 } from "~/lib/tools.ts";
-import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import type { ToolAnnotations, ToolHint, ToolRow } from "~/contract/tools.ts";
 import type { McpServerStatus } from "~/contract/mcp.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
