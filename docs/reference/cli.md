@@ -3467,8 +3467,8 @@ export` as the fix, since the engine would run that entry signed out. It also
 reads the URLs a box dials back to the engine (`CREWLET_MCP_BRIDGE_URL`,
 `CREWLET_SANDBOX_OTEL_RECEIVER_URL`) exactly as `crewlet run` reads them at
 boot: one the engine would refuse to boot on is reported first, as the node's,
-and fails the run whatever modes the entries run in, since a node that does
-not boot runs no seat.
+and fails the run whatever cell (`run_in`) each entry runs in, since a node
+that does not boot runs no seat.
 
 **`login`** has four shapes because the vendors do:
 

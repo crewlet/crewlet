@@ -41,9 +41,9 @@ type BoxURLs struct {
 // ONE READING FOR TWO READERS: [New], which refuses its boot on any refusal
 // here ([BoxURLs.Refusal]) before anything is opened, and `crewlet llm
 // doctor`, which a deploy script gates on before a node takes seats and which
-// reports every one of these the boot would refuse — whatever mode the
-// company's providers run in, since a node that refuses to boot runs no seat
-// at all. Listed once here, a URL a later change gives boxes is one neither
+// reports every one of these the boot would refuse — whatever cell
+// (`run_in`) each of the company's providers runs in, since a node that
+// refuses to boot runs no seat at all. Listed once here, a URL a later change gives boxes is one neither
 // reader can leave out.
 func ReadBoxURLs(getenv func(string) string) BoxURLs {
 	read := func(variable string) BoxURL {
