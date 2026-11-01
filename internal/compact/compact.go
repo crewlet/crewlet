@@ -145,21 +145,49 @@ const (
 	// in the first pass.
 	//
 	// A budget divided evenly across thirty-two chunks can leave each one a
-	// few dozen bytes, which no model can honour and which would make every
-	// first pass fail as over budget. A piece is given at least this much,
-	// and a joined first pass that is then over the whole budget is
-	// compacted once more as a whole — so the floor costs one more call,
-	// never a cut.
+	// few dozen bytes, which no model can honour faithfully. A piece's share
+	// is at least this much, and a joined first pass that is then
+	// over the whole budget is compacted once more as a whole, so the floor
+	// costs one more call, never a cut.
 	minPieceBytes = 2 << 10
 
 	// maxDepth bounds how many reduce passes a compaction may take.
 	//
-	// Each pass shrinks its input by at least the ratio between
-	// [ChunkBytes] and [minPieceBytes], so three passes take MaxChunks
-	// chunks down to one. A fourth would only be reached by a model that
-	// keeps answering longer than it was asked to, and that is
-	// [ErrOverBudget], not a reason to keep spending.
+	// A first-pass piece is ASKED for its share but not held to it (see
+	// [pass.fit]), so what bounds the reduction is this depth and the rule
+	// that every pass must leave the text shorter than it found it. Three
+	// passes take [MaxChunks] chunks down to one with room to spare; a model
+	// that needs a fourth keeps answering longer than it was asked to, and
+	// that is [ErrOverBudget], not a reason to keep spending.
 	maxDepth = 3
+
+	// aimPercent is the share of its budget a rewrite is ASKED for, as
+	// against the budget it is HELD to.
+	//
+	// SIXTY PERCENT, from what models answer when asked for a length. A
+	// model writes tokens and judges length loosely, and it overshoots a
+	// stated limit far more often than it undershoots one: asked for at most
+	// 200, 588 or 6000 characters, the auxiliary models this engine runs
+	// answered between 1.1 and 1.6 times that, and on short budgets up to
+	// three times. Asking for the budget itself made a typical answer a miss.
+	// Asking for three fifths of it puts the typical overshoot back inside
+	// the budget, and the attempts after it are calibrated by the miss that
+	// was measured (see [nextAim]).
+	aimPercent = 60
+
+	// maxAttempts bounds the rewrites of one text that must fit.
+	//
+	// THREE: the first at [aimPercent], and two more from the previous
+	// over-long answer, each aimed lower by exactly the ratio the model
+	// overshot by. The retries read the answer rather than the original, so
+	// each costs a fraction of the first.
+	maxAttempts = 3
+
+	// charsPerWord converts a length in characters into the words a model
+	// is also told. A model keeps to a word count far better than to a
+	// character count it cannot see, and English prose with identifiers in
+	// it runs to about six characters a word, space included.
+	charsPerWord = 6
 )
 
 var (
@@ -167,8 +195,8 @@ var (
 	// the seat, or the call failed or answered nothing.
 	ErrUnavailable = errors.New("compact: no auxiliary model could rewrite the text")
 
-	// ErrOverBudget is a model that answered, twice, with a rewrite still
-	// larger than the budget.
+	// ErrOverBudget is a model that answered, every attempt, with a rewrite
+	// still larger than the budget, or a reduce pass that did not shrink.
 	ErrOverBudget = errors.New("compact: the rewrite did not fit the budget")
 
 	// ErrTooLarge is an input past [MaxChunks] × [ChunkBytes].
@@ -461,6 +489,14 @@ type pass struct {
 }
 
 // fit makes text fit budget, splitting it first when one call cannot read it.
+//
+// A FIRST-PASS PIECE IS ASKED FOR ITS SHARE BUT NOT HELD TO IT. Its answer is
+// never the result: the pieces are joined and fitted again, so a piece that
+// came back somewhat over its share is still progress, and failing the whole
+// compaction over it (which this used to do, cancelling every sibling) threw
+// away a reduction one more call would have finished. Only the rewrite whose
+// answer IS the result is held to the budget ([pass.rewrite]); what bounds the
+// passes before it is [maxDepth] and the rule that each one shrinks the text.
 func (p *pass) fit(ctx context.Context, text string, budget, depth int) (string, error) {
 	if len(text) <= budget {
 		return text, nil
@@ -479,7 +515,7 @@ func (p *pass) fit(ctx context.Context, text string, budget, depth int) (string,
 	group.SetLimit(Parallel)
 	for i, chunk := range chunks {
 		group.Go(func() error {
-			rewritten, err := p.rewrite(gctx, chunk, per)
+			rewritten, err := p.complete(gctx, chunk, askFor(aim(per), chunk), "")
 			if err != nil {
 				return err
 			}
@@ -490,34 +526,78 @@ func (p *pass) fit(ctx context.Context, text string, budget, depth int) (string,
 	if err := group.Wait(); err != nil {
 		return "", err
 	}
-	return p.fit(ctx, strings.Join(parts, "\n\n"), budget, depth+1)
+	joined := strings.Join(parts, "\n\n")
+	if len(joined) >= len(text) {
+		return "", fmt.Errorf("%w: a pass over %d pieces of %s answered %s, no shorter",
+			ErrOverBudget, len(chunks), size(len(text)), size(len(joined)))
+	}
+	return p.fit(ctx, joined, budget, depth+1)
 }
 
-// rewrite asks the model for one rewrite of text within budget, and asks
-// once more — from its own over-long answer — when the first misses.
+// rewrite asks the model for a rewrite of text that fits budget, and asks
+// again, from its own over-long answer, while one misses.
+//
+// THE BUDGET IS WHAT AN ANSWER IS HELD TO, NOT WHAT IT IS ASKED FOR. The first
+// attempt asks for [aimPercent] of it; every attempt after a miss asks for
+// less by the ratio the model overshot what it was asked ([nextAim]), from the
+// answer rather than the original: it is already most of the way there and a
+// fraction of the input's size, so the attempt is cheap, and a target moved
+// by the measured miss lands where repeating the same limit did not.
 func (p *pass) rewrite(ctx context.Context, text string, budget int) (string, error) {
-	answer, err := p.complete(ctx, text, budget, "")
-	if err != nil {
-		return "", err
+	want := aim(budget)
+	source, retry := text, ""
+	misses := make([]string, 0, maxAttempts)
+	for range maxAttempts {
+		ask := askFor(want, text)
+		answer, err := p.complete(ctx, source, ask, retry)
+		if err != nil {
+			return "", err
+		}
+		if len(answer) <= budget {
+			return answer, nil
+		}
+		misses = append(misses, size(len(answer)))
+		want = nextAim(budget, want, len(answer))
+		retry = retryNote(answer, askFor(want, text))
+		source = answer
 	}
-	if len(answer) <= budget {
-		return answer, nil
+	return "", fmt.Errorf("%w: %s held to %s answered %s", ErrOverBudget, p.member.Key,
+		size(budget), strings.Join(misses, ", then "))
+}
+
+// aim is the bytes a rewrite held to budget is first asked for: [aimPercent]
+// of it, and never nothing.
+func aim(budget int) int {
+	return max(budget*aimPercent/100, 1)
+}
+
+// nextAim is what the attempt after a miss is asked for. The model was asked
+// for asked bytes and answered got; it is asked next for the first attempt's
+// aim scaled down by that same ratio, so that the overshoot it showed lands
+// the next answer near the aim rather than over the budget again.
+func nextAim(budget, asked, got int) int {
+	return max(aim(budget)*asked/got, 1)
+}
+
+// askFor is a length a model can see, for a rewrite measured in bytes.
+//
+// THE UNIT A MODEL READS IS NOT THE UNIT A RESULT IS MEASURED IN. A model sees
+// characters and words; every consumer downstream measures bytes. The text's
+// own ratio of characters to bytes converts one into the other, which is exact
+// for ASCII and keeps a text in a script of two- or three-byte characters
+// from being asked for two or three times the room it has.
+func askFor(bytes int, sample string) length {
+	chars := bytes
+	if n := len(sample); n > 0 {
+		chars = max(bytes*utf8.RuneCountInString(sample)/n, 1)
 	}
-	// ONE RETRY, FROM THE ANSWER rather than the original: it is already
-	// most of the way there and a fraction of the input's size, so the
-	// second call is cheap — and a model told by how much it missed hits
-	// a limit far more reliably than one asked the same thing twice.
-	retry := fmt.Sprintf("Your previous rewrite was %d characters and the limit is %d. "+
-		"Rewrite it again, shorter, keeping every identifier.", len(answer), budget)
-	second, err := p.complete(ctx, answer, budget, retry)
-	if err != nil {
-		return "", err
-	}
-	if len(second) > budget {
-		return "", fmt.Errorf("%w: %s asked for %s answered %s, then %s",
-			ErrOverBudget, p.member.Key, size(budget), size(len(answer)), size(len(second)))
-	}
-	return second, nil
+	return length{chars: chars, words: max(chars/charsPerWord, 1)}
+}
+
+// length is what one completion is asked for, in the units it can see.
+type length struct {
+	chars int
+	words int
 }
 
 // complete runs one completion and returns its visible answer.
@@ -529,21 +609,21 @@ func (p *pass) rewrite(ctx context.Context, text string, budget int) (string, er
 // bracketed by a FIXED marker, `<<<TEXT` and `TEXT>>>`, which is exactly the
 // delimiter the record rejects: a text that spelled the closer and then an
 // instruction had stepped outside the text it was being rewritten from.
-func (p *pass) complete(ctx context.Context, text string, budget int, retry string) (string, error) {
+func (p *pass) complete(ctx context.Context, text string, ask length, retry string) (string, error) {
 	call, cancel := context.WithTimeout(ctx, p.c.timeout)
 	defer cancel()
 	p.calls.Add(1)
 	fence := provenance.NewBoundary()
 	completion, err := p.member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: systemPrompt(p.req.Kind, p.req.Focus, budget)},
+			{Role: llm.RoleSystem, Content: systemPrompt(p.req.Kind, p.req.Focus, ask)},
 			{Role: llm.RoleUser, Content: userPrompt(fence, p.req.Label, text, retry)},
 		},
 		// NO TOOLS: a rewrite is text back, and a tool on the surface
 		// invites a model to call it and answer nothing. NO CAP either:
-		// the budget is the prompt's to state (systemPrompt), which is
-		// the one channel the model reads, and [ErrOverBudget] is what
-		// holds a model that answers longer to it.
+		// the length is the prompt's to state (systemPrompt), which is
+		// the one channel the model reads, and [pass.rewrite] is what
+		// holds a model that answers longer to the budget.
 	})
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrUnavailable, p.member.Key, err)

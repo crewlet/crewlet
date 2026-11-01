@@ -3,6 +3,7 @@ package compact
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -10,11 +11,16 @@ import (
 // The rewrite instructions.
 //
 // Tuned for a SMALL model, which is what an auxiliary chain usually points at:
-// the limit is stated in characters as a number, first and last, because a
-// limit stated once in the middle is the instruction a small model drops; and
-// the rules are a short list of what to KEEP rather than an essay on
-// summarising, because "keep every identifier exactly" is checkable and "be
-// concise" is not.
+// the length is stated as numbers, first and last, because a limit stated once
+// in the middle is the instruction a small model drops; it is stated in words
+// as well as characters, because a model keeps to a word count it can feel far
+// better than to a character count it cannot see; and the rules are a short
+// list of what to KEEP rather than an essay on summarising, because "keep
+// every identifier exactly" is checkable and "be concise" is not.
+//
+// The length stated is the AIM, not the budget (see [aimPercent]): the prompt
+// asks for less than the result is held to, because a model asked for a
+// length answers longer than it as often as not.
 //
 // A reworded rule is a behaviour change, like every prompt in this tree.
 
@@ -76,20 +82,41 @@ var kindBriefs = map[Kind]string{
 }
 
 // systemPrompt is one rewrite's instructions.
-func systemPrompt(kind Kind, focus string, budget int) string {
+func systemPrompt(kind Kind, focus string, ask length) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You rewrite text so that it fits in %d characters without losing "+
-		"what its reader needs.\n\n", budget)
+	fmt.Fprintf(&b, "You rewrite text so that it fits in about %s (%s) without losing "+
+		"what its reader needs.\n\n", count(ask.words, "word"), count(ask.chars, "character"))
 	b.WriteString(kindBriefs[kind])
 	if focus = strings.TrimSpace(focus); focus != "" {
 		fmt.Fprintf(&b, "\n\nThe question it is read to answer: %s", focus)
 	}
 	b.WriteString("\n\n")
 	b.WriteString(baseRules)
-	fmt.Fprintf(&b, "\n\nYour whole answer must be at most %d characters.", budget)
+	fmt.Fprintf(&b, "\n\nYour whole answer must be at most %s and at most %s.",
+		count(ask.words, "word"), count(ask.chars, "character"))
 	b.WriteString("\n\n")
 	b.WriteString(provenance.StandingInstruction)
 	return b.String()
+}
+
+// retryNote opens the attempt after a miss: how long the previous answer was,
+// in the units the model was asked in, and the shorter length it is asked for
+// now. It does not quote the budget: a model told the limit it missed aims at
+// that limit again and misses it by the same margin, which is how the
+// one-retry version of this failed.
+func retryNote(previous string, ask length) string {
+	return fmt.Sprintf("Your previous rewrite was %s and %s, which is too long. Rewrite it "+
+		"again in at most %s and at most %s, keeping every identifier exactly.",
+		count(len(strings.Fields(previous)), "word"), count(utf8.RuneCountInString(previous), "character"),
+		count(ask.words, "word"), count(ask.chars, "character"))
+}
+
+// count is n of a unit, as a sentence says it.
+func count(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // userPrompt carries the text inside a fence of b under its label (ADR-0040),
