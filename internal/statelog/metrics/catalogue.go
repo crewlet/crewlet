@@ -1648,6 +1648,40 @@ func Catalogue() []Instrument {
 				"indexes than its budget holds.",
 		},
 		{
+			Name: CodeSearchQueries, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"via"},
+			Shows: "Code searches this node asked, by `via`: `index` and `grep`, " +
+				"a search of one repository read through its code index or with " +
+				"git grep; `scatter`, a search of several, asked of every git " +
+				"node holding them at once. A steady `grep` share of " +
+				"one-repository searches of indexed repositories is indexes that " +
+				"do not keep up with the pushes: see `crewlet.code.index.builds`.",
+		},
+		{
+			Name: CodeSearchDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"via"},
+			Shows: "How long a code search this node asked took, from its " +
+				"asking to its answer, by `via` as `crewlet.code.search.queries`. " +
+				"A scatter takes one round, or two where a git node did not " +
+				"answer the first, each at most 9 s: a scatter near 9 s is a git " +
+				"node that did not answer, which its answer's coverage names.",
+		},
+		{
+			Name: CodeSearchCoverage, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Repositories a code search this node asked did not search, " +
+				"or searched more slowly, by `reason`, as the last git node " +
+				"asked for it answered: `not_answering`, a git node that did " +
+				"not answer for it; `building`, its index being built, with no " +
+				"other git node in its order to ask; `stale`, a node behind the " +
+				"log or the company's configuration; `not_permitted`, a grant the " +
+				"answering node's chart refused; `no_ref`, no such ref in it; " +
+				"`grep_not_named`, a `search: grep` repository an unfiltered " +
+				"search leaves out; `not_indexed`, an indexed repository read " +
+				"with git grep. A steady `not_answering` is a git node to look " +
+				"at; `grep_not_named` alone is a company's choice.",
+		},
+		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "What this node's git cache holds of packs an expunge's " +
 				"begin has left dropping — what no ref reached when the " +

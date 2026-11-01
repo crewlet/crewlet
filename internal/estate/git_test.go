@@ -597,6 +597,56 @@ func TestAGitOrderIsEveryGitNodeItsHomeFirst(t *testing.T) {
 	}
 }
 
+// A SCATTER'S ORDERS ARE ONE READING: GitOrders over a thousand repositories
+// reads who serves git once and answers each the order GitOrder does; asked of
+// no repository it reads nothing; and a placement that cannot say answers
+// unknown for all of them.
+//
+// Mutations: read who serves git again for every repository, and the
+// placement is read a thousand times, red; order with the walk's demotions,
+// and a suspect home falls out of first place, red.
+func TestAScattersGitOrdersAreOneReading(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	halves := f.gitNodes(t, []string{"git-a", "git-b", "git-c", "git-d"})
+	ownHalf := f.gitRouter(t, "git-b", gitHalf{node: halves["git-b"]})
+	repos := make([]string, 1000)
+	for i := range repos {
+		repos[i] = repoID(i)
+	}
+	first, err := ownHalf.GitOrder(repos[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownHalf.markSuspect(first[0])
+	before := f.git.readsSoFar()
+	orders, err := ownHalf.GitOrders(repos)
+	if err != nil {
+		t.Fatalf("GitOrders of a thousand repositories: %v", err)
+	}
+	if reads := f.git.readsSoFar() - before; reads != 1 {
+		t.Errorf("GitOrders of a thousand repositories read who serves git %d times, want once", reads)
+	}
+	for _, repo := range repos {
+		want, err := ownHalf.GitOrder(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(orders[repo], want) {
+			t.Fatalf("GitOrders names %s %v, and GitOrder %v", repo, orders[repo], want)
+		}
+	}
+	before = f.git.readsSoFar()
+	if none, err := ownHalf.GitOrders(nil); err != nil || len(none) != 0 || f.git.readsSoFar() != before {
+		t.Errorf("GitOrders of no repository = (%v, %v) after %d reads, want none and no read", none, err,
+			f.git.readsSoFar()-before)
+	}
+	f.git.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
+	if orders, err := ownHalf.GitOrders(repos[:2]); err == nil || orders != nil {
+		t.Fatalf("GitOrders with the git placement unknown = (%v, %v), want the placement's error", orders, err)
+	}
+}
+
 // MAINTAINERS ARE JUDGED AGAINST ONE LISTING: MaintainerOf over a thousand
 // repositories, each at its own charge, reads the git listing ONCE and names
 // exactly the repositories Maintainer names this node for — a maintainer's

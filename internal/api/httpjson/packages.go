@@ -22,7 +22,7 @@ var goPackages = map[string]bool{
 	"changefeed": true, "checkrun": true, "edits": true,
 	"cliagent": true, "clientsource": true,
 	"cliprofile": true, "coalesce": true, "code": true, "codecluster": true, "codefault": true,
-	"codeindex": true, "codetest": true, "codingagent": true, "colleague": true, "collect": true,
+	"codeindex": true, "codesearch": true, "codetest": true, "codingagent": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true,
 	"confluence": true, "coord": true,
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,

@@ -146,3 +146,18 @@ admission is per connection, and only as private as the network a route's
 password crosses in clear once per connection; an external cluster admits whom
 its operator chooses. So a record, an instruction or a presence frame is still
 believed on its own signature or seal, never on the connection it arrived by.
+
+## Amendment: a code search of several repositories is a fourth instruction channel
+
+The scatters this record leaves unsigned only read. A code search of several
+repositories (`internal/codesearch`) reads too, but every git node carries it
+out AS THE ASKER THE REQUEST NAMES: each repository it is assigned is read
+through the node's own reads by object id, which judge that asker's grant from
+the node's chart, and the lines go back to whoever asked. So the request is an
+instruction by this record's own test — a node acts on who it names — and an
+unsigned one would let any client of the broker read any repository as any seat
+or person. It is a `signedask.Channel` in key domains of its own
+(`code.search.request`, `code.search.reply`), held with the other three by
+`internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`. A search
+that names one repository is not a fourth scatter: it is a read through the
+estate's keyed walk, under the estate service's own signature.

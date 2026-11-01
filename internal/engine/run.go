@@ -30,6 +30,7 @@ import (
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -828,6 +829,12 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
+	// codeSearchWire is this node's code search scatter envelopes, both
+	// halves, and codeSearchLocal the answerer its own searches are handed
+	// to where it has no broker. See codesearch.go.
+	codeSearchWire  *codesearch.Wire
+	codeSearchLocal atomic.Pointer[codesearch.Server]
+
 	// presenceWire seals this node's presence frames and opens its peers',
 	// and presence is the hub that holds its rooms. See presence.go.
 	presenceWire *presence.Wire
@@ -1196,6 +1203,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// And a code search, which every git node carries out as the asker it
+	// names (codesearch.go).
+	codeSearchWire, err := newCodeSearchWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
 	// all the same: a frame names a person (presence.go).
 	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
@@ -1360,6 +1373,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// store.
 		codeReads:           readaudit.New(backends.Queue),
 		steers:              steers,
+		codeSearchWire:      codeSearchWire,
 		presenceWire:        presenceWire,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),

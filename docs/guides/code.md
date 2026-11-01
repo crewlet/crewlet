@@ -715,6 +715,48 @@ CI reported first is left to it — the engine's dispatch queues nothing of a
 name the commit already holds an attempt of. So name your CI's checks apart
 from the ones `.crewlet/checks.yaml` defines.
 
+## Finding code
+
+A code search reads lines, not files: an expression, matched one line at a
+time with Go's regular expressions, over a commit of each repository
+searched — its default branch's tip unless the search names another. It is
+written the way the knowledge base's search is, filters first:
+
+```text
+repo:billing repo:ledger path:src/**/*.go ref:main  retryBudget
+```
+
+- `repo:<name>` searches that repository (repeat it for more); with none, a
+  search covers every repository you may read that is searched by index.
+- `path:<pattern>` keeps the files a `.gitignore`-style pattern matches.
+- `ref:<ref>` searches a branch, a whole ref or a commit's id.
+- The text after them is searched as it is written; a search may be asked
+  as a regular expression or as a whole word instead, and to ignore case. It
+  needs one run of at least three characters to look up, matches within a
+  line, and takes at most 400 bytes — the knowledge search's bound.
+
+**Indexed or grep, per repository.** A repository declared in the company
+file is searched by index unless its entry says `search: grep`; one a seat's
+tool makes, and every scratch repository, by grep. An indexed repository's
+default branch is kept as a trigram index on two of your git nodes, so a
+search of the whole company reads only the files that can match. A grep
+repository is read with git grep whenever it is searched, which costs a
+large repository a second or two of a git node's CPU, so a search reaches it
+only when a `repo:` filter names it — at most eight of them at once.
+
+**A search says what it did not search.** Several repositories are searched
+in one question to every git node at once, each repository answered by the
+node first in its order and, where that one does not answer, once more by the
+next. Every answer carries a coverage block naming every repository it could
+not search and why — a node not answering, an index still being built, a node
+behind, a grant its chart refused, a ref the repository does not hold — and
+the grep repositories a search with no `repo:` left out. An empty answer with
+an empty coverage means nothing matched; an empty answer with a coverage that
+names repositories means those were not looked at: search them again by name,
+or ask after the node named. At most 500 lines come back, in the order of
+repository, path and line, and `truncated` says more matched. See
+[Code search](../concepts/code-host.md#code-search).
+
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its

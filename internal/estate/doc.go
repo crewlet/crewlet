@@ -426,8 +426,8 @@
 // framed and signed under the fleet keyring, by the state log's own
 // [statelog.Signer] under domains of the estate's own, and read with its
 // verdicts ([Envelopes]) — the rule internal/signedask keeps for every channel
-// a node carries a request out on, this one, the fleet broker's membership and
-// a note to a running turn alike: a request that does not verify is never
+// a node carries a request out on, this one, the fleet broker's membership, a
+// note to a running turn and a code search alike: a request that does not verify is never
 // dispatched, the actor a write runs as is the one inside the signed body, and
 // a key a node does not hold is "did not run" — the router moves on to a node
 // that holds it. A request carries an id and a deadline under the signature, so a

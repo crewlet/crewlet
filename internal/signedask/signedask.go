@@ -16,7 +16,7 @@
 // is an instruction — and an unsigned instruction is exactly what ADR-0031
 // refuses on a state log, one hop before the log.
 //
-// Three channels are instructions, and each is a [Channel]:
+// Four channels are instructions, and each is a [Channel]:
 //
 //   - the ESTATE SERVICE (internal/estate): a data node runs a tracker or a
 //     knowledge-base write AS THE ACTOR THE REQUEST NAMES, so unsigned, anybody
@@ -31,7 +31,11 @@
 //   - a NOTE TO A RUNNING TURN (internal/agent/steer): the running node offers
 //     a person's note to the turn AS THAT PERSON, on the asking node's word
 //     that they may steer it — so unsigned, anybody on the broker could put
-//     words in front of a running agent under anybody's name.
+//     words in front of a running agent under anybody's name;
+//   - a CODE SEARCH of several repositories (internal/codesearch): every git
+//     node reads the repositories a request assigns it AS THE ASKER IT NAMES,
+//     judging that asker's grant to each — so unsigned, anybody on the broker
+//     could read any repository as any seat or person in the company.
 //
 // # One frame, the state log's
 //

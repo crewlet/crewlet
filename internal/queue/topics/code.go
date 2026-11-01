@@ -42,6 +42,25 @@ const (
 	// needed and moves nothing.
 	CodeStatus = "crewlet.code.status"
 
+	// CodeSearch is where a code search of several repositories is
+	// scattered (internal/codesearch): every git node serves it, and each
+	// answers for the repositories the request's assignment table names it
+	// for, searching them as the request's asker.
+	//
+	// NOT EVENTS and OUTSIDE THE CODE LOG, for CodeStatus's reasons: the
+	// ephemeral request and reply of [queue.EventQueue.Ask], published where
+	// no stream captures it. SIGNED, unlike CodeStatus (internal/signedask):
+	// a node CARRIES IT OUT as the asker it names, judging that asker's
+	// grant to each repository, so an unsigned search would read any
+	// repository as anybody.
+	//
+	// A LEAF UNDER crewlet.code.search., never that name itself: the code
+	// search's metrics are crewlet.code.search.queries, .duration and
+	// .coverage, and a subject that is a prefix of them makes each a
+	// hand-built subject to this package's guard — which it would be, were a
+	// subject ever built from one.
+	CodeSearch = "crewlet.code.search.ask"
+
 	// CodeHolds is where the code-retention pass asks which of a page of keys
 	// — a seat's scratch repositories by id — a RUNNING turn holds: every
 	// process holding a seat lease answers with its lease identity and the

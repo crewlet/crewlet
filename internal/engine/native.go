@@ -225,6 +225,9 @@ type native struct {
 	// host's status (codestatus.go), registered beside codeHost and nil where
 	// it is; the code host's stop runs it first.
 	withdrawCodeStatus queue.Unsubscribe
+	// withdrawCodeSearch withdraws this node as an answerer of the code
+	// search scatter (codesearch.go), beside withdrawCodeStatus.
+	withdrawCodeSearch queue.Unsubscribe
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -508,7 +511,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				parts.size
 			n.mergePreviews = parts.previews
 			n.compactor, n.home, n.checkRunner = parts.compactor, parts.home, parts.checks
-			n.withdrawCodeStatus = parts.withdrawStatus
+			n.withdrawCodeStatus, n.withdrawCodeSearch = parts.withdrawStatus, parts.withdrawSearch
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER

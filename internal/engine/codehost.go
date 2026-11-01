@@ -475,8 +475,22 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
+
+	// 13. ITS SEARCHES, answered for the fleet (codesearch.go) through the
+	// git reads above, each as the asker its signed request names — and
+	// withdrawn before the host stops, with the status answerer.
+	withdrawSearch, err := e.serveCodeSearch(context.WithoutCancel(ctx), nodeID, reads)
+	if err != nil {
+		if werr := withdraw(context.WithoutCancel(ctx)); werr != nil {
+			log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", werr)
+		}
+		homeLoop.Stop(context.WithoutCancel(ctx))
+		compactor.Stop(context.WithoutCancel(ctx))
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: serve code searches on %s: %w", topics.CodeSearch, err)
+	}
 	return codeHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, checks: checks, withdrawStatus: withdraw}, nil
+		home: homeLoop, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
 }
 
 // codeNudges is this node's own code log as the home's change work watches it
@@ -578,6 +592,7 @@ type codeHostParts struct {
 	home           *codehome.Loop
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
+	withdrawSearch queue.Unsubscribe
 }
 
 // codeReading fills the reading's code half at now from this node's
@@ -1014,6 +1029,11 @@ func (n *native) stopCodeHost(ctx context.Context) {
 		if n.withdrawCodeStatus != nil {
 			if err := n.withdrawCodeStatus(ctx); err != nil {
 				log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", err)
+			}
+		}
+		if n.withdrawCodeSearch != nil {
+			if err := n.withdrawCodeSearch(ctx); err != nil {
+				log.WarnContext(ctx, "code_search_answerer_not_withdrawn", "error", err)
 			}
 		}
 		if n.mergePreviews != nil {

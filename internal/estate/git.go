@@ -558,6 +558,30 @@ func (r *Router) GitOrder(repoID string) ([]string, error) {
 	return r.keyed(repoID, h.nodes, h.own), nil
 }
 
+// GitOrders is [Router.GitOrder] of every one of repoIDs, judged against ONE
+// READING of who serves git, for [Router.HomeOf]'s reason: what asks it — a
+// code search's scatter (internal/codesearch), which assigns every repository
+// an asker may read to the first node of its order and its runner-up to the
+// second — asks about a whole listing, up to config.CodeMaxRepos of them, and
+// a reading a repository would read the presence view again for each, and
+// could judge a scatter's repositories against a fleet that moved part way
+// through it. An error is UNKNOWN for every one of them, as GitOrder's is; no
+// ids read nothing. Each order a fresh slice.
+func (r *Router) GitOrders(repoIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(repoIDs))
+	if len(repoIDs) == 0 {
+		return out, nil
+	}
+	h, err := r.readHomes()
+	if err != nil {
+		return nil, fmt.Errorf("estate: the git orders of %d repositories: %w", len(repoIDs), err)
+	}
+	for _, id := range repoIDs {
+		out[id] = r.keyed(id, h.nodes, h.own)
+	}
+	return out, nil
+}
+
 // homeReading is one reading of who serves git, as [Router.Home] and
 // [Router.HomeOf] order a repository's git nodes over it: every live git node
 // the placement names, and whether this node's own git half is built — which

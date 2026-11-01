@@ -4499,6 +4499,77 @@ many as its limit — is kept in the [memo](#the-memo), keyed by the commit,
 the ref that named it and every part of the search; one the five seconds cut
 is kept nowhere.
 
+### Code search
+
+A code search of **several** repositories — every `search: indexed`
+repository the asker may read, or the ones its `repo:` filters name — is
+one question to every git node at once, never a walk a repository, which an
+unfiltered search of a company would make thousands of
+(`internal/codesearch`). A search naming one repository is the read above.
+
+```mermaid
+sequenceDiagram
+    participant A as asking node
+    participant G1 as first git node of each order
+    participant G2 as its runner-up
+    A->>A: list the asker's repositories, assign each to the first node of its order
+    A->>G1: one signed request on crewlet.code.search.ask: the search, the asker, the table
+    G1->>G1: search each assigned repository as the asker (the read above)
+    G1-->>A: each repository's lines, or why not
+    A->>G2: the repositories nobody answered, once more
+    G2-->>A: their lines, or why not
+    A->>A: merge by (repository, path, line), name what was not searched
+```
+
+- **The table.** The asking node lists the repositories the asker may read
+  at the asker's level, and assigns each to the first git node of its order
+  — its home, and for an indexed repository the first of the two nodes
+  keeping its index ([The home git node](#the-home-git-node)). Every git
+  node hears the request and answers only for the repositories it is
+  assigned.
+- **Signed, because each node searches as the asker.** A node reads its
+  repositories through the same reads a seat's tools make, judging the
+  asker's grant to each from its own chart. So the request is signed under
+  the fleet's keyring in key domains of the search's own, bound to an id and
+  a deadline that a node takes once: a request the fleet did not sign, or one
+  replayed, is answered by nobody, and one signed under a key a node does not
+  hold is answered with the sentence naming the keys it holds.
+- **A runner-up, once.** A repository whose node did not answer it — silent,
+  busy, behind, or building its index — is asked once more of the next node
+  of its order (an indexed repository's second index holder) in a second
+  round. A round waits at most nine seconds — a node's two-second wait for
+  its share of git work, the search's own five, and a second each way — and
+  ends as soon as every node it asked has answered.
+- **Exact.** Each node keeps the first lines of its repositories by
+  repository name, path and line, at most the search's limit, and the asker
+  keeps the first of all of them, so the answer is the same whichever node
+  answers first, and a limit cuts the first lines of the whole search.
+
+Every answer carries its **coverage**, so a search that could not reach part
+of the company never reads as one that found nothing there. Each repository
+the search names is in exactly one of these, by what the last node asked for
+it answered — so a repository whose runner-up was asked and stayed silent is
+under `not_answering`, naming the runner-up, whatever the first node said:
+
+| Field | The repository |
+|---|---|
+| `searched` | answered its lines (a count) |
+| `building` | was not answered: the node keeping its index was building it, and its order named no other git node to ask |
+| `stale` | was not answered: the node asked was behind the code log or the company's configuration — the runner-up, or the first node where there was none |
+| `not_answering` | was not answered by the node named beside it, with why: silent, busy, failing, or holding no key the request is signed under |
+| `not_permitted` | the answering node's chart did not grant the asker: the configuration moved since the asker's listing |
+| `no_ref` | holds no ref or commit the search's `ref:` names |
+
+and beside them `grep_not_named`, the `search: grep` repositories the asker
+may read that a search with no `repo:` filter leaves out — git grep over every
+repository is a scan of the company, which the index is for, so a grep
+repository is searched only when a `repo:` filter names it, eight at most —
+and `not_indexed`, the indexed repositories among those searched that were
+read with git grep, no index answering for their tip yet. Each lists its
+first hundred names, in order, beside its whole count; `skipped_files` and
+`truncated` add up those of every repository searched, and `truncated` is set
+too where the merge cut lines past the limit.
+
 ### The memo
 
 Every page a git node cuts for a server-side read is kept beside its copy —

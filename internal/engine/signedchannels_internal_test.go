@@ -8,7 +8,8 @@ import (
 )
 
 // EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN (the
-// estate service, the fleet broker's membership and a note to a running turn),
+// estate service, the fleet broker's membership, a note to a running turn and a
+// code search),
 // and none of them in a state log's. And so does the one sealed frame
 // that is no instruction, presence, which a node displays as a person in a
 // room: a domain shared with any of the others would let a captured frame of
@@ -32,6 +33,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	searchWire, err := newCodeSearchWire(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
 	presenceWire, err := newPresenceWire(ring)
 	if err != nil {
 		t.Fatal(err)
@@ -50,12 +55,13 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		"the estate service":       pair(envelopes.Domains()),
 		"the fleet broker":         pair(broker.Domains()),
 		"a note to a running turn": pair(desk.wire.Domains()),
+		"a code search":            pair(searchWire.Domains()),
 	} {
 		claim(domains[0], name+"'s requests")
 		claim(domains[1], name+"'s replies")
 	}
 	claim(presenceWire.Domain(), "a presence frame")
-	if len(owner) != len(registeredDomains())+7 {
+	if len(owner) != len(registeredDomains())+9 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }
