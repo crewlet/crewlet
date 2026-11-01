@@ -408,10 +408,22 @@ type decided struct {
 	change *ChangeAnswer
 }
 
+// batchMoves is what a round's record does to the live changes its entries
+// move, as its decide counted it in the model its apply writes from
+// ([changeBook]): the rows the apply writes about them
+// ([changeBook.rowCount]), and the changes whose live queue entry it ejects
+// because it moved their head ([changeBook.queueEnds]) — which no record of
+// the queue's names, so the committer that landed it announces each
+// ([Committer.announcePushEjections]).
+type batchMoves struct {
+	rows    int
+	ejected []string
+}
+
 // decideBatch is one round's decision over the rows tx holds, for the batch in
-// order: the entries of the record, every proposal's answer, the rows the
-// record's apply will write about the live changes its entries move
-// ([changeBook]), and the version the decision read. Pure over (the rows, the
+// order: the entries of the record, every proposal's answer, what the
+// record's apply will do to the live changes its entries move ([batchMoves]),
+// and the version the decision read. Pure over (the rows, the
 // batch, limits, retention, seats, now): retention is
 // code.deleted_retention_days on the deciding node's epoch, from which a
 // deleted repository's refusal names when its purge may begin; seats is that
@@ -428,7 +440,7 @@ type decided struct {
 // an agent nothing on a nil roster).
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
 	limits Limits, retention time.Duration, seats SeatRules, now time.Time, v *verdicts) (entries []PushEntry,
-	answers []decided, changeRows int, version int64, err error) {
+	answers []decided, moves batchMoves, version int64, err error) {
 
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -444,7 +456,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	landed, err := pushRowsIn(ctx, tx, ids)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	open := make([]int, 0, len(batch))
 	for i, p := range batch {
@@ -465,7 +477,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	var refused Refusal
 	var detail string
@@ -475,7 +487,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// ([RepoGone]): a deleted repository comes back when declared again,
 		// one being purged or purged never does.
 		if detail, err = goneDetail(ctx, tx, repoID, repo, found, retention); err != nil {
-			return nil, nil, 0, 0, err
+			return nil, nil, batchMoves{}, 0, err
 		}
 		refused = RefusalRepoDeleted
 	default:
@@ -489,7 +501,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].refused, answers[i].detail = refused, detail
 			answers[i].commands = refuseEvery(batch[i].Commands, refused, detail)
 		}
-		return nil, answers, 0, repo.version, nil
+		return nil, answers, batchMoves{}, repo.version, nil
 	}
 	// THE DROP EPOCH, before every rule of the push's own: a push checked
 	// against a copy at another epoch is refused whole, and the rest of the
@@ -508,31 +520,31 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
 		return batch[i].Principal.Kind.readsChart() || batch[i].Change != nil
 	}) {
-		return nil, nil, 0, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
 	}
 	stored, err := pushRulesIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// PARSED ONCE A BATCH, never once a command and rule (refusal.go), and
 	// again only in a round whose rules are not the ones parsed.
 	if err = v.under(stored); err != nil {
-		return nil, nil, 0, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
+		return nil, nil, batchMoves{}, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
 	}
 	w, err := newWorking(ctx, tx, repoID, repo, batch, open, now)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// THE BRANCHES THE BATCH'S CHANGES PROPOSE INTO, where no command of it
 	// names them: an open is judged by its target's head as well as its
 	// source's, and the working state holds only the refs commands name.
 	if err := w.readTargets(ctx, tx, repoID, changeTargets(batch, open, repo)); err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// THE LIVE CHANGES THE BATCH'S BRANCHES CAN MOVE, and the authors its
 	// pushers are of them, read once a round — for every command the
@@ -545,7 +557,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	book, err := readChangeBook(ctx, tx, repoID, proposed, 0, 0)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, nil, batchMoves{}, 0, err
 	}
 	// rows is what the record's entries make its apply write besides their
 	// changes' rows, as [withinRecord] counts it; carrying is set once a push
@@ -598,7 +610,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// push, their recorded override — stamped from this snapshot's rules,
 		// so the apply matches no pattern.
 		if entry.Landings, err = landingGates.landings(ctx, tx, v.rules, cmds); err != nil {
-			return nil, nil, 0, 0, err
+			return nil, nil, batchMoves{}, 0, err
 		}
 		merged := len(book.writes.merged)
 		book.try()
@@ -637,12 +649,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// already in it ([routingRoom]).
 		routings, routeErr := room.route(ctx, tx, book, entry, book.writes.merged[merged:], opened)
 		if routeErr != nil {
-			return nil, nil, 0, 0, routeErr
+			return nil, nil, batchMoves{}, 0, routeErr
 		}
 		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
 			MaxRecordRows-recordRows(rows+own+book.rowCount()))
 		if fitErr != nil {
-			return nil, nil, 0, 0, fitErr
+			return nil, nil, batchMoves{}, 0, fitErr
 		}
 		if !fits {
 			book.takeBack()
@@ -658,7 +670,8 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		answers[i].inRecord, answers[i].change = true, change
 		entries = append(entries, entry)
 	}
-	return entries, answers, book.rowCount(), repo.version, nil
+	ejected, _, _ := book.queueEnds()
+	return entries, answers, batchMoves{rows: book.rowCount(), ejected: ejected}, repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding

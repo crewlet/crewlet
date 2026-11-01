@@ -5714,8 +5714,10 @@ change as whoever enqueued it.
   the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
   `head_moved` or `not_fast_forward` — and abandons the train they were in.
   The node whose committer landed it announces a `code_queue_ejected` event
-  for each, fed to the activity feed. A dequeue of an entry a train tests
-  abandons the train too.
+  for each, fed to the activity feed. A push that moves a queued change's
+  head ejects its entry `head_moved` in the push's own record, and the node
+  whose committer landed the push announces that ejection the same way. A
+  dequeue of an entry a train tests abandons the train too.
 - A **land** lands up to 64 entries in ONE record: a train's tested
   **prefix** — its candidates from the first, in order, up to one whose tip
   every required check passed on. **Its

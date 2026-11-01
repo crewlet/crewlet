@@ -78,6 +78,12 @@ func ejected(entry, owner, ownerAgent, enqueuer string) types.CodeQueueEjected {
 		EnqueuedBy: enqueuer, EnqueuedByKind: "agent", Owner: owner, OwnerKind: kind, OwnerAgent: ownerAgent}
 }
 
+// headMoved is e, made by a push that moved its change's head.
+func headMoved(e types.CodeQueueEjected) types.CodeQueueEjected {
+	e.Reason, e.Checks = "head_moved", nil
+	return e
+}
+
 // A FAILED CHECK COUNTS ON ITS OWNER'S DAY: four checks that failed the heads
 // of dev's changes — one of them reported by a person's CI, whose row is of no
 // purpose — count four on dev's day — once each by their attempt, so
@@ -171,13 +177,15 @@ func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 }
 
 // AN EJECTION COUNTS ON ITS OWNER'S DAY: dev's change put out of its queue
-// twice counts two ejections on dev's day — never on qa's, who queued it —
-// each once by its entry, so an ejection announced twice is still one; an
-// ejection of a person's change counts on nobody.
+// three times — once by a push that moved its head — counts three ejections
+// on dev's day — never on qa's, who queued it — each once by its entry, so an
+// ejection announced twice is still one; an ejection of a person's change
+// counts on nobody.
 //
 // Mutation: count an ejection on its enqueuer (read the enqueuer's seat) — qa
 // is counted, red; count the records rather than the entries — dev was
-// ejected three times, red.
+// ejected four times, red; count only the queue's own ejections (leave
+// head_moved out) — the push's is not counted, red.
 func TestAnEjectionCountsOnItsOwnersDay(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -190,13 +198,15 @@ func TestAnEjectionCountsOnItsOwnersDay(t *testing.T) {
 		gateRecord(t, "e-2", at(2), ejected("entry-1", "dev", "a-dev", "qa")),
 		gateRecord(t, "e-3", at(3), ejected("entry-2", "dev", "a-dev", "qa")),
 		gateRecord(t, "e-4", at(4), ejected("entry-3", "founder", "", "qa")),
+		// A PUSH THAT MOVED dev's queued head ejected its entry head_moved.
+		gateRecord(t, "e-5", at(5), headMoved(ejected("entry-4", "dev", "a-dev", "qa"))),
 	} {
 		if err := log.Append(t.Context(), rec); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{Ejections: 2}) {
-		t.Fatalf("the day counts %+v, want two ejections on dev's day alone: each entry once, none on its "+
-			"enqueuer or for a person's change", got)
+	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{Ejections: 3}) {
+		t.Fatalf("the day counts %+v, want three ejections on dev's day alone: each entry once, a push's "+
+			"head_moved included, none on its enqueuer or for a person's change", got)
 	}
 }

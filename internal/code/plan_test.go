@@ -860,6 +860,11 @@ func registeredStatements() map[string]statement {
 		// the repositories by their key, two seeks each.
 		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
 			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		// THE ENTRIES A PUSH EJECTED, which its committer announces
+		// (decide_queue.go's announcePushEjections).
+		"entries a push ejected": {pushEjectedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`,
+			1000, "ejected", "head_moved"},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},

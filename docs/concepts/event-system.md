@@ -479,10 +479,12 @@ code_queue_ejected         # a merge queue put an entry OUT: repository
                            # change's owner with `owner_agent_id`, whose
                            # seat day counts it once by its entry as
                            # `ejections`. Published ONCE an entry, by the data node whose
-                           # committer landed the eject record — never by an
-                           # applier, never for a retry its operation ledger
-                           # collapsed. STORED AND FED (code-host.md, "The
-                           # merge queue")
+                           # committer landed the eject record — or the push
+                           # whose move of a queued change's head ejected
+                           # its entry head_moved in the push's own record —
+                           # never by an applier, never for a retry its
+                           # operation ledger collapsed. STORED AND FED
+                           # (code-host.md, "The merge queue")
 code_target_broken         # a protected branch's tip checks found the
                            # FIRST landing they failed on: repository by id
                            # and name, the branch, the landing's commit and

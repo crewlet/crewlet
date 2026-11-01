@@ -32,8 +32,10 @@ func TestABatchNamesTheChangeItsEarlierPushOpened(t *testing.T) {
 		var err error
 		// ON THE CHART: a push asking for a change holds its options' text
 		// to it for whom it mentions.
-		entries, answers, rows, _, err = decideBatch(t.Context(), tx, decideRepo, []Proposal{first, second},
+		var moves batchMoves
+		entries, answers, moves, _, err = decideBatch(t.Context(), tx, decideRepo, []Proposal{first, second},
 			DefaultLimits(), DefaultDeletedRetention, onTheChart, decideAt, &verdicts{})
+		rows = moves.rows
 		return err
 	}); err != nil {
 		t.Fatalf("decide: %v", err)

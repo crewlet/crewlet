@@ -639,6 +639,46 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	requireQueueRefused(t, n, before, res, err, code.MergeRefusalNotQueued, "is ejected")
 }
 
+// A PUSH THAT EJECTS A QUEUED HEAD ANNOUNCES IT: a push moving a queued
+// change's source branch ends its entry ejected head_moved in the push's own
+// record, which no queue record names — so the committer that landed the push
+// announces one code_queue_ejected for that entry, naming the change, why and
+// its owner dev, whose day counts it (`ejections`), from the node that landed
+// it.
+//
+// Mutation: never announce a push's ejections (drop commit's call of
+// announcePushEjections) — no code_queue_ejected follows the push, red.
+func TestAPushThatEjectsAQueuedHeadAnnouncesIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, stream := mergeStream(t, n)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	first := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), first)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+
+	push := func(old, new string) {
+		t.Helper()
+		pushed, err := c.Propose(t.Context(), proposal(repo, update(featureRef, oidOf(old), oidOf(new))))
+		if err != nil || pushed.Position.IsZero() {
+			t.Fatalf("the push of %s answered %+v, %v", new, pushed, err)
+		}
+	}
+	push("B", "B2")
+	waitAnnouncedOf(t, stream, "code_queue_ejected", 1)
+	ev := stream.of("code_queue_ejected")[0]
+	payload, ok := ev.Data.(*types.CodeQueueEjected)
+	if !ok || payload.EntryID != first.Enqueue.EntryID || payload.ChangeID != change || payload.Number != 1 ||
+		payload.Reason != string(code.EjectHeadMoved) || payload.RepoName != "web" || ev.Source != n.id ||
+		payload.Owner != "dev" || payload.OwnerKind != "agent" || payload.OwnerAgent != "agent-dev" {
+		t.Fatalf("the push's ejection was announced from %q as %+v, want web!1's entry %s ejected head_moved, "+
+			"owned by dev — its day counting it — from %s", ev.Source, ev.Data, first.Enqueue.EntryID, n.id)
+	}
+}
+
 // purgeTips is every object an `expunge_tips` read of repo names from since,
 // every page of it, n's reader paging every pageRows rows.
 func (n *node) purgeTips(repo string, since time.Time, pageRows int) []string {

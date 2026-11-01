@@ -554,8 +554,10 @@ func (e ReviewSubmitted) SummaryFor(actor string) string {
 // conflicted, its merge gate no longer holds with its enqueuer as the merger,
 // its head moved, or its fast-forward is none. Published ONCE an entry, by the
 // data node whose committer landed the eject record, on that record's apply —
-// never by an applier, which every data node runs, and never for a retry its
-// operation ledger collapsed onto the record.
+// or the push record that moved a queued change's head, which ends its entry
+// head_moved in its own apply and names no eject — never by an applier, which
+// every data node runs, and never for a retry its operation ledger collapsed
+// onto the record.
 //
 // # Fed, and stored
 //
