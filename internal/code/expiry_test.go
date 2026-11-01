@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -154,17 +156,16 @@ func TestAnExpiryProposalIsValidatedAsOne(t *testing.T) {
 //     (M3-decisions M3-O61);
 //   - its repository's default branch (M3-decisions M3-O62), and the same
 //     branch of a repository whose default is main deleted;
-//   - the source of a live change, whose deletion would close it;
 //   - under any protection that matches it: every rule refuses the engine's
 //     push protected_direct (direct_push persons takes a person's alone, none
 //     nobody's), so allow_delete never comes to be asked.
 //
 // Mutations: drop ExpiryRule's held term → the held branch is deleted, red;
 // compare it with >= → the branch held before its page is kept, red; drop the
-// default term → the default branch is deleted, red; drop the change term →
-// the change's source is deleted, red; run 4b before rule 4 → the moved
-// branch is answered with 4b's sentence, red; skip 4b → the person's branch is
-// deleted, red.
+// default term → the default branch is deleted, red; run 4b before rule 4 →
+// the moved branch is answered with 4b's sentence, red; skip 4b → the
+// person's branch is deleted, red. A live change's branches are
+// TestTheDecideKeepsAnOpenChangesBranch's.
 func TestTheDecideKeepsABranchThatIsNoLongerIdle(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -189,10 +190,6 @@ func TestTheDecideKeepsABranchThatIsNoLongerIdle(t *testing.T) {
 		protected  = idle("protected")
 		guarded    = idle("guarded")
 	)
-	opened := seatSets(seatBranch, old)
-	opened.Change = &code.ChangeOption{Target: "refs/heads/main", Title: "the work under review"}
-	change := branch("change", idleSince, opened)
-
 	// BEFORE THE PAGE: a hold, the default branch, the protections.
 	_, read := n.readRef("held-before", seatBranch)
 	n.lands(lcRefHold(agent("dev"), heldBefore, "turn-0", seatBranch, read))
@@ -223,7 +220,6 @@ func TestTheDecideKeepsABranchThatIsNoLongerIdle(t *testing.T) {
 		{"held before its page", heldBefore, "", ""},
 		{"the default branch", deflt, code.RefusalStale, "the repository's default branch"},
 		{"not the default branch", otherDeflt, "", ""},
-		{"a live change's source", change, code.RefusalStale, "the source or the target of a live change"},
 		{"under direct_push persons", protected, code.RefusalProtectedDirect, ""},
 		{"under direct_push none, deletable", guarded, code.RefusalProtectedDirect, ""},
 	} {
@@ -244,6 +240,140 @@ func TestTheDecideKeepsABranchThatIsNoLongerIdle(t *testing.T) {
 		case tc.reason != "" && (res.Outcome != "" || n.targetOf(tc.id, seatBranch) == ""):
 			t.Errorf("%s: kept, and a record was written (%s) or the branch is gone", tc.name, res.Outcome)
 		}
+	}
+}
+
+// The seat branches the open-change cases set, each idle past code.RefExpiry:
+// the sources of an open change, of a draft and of a closed one, the target a
+// live change is proposed into, and one no change names.
+const (
+	openSource   = "refs/heads/seats/dev/open"
+	draftSource  = "refs/heads/seats/dev/draft"
+	closedSource = "refs/heads/seats/dev/closed"
+	changeInto   = "refs/heads/seats/dev/into"
+	noChange     = "refs/heads/seats/dev/plain"
+)
+
+// openChangesOn sets the open-change cases' seat branches on repo, idle, and
+// opens on them, as dev: web!1 from openSource and web!2, a draft, from
+// draftSource, both into main; web!3 from closedSource, then closed; and web!4
+// from feature into changeInto. Each change is asked of the repository's
+// committer and applied by the node's applier.
+func openChangesOn(t *testing.T, n *node, c *code.Committer, repo string) {
+	t.Helper()
+	ctx := t.Context()
+	old := oidOf("idle")
+	n.pushAt(idleSince, repo, seatSets(openSource, old), seatSets(draftSource, old), seatSets(closedSource, old),
+		seatSets(changeInto, old), seatSets(noChange, old))
+	draft := opening(repo, draftSource, mainRef, dev)
+	draft.Open.Draft = true
+	for _, p := range []code.ChangeProposal{opening(repo, openSource, mainRef, dev), draft,
+		opening(repo, closedSource, mainRef, dev)} {
+		res, err := c.ProposeChange(ctx, p)
+		requireChanged(t, res, err)
+		if p.Open.SourceRef == closedSource {
+			res, err = c.ProposeChange(ctx, closing(repo, res.ChangeID, dev, res.Version))
+			requireChanged(t, res, err)
+		}
+	}
+	res, err := c.ProposeChange(ctx, opening(repo, featureRef, changeInto, dev))
+	requireChanged(t, res, err)
+	if res.Number != 4 {
+		t.Fatalf("the change into %s is web!%d, want web!4", changeInto, res.Number)
+	}
+}
+
+// AN OPEN CHANGE'S SOURCE BRANCH NEVER EXPIRES (M4-D32): the decide keeps a
+// seat branch idle past code.RefExpiry that a live change is proposed from —
+// an open change's and a draft's — answering stale with a sentence NAMING the
+// change, so whoever reads why the branch outlived the fortnight reads which
+// review holds it; and the branch a live change is proposed into, since
+// deleting it strands the change. Once a change is closed, its source is a
+// seat's idle branch like any other, and is deleted. Every change here is
+// opened AFTER the page was read, so the listing's own skip
+// (TestTheListingSkipsAnOpenChangesBranch) had no say: the decide's term alone
+// keeps each branch, as it must for a review opened while a pass runs.
+//
+// Mutations: drop ExpiryRule's open-change term → the open and the draft
+// sources are deleted, red; drop its target term → the branch web!4 merges
+// into is deleted, red; read the live change's number by repository alone in
+// expiryRefsSQL → the sentence names another change, red.
+func TestTheDecideKeepsAnOpenChangesBranch(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	repo := changeRepo(t, n, "web")
+	seen := n.listed()
+	openChangesOn(t, n, c, repo)
+	old := oidOf("idle")
+
+	for _, tc := range []struct {
+		name, ref string
+		detail    string
+	}{
+		{"an open change's source", openSource, "the source branch of live change web!1"},
+		{"a draft's source", draftSource, "the source branch of live change web!2"},
+		{"a closed change's source", closedSource, ""},
+		{"a live change's target", changeInto, "the target of a live change"},
+		{"a branch no change names", noChange, ""},
+	} {
+		res, err := c.Propose(t.Context(), expiryOf(repo, seen, deletion(tc.ref, old)))
+		if err != nil || len(res.Answer.Commands) != 1 {
+			t.Errorf("%s: the expiry was answered %+v, %v", tc.name, res, err)
+			continue
+		}
+		got := res.Answer.Commands[0]
+		switch {
+		case tc.detail == "" && (got.Result != code.ResultOK || res.Outcome != statelog.OutcomeApplied ||
+			n.targetOf(repo, tc.ref) != ""):
+			t.Errorf("%s: answered %+v (%s), want it deleted", tc.name, got, res.Outcome)
+		case tc.detail != "" && (got.Result != code.ResultNG || got.Reason != code.RefusalStale ||
+			got.Detail != tc.detail):
+			t.Errorf("%s: answered %+v, want stale %q", tc.name, got, tc.detail)
+		case tc.detail != "" && (res.Outcome != "" || n.targetOf(repo, tc.ref) != old):
+			t.Errorf("%s: kept, and a record was written (%s) or the branch moved", tc.name, res.Outcome)
+		}
+	}
+}
+
+// THE LISTING SKIPS A LIVE CHANGE'S BRANCHES (M4-D32): the pass's page of
+// idle seat branches leaves out the source of an open change and of a draft,
+// and the branch a live change is proposed into — branches the decide keeps
+// whatever their age, which a pass would otherwise propose, and its committer
+// refuse, on every pass for as long as the review lasted — and still lists a
+// closed change's source and a branch no change names. The skip is the
+// change's REPOSITORY's: the same branch names in another repository, where
+// no change names them, are listed.
+//
+// Mutations: drop the listing's source term → the open and the draft sources
+// are listed, red; drop its target term → the branch web!4 merges into is
+// listed, red; correlate either on the ref alone → the other repository's
+// same-named branch is skipped, red.
+func TestTheListingSkipsAnOpenChangesBranch(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	web := changeRepo(t, n, "web")
+	openChangesOn(t, n, c, web)
+	docs := changeRepo(t, n, "docs")
+	old := oidOf("idle")
+	n.pushAt(idleSince, docs, seatSets(openSource, old), seatSets(draftSource, old), seatSets(changeInto, old))
+
+	refs, _, err := code.ExpiryPage(t.Context(), n.reader, harnessAt.Add(-code.RefExpiry))
+	if err != nil {
+		t.Fatalf("list the idle seat branches: %v", err)
+	}
+	want := map[string]bool{web + " " + closedSource: true, web + " " + noChange: true,
+		docs + " " + openSource: true, docs + " " + draftSource: true, docs + " " + changeInto: true}
+	got := map[string]bool{}
+	for _, ref := range refs {
+		got[ref] = true
+	}
+	if len(refs) != len(want) || !maps.Equal(got, want) {
+		t.Fatalf("the page lists %q, want exactly %v (web %s, docs %s)", refs, slices.Sorted(maps.Keys(want)),
+			web, docs)
 	}
 }
 

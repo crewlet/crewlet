@@ -2396,11 +2396,21 @@ A branch is **kept** while anything still depends on it:
   `code_ref_expiry_skipped` at warn;
 - it is its repository's **default branch**: deleted, the repository's HEAD
   would name nothing and every clone would check nothing out;
-- it is the **source or the target of a live change**: deleting a source
-  closes its change, and a review may take longer than a fortnight;
+- it is the **source branch of a live change**, a draft's or an open one's:
+  deleting it would close the change, and a review may take longer than a
+  fortnight. Once the change is closed or merged, its branch is a seat's
+  branch like any other, idle from the last time it was set;
+- it is the **target of a live change**: deleting it would leave the change
+  with nothing to merge into;
 - a [protection rule](#protection-rules) matches it — every rule takes a
   person's direct push alone (`persons`, unset reads it) or nobody's (`none`),
   and the lifecycle is no person.
+
+A live change's branches are not even listed: the pass's page of idle branches
+leaves them out, so the lifecycle proposes nothing for a branch under review
+and `refs_kept` does not count it on every pass. The committer still asks, for
+a change opened while a pass runs, and keeps the source branch saying which
+change holds it (`stale`, `the source branch of live change web!12`).
 
 The deletion is a **push**, on the engine's own account — no credential, no
 seat, no run — decided by the repository's [committer](#the-committer) like any

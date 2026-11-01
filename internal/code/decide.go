@@ -40,7 +40,7 @@ import (
 //     4b. a command of an EXPIRY entry ([ViaExpiry]) whose ref is no longer
 //     its seat's idle branch ([ExpiryRule]) is stale — pushed since it was
 //     listed, held by a live turn since, the repository's default branch, a
-//     live change's source or target, or last set by somebody else;
+//     live change's source (named) or target, or last set by somebody else;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted —
 //     and a rule that takes a person's push alone refuses everybody else's;
 //  6. a create beside a live ref above it or with a live ref below it
@@ -1033,27 +1033,34 @@ func expiryRowsIn(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo,
 	out := map[string]ExpiryRow{}
 	for rows.Next() {
 		var ref string
-		var at int64
+		var at, source int64
 		var row ExpiryRow
-		if err := rows.Scan(&ref, &row.Target, &row.Seat, &at, &row.Held, &row.Change); err != nil {
+		if err := rows.Scan(&ref, &row.Target, &row.Seat, &at, &row.Held, &source, &row.ChangeTarget); err != nil {
 			return nil, err
 		}
 		row.At, row.Default = store.DecodeTime(at), ref == branchPrefix+repo.defaultBranch
+		if source > 0 {
+			// THE SNAPSHOT'S NAME of the repository, as the change's number
+			// is the snapshot's: a rename since the page names it as it is now.
+			row.OpenChange = ChangeRef(repo.name, source)
+		}
 		out[ref] = row
 	}
 	return out, rows.Err()
 }
 
 // expiryRefsSQL is rule 4b's row of each ref of a list (?2) in the repository
-// ?1: code_refs' key, driven from the list, and an EXISTS seek of the live
-// changes by source (code_changes_open_idx) and by target
-// (code_changes_target_idx, its leading two columns), the live states spelled
-// as both indexes are partial on them, unqualified (no other table here has
-// a state). Registered in plan_test.go.
+// ?1: code_refs' key, driven from the list; the NUMBER of the live change the
+// ref is the source of (0 for none — a repository numbers its changes from 1),
+// one seek of code_changes_open_idx and a read of that one row, since the
+// sentence keeping the branch names the change; and an EXISTS seek of the
+// live changes by target (code_changes_target_idx, its leading two columns).
+// The live states are spelled as both indexes are partial on them,
+// unqualified (no other table here has a state). Registered in plan_test.go.
 const expiryRefsSQL = `SELECT r.ref, r.target, r.seat, r.at, r.held_position,
-		EXISTS (SELECT 1 FROM code_changes AS s INDEXED BY code_changes_open_idx
-			WHERE s.repo_id = ?1 AND s.source_ref = r.ref AND ` + liveChanges + `)
-		OR EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
+		COALESCE((SELECT s.number FROM code_changes AS s INDEXED BY code_changes_open_idx
+			WHERE s.repo_id = ?1 AND s.source_ref = r.ref AND ` + liveChanges + `), 0),
+		EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
 			WHERE t.repo_id = ?1 AND t.target_ref = r.ref AND ` + liveChanges + `)
 	FROM json_each(?2) AS j CROSS JOIN code_refs AS r
 	WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT)`

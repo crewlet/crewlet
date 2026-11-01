@@ -470,13 +470,15 @@ func registeredStatements() map[string]statement {
 		"ref hold version": {refHoldVersionSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// THE REF LIFECYCLE: rule 4b's rows of an expiry's refs, driven from
 		// the list, with a seek of each live-change index; the step's keyset
-		// page over its partial index, oldest first; and the page's
-		// repositories by their key.
+		// page over its partial index, oldest first, each row it reads
+		// sought in both live-change indexes so a live change's branches are
+		// skipped (M4-D32); and the page's repositories by their key.
 		"expiry refs": {expiryRefsSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j",
 			refsKey + " (repo_id=? AND ref=?)", "code_changes_open_idx (repo_id=? AND source_ref=?)",
 			"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
 		"expiry listing": {expiryListingSQL, []any{100, -1, "", "", MaxCommandsPerPush},
-			[]string{"code_refs_expiry_idx (at>=? AND at<=?)"}},
+			[]string{"code_refs_expiry_idx (at>=? AND at<=?)", "code_changes_open_idx (repo_id=? AND source_ref=?)",
+				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
 		"expiry repos": {expiryReposSQL, []any{`["repo-1","repo-2"]`}, []string{"SCAN json_each AS j",
 			repoKey + " (id=?)"}},
 		// code_refs_near_limit's reading: the candidates by a keyset walk of

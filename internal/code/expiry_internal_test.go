@@ -3,18 +3,21 @@ package code
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE REF LIFECYCLE'S RULE KEEPS EVERY BRANCH THAT IS NO LONGER IDLE, each
 // with its own sentence, in the order it asks — an earlier push of the batch,
-// a hold recorded past the page, the default branch, a live change, a writer
+// a hold recorded past the page, the default branch, a live change's source
+// (naming the change) and its target, a writer
 // that is not the seat, the window — and lets an idle branch go. A hold
 // recorded AT the page's position was taken before it, and the pass's own read
 // of the holds answered it: it keeps nothing here.
@@ -46,7 +49,9 @@ func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 		{"held at the page", with(func(r *ExpiryRow) { r.Held = through }), false, ""},
 		{"held before the page", with(func(r *ExpiryRow) { r.Held = through - 1 }), false, ""},
 		{"the default branch", with(func(r *ExpiryRow) { r.Default = true }), false, expiryKeptDefault},
-		{"a live change's", with(func(r *ExpiryRow) { r.Change = true }), false, expiryKeptChange},
+		{"a live change's source", with(func(r *ExpiryRow) { r.OpenChange = "web!12" }), false,
+			"the source branch of live change web!12"},
+		{"a live change's target", with(func(r *ExpiryRow) { r.ChangeTarget = true }), false, expiryKeptTarget},
 		{"set last by somebody else", with(func(r *ExpiryRow) { r.Seat = "" }), false, expiryKeptSeat},
 		{"set within the window", with(func(r *ExpiryRow) { r.At = now.Add(-RefExpiry + time.Hour) }), false,
 			expiryKeptRecent},
@@ -55,6 +60,10 @@ func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 		// most: a branch somebody else set and a turn holds is held.
 		{"held and set by somebody else", with(func(r *ExpiryRow) { r.Held, r.Seat = through+1, "" }), false,
 			expiryKeptHeld},
+		// ...and a branch that is one live change's source and another's
+		// target names the change proposed from it.
+		{"a source and a target", with(func(r *ExpiryRow) { r.OpenChange, r.ChangeTarget = "web!3", true }), false,
+			"the source branch of live change web!3"},
 	} {
 		refusal, why := ExpiryRule(c.row, c.touched, now, through)
 		switch {
@@ -70,10 +79,14 @@ func TestExpiryRuleKeepsWhatIsNoLongerIdle(t *testing.T) {
 // receiver-details test's bound, which a committer's answer is held to as
 // well.
 //
+// The one sentence that carries a name is held at its longest: the longest
+// repository name and the largest change number.
+//
 // Mutation: lengthen one past maxDetailBytes → red.
 func TestEveryExpirySentenceFitsADetail(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{expiryKeptTouched, expiryKeptHeld, expiryKeptDefault, expiryKeptChange,
+	longest := expiryKeptOpenChange(ChangeRef(strings.Repeat("r", gitref.MaxRepoNameBytes), math.MaxInt64))
+	for _, s := range []string{expiryKeptTouched, expiryKeptHeld, expiryKeptDefault, longest, expiryKeptTarget,
 		expiryKeptSeat, expiryKeptRecent} {
 		if len(s) > maxDetailBytes || s == "" {
 			t.Errorf("%q is %d bytes, want one sentence within %d", s, len(s), maxDetailBytes)
