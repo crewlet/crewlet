@@ -872,7 +872,7 @@ length, so a push of some six hundred such refs of the longest reaches the
 bound first. The receiving node measures a push's ref updates as it reads
 them, with everything the rest of the push could add at its largest, and
 refuses one past the bound before anything of it is run or stored.
-[`crewlet code import`](../reference/cli.md#crewlet-code-import) cuts each
+[`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local) cuts each
 batch of refs it pushes by the same rule, so an import never meets it.
 
 What a repository holds is its packs **as the pushes stored them** until its

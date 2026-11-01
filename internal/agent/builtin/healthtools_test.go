@@ -376,8 +376,9 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 // Admits (which a surface asks before anything is named), and Withheld (what a
 // seat's surfaces leave out: both health tools for the ungranted seat, nothing
 // of them for the granted one, and no other builtin but those the table holds
-// human-only — code_report_check, a person's own CI's, and
-// code_purge_unreachable, a person's purge — which it refuses every seat,
+// human-only — code_report_check, a person's own CI's,
+// code_purge_unreachable, a person's purge, and code_import_repo, a person's
+// import — which it refuses every seat,
 // chart or none). A person is the class's: admin admitted, everybody
 // else refused.
 //

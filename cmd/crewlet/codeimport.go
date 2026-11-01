@@ -27,8 +27,12 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// `crewlet code import` — another host's repository, pushed into one the code
-// host serves.
+// `crewlet code import -local` — another host's repository, pushed from this
+// machine into one the code host serves. Without -local the NODE imports
+// (codeimportnode.go): it creates the repository and its home fetches the
+// source. This is the import for a source only this machine can reach — a
+// forge on the operator's own network, behind their VPN or their credentials
+// — into a repository that already exists.
 //
 // # Client-side, and as the person
 //
@@ -37,8 +41,7 @@ import (
 // bound to, through the ordinary push path: every rule a push is held to — the
 // limits, the protections, the blob limit, git's fsck — holds for an import
 // because an import IS pushes, and the repository's push history names that
-// person for each. The engine dials nothing, so there is no server-side fetch
-// of a URL somebody typed to guard (a server-side import is M6's).
+// person for each. The engine dials nothing for it.
 //
 // # Steps, each MEASURED before it is pushed
 //
@@ -165,9 +168,10 @@ import (
 // the node holds at a value the source's history does not reach is not a
 // resumed import of the same history, and is refused.
 
-// codeImportUsage is the import's synopsis.
+// codeImportUsage is the import's two synopses: the node's, and -local's.
 const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-url URL] " +
-	"[-git PATH] [-dry-run]"
+	"-owner unit:KEY|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]\n" +
+	"       crewlet code import <source-url> <name> -local [<config.yaml>] [-url URL] [-git PATH] [-dry-run]"
 
 // importMeasureCap is how far a step's build goes before it stops: twice the
 // limit. Past it the step is cut to under half its length whatever the rest
@@ -214,23 +218,46 @@ const maxImportLine = 1 << 20
 // SHA-1 repositories.
 const oidHexLen = 40
 
-// codeImport is `crewlet code import`.
+// codeImport is `crewlet code import`: the node's import, or with -local this
+// machine's.
 func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	imp, dryRun, err := prepareImport(ctx, environ, args, stdout, stderr)
+	call, err := readImport(environ, args, stderr)
 	if err != nil {
 		return err
 	}
-	return imp.run(ctx, dryRun)
+	if !call.local {
+		return codeImportOnNode(ctx, call, stdout, stderr)
+	}
+	imp, err := call.importer(ctx, stdout, stderr)
+	if err != nil {
+		return err
+	}
+	return imp.run(ctx, call.dryRun)
 }
 
-// prepareImport reads the command line, the repository the import fills and
-// the operator's git, and answers the run they make and whether it is a dry
-// one.
-func prepareImport(ctx context.Context, environ config.Source, args []string, stdout, stderr io.Writer) (
-	*importer, bool, error) {
+// importCall is one `crewlet code import` as its command line asks it.
+type importCall struct {
+	source string // the source's URL, as the operator gave it
+	name   string // the repository on the node
+	client *nodeClient
+	// local is -local: this machine's git pushes the source into a
+	// repository that exists. Unset, the node creates the repository and
+	// fetches the source itself.
+	local bool
+	// gitPath and dryRun are -local's.
+	gitPath string
+	dryRun  bool
+	// owner, credential, mirror and opID are the node's import's.
+	owner, credential, opID string
+	mirror                  bool
+}
 
+// readImport reads an import's command line: its two subjects, the node it
+// talks to, and its flags — the two imports' apart, since a flag of one
+// given to the other is a person who meant the other one.
+func readImport(environ config.Source, args []string, stderr io.Writer) (importCall, error) {
 	// THE TWO SUBJECTS LEAD, before any flag (`work purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
@@ -238,42 +265,86 @@ func prepareImport(ctx context.Context, environ config.Source, args []string, st
 	name, rest := splitSubject(rest)
 	if source == "" || name == "" {
 		fmt.Fprintln(stderr, codeImportUsage)
-		return nil, false, errors.New("name the repository to import and the code host's repository to import " +
-			"it into, before any flag")
+		return importCall{}, errors.New("name the repository to import and the code host's repository to " +
+			"import it into, before any flag")
 	}
 	var (
-		gitPath *string
-		dryRun  *bool
+		local, dryRun, mirror            *bool
+		gitPath, owner, credential, opID *string
 	)
 	client, err := nodeClientFor(environ, rest, "code import", stderr, func(fs *flag.FlagSet) {
-		gitPath = fs.String("git", "", "the git binary to run; empty is the first on PATH")
-		dryRun = fs.Bool("dry-run", false, "plan the import and push nothing")
+		local = fs.Bool("local", false, "import on THIS machine with its own git and network: push the "+
+			"source into a repository that exists, in steps under code.limits.max_push_bytes; the same "+
+			"command again resumes it")
+		gitPath = fs.String("git", "", "-local: the git binary to run; empty is the first on PATH")
+		dryRun = fs.Bool("dry-run", false, "-local: plan the import and push nothing")
+		owner = fs.String("owner", "", "the new project's owner: unit:<key> or seat:<handle>")
+		credential = fs.String("credential", "", "the NAME of the variable that holds the source's token, "+
+			"in the node's secret store or environment (crewlet secrets set NAME); empty fetches anonymously")
+		mirror = fs.Bool("mirror", false, "keep the repository in step with the source as a pull mirror, "+
+			"rather than import it once")
+		opID = fs.String("op-id", "", "retry an `unknown` outcome with the id it printed, so the retry is "+
+			"the same create; empty starts a new one")
 	})
 	if err != nil {
-		return nil, false, err
+		return importCall{}, err
 	}
-	repo, err := codeImportTarget(ctx, client, name)
-	if err != nil {
-		return nil, false, err
+	call := importCall{source: source, name: name, client: client, local: *local, gitPath: *gitPath,
+		dryRun: *dryRun, owner: *owner, credential: *credential, opID: *opID, mirror: *mirror}
+	// THE TWO IMPORTS' FLAGS APART: each names what only its own import
+	// reads, so one given beside the other import would be silently
+	// dropped — a -dry-run that runs, a -mirror that imports once.
+	given := map[string]bool{"-owner": call.owner != "", "-credential": call.credential != "",
+		"-mirror": call.mirror, "-op-id": call.opID != ""}
+	if !call.local {
+		given = map[string]bool{"-git": call.gitPath != "", "-dry-run": call.dryRun}
 	}
-	principal, err := codeImportPrincipal(ctx, client)
-	if err != nil {
-		return nil, false, err
+	var misplaced []string
+	for flag, set := range given {
+		if set {
+			misplaced = append(misplaced, flag)
+		}
 	}
-	g, err := newOperatorGit(*gitPath, client, os.Environ())
+	if len(misplaced) == 0 {
+		return call, nil
+	}
+	slices.Sort(misplaced)
+	fmt.Fprintln(stderr, codeImportUsage)
+	if call.local {
+		return importCall{}, fmt.Errorf("%s: the node's import alone, which creates the repository and "+
+			"fetches the source, where -local pushes from this machine into one that exists: drop them, or "+
+			"-local", strings.Join(misplaced, " and "))
+	}
+	return importCall{}, fmt.Errorf("%s: -local's alone, which pushes from this machine with its own git "+
+		"into a repository that exists: add -local, or drop them for the node to fetch the source",
+		strings.Join(misplaced, " and "))
+}
+
+// importer is -local's run of call: the repository the import fills and the
+// operator's git, read before anything is pushed.
+func (call importCall) importer(ctx context.Context, stdout, stderr io.Writer) (*importer, error) {
+	repo, err := codeImportTarget(ctx, call.client, call.name)
 	if err != nil {
-		return nil, false, err
+		return nil, err
+	}
+	principal, err := codeImportPrincipal(ctx, call.client)
+	if err != nil {
+		return nil, err
+	}
+	g, err := newOperatorGit(call.gitPath, call.client, os.Environ())
+	if err != nil {
+		return nil, err
 	}
 	if err = g.atClientFloor(ctx); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	imp := &importer{g: g, client: client, source: source, name: name, repo: repo, principal: principal,
-		budget: repo.Limits.MaxPushBytes, maxStored: code.MaxPackBytes,
+	imp := &importer{g: g, client: call.client, source: call.source, name: call.name, repo: repo,
+		principal: principal, budget: repo.Limits.MaxPushBytes, maxStored: code.MaxPackBytes,
 		stdout: stdout, stderr: stderr}
 	if isTerminal(stderr) {
 		imp.live = stderr
 	}
-	return imp, *dryRun, nil
+	return imp, nil
 }
 
 // codeImportTarget is the repository an import pushes into, read at the log's

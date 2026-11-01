@@ -5065,7 +5065,8 @@ where the code host's writes are served, the code writes: `code_commit_files`,
 `code_rerun_checks` and `code_report_check` — the last your own CI's report of a check, which no seat
 is given ([External CI](../guides/code.md#external-ci)) — and a repository's `code_purge_unreachable`,
 a purge of its unreachable objects that no seat is given either and that asks a fresh proof of who
-you are — each made as the human seat you
+you are, and `code_import_repo`, a repository created from one at another host, which no seat is given
+either — each made as the human seat you
 hold through the credential you came with (a token bound to nobody writes
 nothing), each answering its `op_id` here and taking it back by the tracker's
 own rule, and each one `operator_acted`. And

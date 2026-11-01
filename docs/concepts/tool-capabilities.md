@@ -76,7 +76,7 @@ is read, which the node that answers judges both at, and a write's is the
 least access at which the node that decides it may admit the call — the rest
 is the relation that node judges from its own chart, which no access alone
 names (an open's push of its branch, a change's owner steering it). Their
-twenty-five writes — `code_commit_files`,
+twenty-six writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
@@ -85,7 +85,8 @@ twenty-five writes — `code_commit_files`,
 `code_resolve_finding`, its findings' `code_apply_suggestions` and its
 `code_rebase_change`, its `code_merge_change`, `code_dequeue_change` and
 `code_revert_change`, a commit's checks' `code_rerun_checks` and
-`code_report_check`, and a repository's `code_purge_unreachable` — are each
+`code_report_check`, a repository's `code_purge_unreachable`, and
+`code_import_repo` — are each
 `read_only: false`
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
@@ -124,12 +125,22 @@ precondition and who it waits on — never `invalid`, since nothing about the
 call was wrong, and never a retry, since its people clear it and a
 `ready_to_merge` wake follows. A seat holding it is also told, in its
 executor prompt's `code_merging` section, to end its turn rather than wait.
-`code_report_check` and `code_purge_unreachable` are the two code writes no
-seat is offered: each is human-only in the authority table — a report is a
-check result, and a seat runs no CI whose result it could report ([External
+`code_report_check`, `code_purge_unreachable` and `code_import_repo` are the
+three code writes no seat is offered: each is human-only in the authority
+table — a report is a check result, and a seat runs no CI whose result it
+could report ([External
 CI](../guides/code.md#external-ci)); a purge drops history nothing brings
 back, which no model's say-so may erase, and it asks the person a fresh proof
-of who they are besides. A purge is `idempotent: true`: its request is the
+of who they are besides; and an import has the code host dial another host
+for the company, which a model's say-so would point at any URL a page it read
+named ([Imports and mirrors are a person's](../guides/code.md#import-from-github-or-gitlab)).
+An import is a create like `code_create_repo`, `idempotent: true` and not
+destructive: its repository's id comes from the call's operation, so the same
+call made again is the same create, and a mistaken one is deleted as any
+repository is. Its `credential` is the NAME of the variable holding the
+source's token — never the token, which the tool refuses for its shape before
+anything is sent, since every record of the repository's settings would carry
+it. A purge is `idempotent: true`: its request is the
 call's operation, so the same call made again is the same request, and a
 request asked while another is open widens that one rather than adding a
 second. A seat holding the

@@ -318,9 +318,9 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Thirty-seven more — twelve that read, two of them a repository's changes and
-one a commit's checks, and twenty-five that change a branch, a repository, a
-change or a commit's checks, or purge a repository — registered wherever
+Thirty-eight more — twelve that read, two of them a repository's changes and
+one a commit's checks, and twenty-six that change a branch, a repository, a
+change or a commit's checks, purge a repository or import one — registered wherever
 the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
@@ -329,19 +329,20 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same thirty-seven, so an operator's own
+and the operator catalogue serves the same thirty-eight, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
-person as the human seat they hold — and reports their own CI's checks and
-purges a repository's unreachable objects, which no seat does. The twelve reads are reads: none counts as
+person as the human seat they hold — and reports their own CI's checks,
+purges a repository's unreachable objects and imports a repository from
+another host, which no seat does. The twelve reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The twenty-five
+them, and the operator catalogue records no call to one. The twenty-six
 writes each deliver to the code host, so a turn woken about work on a repository that
 answered by moving a branch, opening a change or reviewing one delivered; no
 worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
 catalogue is recorded as any write is. A seat is offered twenty-three of them —
-every write but `code_report_check` and `code_purge_unreachable`, each a
-person's alone — only where
+every write but `code_report_check`, `code_purge_unreachable` and
+`code_import_repo`, each a person's alone — only where
 its `role.code.access` is `full_access`: below it, no repository's grant lets
 the seat change anything ([Who may read and
 push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
@@ -389,6 +390,7 @@ every round.
 | `code_rerun_checks` | A commit's checks run again — named by `change` or `sha` as `code_get_check_failures` names them — each named in `checks` with the attempt the caller read as its latest (at most 16 a call), or with `all_failed` every check whose latest attempt ended without passing: each queued at the next attempt, at most ten. A seat reruns only an attempt its infrastructure or a stop ended (`errored`, `cancelled`), on a repository it may write or a change it wrote; a failure is refused it `rerun_genuine`. A check a person's CI reports is refused `native_check`: its CI runs it again |
 | `code_report_check` | A person's own CI's check of a commit, reported onto the commit's checks — `status` `running` when it starts, then `passed`, `failed`, `errored` or `cancelled` with its `summary`, `tail`, `failures` and `url` — by `sha` (for `checked_for`, the default branch when left out) or `change`. A person's alone, never a seat's, and refused `native_check` for a check the engine has queued at that commit ([External CI](code.md#external-ci)) |
 | `code_purge_unreachable` | A repository's unreachable objects purged — every object no branch or tag reaches, such as a secret force-pushed away — by its maintainer, with no grace for what a ref drop left. A person's alone, with a fresh proof of who they are, never a seat's, and a token bound to nobody is refused. Answered once the request is recorded: the request, where it landed, the node that serves it, and what still holds the objects after (`holds`: the nodes' caches until each syncs past it, every backup taken before it commits, and the object store for a day after); the same call again is the same request, and one asked while another is open widens it. `code_get_repo`'s `expunge` says when it is served |
+| `code_import_repo` | A project repository created and filled from one at another host — `url`, an https URL its home git node fetches — or, with `mirror`, kept in step with it as a pull mirror, which takes no push. `name`, `owner` (as `code_create_repo` takes one), `visibility` and `default_branch` as a create's; `credential` the NAME of the variable holding the source's token, which the node resolves from the secret store and then its environment each time it dials — a token in its place is refused before anything is sent. A person's alone, never a seat's, and a token bound to nobody is refused. Answered once the create is recorded, the repository `importing` until its home has landed the source; the same call made again is the same create |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a

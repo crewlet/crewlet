@@ -40,7 +40,7 @@ import (
 
 // `crewlet code` — the engine's own git host, from the command line.
 //
-// # Three kinds of subcommand
+// # Four kinds of subcommand
 //
 // status and verify ASK A RUNNING NODE, through the API's /code/ routes, as
 // the person the token is bound to: the repositories are rows on the code
@@ -52,13 +52,20 @@ import (
 // The tests serve the writer — a real node — so the two cannot drift
 // unnoticed.
 //
-// export and import are CLIENT-SIDE: the operator's own git, run with the
-// operator's own environment — their proxy, their configuration, their
-// credentials for another host — talks to the node's git routes exactly as a
-// person's git does. export clones a repository and writes the bundle on this
-// machine; import clones another host's repository here and pushes it into
-// one the node serves, in bounded steps (codeimport.go). The engine dials
-// nothing for either ([operatorGit]).
+// import and purge-unreachable ACT, through the act route
+// (`POST /operator/act/{tool}`) as the person the token is bound to: the
+// tools a person's assistant calls, code_import_repo and
+// code_purge_unreachable, so a request from a shell is the same request with
+// the same record. An import creates the repository, and its home git node
+// fetches the source (codeimportnode.go).
+//
+// export and `import -local` are CLIENT-SIDE: the operator's own git, run
+// with the operator's own environment — their proxy, their configuration,
+// their credentials for another host — talks to the node's git routes exactly
+// as a person's git does. export clones a repository and writes the bundle on
+// this machine; `import -local` clones another host's repository here and
+// pushes it into one the node serves, in bounded steps (codeimport.go). The
+// engine dials nothing for either ([operatorGit]).
 //
 // credential is git's credential helper for the code host
 // ([codeCredential]), which export configures for every git it runs against a
@@ -73,9 +80,15 @@ const codeUsage = `usage: crewlet code <command>
       node keeps its own cache, so verify each
   export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
       write a repository's every ref and object to one git bundle
-  import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
-      push another host's repository into a declared one, in steps under
-      code.limits.max_push_bytes; the same command again resumes it
+  import <source-url> <name> [<config.yaml>] [-url URL] -owner unit:KEY|seat:HANDLE
+         [-credential VAR] [-mirror] [-op-id ID]
+      create a project the node fills from another host's repository — or
+      keeps in step with it, -mirror — fetching it with the token the node
+      holds as VAR; a person's alone, through their own token
+  import <source-url> <name> -local [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
+      push another host's repository from this machine into one that exists,
+      in steps under code.limits.max_push_bytes; the same command again
+      resumes it
   purge-unreachable <name> [<config.yaml>] [-url URL] [-op-id ID]
       ask the repository's maintainer to drop every object no branch or tag
       reaches, with no grace; a person's alone, through their own token

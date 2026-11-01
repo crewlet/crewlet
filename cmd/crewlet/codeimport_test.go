@@ -130,11 +130,12 @@ func noise(seed uint64, n int) string {
 	return string(b[:n])
 }
 
-// importInto runs `crewlet code import url web` against h with the hermetic
-// git, and any more arguments.
+// importInto runs `crewlet code import url web -local` against h with the
+// hermetic git, and any more arguments.
 func (h codeHost) importInto(t *testing.T, url string, more ...string) (string, string, error) {
 	t.Helper()
-	return cli(t, append([]string{"code", "import", url, "web", h.cfg, "-git", hermeticGit(t)}, more...)...)
+	return cli(t, append([]string{"code", "import", url, "web", h.cfg, "-local", "-git", hermeticGit(t)},
+		more...)...)
 }
 
 // pushes is how many pushes web's history holds, read at the log's head.
@@ -384,7 +385,7 @@ func TestAnImportPushesThePackEachStepWasMeasuredAs(t *testing.T) {
 		"  fi\n"+
 		"done\n")
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", noSearchOnPush)
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", noSearchOnPush)
 	if err != nil {
 		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
@@ -1133,7 +1134,7 @@ func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-url", h.base,
+	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-local", "-url", h.base,
 		"-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "not bound to a person") {
 		t.Fatalf("an import with a token bound to nobody = %v, want the node's refusal", err)
@@ -1299,20 +1300,23 @@ func TestGitsOutputIsReadALineAtATime(t *testing.T) {
 	}
 }
 
-// runImport runs `crewlet code import url web` against h with git, h's own
+// runImport runs `crewlet code import url web -local` against h with git, h's own
 // token the credential its environment holds, and a case's own say over the
-// run first: tune changes the run prepareImport made — a bound the case scales
+// run first: tune changes the run its command line prepared — a bound the case scales
 // down to what a test-sized history can reach.
 func (h codeHost) runImport(t *testing.T, url, git string, tune func(*importer)) (string, string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	imp, dry, err := prepareImport(t.Context(), tokenEnviron(h.token),
-		[]string{url, "web", h.cfg, "-git", git}, &out, &errOut)
+	call, err := readImport(tokenEnviron(h.token), []string{url, "web", h.cfg, "-local", "-git", git}, &errOut)
+	var imp *importer
+	if err == nil {
+		imp, err = call.importer(t.Context(), &out, &errOut)
+	}
 	if err == nil {
 		if tune != nil {
 			tune(imp)
 		}
-		err = imp.run(t.Context(), dry)
+		err = imp.run(t.Context(), call.dryRun)
 	}
 	return out.String(), errOut.String(), err
 }
@@ -1604,7 +1608,7 @@ func TestImportStepsAMergesHistoryOnceWhateverDescendsFromTheMerge(t *testing.T)
 			git, url, bare, vendor, merge := mergedHistory(t, tc.vendor, 5)
 			path, measured := measuringGit(t)
 
-			out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", path)
+			out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", path)
 			if err != nil {
 				t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 			}
@@ -1653,7 +1657,7 @@ func TestImportRefusesAMergeNoBranchReachesWithARemedyThatWorks(t *testing.T) {
 	git, url, bare, vendor, merge := mergedHistory(t, false, 0)
 	path, measured := measuringGit(t)
 
-	out, _, err := cli(t, "code", "import", url, "web", h.cfg, "-git", path)
+	out, _, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", path)
 	if err == nil {
 		t.Fatalf("an import of a merge past the limit no branch reaches succeeded:\n%s", out)
 	}
@@ -1920,7 +1924,7 @@ func TestImportPinsWhatEachStepPushes(t *testing.T) {
 	hist.tag("v1", first, "the first commit")
 	git, url, bare := hist.load(t)
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", operatorsGit(t,
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
 		"push.followTags=true", "push.gpgSign=true", "push.negotiate=true"))
 	if err != nil {
 		t.Fatalf("an import under the operator's push settings: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
@@ -1956,7 +1960,7 @@ func TestAnImportOpensNoChange(t *testing.T) {
 	hist.commit("refs/heads/topic", tip, map[string]string{"TOPIC.md": "two\n"})
 	git, url, bare := hist.load(t)
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", operatorsGit(t,
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", operatorsGit(t,
 		"push.pushOption=change"))
 	if err != nil {
 		t.Fatalf("an import under a push option asking for a change: %v\nstdout:\n%s\nstderr:\n%s", err, out,
@@ -2004,7 +2008,7 @@ func TestImportReportsARefusedStepWithoutWaitingForTheNextMeasurement(t *testing
 		"esac\n")
 
 	start := time.Now()
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", held)
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-local", "-git", held)
 	if err == nil || !strings.Contains(err.Error(), "the import stopped at step 1") ||
 		!strings.Contains(errOut, "protected_direct") {
 		t.Fatalf("an import of a frozen main = %v\nstdout:\n%s\nstderr:\n%s; want it stopped at step 1", err, out,
@@ -2057,7 +2061,7 @@ func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-url", n.base, "-git", hermeticGit(t))
+	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-local", "-url", n.base, "-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "code.native is not set") ||
 		strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an import into a company hosting no code = %v, want the node's not_hosted and no code.repos", err)

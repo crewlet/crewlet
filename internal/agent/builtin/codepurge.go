@@ -55,8 +55,8 @@ import (
 // CodePurgeUnreachableTool is the purge's name: its authority row's action.
 const CodePurgeUnreachableTool = string(authz.ActionCodePurgeUnreachable)
 
-// PurgeWrites are the purge, the last of [CodeWrites]: M6's write after M4's
-// and M5's.
+// PurgeWrites are the purge, in [CodeWrites] after M4's and M5's writes and
+// before the import ([ImportWrites]): M6's first write.
 func PurgeWrites() []string { return []string{CodePurgeUnreachableTool} }
 
 // purgeVerb is the verb a purge's operation is named by (m3-w1's op rule).

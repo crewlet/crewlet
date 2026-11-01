@@ -29,7 +29,8 @@ subcommand below is served by it.
 | `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
 | `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
-| `crewlet code import <source-url> <name> [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into a declared one, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
+| `crewlet code import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR` — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
+| `crewlet code import <source-url> <name> -local [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into one that exists, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet code purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
@@ -1232,21 +1233,23 @@ report as it answered it. The token takes `admin`.
 crewlet code status [<config.yaml>] [-url URL] [-repo NAME] [-pushes N] [-json]
 crewlet code verify [<config.yaml>] [-url URL] [-repo NAME]... [-repair] [-json]
 crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
-crewlet code import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
+crewlet code import <source-url> <name> [<config.yaml>] [-url URL] -owner unit:KEY|seat:HANDLE
+                    [-credential VAR] [-mirror] [-op-id ID]
+crewlet code import <source-url> <name> -local [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
 crewlet code purge-unreachable <name> [<config.yaml>] [-url URL] [-op-id ID]
 crewlet code credential [-token-env NAME] get|store|erase
 ```
 
 The engine's own [git host](../concepts/code-host.md) from the command line.
-`status`, `verify` and `purge-unreachable` ask a **running node** — the first
-two through its `/code/` routes
-([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), the third
+`status`, `verify`, `import` and `purge-unreachable` ask a **running node** —
+the first two through its `/code/` routes
+([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), the other two
 through the act transport — as whoever the
 token resolves to: the repositories are rows the data nodes keep, and a git
 node's cache is files only its own process touches, so nothing here opens
 either. Like every node client they take the token from `$CREWLET_API_TOKEN`
 alone and find the node from the Tier A file's `api` block — `-url` overrides
-it, and with `-url` given no Tier A file is read. `export`, `import` and `credential` are **client-side**: your own git,
+it, and with `-url` given no Tier A file is read. `export`, `import -local` and `credential` are **client-side**: your own git,
 with your own environment, talks to the node's git routes exactly as anyone's
 git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
 
@@ -1468,6 +1471,60 @@ repository with no refs yet, or one deleted, is refused with nothing written.
 
 ### `crewlet code import`
 
+Creates a project repository and has the code host fill it from a repository at
+another host — once, or for good as a **pull mirror** (`-mirror`). It is the
+`code_import_repo` tool your own assistant calls, over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
+so the create is one record however it was asked.
+
+```
+$ crewlet code import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
+importing https://github.com/acme/web.git into web — importing, owned by unit:eng (at CREWLET_CODE_LOG@1:4821)
+  its home git node fetches the source now; `crewlet code status -repo web` shows it importing until the fetch has landed
+```
+
+**The node fetches, not this machine.** The repository's home git node fetches
+the source's branches and tags over HTTPS — every address the host resolves to
+must be a public one unless Tier A's `git.import_allow_private` says otherwise,
+and redirects are not followed — and lands them in chunks, packs before the
+refs that need them, so a history of any size goes in whatever
+`code.limits.max_push_bytes` says. The repository is `importing` until the last
+chunk lands, and takes no push meanwhile; a restarted home fetches again,
+from the refs already landed. A blob past `code.limits.max_blob_bytes`, or a
+history past `code.limits.repo_max_bytes`, ends the import early: the
+repository turns `active` holding what landed, and the import is not tried
+again. `crewlet code status -repo <name>` shows it `importing` until the import
+ends.
+
+- `-owner` is required: the project's owner, `unit:<key>` or `seat:<handle>`,
+  as `code_create_repo` takes one.
+- `-credential VAR` names the variable that holds the source's token — in upper
+  case, such as `GITHUB_TOKEN` — which the node resolves from the
+  [secret store](../concepts/secret-store.md) and then its environment when it
+  dials (`crewlet secrets set GITHUB_TOKEN` stores one). The repository records
+  the reference `${GITHUB_TOKEN}`, never the token, and a token given in its
+  place is refused before anything is sent. Left out, the source is fetched
+  anonymously.
+- `-mirror` makes the repository a pull mirror: imported from the source first,
+  then moved only by its home's syncs from it — every push to it is refused.
+
+**A person's alone.** `$CREWLET_API_TOKEN` must be your own token — `crewlet
+iam token -login` mints one — bound to the human seat you hold: an import has
+the code host dial another host for the company, so a token bound to nobody is
+refused, naming why, and so is a seat's tool call.
+
+**A retry is the same create.** The command mints an operation id and sends it
+as the `Idempotency-Key`; the repository's id is derived from it, so an answer
+whose outcome is unknown, or none at all, prints it, and `-op-id <id>` sends it
+again, which is answered as the first create rather than refused for a name
+already taken.
+
+A source the node cannot reach — a forge on your own network, behind your VPN
+or your SSH key — is imported from this machine instead, with `-local`, into a
+repository that exists.
+
+### `crewlet code import -local`
+
 Pushes another host's repository — anything your git clones: an HTTPS or SSH
 URL on GitHub or GitLab, another server, a path on this machine — into one the
 code host serves, **as you**: every step is an ordinary push by the person your
@@ -1478,7 +1535,7 @@ git reaches the source with your own credentials, proxy and network, so there
 is no fetch of a URL on the node to guard.
 
 ```
-$ crewlet code import https://github.com/acme/web.git web
+$ crewlet code import https://github.com/acme/web.git web -local
 skipping 412 refs outside refs/heads/ and refs/tags/ (refs/pull/*): a forge's, not the repository's
 cloning https://github.com/acme/web.git into /tmp/crewlet-import-2861
 cloned https://github.com/acme/web.git: 63 refs (4 branches, 59 tags), 2.1 GiB packed
@@ -1493,7 +1550,8 @@ imported web: 63 refs, 3.4 GiB sent in 4 steps, 3.4 GiB stored with the packs' i
 
 In order:
 
-1. **The repository.** It must be declared in `code.repos` and active — read at
+1. **The repository.** It must exist and be active — declared in `code.repos`
+   or made by a tool — read at
    `linearizable`, so one declared a moment ago is found — and its
    `code.limits` are the ones the node holds its pushes to. An archived or
    deleted repository takes no push, and is refused saying how to declare it;

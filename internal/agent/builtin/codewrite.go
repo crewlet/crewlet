@@ -108,12 +108,14 @@ const (
 
 // CodeWrites are the write tools, in the order a catalogue lists them: the
 // branch's five, then the repository's five, then a repository's changes'
-// ([ChangeWrites], codechangewrite.go). Read by [Register]'s delivery switch,
+// ([ChangeWrites], codechangewrite.go), its checks' ([CheckWrites]), and M6's
+// purge and import ([PurgeWrites], [ImportWrites]). Read by [Register]'s delivery switch,
 // [codeAnnotations] and every test that holds the writes apart from the reads.
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...)...)
+		CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
+		ImportWrites()...)...)
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
@@ -184,7 +186,8 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeRestoreRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeProtectBranchTool},
-	}, append(append(changeWriteTools(deps), checkWriteTools(deps)...), &codePurgeUnreachable{deps: deps})...)
+	}, append(append(changeWriteTools(deps), checkWriteTools(deps)...), &codePurgeUnreachable{deps: deps},
+		&codeImportRepo{deps: deps})...)
 }
 
 // ---- who writes ------------------------------------------------------------ //

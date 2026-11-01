@@ -1757,11 +1757,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty-seven code tools'
+// codeCatalogueBudget is the most bytes the thirty-eight code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
-// (CodeWritesWithheld) — but for code_report_check and code_purge_unreachable,
-// each a person's alone — and
+// (CodeWritesWithheld) — but for code_report_check, code_purge_unreachable
+// and code_import_repo, each a person's alone — and
 // what the operator catalogue serves; every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
@@ -1826,8 +1826,15 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // within it, deliberately, with its measured cost: 49 963 → 50 535 (~12 634
 // tokens), 572 bytes (~143 tokens), which no seat is shown (it is human-only),
 // its one argument the repository and what it is answered with said once, in
-// its description; ~4% headroom left, so the next tool raises this.
-const codeCatalogueBudget = 52_900
+// its description; ~4% headroom left, so the next tool raises this. And
+// 52 900 → 55 600 when code_import_repo joined, deliberately: all thirty-eight
+// measured 52 427 (~13 107 tokens) with it, 473 bytes under the old budget —
+// 1 892 above the purge's 50 535, which is the import's definition (its seven
+// arguments, the owner's shape and the credential's one rule said once) and
+// code_protect_branch's item-at-a-time list changes landed between, not
+// measured apart — none of which a seat is shown (the import is human-only);
+// ~6% headroom again.
+const codeCatalogueBudget = 55_600
 
 // codeReadsCatalogueBudget is the most bytes the twelve code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
@@ -1856,7 +1863,7 @@ const codeReadsCatalogueBudget = 20_300
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// thirty-seven, each held to a budget, so a later description edit is a
+// thirty-eight, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1884,7 +1891,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the twelve code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty-seven code tools (a full_access seat's and the operator's)",
+		{"all thirty-eight code tools (a full_access seat's and the operator's)",
 			added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
