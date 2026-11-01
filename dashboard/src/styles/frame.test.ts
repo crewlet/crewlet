@@ -1321,6 +1321,51 @@ describe("the Spend overview's rows", () => {
     expect(
       block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
     ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+    expect(block(sheet("chatlet-panes.css"), ".chat-activity-list")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) /,
+    );
+  });
+
+  // CHATLET'S ACTIVITY LIST KEEPS THE VIEW'S SIDE LINE. Its rows began at the
+  // view's own edge, the selected fill flush against it and each face 4px in,
+  // while the view's title and its first tab stood on the side line, 20px in;
+  // and the list sat flush against the tab bar. A row pads itself by the first
+  // step, so the list stands that step inside the line and the faces start on
+  // it. The inset is the list's own, inside its column, so the column's
+  // hairline still meets the tab bar.
+  test("Chatlet's Activity list starts its faces on the view's side line", () => {
+    const panes = sheet("chatlet-panes.css");
+    expect(block(panes, ".chat-activity-list")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) 0 var\(--spacing-3\)\s+calc\(var\(--crewlet-chat-pad-x\) - var\(--spacing-2\)\);/,
+    );
+    // WIDE ENOUGH FOR THE ROOM: at the kit's 17rem the clamp took the room's
+    // name off "replied to a thread in #engineering".
+    expect(block(panes, ".chat-activity")).toMatch(/--crewlet-list-detail-list:\s*20rem;/);
+    expect(block(panes, ".chat-activity")).not.toMatch(/padding/);
+    const views = readFileSync(
+      fileURLToPath(new URL("../routes/chatlet/Views.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(views).toMatch(
+      /list=\{\s*<div className="chat-activity-list">\s*<InboxList label="Activity">/,
+    );
+  });
+
+  // A ROOM'S NAME WRAPS IN BROWSE ROOMS AND SEARCH'S ROOMS: one unbroken name
+  // ran over its own tag and into Join or Open on a narrow view.
+  test("a room's name in a Browse row wraps rather than running into its action", () => {
+    expect(block(sheet("chatlet-panes.css"), ".chat-browse-row__name")).toMatch(
+      /overflow-wrap:\s*anywhere;/,
+    );
+  });
+
+  // A BROWSE ROW'S GLYPH STANDS ON THE SIDE LINE, under the search field: the
+  // link pads itself by the first step for its hover fill, and inset by that
+  // pad as well the glyph stood 8px inside the line (28px against 20px).
+  test("a Browse row's glyph starts on the view's side line", () => {
+    const main = block(sheet("chatlet-panes.css"), ".chat-browse-row__main");
+    expect(main).toMatch(/margin-inline-start:\s*calc\(var\(--spacing-2\) \* -1\);/);
+    expect(main).toMatch(/padding:\s*var\(--spacing-2\);/);
   });
 
   // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
