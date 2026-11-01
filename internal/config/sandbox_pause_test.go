@@ -127,15 +127,14 @@ roles:
 	}
 }
 
-// THE COMPANY-WIDE ROUND CAP IS ON UNLESS IT IS SAID TO BE OFF, and saying so
-// survives the store.
+// A COMPANY'S EXECUTOR RUNS ARE UNCAPPED UNLESS IT SETS A CAP, and a cap it
+// sets survives the store.
 //
-// It is the only bound on a runaway executor run, so a company that says
-// nothing runs under the shipped cap rather than under none, and an explicit
-// 0 — uncapped — is a setting rather than an absence: a stored revision is
-// decoded onto the defaults, so a zero the encoder dropped would come back as
-// the cap the company turned off.
-func TestTheCompanyRoundCapIsOnUnlessItIsSaidToBeOff(t *testing.T) {
+// How many rounds a task takes is its harness's to judge, so a company that
+// says nothing — or says 0 — runs every executor without a round cap, and one
+// that names a cap has it on the revision it authored and on the revision
+// decoded back from the store, which is the one every launch reads.
+func TestACompanysExecutorRunsAreUncappedUnlessItSetsACap(t *testing.T) {
 	const catalogue = `
 name: Nimbus
 providers:
@@ -146,29 +145,38 @@ providers:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := silent.Providers.Sandbox.MaxTurns(); got != 96 {
-		t.Errorf("a catalogue that says nothing caps a run at %d, want the shipped 96", got)
+	if got := silent.Providers.Sandbox.MaxTurns(); got != 0 {
+		t.Errorf("a catalogue that says nothing caps a run at %d, want uncapped (0)", got)
 	}
 	var none *config.SandboxProvider
-	if got := none.MaxTurns(); got != 96 {
-		t.Errorf("no catalogue at all reads a cap of %d, want the shipped 96", got)
+	if got := none.MaxTurns(); got != 0 {
+		t.Errorf("no catalogue at all reads a cap of %d, want uncapped (0)", got)
 	}
 
-	off, err := config.ParseCompany([]byte(catalogue + "    default_max_turns: 0\n"))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	stored, err := json.Marshal(off)
-	if err != nil {
-		t.Fatal(err)
-	}
-	back, err := config.DecodeCompany(stored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]*config.Company{"authored": off, "stored": back} {
-		if got := c.Providers.Sandbox.MaxTurns(); got != 0 {
-			t.Errorf("%s: an explicit 0 caps a run at %d, want uncapped", name, got)
+	for _, tc := range []struct {
+		line string
+		want int
+	}{
+		{"    default_max_turns: 0\n", 0},
+		{"    default_max_turns: 40\n", 40},
+	} {
+		authored, err := config.ParseCompany([]byte(catalogue + tc.line))
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.line, err)
+		}
+		stored, err := json.Marshal(authored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := config.DecodeCompany(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, c := range map[string]*config.Company{"authored": authored, "stored": back} {
+			if got := c.Providers.Sandbox.MaxTurns(); got != tc.want {
+				t.Errorf("%s %q: the company's cap reads %d, want %d",
+					name, strings.TrimSpace(tc.line), got, tc.want)
+			}
 		}
 	}
 }

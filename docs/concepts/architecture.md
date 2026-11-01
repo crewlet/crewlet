@@ -515,10 +515,15 @@ flowchart TB
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
 is the model↔tool round trip *inside each phase*, bounded by its own cap
 (the executor's harness run by `role.sandbox.max_turns`, else
-`providers.sandbox.default_max_turns`, 96 unless set; a constant for the
-reviewer, which holds one submission tool). A turn is therefore up to
-`max_iterations × (executor rounds + review rounds)` priced model calls, which
-is the number to reason about when sizing a budget — not "one call per turn".
+`providers.sandbox.default_max_turns`, and by nothing where neither sets a
+cap; a constant for the reviewer, which holds one submission tool). A turn is
+therefore up to `max_iterations × (executor rounds + review rounds)` priced
+model calls, which is the number to reason about when sizing a budget — not
+"one call per turn" — and on the executor's side it is as many rounds as its
+harness takes, unless a cap is set. What holds an uncapped run's spend is the
+seat's and the company's [token budget](../getting-started/configuration.md#token-budgets):
+a launch below its floor waits for the window to turn over, and every run is
+charged in full when it is collected.
 
 **One loop where there were two, and that is the point.** The engine used to
 plan in one conversation and act in another; the actor lost everything the

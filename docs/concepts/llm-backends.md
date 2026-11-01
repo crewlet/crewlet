@@ -323,7 +323,7 @@ providers:
       # Tier A field).
 
       timeout_seconds: 600           # one stretch of a harness run on this host, wall clock (default 600);
-                                     #   an executor run is bounded by its turn cap instead
+                                     #   an executor run is not on this clock
       max_concurrent: 4              # live harness processes on this host (default 4); executor
                                      #   runs are not counted: each seat runs at most one
 
@@ -379,8 +379,9 @@ go too) and the call is reported as `timeout`, which the seat's fallback chain
 carries to its next entry. A value of `0` takes the default; a negative one is
 refused. It bounds the **phases on this host** only — the reviewer, a worker,
 the onboarding pass, a side pass: an executor run is its harness's own detached run
-in a box, bounded by its turn cap (`role.sandbox.max_turns`, else
-`providers.sandbox.default_max_turns`) rather than a clock.
+in a box, never stopped on a clock, its rounds capped only where the seat or
+the company sets a turn cap (`role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`).
 
 **`max_concurrent: 4`** bounds the entry's **live harness processes**, and keeps
 peak memory near 1.5 GB: each harness is a full Node or Rust runtime at roughly
@@ -1347,10 +1348,11 @@ onboarding pass by `mark_onboarded` — follows the same ending with another
 run, opened by a corrective naming its tool, up to twice (see
 [Turn Engine](turn-engine.md#round-cap-extension-judge)).
 What the executor's run has instead is the seat's system prompt, which tells
-it the run ends with that call. Its rounds are bounded by the harness's own turn
-cap on both runners — Claude Code's `--max-turns`, OpenCode's agent `steps` —
-set from the seat's `role.sandbox.max_turns`, else
-`providers.sandbox.default_max_turns`: 96 unless set, `0` uncapped.
+it the run ends with that call. Its rounds are its harness's own to count:
+uncapped unless the seat's `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
+harness's own on both runners — Claude Code's `--max-turns`, OpenCode's agent
+`steps`.
 
 #### The tool bridge
 

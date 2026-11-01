@@ -39,8 +39,9 @@ and after the call, the tool's schema through `tools.Invoke` with its
 canonical arguments
 ([ADR-0059](0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)),
 and the run's end. Its budget is a floor at its launch and
-a charge at its collection, and its rounds are the CLI's own turn cap, so the
-loop's budget, round cap and terminator gates hold the phases on this host
+a charge at its collection, and its rounds are the CLI's own, held to its own
+turn cap where the company or the seat sets one, so the loop's budget, round
+cap and terminator gates hold the phases on this host
 (the reviewer, workers, the onboarding pass and the side passes), and the
 alternative below of letting the CLI run tools of its own is rejected for
 those phases.

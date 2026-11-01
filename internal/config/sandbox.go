@@ -161,18 +161,23 @@ type SandboxProvider struct {
 	// take, for seats that name none (role.sandbox.max_turns). Read it
 	// through [SandboxProvider.MaxTurns].
 	//
-	// THE ONLY ROUND BOUND ON EVERY AGENT SEAT'S TURN. An executor run is
-	// deliberately never force-stopped on a clock — see
-	// default_timeout_seconds — so nothing else stops one that is
-	// thrashing rather than working, and the box's own TTL is refreshed on
-	// every waiter tick precisely so that it cannot. Unset takes
-	// [defaultSandboxMaxTurns]; an explicit 0 is uncapped, which is how a
-	// company opts out.
+	// UNCAPPED UNLESS SET. A run is its harness's own loop, and how many
+	// rounds its task takes is the harness's to judge, as it is when a person
+	// runs it: the engine does not end a run part-way on a count nobody
+	// chose. A company that wants a bound sets one here, and a positive value
+	// becomes the harness's own turn cap — Claude Code's --max-turns,
+	// OpenCode's agent steps. Without one, a run ends when it finishes, at a
+	// scheduled turn's timeout_seconds, or when a person stops it: it is
+	// never stopped on its box's clock (see default_timeout_seconds), and a
+	// token budget holds every launch to its floor and charges the run when
+	// it is collected, never part-way through.
 	//
-	// A POINTER, because those are three states and an int has two: an
-	// unset field's zero would read as "uncapped", so every company that
-	// said nothing would run without the one bound its turns have.
-	DefaultMaxTurns *int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped."`
+	// A PLAIN INT, because zero — the field left out or written 0 — is
+	// uncapped and every other value is the cap itself. It was a pointer
+	// while leaving it out took a shipped cap of 96 and only an explicit 0
+	// turned that off; with no default left to take, a pointer would tell
+	// nothing apart.
+	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset or 0 = uncapped."`
 
 	// CommitAttribution says whether every commit an executor authors as
 	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
@@ -244,16 +249,6 @@ func (e *E2BSandbox) validate(path Path) error {
 const (
 	defaultSandboxTimeoutSeconds  = 900.0
 	defaultSandboxPauseTTLSeconds = 1800.0
-
-	// defaultSandboxMaxTurns is 96 because it is now the only round bound
-	// on every agent seat's turn. The engine's own executor loop was capped
-	// at 48 rounds once its extension judge had granted all it could
-	// (turn_engine's execute ceiling, twice its 24-round base), and that was
-	// for engine-tool work alone. One run now also does the shell, edit and
-	// test steps code work adds, each a harness turn of its own, so twice that
-	// ceiling: room for a real task's reading, editing and checking, and
-	// still a wall a run that is thrashing hits within one turn.
-	defaultSandboxMaxTurns = 96
 )
 
 // Timeout is the box TTL, applying the default.
@@ -265,14 +260,14 @@ func (s *SandboxProvider) Timeout() float64 {
 }
 
 // MaxTurns is the agentic-round cap one executor run takes when its seat
-// names none, applying the default: an explicit 0 is uncapped, and unset is
-// [defaultSandboxMaxTurns]. Nil-safe, so a company with no catalogue reads
-// the default rather than panicking: such a company runs no box at all.
+// names none, zero for uncapped ([SandboxProvider.DefaultMaxTurns]).
+// Nil-safe, so a company with no catalogue reads uncapped rather than
+// panicking: such a company runs no box at all.
 func (s *SandboxProvider) MaxTurns() int {
-	if s == nil || s.DefaultMaxTurns == nil {
-		return defaultSandboxMaxTurns
+	if s == nil {
+		return 0
 	}
-	return *s.DefaultMaxTurns
+	return s.DefaultMaxTurns
 }
 
 // AttributesCommits reports whether an executor's own commits credit Crewlet
@@ -417,10 +412,10 @@ func (s *SandboxProvider) validate(path Path) error {
 			"must be 0 (the %v s default) or positive, got %v",
 			defaultSandboxTimeoutSeconds, s.DefaultTimeoutSeconds)
 	}
-	if s.DefaultMaxTurns != nil && *s.DefaultMaxTurns < 0 {
+	if s.DefaultMaxTurns < 0 {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
-			"%d (a round cap cannot be negative; omit the field for the default "+
-				"of %d, or set 0 for uncapped)", *s.DefaultMaxTurns, defaultSandboxMaxTurns)
+			"%d (a round cap cannot be negative; omit the field, or set 0, to "+
+				"leave executor runs uncapped)", s.DefaultMaxTurns)
 	}
 	// A NEGATIVE value is refused: an unbounded pause is the leak this knob
 	// exists to prevent.

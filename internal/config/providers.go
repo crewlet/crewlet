@@ -318,10 +318,10 @@ type LLMProvider struct {
 	//
 	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
 	// pass, a side pass. An executor run is the harness's own detached run in a
-	// box, and it is bounded by its round cap
-	// (providers.sandbox.default_max_turns, role.sandbox.max_turns) rather
-	// than by a clock.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
+	// box, and it is never stopped on a clock: its rounds are capped only
+	// where the company or the seat sets a turn cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns).
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are not on this clock."`
 
 	// MaxConcurrent is how many harness processes this provider runs at once on
 	// the engine's own host. A process lives for a whole run of a phase, its
