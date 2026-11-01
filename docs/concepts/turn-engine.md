@@ -707,6 +707,23 @@ There is no reason for a response cut short. A harness whose model hit its outpu
 
 ---
 
+## How a turn ends on the executor log
+
+A harness's transcript cannot say how its turn ended: whether the reply the seat was about to send reached the person waiting, what the reviewer decided, who stopped the turn and why, what lost it. So every turn that launched its executor ends with an **end** on the executor log — the account the next turn on the same conversation is told beside the [session it continues](code-sandbox.md#each-launchs-session-kept) — published before the seat settles, under the one operation every path that ends the turn derives, and asked again under it while the log does not answer:
+
+| Way the turn ends | Where its end is recorded | What it says |
+|---|---|---|
+| Its resumed turn runs to its end | The resume, as it files the turn | `completed`, or `failed` where a guard ended it or its decision was a failure — the turn's **own** decision and breach, never the reviewer's last word, which still reads `done` after the loop overrode it; whether its reply reached the party waiting, and on what surface; what the reviewer said landed; what stopped a blocked round |
+| A person stops the resumed turn | The resume | `stopped`, by whom and with their reason, beside whatever the turn had decided and delivered by then |
+| The resumed turn breaks and is abandoned | The resume | `failed`, saying why it was abandoned |
+| A person stops the run a resumed turn relaunched, or one a dispatch launched, before the turn parked on it | The frame that launched it | `stopped` |
+| A person stops a run the turn had parked on | The run's ending, which no frame of the turn reaches | `stopped`; whether its reply had reached anybody read off the run's own bridged calls |
+| The run is lost — its box gone, its suspension never recorded, its tail abandoned | The run's ending | `lost`, with the loss; its delivery read off the run's calls the same way |
+
+A turn that **owed the engine's answer** to a colleague's `a2a_ask` ends saying what the engine sent — the turn's artifact, a blocked round's evidence, or an apology saying it was stopped, lost or guarded — and whether the reply went: the engine sent it, not the turn, so the turn's own calls cannot say. A stop's reason is the person's own words and is carried as theirs, fenced, to whoever reads it next. A turn that captured no session still ends: its row names no object and holds the account. `turn_engine.conversation_session.enabled: false` keeps no session and still records every end. An end the log does not take within its budget is an outage the log's own alarms name; its turn is ended `lost` by the retention duty a day after its last capture, and the seat is never held for it.
+
+---
+
 ## Runtime invariants
 
 Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards.go`, `internal/tools/surface.go`, `internal/agent/skills/guard.go`):
@@ -1480,6 +1497,8 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | | `activity_transcript` | The launch's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 192 KiB in whole lines, with a note line where its middle was. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole) |
 | | `harness_turns` | The model turns the launch's harness reported its own loop took — its provider calls, which the engine neither made nor timed, and what every spend figure's `calls` counts the record as. Claude Code reports them; OpenCode's stream carries no count a reader can trust, so its launches report none and count as one call. The executor's own record counts none |
 | | `cost_usd` | What the launch's harness said it billed, where it says so — the one figure that sees a subscription harness's spend, which never passes through the engine's token meter. The dashboard draws tokens and never money |
+| | `harness_session` / `harness_version` | The harness's own session the launch ran, and its release |
+| | `session_kept_bytes` / `session_not_kept` | What the collection [kept of the launch's session](code-sandbox.md#each-launchs-session-kept): its sealed size, or why a capture taken did not land; absent where nothing was taken |
 | `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
 | `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
 

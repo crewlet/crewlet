@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/executordomain`
-- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`, `internal/estate.TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode`, `internal/estate.TestAConversationReadWaitsForAnEndAnotherNodeMade`, `internal/estate.TestEveryExecutorWriteIsTheEngines`, `internal/estate.TestNoSurfaceHoldsTheEnginesExecutorWrites`
+- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`, `internal/estate.TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode`, `internal/estate.TestAConversationReadWaitsForAnEndAnotherNodeMade`, `internal/estate.TestEveryExecutorWriteIsTheEngines`, `internal/estate.TestNoSurfaceHoldsTheEnginesExecutorWrites`, `internal/sandbox.TestEachLaunchOfATurnIsNumberedPastTheOneBefore`, `internal/sandbox.TestACapturesPlaceOnlyGrowsOnTheRow`, `internal/sandbox.TestACollectionKeepsTheJobsSessionThroughTheLogsWrites`, `internal/sandbox.TestAJobKeptWholeIsNotKeptAgain`, `internal/sandbox.TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd`, `internal/sandbox.TestARefusedUploadIsRecordedAsRefused`, `internal/sandbox.TestAStopKeepsTheJobsSessionBeforeItsBoxGoes`, `internal/sandbox.TestTheSwitchOffKeepsNothingAndStillEndsTheTurn`, `internal/sandbox/executor.TestAKeptSessionCarriesNoSecretTheEnginePutInItsBox`, `internal/sandbox/executor.TestAPackOnDemandKeepsItsDigestInTheBox`, `internal/sandbox/executor.TestATranscriptLineStaysJSONAndLosesEverySecret`, `internal/sandbox/executor.TestTheDigestIsPOSIXCksums`, `internal/engine.TestAResumedTurnsEndIsRecordedWithItsOwnDecision`, `internal/engine.TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog`, `internal/engine.TestALaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce`, `internal/engine.TestALostTurnEndsAsLostOnTheExecutorLog`, `internal/engine.TestTheEndCarriesTheTurnsOwnDecisionAndBreach`, `internal/engine.TestTheEndSaysWhatTheEngineAnsweredAColleague`
 - **Measured:** a harness's session of a day's work compresses to one or two mebibytes and is bounded here at 32 MiB; at the reference company's 3 000 turns a day the log that names the sessions grows about 29 MB a day, while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 704 MiB (11Gi, objects in S3) and 320 MiB (14Gi, beside the nats bucket) above the nine logs before this one, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (10916375210 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so
 - **Tag-status:** unreleased
 
@@ -106,3 +106,54 @@ router hands out, the domain's own writer or an engine hand-out of either. The
 second is a walk of the source and sees names, not values, so a writer smuggled
 inside another type is review's to catch. The reads are ordinary reads, which a
 surface may hold. `internal/estate` states the class.
+
+## Amendment: every launch's session is captured where its box can be read, and every turn's end is recorded
+
+The sandbox runtime now writes the log (internal/sandbox's `session.go`).
+
+**Captured wherever the box can still be read, on the node whose host it is
+on** (ADR-0065), before the box is paused or reclaimed: a completion's
+collection takes the archive the run's script packed when its harness exited,
+or packs one now for a job that never got to — one its turn's cap ended while
+it ran, one that failed before it packed, one lost with its engine whose box is
+left; a person's stop packs one in the read that charges the stopped job; and a
+loss whose box is still on this node's host packs one before its ending
+reclaims the box. A box that is gone keeps nothing. The pack made on demand is
+the runner's own (internal/sandbox/executor), the same pack the run's script
+makes, so every pack keeps its archive's digest in the box.
+
+**Scrubbed on its way out**, file by file, each read and written as what it is:
+every secret the engine itself put in the box, by value, raw and as a JSON
+string escapes it, then the redaction every text leaving a box passes — a
+transcript line string by string and as a line where that leaves it JSON, a
+document a token at a time, anything else as text as the redaction settles it.
+The scrub changes the archive's bytes, so the box records the kept archive's
+digest too, and a session carried back into the box it came from is never
+restored over the copy that box went on with.
+
+**Ordered by the launch's ordinal**, which the write opening each launch mints
+on the run's record (1, 2, …) beside its id, so every capture carries a
+(launch, capture) pair that only grows. Each capture reserves its place on the
+run's record before a byte moves, with the bridged call and the note the job
+had been answered and told through, and is stamped there as landed, refused
+(why) or unresolved — uploaded and its record unanswered, which the turn's end
+asks again under the same operation, and which is refused once its object is
+past `objstore.RecordWithin`. A record is asked through the estate router's
+writes, the engine's own class, under the operation its turn, launch and place
+derive, again under it for thirty seconds while the log does not answer.
+
+**Every turn that launched its executor records its end** — at its resumed
+turn's end, a person's stop of a resumed turn, an abandoned resume, a stop of a
+run before its turn parked (from the frame that launched it), and the run's own
+ending for a stop of a parked turn and for a loss, which no frame of the turn
+reaches — with the turn's own decision and breach, whether its reply reached
+the party waiting (off the run's bridged calls where the run's ending ends it),
+and the engine's own answer to a colleague's ask. An end the log does not take
+within its budget holds no seat; the retention's lost end covers its turn.
+`turn_engine.conversation_session.enabled: false` captures nothing and still
+records every end.
+
+A cross-node box read waits for the capture inside it: its minute and the
+capture's bound — the pack, a sealed session at its bound at the object store's
+slowest pace, and the record. Restoring a capture is a later amendment's.
+

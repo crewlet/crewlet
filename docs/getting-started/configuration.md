@@ -108,7 +108,11 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   carried into that conversation's next turn
                                         #   (see concepts/conversation-sessions.md)
     enabled: true                       # feature gate — a live kill switch; off restores the
-                                        #   pre-ledger prompt exactly
+                                        #   pre-ledger prompt exactly AND keeps no executor
+                                        #   session (none is captured); how each turn ended
+                                        #   is still recorded on the executor log, which is
+                                        #   the turn's account, not its session (see
+                                        #   concepts/code-sandbox.md)
     max_entries: 20                     # entries KEPT per conversation, trimmed at write
                                         #   time. A second bound applies at RENDER time:
                                         #   the injected block drops whole oldest entries,
