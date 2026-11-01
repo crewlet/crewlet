@@ -23,13 +23,15 @@ import (
 const homeWait = time.Minute
 
 // readsServed is how many reads node's query server has run its git for: every
-// unit of its seat git-work share a read took (metrics.CodeSeatworkWaits),
-// which only a read that found its objects takes — never one answered unready
-// or refused.
+// unit of its seat git-work share a read took (metrics.CodeSeatworkWaits,
+// outcome granted, work read), which only a read that found its objects takes
+// — never one answered unready, whose wait the share times too, or refused,
+// and never an engine write's build, which takes its unit of the same share.
 func readsServed(n Node) uint64 {
 	var total uint64
 	for _, s := range n.Metrics().Read() {
-		if s.Name == metrics.CodeSeatworkWaits {
+		if s.Name == metrics.CodeSeatworkWaits && s.Attrs["outcome"] == "granted" &&
+			s.Attrs["work"] == string(code.SeatWorkRead) {
 			total += s.Count
 		}
 	}
