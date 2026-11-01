@@ -53,8 +53,10 @@ type nativeDomain struct {
 // lists drifted: a tracker refusal the surface knew and a tool did not
 // (`ErrNotAuthor`, `ErrNoComment`) was a tool's internal_error, and a domain
 // added beside the two would have been a 500 for every content refusal its
-// tool-less verbs met. A gate holds this table to every domain the estate
-// router carries a write for ([TestEveryRoutedDomainIsDeclaredToTheSurfaces]),
+// tool-less verbs met. A gate holds this table to every domain a surface writes
+// through the estate router ([TestEveryRoutedDomainIsDeclaredToTheSurfaces]) —
+// never the executor log, whose writes are the engine's own record of its runs
+// and no surface's, so it has no refusal here to class and no object to name —
 // each domain's classes to every sentinel and error type the domain declares
 // ([TestEveryDomainRefusalIsClassed]), and its objects to the catalogue's
 // tools in both directions: every one is an argument some tool takes, and

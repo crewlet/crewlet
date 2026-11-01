@@ -26,9 +26,11 @@ import (
 // the mailbox retirement (ADR-0073).
 //
 // EVERY DATA NODE RUNS IT, whatever its company keeps: the register runs every
-// domain or none ([register]). Nothing in this build writes a session yet;
-// the capture and the restore are the executor's, and they call the sides
-// built here.
+// domain or none ([register]), and every data node serves the sides built here
+// to the estate router ([Engine.estateBackend]), whose estate.ExecutorReads and
+// estate.ExecutorWrites are how a node without `data` reaches the log — the
+// writes the engine's alone. Nothing in this build writes a session yet; the
+// capture and the restore are the executor's, and they call those.
 
 // executorRegistrations is the executor domain's entry in the register: the
 // TENTH domain and the EIGHTH strict, identity-claiming one. Its declaration,

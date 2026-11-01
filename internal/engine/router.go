@@ -403,6 +403,17 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 			b.ArtifactData.Writer = c.artifactDataWriter
 		}
 	}
+	// AND THE SEATS' EXECUTOR SESSIONS, run on every data node from boot
+	// whatever the company keeps, for the same reason: a seat's box runs
+	// wherever its seat is held, a node without `data` included, and the
+	// engine records what it did, and reads it back at the next launch,
+	// through whichever data node answers (ADR-0073).
+	if c.executorReader != nil && c.executorWriter != nil {
+		b.Executor = estate.ExecutorHalf{Reader: c.executorReader}
+		if publishes {
+			b.Executor.Writer = c.executorWriter
+		}
+	}
 	if n == nil {
 		return b
 	}

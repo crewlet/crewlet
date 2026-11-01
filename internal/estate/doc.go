@@ -12,15 +12,18 @@
 // copy of the tracker's, the knowledge base's, chat's or the identity
 // directory's rows. Its seats still read and write the first three, constantly
 // — every board, every task, every page and every room a tool touches — and ask
-// the fourth whose record a login names and who holds each human seat, so
-// something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE and
-// SERVES it over the broker ([Serve]), and every node's tools are handed
-// facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker, knowledge-base and chat routes and the operator's own
-// MCP — for the reason a data node's own seats are: read straight off the
-// node's copy, a node whose copy was out of service answered its operator from
-// the very copy it had stopped serving its seats from.
+// the fourth whose record a login names and who holds each human seat; and the
+// engine records on the executor log what each of its seats' boxes did, which
+// the seat's next launch reads back. So something has to answer them. EVERY
+// DATA NODE HOLDS THE WHOLE ESTATE and SERVES it over the broker ([Serve]),
+// and every node's tools are handed facades of one [Router], which answers
+// in-process where this node's copy serves and asks another data node
+// otherwise. The engine's record of its runs goes through the same router
+// ([ExecutorWrites]), and so do the operator's surfaces — the API's tracker,
+// knowledge-base and chat routes and the operator's own MCP — for the reason a
+// data node's own seats do: read straight off the node's copy, a node whose
+// copy was out of service answered its operator from the very copy it had
+// stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //
@@ -55,6 +58,10 @@
 // ([chatlet.Actor.OpKey]); the erase and the prune take their caller's whole
 // operation id instead, and are repeated under it as a tracker purge is.
 //
+// An EXECUTOR write is a tracker write's case: the operation id on its call is
+// the one the executor log derives for that execution, so a repeat under it
+// is the same operation, and an unanswered or unvouched one moves on under it.
+//
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, it could not reach the caller's
 // floor in time, or it could not verify the request — did not execute
@@ -65,6 +72,25 @@
 // that node may have run it, so the walk ends in [ErrOutcomeUnknown] and the
 // same operation id is the retry, since "nobody ran it" is the claim a caller
 // acts on by writing again.
+//
+// # Who originates a write: a surface, or the engine
+//
+// The class says what a failover may repeat; the ORIGIN says who may make the
+// write at all ([opOrigin]). Every write above but one log's is a SURFACE's —
+// a seat's tool, a person's request, the operator's own MCP — made on
+// somebody's behalf, so a refusal of it is somebody's to read: the person's
+// write surface classes it and names the object it was about, and every domain
+// a surface writes is declared to those surfaces, read off this router's own
+// table ([SurfaceWriteDomains]). The executor log's writes are the ENGINE's:
+// its record of what its own runs did — a harness's session captured, a turn
+// ended, a session aged out, a removed seat's taken away — which nobody asks
+// for and no surface may make (ADR-0073). So they are declared to no surface,
+// and they are reached through a writer facade the engine alone holds
+// ([ExecutorWrites]). Two gates hold the class, one on each side: every write
+// on the executor log is declared the engine's, and no package that serves a
+// person or a model (a seat's tools, the API and its operator MCP, Ask
+// Crewlet, the binary) names that facade or the domain's writer. The log's
+// reads are ordinary reads, which a surface may hold ([ExecutorReads]).
 //
 // # A copy that is WRONG is out of service; one that LAGS is a worse node
 //
@@ -185,10 +211,11 @@
 // registered sentinel it matches and every registered type it carries (see
 // errors.go), and the far side rebuilds an error that answers the same
 // questions. A sentinel or an error type added to the packages whose errors
-// cross — this one's, the tracker's, the knowledge base's, chat's, the state
-// log's and the identity estate's with the vocabulary its answers are judged in
-// — is a build failure until it is registered. An operation answered in-process
-// returns its own error, which answers every question without the wire's help.
+// cross — this one's, every domain's an operation floors on (the executor
+// log's among them), the state log's and the identity estate's with the
+// vocabulary its answers are judged in — is a build failure until it is
+// registered. An operation answered in-process returns its own error, which
+// answers every question without the wire's help.
 //
 // AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
 // rebuilds a type from its exported fields and so cannot rebuild one of those

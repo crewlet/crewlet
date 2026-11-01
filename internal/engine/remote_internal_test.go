@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -81,6 +82,7 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 		c := &core{
 			artifactsReader: &artifactsdomain.Reader{}, artifactsWriter: &artifactsdomain.Writer{},
 			artifactDataReader: &artifactdata.Reader{}, artifactDataWriter: &artifactdata.Writer{},
+			executorReader: &executordomain.Reader{}, executorWriter: &executordomain.Writer{},
 		}
 		b := e.estateBackend(c, n)
 		for name, offered := range map[string]bool{
@@ -88,6 +90,7 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 			"pages":         b.PageWriter != nil,
 			"artifacts":     b.Artifacts.Writer != nil,
 			"artifact data": b.ArtifactData.Writer != nil,
+			"executor":      b.Executor.Writer != nil,
 		} {
 			if offered != wantWriters {
 				t.Errorf("%s: the %s writer offered = %v, want %v", mode, name, offered, wantWriters)
@@ -98,6 +101,7 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 			"pages":         b.Pages != nil,
 			"artifacts":     b.Artifacts.Reader != nil,
 			"artifact data": b.ArtifactData.Reader != nil,
+			"executor":      b.Executor.Reader != nil,
 		} {
 			if !served {
 				t.Errorf("%s: the %s reader is missing, and a mode that publishes "+

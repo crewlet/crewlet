@@ -397,6 +397,13 @@ node's seats do, and each of those tools asks a data node over the broker:
   is an estate read like any other, floored on the identity log and read
   again every thirty seconds. Until the node has read it once, its human
   seats are withheld from routing rather than routed by the org chart alone.
+- **Its seats' executor sessions are recorded through a data node too.** The
+  engine's record of what each seat's box did (the session it leaves, how its
+  turn ended), and the next launch's read of the conversation it continues, go
+  to the [executor log](../concepts/conversation-sessions.md) through the same
+  router. Those writes are the engine's alone: no tool and no person can make
+  one, so none of them is a write a seat's tools or your API calls could
+  reach.
 - **Its own writes are visible to its next read** on whichever data node
   answers it: every request carries the furthest position the node has been
   told landed, and a data node that has not applied that far says so rather

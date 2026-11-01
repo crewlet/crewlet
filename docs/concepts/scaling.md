@@ -81,7 +81,11 @@ from the node's own copy where it has one — carrying the node's own writes as 
 floor so whichever data node answers has applied them. The identity
 directory is read the same way: the seat bindings its inbound routing withholds
 a suspended person's seat by, and the login a lead's tools resolve to a
-person's seat, are answered by a data node, floored on the identity log. What
+person's seat, are answered by a data node, floored on the identity log. So is
+the executor log: the engine's record of the session each of its seats' boxes
+left, which the seat's next launch continues, is written and read through a
+data node too, the writes as the engine's own (see
+[below](#how-a-request-reaches-the-estate)). What
 it publishes about its turns is kept in
 exactly one data node's event log ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
 It joins no **fleet-wide consumer group** whose handler needs data — the
@@ -145,6 +149,18 @@ flowchart TD
   write one data node answered *unvouched* — its ledger cannot say whether the
   operation landed — is asked of the next under the same id before the caller
   is told the outcome is unknown.
+- **The executor log is written by the engine alone.** Every other write is a
+  surface's, made on somebody's behalf: a seat's tool, a person's request, the
+  operator's MCP. The executor log's are the engine's own record of what a
+  seat's box did — a session captured, a turn ended, a session past its
+  retention or a removed seat's taken away — so no tool, person or operator
+  surface can make one, and a build gate fails on any surface's code that
+  reaches the writer. Each carries the operation id the log derives for that
+  capture or that end, and moves on under it like a tracker write. Its reads are
+  ordinary reads at the level the caller asks: a launch reads the conversation
+  it continues at `linearizable`, because a seat that moved to this node holds
+  no floor for the end its last turn published through another one
+  ([Read Consistency](../guides/consistency.md#which-logs-can-be-read-at-linearizable)).
 - **Every request and every answer is signed.** A data node runs a write as
   the actor the request names, and answers a chat read for the viewer it
   names, so the request is an instruction, and an

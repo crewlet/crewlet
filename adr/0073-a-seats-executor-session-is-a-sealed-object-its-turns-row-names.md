@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/executordomain`
-- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`
+- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`, `internal/estate.TestASeatsOnlyNodesCaptureIsRecordedThroughADataNode`, `internal/estate.TestAConversationReadWaitsForAnEndAnotherNodeMade`, `internal/estate.TestEveryExecutorWriteIsTheEngines`, `internal/estate.TestNoSurfaceHoldsTheEnginesExecutorWrites`
 - **Measured:** a harness's session of a day's work compresses to one or two mebibytes and is bounded here at 32 MiB; at the reference company's 3 000 turns a day the log that names the sessions grows about 29 MB a day, while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 704 MiB (11Gi, objects in S3) and 320 MiB (14Gi, beside the nats bucket) above the nine logs before this one, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (10916375210 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so
 - **Tag-status:** unreleased
 
@@ -79,3 +79,30 @@ which ADR-0027 (as ADR-0036 amends it) allows only inside one artifact, because
 the collector judges an object by whether any row names it. Two turns running
 on one conversation at once would also overwrite each other's session. A row
 per turn names only its own object, and the conversation's head is a read.
+
+## Amendment: every node reaches the log through the estate router, and only the engine writes it
+
+A seat's box runs wherever its seat is held, a node without `data` among them,
+and only a data node publishes, so the log is reached the way every other
+domain of the estate is: through the estate router
+([ADR-0025](0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)),
+floored on this log. Each write is an idempotent operation under the id the
+domain derives for its execution, so one a data node never answered is asked of
+the next under that same id; each read is answered at the level its caller asks,
+and a launch reads its conversation at `linearizable`, since a seat that moved
+holds no floor for the end its last turn published through another node.
+
+Its writes are a class of their own: ENGINE-ORIGINATED. A capture, an end, a
+retention delete and a removed seat's are the engine's record of what its own
+runs did, which no tool, no person and no operator surface asks for. Declaring
+the log to the person's write surfaces, as the domains a surface writes are
+declared, would have meant a refusal class and an object argument for writes
+nobody can make of them, met only by borrowing an argument some operator tool
+takes for something else. So the router declares who originates each write,
+the surfaces are held to the domains a surface writes, and two gates hold the
+engine's class: every write on this log is declared the engine's and nothing
+else is, and no package that serves a person or a model names the writer the
+router hands out, the domain's own writer or an engine hand-out of either. The
+second is a walk of the source and sees names, not values, so a writer smuggled
+inside another type is review's to catch. The reads are ordinary reads, which a
+surface may hold. `internal/estate` states the class.

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -347,6 +348,12 @@ type Backend struct {
 	// from boot beside the artifacts estate ([ArtifactDataHalf]).
 	ArtifactData ArtifactDataHalf
 
+	// Executor is the executor log, which every data node runs from boot
+	// whatever its company keeps: its reader, and its writer only while the
+	// node publishes, each nil where the core runtime is not up yet
+	// ([ExecutorHalf]).
+	Executor ExecutorHalf
+
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
@@ -402,14 +409,17 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // domain's own declaration. An operation's floor is on its OWN domain's log and
 // no other: see [ready].
 //
-// THE SIX DOMAINS AN OPERATION READS OR WRITES, and not the other three the
+// THE SEVEN DOMAINS AN OPERATION READS OR WRITES, and not the other three the
 // estate carries: the vectors and the usage days are written by a fleet duty
 // and by each data node's own publisher, never through an operation, and no
 // operation reads their rows at a position — the searches that rank by the
 // vectors read them as an index, which carries no floor at all — and the
 // Dashboard Assistant's conversations are read and written only where the API
 // runs, on a data node, from that node's own copy, so no request carries them
-// across the router.
+// across the router. The executor log is among the seven though no surface
+// writes it: the engine records a seat's executor session wherever the seat's
+// box ran, a node without `data` included, and only a data node publishes
+// ([originEngine], executor.go).
 var (
 	trackerDomain      = worklet.Domain{}.Name()
 	pagesDomain        = doclet.Domain{}.Name()
@@ -417,6 +427,7 @@ var (
 	artifactsDomain    = artifactsdomain.Domain{}.Name()
 	artifactDataDomain = artifactdata.Domain{}.Name()
 	chatDomain         = chatlet.Domain{}.Name()
+	executorDomain     = executordomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -425,6 +436,7 @@ var (
 		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
 		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 		chatDomain:         chatlet.Domain{}.Stream().Name,
+		executorDomain:     executordomain.Domain{}.Stream().Name,
 	}
 )
 
