@@ -14,8 +14,9 @@ import (
 
 // A PUSH'S CHANGE, AS ITS RECEIVER HANDLES IT: the options git handed the hook
 // read once (askChange), the change made ready for the push's proposal — its
-// source judged again, its title filled in, its room in the push's record
-// measured (readyChange) — and what became of it told the pusher in one line
+// source judged again, its room in the push's record measured (readyChange),
+// its title filled in beside the push's upload (titleChange) — and what
+// became of it told the pusher in one line
 // on the hook's stderr (changeLine). None of it ever refuses the push, which
 // lands or not by its commands alone (internal/code's pushchange.go). A push
 // the handler refused whole before receive-pack ran never reaches the relay
@@ -86,11 +87,11 @@ func (l *landing) askedChange() changeAsk {
 //     their largest (code.Proposal.ValidateCommands): bad_option, since a
 //     push of the change's branch alone always has room for it.
 //
-// Where the options named no title, the change takes the subject of the
-// commit the push sets its source to (defaultTitle).
-func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cmds,
-	proposed []code.Command) *code.ChangeOption {
-
+// A change whose options named no title is answered with none, and measured
+// with one at its longest: the landing fills it in beside the push's upload
+// (titleChange), so no push waits on a git process before its bytes start
+// for the object store.
+func (s *Server) readyChange(l *landing, ask *changeAsk, cmds, proposed []code.Command) *code.ChangeOption {
 	if ask.option == nil || ask.answer != nil {
 		return nil
 	}
@@ -102,9 +103,6 @@ func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cm
 		return nil
 	}
 	opt := *ask.option
-	if opt.Title == "" {
-		opt.Title = s.defaultTitle(ctx, l, source)
-	}
 	err := code.Proposal{Principal: l.Principal, Via: l.Via, Node: s.o.NodeID, Commands: proposed,
 		Change: &opt}.ValidateCommands()
 	if err != nil {
@@ -120,6 +118,22 @@ func (s *Server) readyChange(ctx context.Context, l *landing, ask *changeAsk, cm
 		return nil
 	}
 	return &opt
+}
+
+// titleChange is the work that fills in the title of change, the change a
+// push proposes (readyChange), where its options named none — defaultTitle of
+// source, the command it is opened from, written into change — and nil where
+// there is nothing to fill in. The landing runs it beside the push's upload
+// and waits for it before the proposal is checked (introduceAndStore), so
+// the title is read while the bundle's bytes are already on their way: the
+// read refuses nothing — it falls back to the branch's name and the
+// commit's id — so nothing need wait for it before the upload. source is
+// copied here, so the work reads nothing of the landing's commands.
+func (s *Server) titleChange(l *landing, change *code.ChangeOption, source code.Command) func(context.Context) {
+	if change == nil || change.Title != "" {
+		return nil
+	}
+	return func(ctx context.Context) { change.Title = s.defaultTitle(ctx, l, source) }
 }
 
 // commitHeadBytes is the most of a commit object the title of a change is
@@ -144,8 +158,13 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 		Dir: l.Scratch.Dir, Alternate: l.Scratch.Alternate, Args: []string{"cat-file", "commit", source.New},
 		Stdout: head, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	}); err != nil {
-		s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
-			"commit", source.New, "error", err)
+		// A READ ENDED WITH ITS LANDING — the upload or the listing beside
+		// it failed (introduceAndStore) — says nothing of the title: the
+		// push fails for what ended it, and is logged for that.
+		if ctx.Err() == nil {
+			s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+				"commit", source.New, "error", err)
+		}
 		return code.DeliveredTitle("", branch, source.New)
 	}
 	return code.DeliveredTitle(logSubject(head.buf), branch, source.New)

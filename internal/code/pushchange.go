@@ -220,7 +220,18 @@ func (o *ChangeOption) validFields() error {
 // measured is o as an entry carrying it is measured before its decide has
 // stamped it ([entryBound]): its target at its longest spelling where the
 // decide is to fill in the repository's default branch — a branch's ref of
-// [MaxRefNameBytes], every byte one JSON spells in six — and nil for none.
+// [MaxRefNameBytes], every byte one JSON spells in six — and its title at
+// its longest where its receiver is yet to fill it in — [MaxChangeTitleBytes]
+// of the same — and nil for none.
+//
+// AN UNTITLED CHANGE IS MEASURED, never refused: the receiver of a push asks
+// [Proposal.ValidateCommands] whether its record has room for the change
+// before it has read the title it fills in where the options named none (the
+// subject of the source's commit, read beside the push's upload, so no push
+// waits on a git process before its bytes start for the object store), and
+// the title it then fills in is at most what this measured. Every other
+// check — [Proposal.Validate] and the ones it is made of — holds the title to
+// [ChangeOption.validFields] first, which refuses an empty one.
 func (o *ChangeOption) measured() *ChangeOption {
 	if o == nil {
 		return nil
@@ -228,6 +239,9 @@ func (o *ChangeOption) measured() *ChangeOption {
 	m := *o
 	if m.Target == "" {
 		m.Target = branchPrefix + strings.Repeat("<", MaxRefNameBytes-len(branchPrefix))
+	}
+	if m.Title == "" {
+		m.Title = strings.Repeat("<", MaxChangeTitleBytes)
 	}
 	return &m
 }

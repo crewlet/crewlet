@@ -5,8 +5,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -121,6 +123,52 @@ func TestAPushedChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
 	if got == nil || got.Title != "a b" || got.SourceRef != branch {
 		t.Fatalf("the change the push opened is %+v, want one from %q titled by its name, made a title", got,
 			branch)
+	}
+}
+
+// A PUSHED CHANGE'S TITLE IS READ BESIDE ITS UPLOAD: the subject a change is
+// titled by where its options name none is read by a git process, which a
+// busy read lane holds up to its slot wait — and the read refuses nothing,
+// so the push's bundle starts for the object store while it is still held,
+// and the change it opens carries the subject once it is read.
+//
+// Mutation: read the title before the upload (land: run titleChange's work
+// before introduceAndStore, handing it none) — no upload starts while the
+// read is held, red.
+func TestAPushedChangesTitleIsReadBesideItsUpload(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	titling, release := host.HoldGit(c.Fleet.Nodes()[0].Host(), "cat-file", "commit")
+	t.Cleanup(release)
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "Retry the upload")
+	uploading := make(chan struct{})
+	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Reached: uploading})
+
+	done := make(chan codetest.Pushed, 1)
+	go func() {
+		done <- p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:refs/heads/feature")
+	}()
+	reachedFirst(t, titling, done)
+	// Ten seconds is the wait the package's held-step cases give a step that
+	// should start at once: an upload that starts only once the read ends
+	// never starts while it is held, however long this waits.
+	select {
+	case <-uploading:
+	case res := <-done:
+		t.Fatalf("the push ended while its change's title was held: %s", res)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the push's upload did not start while its change's title was read")
+	}
+	release()
+	res := <-done
+	if !res.OK("refs/heads/feature") || !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
+		t.Fatalf("a push whose change's title was read beside its upload: %s", res)
+	}
+	if got, _ := changeNumbered(t, c, 1); got == nil || got.Title != "Retry the upload" {
+		t.Fatalf("the change the push opened is %+v, want it titled by its head's subject", got)
 	}
 }
 

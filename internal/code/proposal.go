@@ -214,7 +214,9 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // node and its commands, with the receiver's refusals that need no object;
 // every other field is ignored but its change ([Proposal.Change]), which the
 // receiver learns only from the options receive-pack hands its hook and asks
-// this again with before it proposes one: a change too wide for the entry
+// this again with before it proposes one — its title, where the options
+// named none, still to be filled in and measured at its longest
+// ([ChangeOption.measured]): a change too wide for the entry
 // beside the commands at their largest is answered to its pusher and left
 // out, so the push lands without it. The principal and the way are MEASURED
 // AS STAMPED, since every proposer stamps both before its work: no work adds
@@ -273,7 +275,8 @@ func (p Proposal) ValidateCommands() error {
 // field is spelled at its longest, the push id and the receive instant at
 // their longest spellings, and the push --atomic. The principal, its run among
 // it, the way and the change stay as their proposer stamped them: no work adds
-// to them, and [entryBound] measures the change's target at its longest.
+// to them, and [entryBound] measures the change's target, and a title its
+// receiver is still to fill in, at their longest.
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -659,7 +662,8 @@ const (
 // entryBound is the most bytes p's entry can take in a push record: the
 // entry encoded as proposed — a seat's carrying the day its decide stamps, at
 // its longest ([longestDay]), and its change as its decide would open it,
-// the target it stamps at its longest where the options named none
+// the target it stamps, and a title its receiver is still to fill in, at
+// their longest where the options named none
 // ([ChangeOption.measured]), and an operator's landings as its decide would
 // stamp them, every branch it moves onto a commit a protected one, green
 // ([measuredLandings]) — plus what deciding can add to each command, plus the

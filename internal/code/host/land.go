@@ -408,8 +408,14 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	proposed, named := recordedCommands(cmds)
 	// AND THE CHANGE THE OPTIONS ASK FOR, made ready for the proposal now
 	// that the push is to be proposed (readyChange): answered here, and left
-	// out, where it has no source by now or no room in the push's record.
-	change := s.readyChange(ctx, &l, &ask, cmds, proposed)
+	// out, where it has no source by now or no room in the push's record —
+	// its title, where the options named none, filled in beside the upload
+	// (titleChange).
+	change := s.readyChange(&l, &ask, cmds, proposed)
+	var title func(context.Context)
+	if change != nil {
+		title = s.titleChange(&l, change, cmds[ask.source])
+	}
 	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
 		return code.Proposal{
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
@@ -417,7 +423,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
 		}
 	}
-	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,
+	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref, title,
 		func(introduced []string, count int, unstored *code.PackRef) error {
 			if l.Merge != nil {
 				return mergeCarrying(*l.Merge, unstored, l.Synced.DropEpoch).ValidateUnstored()
@@ -672,9 +678,16 @@ func (s *Server) behind(ctx context.Context, l *landing) (string, bool) {
 // one, named by no row, which the collector removes after its grace as it
 // does a refused push's. A refusal that must store nothing is decided before
 // this step, never here (land's steps 6 to 8).
+//
+// title, where it is not nil, fills in the title of the change the push
+// proposes (titleChange): it too refuses nothing — the title falls back to
+// the branch's name and the commit's id — so it runs beside the upload as
+// the listing does, and validate is asked only once it has written, so the
+// check and the proposal carry the title. Every return waits for it, so a
+// caller reads the change it wrote.
 func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []string, packPath string,
-	ref *code.PackRef, validate func([]string, int, *code.PackRef) error) (introduced []string, count int,
-	stored, err error) {
+	ref *code.PackRef, title func(context.Context), validate func([]string, int, *code.PackRef) error) (
+	introduced []string, count int, stored, err error) {
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -686,21 +699,34 @@ func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []strin
 		copied := *ref
 		unstored = &copied
 	}
+	var titled sync.WaitGroup
+	if title != nil {
+		titled.Go(func() { title(ctx) })
+	}
+	defer titled.Wait()
 	check := func() error {
+		titled.Wait()
 		if verr := validate(introduced, count, unstored); verr != nil {
 			cancel(errInvalidProposal)
 			return &invalidProposal{err: verr}
 		}
 		return nil
 	}
+	// BESIDE THE UPLOAD: the listing where there are commits to list, and
+	// the check after it — after the title too, where there is one to read,
+	// so a push with nothing to list still starts its upload while its
+	// change's title is read. With neither, the check answers before the
+	// upload starts, at no cost to it.
 	var listing sync.WaitGroup
-	if len(news) > 0 && ref != nil {
+	if ref != nil && (len(news) > 0 || title != nil) {
 		packBytes := unstored.PackBytes()
 		listing.Go(func() {
-			if introduced, count, err = s.introduced(ctx, l.Scratch, l.objects(), news,
-				packBytes); err != nil {
-				cancel(errListingFailed)
-				return
+			if len(news) > 0 {
+				if introduced, count, err = s.introduced(ctx, l.Scratch, l.objects(), news,
+					packBytes); err != nil {
+					cancel(errListingFailed)
+					return
+				}
 			}
 			err = check()
 		})

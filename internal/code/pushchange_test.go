@@ -2,6 +2,8 @@ package code_test
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -473,6 +475,45 @@ func TestADeliveredChangeIsAlwaysTitled(t *testing.T) {
 		if tc.want != "" && got != tc.want {
 			t.Errorf("%s: titled %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// AN UNTITLED CHANGE IS MEASURED AT ITS WIDEST TITLE: a push's receiver asks
+// whether its record has room for the change before it has read the title it
+// fills in (that read runs beside the upload), so a change whose options
+// named no title is measured, never refused for it, and measured as wide as
+// any title it may be given — MaxChangeTitleBytes JSON spells six times over
+// — so the title filled in later never takes a record past its room.
+//
+// Mutation: measure an untitled change with its title left empty — it is
+// measured narrower than a change of the widest title, red.
+func TestAnUntitledChangeIsMeasuredAtItsWidestTitle(t *testing.T) {
+	t.Parallel()
+	push := func(tags int, title string) code.Proposal {
+		cmds := []code.Command{{Ref: "refs/heads/topic", Old: code.ZeroOID, New: oidOf("topic")}}
+		for i := range tags {
+			ref := fmt.Sprintf("refs/tags/%04d", i)
+			cmds = append(cmds, code.Command{Ref: ref + strings.Repeat("&", code.MaxRefNameBytes-len(ref)),
+				Old: code.ZeroOID, New: oidOf(ref)})
+		}
+		return code.Proposal{Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder"},
+			Via: code.ViaGit, Node: "n1", Commands: cmds, Change: &code.ChangeOption{Title: title}}
+	}
+	if err := push(0, "").ValidateCommands(); err != nil {
+		t.Fatalf("a push of one branch asking for an untitled change: %v, want room for it", err)
+	}
+	widest := strings.Repeat("<", code.MaxChangeTitleBytes)
+	if why := code.TitleProblem(widest); why != "" {
+		t.Fatalf("the widest title %q is no title: %s", widest, why)
+	}
+	var untitled, titled *code.TooWideError
+	tags := code.MaxCommandsPerPush - 1
+	if err := push(tags, widest).ValidateCommands(); !errors.As(err, &titled) {
+		t.Fatalf("%d tags of the costliest ref beside a change of the widest title: %v, want it too wide", tags, err)
+	}
+	if err := push(tags, "").ValidateCommands(); !errors.As(err, &untitled) || untitled.Bytes != titled.Bytes {
+		t.Fatalf("the same push asking for an untitled change: %v, want it measured as the widest title's, %d "+
+			"bytes", err, titled.Bytes)
 	}
 }
 

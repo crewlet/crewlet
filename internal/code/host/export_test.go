@@ -325,15 +325,16 @@ func RecordGitInputs(s *Server) func() []GitInput {
 	}
 }
 
-// HoldGit holds every process of subcommand sub s hands the pool from now on
-// until release: reached is closed when the first is held. Set before s's
-// first request.
-func HoldGit(s *Server, sub string) (reached <-chan struct{}, release func()) {
+// HoldGit holds every process s hands the pool from now on whose arguments
+// start with args — a subcommand, and as many of its own arguments as tell
+// one of its processes from another — until release: reached is closed when
+// the first is held. Set before s's first request.
+func HoldGit(s *Server, args ...string) (reached <-chan struct{}, release func()) {
 	at, held := make(chan struct{}), make(chan struct{})
 	var once, closing sync.Once
 	run := s.runGit
 	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
-		if len(c.Args) > 0 && c.Args[0] == sub {
+		if len(args) > 0 && len(c.Args) >= len(args) && slices.Equal(c.Args[:len(args)], args) {
 			once.Do(func() { close(at) })
 			select {
 			case <-held:
