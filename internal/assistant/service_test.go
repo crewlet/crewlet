@@ -18,6 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
+// auditWait is how long a suite waits for a turn's audit record, which the
+// runner publishes right after the turn's done frame: far past any delay a
+// loaded race runner puts between the two, and reached only by a turn that
+// never publishes one.
+const auditWait = 10 * time.Second
+
 // getTask is the catalogue's own task read, whose answer other people wrote.
 func getTask(t *testing.T) catalog.Tool { return assistanttest.Tool(t, "get_task") }
 
@@ -101,7 +107,11 @@ func TestNoTokenReachesARecordALogOrAPrompt(t *testing.T) {
 	}
 	frames := f.Follow(accepted.TurnID, 0)
 	stream, _ := json.Marshal(frames)
-	audit, _ := json.Marshal(f.Audit.Events())
+	published, ok := f.Audit.Await(1, auditWait)
+	if !ok {
+		t.Fatal("the turn published no audit record")
+	}
+	audit, _ := json.Marshal(published)
 	for name, text := range map[string]string{
 		"the prompt": f.Model.Prompts(), "the stream": string(stream),
 		"the records": strings.Join(f.Store.Records(), "\n"), "the audit": string(audit),
@@ -474,7 +484,11 @@ func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 	}
 	// THE AUDIT KEEPS THE PATTERN: the company-wide trail names the route the
 	// step matched, never a path value the person's own step shows.
-	audit, _ := json.Marshal(f.Audit.Events())
+	published, ok := f.Audit.Await(1, auditWait)
+	if !ok {
+		t.Fatal("the turn published no audit record")
+	}
+	audit, _ := json.Marshal(published)
 	if !strings.Contains(string(audit), `/query/{what}`) ||
 		strings.Contains(string(audit), `/query/knowledge`) {
 		t.Errorf("the turn's audit records %s, want the route pattern alone", audit)
