@@ -122,6 +122,13 @@ type GateRules struct {
 	// consent to a reverting of a landing that breaks the target.
 	OwnersApprove bool
 	AutoRevert    bool
+	// KeepsSource is whether any gate matching Target keeps a seat's source
+	// branch when a change merges (delete_source: none): a merge's caller
+	// deletes a source in a seat's namespace unless it is so, and keeps
+	// every other source (Q4) — a gate that keeps it wins over one that
+	// deletes it, since a deleted branch is the one of the two no later
+	// write undoes.
+	KeepsSource bool
 }
 
 // GateRulesOf is the gate target is held to by rules — a repository's rules,
@@ -193,6 +200,9 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 			}
 		}
 		out.OwnersApprove = out.OwnersApprove || g.OwnersApprove
+		// A VALUE THIS BUILD DOES NOT KNOW KEEPS the branch, as an unknown
+		// term reads as its strictest.
+		out.KeepsSource = out.KeepsSource || g.DeleteSource != DeleteSeats
 		if len(g.Checks) > 0 {
 			gatedCheck++
 			if g.Landing.Policy == LandingPostLand {

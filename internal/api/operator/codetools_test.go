@@ -144,6 +144,10 @@ func (*writingHost) Checks(context.Context, code.ChecksRequest) (code.ChecksResu
 	return code.ChecksResult{}, code.ErrNotServing
 }
 
+func (*writingHost) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
+	return code.QueueResult{}, code.ErrNotServing
+}
+
 // THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
 // PRESS THEM: the catalogue holds the code writes beside the reads exactly
 // while the call's code half carries the code host's writes, advertises each

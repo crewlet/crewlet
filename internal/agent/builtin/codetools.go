@@ -207,6 +207,14 @@ type CodeDeps struct {
 	// never filed under a key nobody resolved.
 	Tasks TaskReader
 
+	// Closer is the engine's own tracker's writer FOR ONE ACTOR, which a
+	// merged change's step two closes its native work item through
+	// (code_merge_change's `close_task`), as the caller who merged it — the
+	// tracker's rule that a writer acts as exactly one party. Set beside
+	// [CodeDeps.Tasks]; nil closes none, and a merge asked to close its item
+	// says it was not closed and why.
+	Closer func(actor Actor) WorkWriter
+
 	// Holder records a turn's hold on a scratch repository it names
 	// ([HoldRepo]), set wherever the tools are offered to seats and
 	// independently of Writer, because a seat that only reads still holds

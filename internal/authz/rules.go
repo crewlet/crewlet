@@ -184,6 +184,12 @@ const (
 	// And its commits rebased onto its target: an engine write of its source,
 	// a forced push of it, judged as every engine write is.
 	ActionCodeRebaseChange Action = "code_rebase_change"
+	// And it merged into its target, or put in its target's queue where the
+	// target's gate requires a check — its merge authority, its gate and a
+	// person's override judged by the committer from its own chart (M5-D2,
+	// M5-D7) — and taken out of that queue again.
+	ActionCodeMergeChange   Action = "code_merge_change"
+	ActionCodeDequeueChange Action = "code_dequeue_change"
 	// A commit's CHECKS: what a check that failed said — its failures, its
 	// summary, its tail and pages of its log — read by the repository's
 	// grant; an attempt run again, decided by the repository's checks writer
@@ -837,6 +843,12 @@ var rules = map[Action]rule{
 	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND ITS REBASE, on the same footing.
 	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND ITS MERGE AND ITS DEQUEUE, decided per repository by its
+	// committer — who may merge into the target is the gate's merge_by, an
+	// override is a person's alone — so neither human-only nor asking a
+	// proof here: a seat merges a change its gate lets it merge.
+	ActionCodeMergeChange:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeDequeueChange: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
 	// each decided per repository in the tool and by the checks writer from
 	// its chart, on the same footing — a seat reads what failed and reruns

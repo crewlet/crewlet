@@ -146,6 +146,11 @@ func (h *codeWriteHost) Checks(context.Context, code.ChecksRequest) (code.Checks
 	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(25)}, nil
 }
 
+// Queue answers a queue's write as decided: no case here dequeues a change.
+func (h *codeWriteHost) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
+	return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(26)}, nil
+}
+
 // writesAsked is the engine writes the host was asked, copied under its lock.
 func (h *codeWriteHost) writesAsked() []code.EngineWrite {
 	h.mu.Lock()

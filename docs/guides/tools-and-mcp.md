@@ -318,8 +318,8 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Thirty-three more — twelve that read, two of them a repository's changes and
-one a commit's checks, and twenty-one that change a branch, a repository, a
+Thirty-five more — twelve that read, two of them a repository's changes and
+one a commit's checks, and twenty-three that change a branch, a repository, a
 change or a commit's checks — registered wherever
 the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
@@ -329,24 +329,24 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same thirty-three, so an operator's own
+and the operator catalogue serves the same thirty-five, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold — and reports their own CI's checks, which
 no seat does. The twelve reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The twenty-one
+them, and the operator catalogue records no call to one. The twenty-three
 writes each deliver to the code host, so a turn woken about work on a repository that
 answered by moving a branch, opening a change or reviewing one delivered; no
 worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered twenty of them —
+catalogue is recorded as any write is. A seat is offered twenty-two of them —
 every write but `code_report_check`, a person's alone — only where
 its `role.code.access` is `full_access`: below it, no repository's grant lets
 the seat change anything ([Who may read and
 push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
 `review` seat — `read_only` is what a seat that sets none runs at — is offered
 the twelve reads alone, and its prompt says nothing about changing code,
-rather than carrying twenty tools it would be refused on every repository on
+rather than carrying twenty-two tools it would be refused on every repository on
 every round.
 
 | Tool | Description |
@@ -384,6 +384,8 @@ every round.
 | `code_rebase_change` | The change rebased onto its target's tip from the head the caller read (`expected_head`): its commits the target does not hold replayed oldest first, each keeping its author and author date, and its branch moved to them by one forced push of the caller's, held to the branch's protections as a force-push is. The first commit that conflicts stops it with nothing changed (`invalid`, naming the commit and each conflicted path); a change of more than 1 000 such commits, or holding a merge commit, is refused (`invalid`) ([A change rebased](../concepts/code-host.md#a-change-rebased)) |
 | `code_rerun_checks` | A commit's checks run again — named by `change` or `sha` as `code_get_check_failures` names them — each named in `checks` with the attempt the caller read as its latest (at most 16 a call), or with `all_failed` every check whose latest attempt ended without passing: each queued at the next attempt, at most ten. A seat reruns only an attempt its infrastructure or a stop ended (`errored`, `cancelled`), on a repository it may write or a change it wrote; a failure is refused it `rerun_genuine`. A check a person's CI reports is refused `native_check`: its CI runs it again |
 | `code_report_check` | A person's own CI's check of a commit, reported onto the commit's checks — `status` `running` when it starts, then `passed`, `failed`, `errored` or `cancelled` with its `summary`, `tail`, `failures` and `url` — by `sha` (for `checked_for`, the default branch when left out) or `change`. A person's alone, never a seat's, and refused `native_check` for a check the engine has queued at that commit ([External CI](code.md#external-ci)) |
+| `code_merge_change` | The change merged into its target from the head the caller read (`expected_head`), by `method` (`merge`, the default, `squash` or `fast_forward`), as one record its committer decides against the target's merge gate — or, on a target whose gate requires a check, put in its queue and answered with its place. A change its gate does not allow yet is refused `not_ready`, naming every unmet precondition and who each waits on; `delete_branch` (unsaid: a seat's branch unless a rule keeps it), `close_task` (the work item closed as a second write once it merges) and a person's `override_reason` ([Merging a change](code.md#merging-a-change)) |
+| `code_dequeue_change` | The change's entry taken out of its target's merge queue, at its enqueuer's, its owner's, a maintainer's or a person's ask; a change no queue holds is refused (`conflict`) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a

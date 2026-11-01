@@ -616,6 +616,12 @@ const (
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
+	// CodeNotReady is a change that does not yet meet its target's merge
+	// gate: nothing merged or was queued, the detail names every unmet
+	// precondition and who it waits on, and the change's owner hears
+	// ready_to_merge once it is met. 409: the change's state collided with
+	// the request, and its people, not a retry, clear it.
+	CodeNotReady Code = "not_ready"
 	// CodeStoreFull is content the object store had no room for: nothing
 	// was stored, and an operator has to make room before the same request
 	// can land. 507, never a 503: waiting alone does not clear it, so it
@@ -1182,6 +1188,9 @@ var codes = map[Code]string{
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",
+	CodeNotReady: "The change does not meet its branch's merge rules yet, so " +
+		"nothing was merged. The detail names what it waits on and who " +
+		"clears each; its owner hears once it is ready.",
 	CodeStoreFull: "The company's file store has no room left, so nothing was " +
 		"stored. An operator has to make room for it; sending it again changes " +
 		"nothing until then.",

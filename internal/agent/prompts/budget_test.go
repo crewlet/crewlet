@@ -92,6 +92,13 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // Measured at ~1011, so ~3% is left, as before it. The plain contract alone —
 // no tracker, no workers, no sandbox, no code — measures ~508 of it.
 //
+// 1040 -> 1100 for a section, deliberately: `code_merging` says a merge that
+// is not ready, or is queued for its checks, is not waited on — the turn ends
+// and a `ready_to_merge` or `merged` wake brings the seat back — which took the
+// prompt from ~1011 to ~1067 (~56, its heading with it): a seat that polls a
+// merge spends a round on every poll, which no tool's answer reaches a seat
+// early enough to stop. Measured at ~1067, so ~3% is left, as before it.
+//
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
 // grows when somebody writes a paragraph. What a roster costs is bounded by
@@ -101,7 +108,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 1040)
+	withinBudget(t, "executor", p, 1100)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -180,7 +187,7 @@ func referenceExecutor(t *testing.T) ExecutorInput {
 		AvailableTools: append([]string{
 			"activate_tool", escalationTool, "create_work_item", "delegate",
 			"list_mcp_server_tools", "run_sandbox", "submit_work",
-		}, slices.Concat(CodeHistoryTools(), CodeWriteTools())...),
+		}, slices.Concat(CodeHistoryTools(), CodeWriteTools(), CodeMergeTools())...),
 		Workers:       referenceWorkers(),
 		OffersSandbox: true,
 	}
@@ -308,6 +315,10 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // before it, since the box sentence the code guidance gained beside the
 // sandbox (~36) was charged to the executor's budget above and never to this
 // account, which had ~1% headroom left unsaid. ~3% headroom again.
+//
+// 2620 -> 2680 for the code merging guidance (~56 tokens), the same exception
+// once more: rendered only for a seat holding `code_merge_change`. The turn
+// measured ~2,598 with it, ~1% under the old figure, so ~3% headroom again.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -332,7 +343,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2620
+const wholeTurnBudget = 2680
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

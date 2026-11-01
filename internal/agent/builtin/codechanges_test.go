@@ -27,6 +27,13 @@ import (
 // siteChangeID is change site!7's id.
 const siteChangeID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d07"
 
+// siteEntryID is site!7's entry in its target's queue; otherEntryID another
+// change's ahead of it.
+const (
+	siteEntryID  = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e01"
+	otherEntryID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0e02"
+)
+
 // revHead is revision n's head, and revBase the base its facts recorded —
 // each a whole id of its own, n from 1 to 9.
 func revHead(n int64) string { return strings.Repeat(strconv.FormatInt(n, 10), 40) }
@@ -116,6 +123,11 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		if len(out.Changes) == limit && out.Changes[limit-1].Number != f.listing[len(f.listing)-1].Number {
 			out.Next = q.ChangesCursor(out.Changes[limit-1])
 		}
+		return out, nil
+	}
+	if q.Kind == code.ReadQueue {
+		// THE CHANGE'S TARGET'S QUEUE holds its one entry, for a dequeue.
+		out.Queue = []code.QueueRow{{EntryID: siteEntryID, ChangeID: f.detail.ID}}
 		return out, nil
 	}
 	if q.Change != f.detail.Number {

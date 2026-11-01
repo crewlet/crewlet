@@ -88,34 +88,22 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **A check holds no merge back yet.** A repository defines its checks in
-  `.crewlet/checks.yaml`, which `crewlet validate` reads as the code host does
-  ([Checks](#checks)); its home git node queues the checks its target's file
-  defines at every live change's head ([How a head's checks are
+- **Nothing lands a change from its merge queue yet.** A repository defines
+  its checks in `.crewlet/checks.yaml`, which `crewlet validate` reads as the
+  code host does ([Checks](#checks)); its home git node queues the checks its
+  target's file defines at every live change's head ([How a head's checks are
   dispatched](#how-a-heads-checks-are-dispatched)) and a protected branch's
   required checks at its newest landing ([Tip checks and
   code_green](#tip-checks-and-code_green)), and every git node runs whatever
-  attempt is queued ([Who runs a check](#who-runs-a-check)). A change's
-  readiness counts the checks its branch's gate requires ([The merge
-  gate](#the-merge-gate)), but nothing asks for a merge in this release
-  (below), so no check's result holds one back.
-- **Nothing asks for a change's merge yet.** A [change](#changes) is
-  opened, edited, closed, reopened, rebased and reviewed, its findings
-  answered and applied, by a push and through the tools and the dashboard
-  ([Review a change](../guides/code.md#review-a-change)); a push that sets its
-  target to its head merges it, and its home lands one whose head its target
-  already holds ([The home's change work](#the-homes-change-work)). But no
-  tool or route asks for a merge in this release, so no change is merged in
-  front of a protected branch: a protection rule decides what a push may do
-  to a ref, and nothing else stands in front of one. A rule's [merge
-  gate](#merge-gates) is recorded and read, every change into its branch is
-  judged under it ([The merge gate](#the-merge-gate)), a change into a
-  branch whose gate requires a check is queued for its landing by its gate
-  ([The merge queue](#the-merge-queue)), a repository's home builds a merge
-  an engine write asks for, and its committer decides the merge as one record
-  its gate proves ([A merge, end to end](#a-merge-end-to-end)) — and since
-  nothing asks for one, nothing merges by the gate yet, nor lands from a
-  queue.
+  attempt is queued ([Who runs a check](#who-runs-a-check)). A change is
+  merged by `code_merge_change` — a seat's, a person's assistant's or the
+  dashboard's — as one record its gate proves ([A merge, end to
+  end](#a-merge-end-to-end), [Merging a
+  change](../guides/code.md#merging-a-change)), and a change into a branch
+  whose gate requires a check is put in that branch's [merge
+  queue](#the-merge-queue) instead. But no git node lands a queue's entries in
+  this release, so such a change waits there until a person merges it past
+  the gate (`override_reason`) or it is taken out (`code_dequeue_change`).
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -361,9 +349,12 @@ field at a time, each field a call leaves out kept as the branch's gate has it
 — or defaulted as above, on a branch whose rule has none — and only a person
 loosens one ([Who may change a protection](#who-may-change-a-protection)).
 
-A gate is **recorded, answered and judged, and nothing merges by it yet**:
+A gate is **recorded, answered and judged, and a merge is held to it**:
 every change into a gated branch is judged under it, its readiness listing
-each term the gate holds it to ([The merge gate](#the-merge-gate)); a read of
+each term the gate holds it to ([The merge gate](#the-merge-gate)), and
+`code_merge_change` merges one only as it allows, a change into a branch
+whose gate requires a check queued rather than merged ([What it does not do
+yet](#what-it-does-not-do-yet)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 (`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
 to the rule's `allow_force`, `allow_delete` and `direct_push` alone, as before

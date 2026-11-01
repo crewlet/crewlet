@@ -68,8 +68,13 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// resolved to the item's identity through the very read the work tools
 	// resolve a key with, on this node's router — none elsewhere, where a
 	// key names no item this engine keeps.
+	//
+	// AND ITS WRITER FOR ONE ACTOR, which a merged change's step two closes
+	// its work item through as whoever merged it: the router's, a person's
+	// credential or a seat's turn alike ([remoteActor]).
 	if halves, ok := e.trackerHalves(); ok {
 		deps.Tasks = halves.reader
+		deps.Closer = func(actor builtin.Actor) builtin.WorkWriter { return halves.as(actor) }
 	}
 	return deps
 }

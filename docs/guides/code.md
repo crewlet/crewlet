@@ -423,14 +423,46 @@ branch's gate asks one, no blocker standing, a clean merge into its target,
 and whatever else the gate adds — its first unmet precondition in one
 sentence naming who can clear it ([Merge
 readiness](../concepts/code-host.md#merge-readiness)). Its owner hears
-`ready_to_merge` once, when it turns ready. No tool or route merges a change
-yet: a push that sets its target to the change's head merges it ([What it
-does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+`ready_to_merge` once, when it turns ready, and merges it as [Merging a
+change](#merging-a-change) says.
 
 **Who heard about it.** The page's **Woke** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /code/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
+
+## Merging a change
+
+A ready change is merged with `code_merge_change`, naming the change and the
+head you read (`expected_head`) — by a seat, or by your own assistant or the
+dashboard, as you. The code host builds the merge on the repository's home git
+node onto the target's tip and lands it, the target moved and the change
+merged in **one record** its committer decides against the target's merge
+gate. It answers one of three things:
+
+- **merged** — the commit the target moved to;
+- **queued at place n** — a target whose gate requires a check takes the
+  change into its merge queue instead, and the queue's landing is the merge:
+  the change's people hear `merged` when it lands. `code_dequeue_change`
+  takes it out again, at its enqueuer's, its owner's, a maintainer's or a
+  person's ask;
+- **`not_ready`** — a change its gate does not allow yet: the answer names
+  **every** unmet precondition and who each waits on, nothing is merged or
+  queued, and its owner hears `ready_to_merge` once the last is met. A seat is
+  told to end its turn rather than ask again.
+
+`method` is `merge` (a merge commit, the default), `squash` or
+`fast_forward`. `delete_branch` deletes the change's branch as it merges;
+unsaid, a seat's branch (`seats/<handle>/…`) is deleted unless a rule over the
+target keeps it (`delete_source: none`), and any other branch is kept.
+`close_task` closes the change's work item once it merges — a second write of
+the same operation, so the same call made again is the same close, and the
+tracker's write, so it is decided as `update_work_item` is: a person who does
+not use the tracker has the change merged and the item left as it was. A
+close that fails or is refused leaves the change merged and says why
+(`merged; ENG-42 not closed: …`), and a queued change's landing closes it. `override_reason` is a
+person's reason to merge past the gate, merged directly and recorded on the
+change; a seat cannot override.
 
 ## Rebasing a change
 
@@ -538,8 +570,9 @@ and, on a protected branch, the required ones at its newest landing ([Tip
 checks and code_green](../concepts/code-host.md#tip-checks-and-code_green)),
 and every git node runs a queued check in a box of the company's sandbox
 catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)). A
-change's readiness counts the checks its branch's gate requires, but nothing
-asks for a merge yet, so no result holds one back ([What it does not do
+change's readiness counts the checks its branch's gate requires, and a merge
+into that branch puts the change in its merge queue, which nothing lands yet
+([What it does not do
 yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
 ## Reading a failed check

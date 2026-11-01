@@ -159,6 +159,27 @@ const codeWritesSection = "\n## Changing the company's code" +
 	"build or test belongs in a checkout. Your experiments go in a scratch " +
 	"repository, `<your handle>.<name>`."
 
+// KeyCodeMerging is the outline key of the guidance on merging a change.
+const KeyCodeMerging = "code_merging"
+
+// CodeMergeTools are the code tools [codeMergingSection]'s claims rest on: the
+// merge itself. Exported for internal/agent/builtin's test that holds them to
+// the change writes it registers.
+func CodeMergeTools() []string { return []string{"code_merge_change"} }
+
+// codeMergingSection is the one rule about MERGING a change that no tool's
+// description can carry early enough: what a seat does while a change waits.
+// A merge its gate does not allow yet is answered not_ready and a queued one
+// lands later, and in both the engine wakes the seat when it is time — a
+// ready_to_merge wake once the last precondition is met, a merged one once a
+// queue lands it — so a seat that polls, or keeps its turn open waiting, spends
+// rounds on what a wake already delivers. Which preconditions, who clears them
+// and the change's place in its queue are the tool's answer, not repeated here.
+const codeMergingSection = "\n## Merging a change" +
+	"\nA change merges with `code_merge_change` once it is ready. A merge that " +
+	"is not ready, or is queued for its checks, is not waited on: end the turn, " +
+	"and a `ready_to_merge` or `merged` wake brings you back."
+
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
 //
@@ -359,6 +380,10 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// AND HOW TO CHANGE IT, right after: the same choice made for a write.
 	if holdsAll(in.AvailableTools, CodeWriteTools()) {
 		b.Heading(KeyCodeWrites, codeWritesSection)
+	}
+	// AND HOW A CHANGE MERGES, last of the three: what to do while it waits.
+	if holdsAll(in.AvailableTools, CodeMergeTools()) {
+		b.Heading(KeyCodeMerging, codeMergingSection)
 	}
 
 	// The tool-skills catalogue lands adjacent to the tools to discover so

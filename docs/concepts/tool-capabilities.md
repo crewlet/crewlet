@@ -76,15 +76,16 @@ is read, which the node that answers judges both at, and a write's is the
 least access at which the node that decides it may admit the call — the rest
 is the relation that node judges from its own chart, which no access alone
 names (an open's push of its branch, a change's owner steering it). Their
-twenty-one writes — `code_commit_files`,
+twenty-three writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
 `code_update_change` and `code_close_change`, and its conversation's
 `code_request_review`, `code_review_change`, `code_comment_on_change`,
 `code_resolve_finding`, its findings' `code_apply_suggestions` and its
-`code_rebase_change`, and a commit's checks' `code_rerun_checks` and
-`code_report_check` — are each `read_only: false`
+`code_rebase_change`, its `code_merge_change` and `code_dequeue_change`, and a
+commit's checks' `code_rerun_checks` and `code_report_check` — are each
+`read_only: false`
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
 which would write under its parent's grant; each is registered as a delivery
@@ -111,6 +112,13 @@ author's answer, which leaves a blocker standing for its raiser to judge.
 `code_rebase_change` is a forced push of the change's branch, held to the
 head its caller read, whose replayed commits keep their own authors: the
 rebaser becomes an author of the change as any pusher of a revision does.
+`code_merge_change` merges the change from the head its caller read, or puts
+it in its target's queue, and a change its target's gate does not allow yet
+is refused in a class of its own, `not_ready`, naming every unmet
+precondition and who it waits on — never `invalid`, since nothing about the
+call was wrong, and never a retry, since its people clear it and a
+`ready_to_merge` wake follows. A seat holding it is also told, in its
+executor prompt's `code_merging` section, to end its turn rather than wait.
 `code_report_check` is the one code write no seat is offered: it is
 human-only in the authority table, since a report is a check result, and a
 seat runs no CI whose result it could report ([External

@@ -100,6 +100,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalForbidden:          {http.StatusForbidden, httpjson.CodeForbidden},
 	crewletmcp.RefusalStaleVersion:       {http.StatusConflict, httpjson.CodeStaleVersion},
 	crewletmcp.RefusalConflict:           {http.StatusConflict, httpjson.CodeConflict},
+	crewletmcp.RefusalNotReady:           {http.StatusConflict, httpjson.CodeNotReady},
 	crewletmcp.RefusalExists:             {http.StatusConflict, httpjson.CodeExists},
 	crewletmcp.RefusalAlreadyAnswered:    {http.StatusConflict, httpjson.CodeAlreadyAnswered},
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},

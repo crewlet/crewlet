@@ -195,6 +195,10 @@ var notRefArgs = map[string]string{
 	"failures_omitted":   "how many failures a reported check counted past those it names",
 	"duration_ms":        "a reported check's duration",
 	"url":                "a reported check's page on its CI",
+	"method":             "how a change merges",
+	"delete_branch":      "whether a merge deletes the change's own source, which the merge record moves",
+	"close_task":         "whether a merge closes the change's work item",
+	"override_reason":    "a person's reason to merge past a gate",
 }
 
 // refCallDrops is the arguments a tool's holdingCall row carries that the call

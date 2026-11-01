@@ -53,7 +53,32 @@ type codeWrites struct {
 	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
 	change     func(p code.ChangeProposal) (code.ChangeResult, error)
 	converse   func(w code.ConversationWrite) (code.ConversationResult, error)
+	queues     []code.QueueProposal
+	queue      func(p code.QueueProposal) (code.QueueResult, error)
 	before     func(what, repoID string)
+}
+
+// Queue answers a write of a target's queue — a dequeue — as applied, unless
+// a case answers otherwise.
+func (c *codeWrites) Queue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	c.mu.Lock()
+	c.queues = append(c.queues, p)
+	answer, before := c.queue, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("queue", p.RepoID())
+	}
+	if answer != nil {
+		return answer(p)
+	}
+	return code.QueueResult{Outcome: statelog.OutcomeApplied, State: code.QueueDequeued, Position: codeAt(17)}, nil
+}
+
+// queuesAsked is the queue writes the fake was asked, copied under its lock.
+func (c *codeWrites) queuesAsked() []code.QueueProposal {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.queues)
 }
 
 var (
@@ -1174,7 +1199,10 @@ func holdingCall(name string) (map[string]any, bool) {
 			"checks": []any{map[string]any{"name": "unit", "attempt": 1}}},
 		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
 		// sends one, so it holds nothing, as an operator's call holds nothing.
-		builtin.CodeReportCheckTool: nil,
+		builtin.CodeReportCheckTool:   nil,
+		builtin.CodeRebaseChangeTool:  {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7},
 	}
 	args, ok := rows[name]
 	return args, ok

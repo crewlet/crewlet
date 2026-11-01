@@ -119,7 +119,7 @@ func richExecutorInput() ExecutorInput {
 			// AND THE CODE TOOLS, so the guidance they gate renders — the
 			// reads' and the writes'.
 			"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log", "code_blame",
-			"code_get_change", "code_commit_files", "code_create_repo",
+			"code_get_change", "code_commit_files", "code_create_repo", "code_merge_change",
 		},
 		Workers:             "- `researcher` — digs; returns `findings`",
 		CounterpartyProfile: "Ana prefers bullet points — and emoji 👍",

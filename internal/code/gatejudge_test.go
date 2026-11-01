@@ -409,3 +409,43 @@ func TestTheMergeAuthorityIsTheStrictestRuleAndTheFloor(t *testing.T) {
 		}
 	}
 }
+
+// A GATE THAT KEEPS A SEAT'S BRANCH WINS: a merge deletes a source in a
+// seat's namespace unless a gate matching its target keeps it — the one of
+// the two answers no later write undoes — so one rule saying `none` keeps it
+// whatever another says, a value this build does not know keeps it, and a
+// target no gate matches keeps nothing (its merge's caller deletes the seat's
+// branch).
+//
+// Mutation: KeepsSource ORed with `false` → the none and unknown cases, red.
+func TestAGateThatKeepsASeatsBranchWins(t *testing.T) {
+	keeping := bareGate()
+	keeping.DeleteSource = code.DeleteNone
+	unknown := bareGate()
+	unknown.DeleteSource = "archive"
+	rule := func(pattern string, g code.MergeGate) code.Protection {
+		return code.Protection{PushRule: code.PushRule{Pattern: pattern, DirectPush: code.DirectPersons}, Gate: &g}
+	}
+	for _, tc := range []struct {
+		name  string
+		rules []code.Protection
+		want  bool
+	}{
+		{"seats deletes", []code.Protection{rule(mainRef, bareGate())}, false},
+		{"none keeps", []code.Protection{rule(mainRef, keeping)}, true},
+		{"none beside seats keeps", []code.Protection{rule(mainRef, bareGate()), rule("refs/heads/*", keeping)},
+			true},
+		{"an unknown value keeps", []code.Protection{rule(mainRef, unknown)}, true},
+		{"an ungated target keeps nothing", []code.Protection{rule("refs/heads/release", keeping)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := code.GateRulesOf(tc.rules, mainRef, "")
+			if err != nil {
+				t.Fatalf("GateRulesOf: %v", err)
+			}
+			if r.KeepsSource != tc.want {
+				t.Errorf("KeepsSource = %v, want %v", r.KeepsSource, tc.want)
+			}
+		})
+	}
+}

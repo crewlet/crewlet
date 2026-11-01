@@ -91,18 +91,19 @@ const (
 func ChangeWrites() []string {
 	return []string{CodeOpenChangeTool, CodeUpdateChangeTool, CodeCloseChangeTool, CodeRequestReviewTool,
 		CodeReviewChangeTool, CodeCommentOnChangeTool, CodeResolveFindingTool, CodeApplySuggestionsTool,
-		CodeRebaseChangeTool}
+		CodeRebaseChangeTool, CodeMergeChangeTool, CodeDequeueChangeTool}
 }
 
 // changeWriteTools are the change writes over deps, in [ChangeWrites]' order:
 // a change's lifecycle, then its conversation (codechangeconverse.go), then
-// its findings' suggestions applied (codechangesuggest.go) and the change
-// rebased onto its target (codechangerebase.go).
+// its findings' suggestions applied (codechangesuggest.go), the change
+// rebased onto its target (codechangerebase.go), and merged into it or taken
+// out of its queue (codechangemerge.go).
 func changeWriteTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{&codeOpenChange{deps: deps}, &codeUpdateChange{deps: deps},
 		&codeCloseChange{deps: deps}, &codeRequestReview{deps: deps}, &codeReviewChange{deps: deps},
 		&codeCommentOnChange{deps: deps}, &codeResolveFinding{deps: deps}, &codeApplySuggestions{deps: deps},
-		&codeRebaseChange{deps: deps}}
+		&codeRebaseChange{deps: deps}, &codeMergeChange{deps: deps}, &codeDequeueChange{deps: deps}}
 }
 
 // changeVerb is the verb a change write's operation is named by (m3-w1's op

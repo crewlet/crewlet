@@ -45,6 +45,7 @@ const (
 	RefusalForbidden          = mcp.RefusalForbidden
 	RefusalStaleVersion       = mcp.RefusalStaleVersion
 	RefusalConflict           = mcp.RefusalConflict
+	RefusalNotReady           = mcp.RefusalNotReady
 	RefusalExists             = mcp.RefusalExists
 	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
 	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget

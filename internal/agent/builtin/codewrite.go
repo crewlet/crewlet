@@ -117,7 +117,7 @@ func CodeWrites() []string {
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
-// tier is never offered: all ten where the tier caps the seat below write
+// tier is never offered: every one where the tier caps the seat below write
 // ([code.Tier.Cap]) — read_only, which is also an unset tier, review, and a
 // value no build writes, which caps at nothing — and none at full_access.
 //
@@ -163,6 +163,9 @@ type CodeWriter interface {
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
 	Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
+	// Queue asks the repository's committer to decide one write of a
+	// target's merge queue — a dequeue, here (code.QueueProposal).
+	Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 }
 
 // codeWriteTools are the writes over deps, in [CodeWrites]' order.
