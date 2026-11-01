@@ -251,7 +251,7 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		_ = fw.write(frameStderr, []byte(fmt.Sprintf("crewlet: %s at %s\n", sess.synced.Repo.Name,
 			ld.Result.position)))
 	}
-	if line := changeLine(ld.Change, ld.Result, sess.synced.Repo.Name); line != "" {
+	if line := changeLine(ld.Change, ld.Result, sess.synced.Repo.Name, s.o.ExternalBase); line != "" {
 		_ = fw.write(frameStderr, []byte("crewlet: "+line+"\n"))
 	}
 	_ = fw.write(frameExit, []byte{0})

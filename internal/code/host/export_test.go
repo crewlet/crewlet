@@ -57,11 +57,14 @@ var (
 )
 
 // ChangeAnswerLines is every line a push's change is told in, as the concept
-// page's table prints it: a change named by placeholders (<repo>!<n>), and a
-// refusal by its code with its sentence left out, the sentences being the
-// decide's and the receiver's to word.
+// page's table prints it: a change named and its page addressed by
+// placeholders (<repo>!<n>, on <api.external_url>), and a refusal by its code
+// with its sentence left out, the sentences being the decide's and the
+// receiver's to word. The bare forms are a host told no base, which no engine
+// node serving a push is, and the page does not print them.
 func ChangeAnswerLines() []string {
-	lines := []string{fmt.Sprintf(changeOpenedLine, "<repo>!<n>"), fmt.Sprintf(changeUpdatedLine, "<repo>!<n>"),
+	const name, page = "<repo>!<n>", "<api.external_url>/dashboard#/code/repos/<repo>/changes/<n>"
+	lines := []string{fmt.Sprintf(changeOpenedLine, name, page), fmt.Sprintf(changeUpdatedLine, name, page),
 		changeUnlanded, changePending, changeUnknown}
 	for _, r := range code.PushChangeRefusals() {
 		lines = append(lines, strings.TrimSpace(fmt.Sprintf(changeRefusedLine, r, "")))

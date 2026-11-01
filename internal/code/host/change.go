@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -250,9 +251,18 @@ func resolvedChange(asked bool, tentative *code.ChangeAnswer, out code.PushOutco
 const (
 	// changeOpenedLine and changeUpdatedLine name the change a push opened,
 	// and the live one its source already headed, by its name on its
-	// repository (code.ChangeRef).
-	changeOpenedLine  = "change %s opened"
-	changeUpdatedLine = "change %s updated"
+	// repository (code.ChangeRef) and the address of its page (changeLink):
+	// a person who pushed with `-o change` opens the change from the line
+	// git printed, where its reviewers, its findings and its merge are.
+	changeOpenedLine  = "change %s opened: %s"
+	changeUpdatedLine = "change %s updated: %s"
+	// changeOpenedBare and changeUpdatedBare are the same two lines from a
+	// host told no address of the deployment (Options.ExternalBase): the
+	// change's name, and no link that could not be opened. No engine node
+	// that serves a push is one — every push reaches it through the API
+	// listener, which `api.external_url` is required beside.
+	changeOpenedBare  = "change %s opened"
+	changeUpdatedBare = "change %s updated"
 	// changeRefusedLine is why a push opened none, its code and sentence.
 	changeRefusedLine = "change not opened: %s: %s"
 	// changeUnlanded is a push that did not land, and so opened nothing.
@@ -280,7 +290,10 @@ const (
 //   - for one that did not land, that nothing of it did (changeUnlanded);
 //   - and for one that landed with no word of its change, that it is not
 //     known (changeUnknown).
-func changeLine(c changeAsk, r pushResult, repo string) string {
+//
+// base is the address a person reaches the deployment at
+// (Options.ExternalBase), on which the change's page is linked.
+func changeLine(c changeAsk, r pushResult, repo, base string) string {
 	if !c.asked {
 		return ""
 	}
@@ -294,8 +307,29 @@ func changeLine(c changeAsk, r pushResult, repo string) string {
 		return changeUnlanded
 	case a == nil || a.ChangeID == "" || a.Number < 1:
 		return changeUnknown
-	case a.Opened:
-		return fmt.Sprintf(changeOpenedLine, code.ChangeRef(repo, a.Number))
 	}
-	return fmt.Sprintf(changeUpdatedLine, code.ChangeRef(repo, a.Number))
+	name, link := code.ChangeRef(repo, a.Number), changeLink(base, repo, a.Number)
+	switch {
+	case link == "" && a.Opened:
+		return fmt.Sprintf(changeOpenedBare, name)
+	case link == "":
+		return fmt.Sprintf(changeUpdatedBare, name)
+	case a.Opened:
+		return fmt.Sprintf(changeOpenedLine, name, link)
+	}
+	return fmt.Sprintf(changeUpdatedLine, name, link)
+}
+
+// changeLink is the address of change number on repo's page on the
+// deployment's base — `<api.external_url>/dashboard#/code/repos/web/changes/42`
+// — and "" on a host told no base. The ONE place the link git prints is
+// composed: the dashboard's shell (auth.PathDashboard, which every link a
+// person follows points at, as an invitation's and an artifact's do) and the
+// change's route in it (code.ChangeAddress, which the dashboard's links suite
+// holds to its router).
+func changeLink(base, repo string, number int64) string {
+	if base == "" {
+		return ""
+	}
+	return base + auth.PathDashboard + code.ChangeAddress(repo, number)
 }

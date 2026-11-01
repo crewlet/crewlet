@@ -1262,7 +1262,8 @@ one](../guides/code.md#open-a-change-from-a-push)).
   no branch or of several, and a change the rules of an open refuse — a target
   that is the source, no live target, a source at its target's commit — leave
   the push to land as one that asked for nothing. git prints one line of what
-  became of the change, `remote: crewlet: change web!42 opened` or why none was
+  became of the change — `remote: crewlet: change web!42 opened:` and the
+  link to its page on `api.external_url`, or why none was
   ([What git prints](#when-a-push-asked-for-a-change)).
 
 ### Revisions
@@ -7058,10 +7059,14 @@ not by its refs alone. Where the push landed and its change did not open, a
 push of the same commit again moves nothing and asks for nothing: fix what the
 line says and push the branch's next commit with `-o change`.
 
+A line naming a change links its page on the dashboard, on the address people
+reach the deployment at (`api.external_url`), so the change a push opened or
+revised is one click from the terminal that pushed it.
+
 | What happened | What git prints | What to do |
 |---|---|---|
-| The push opened a change | `remote: crewlet: change <repo>!<n> opened` | Nothing: the change proposes the branch into its target, and the branch's next push is its next revision. |
-| The branch already headed a live change, which the push revised | `remote: crewlet: change <repo>!<n> updated` | Nothing: the push is the change's next revision. The options shaped nothing — they shape a change a push opens. |
+| The push opened a change | `remote: crewlet: change <repo>!<n> opened: <api.external_url>/dashboard#/code/repos/<repo>/changes/<n>` | Nothing: the change proposes the branch into its target, and the branch's next push is its next revision. Open the link to ask for its review. |
+| The branch already headed a live change, which the push revised | `remote: crewlet: change <repo>!<n> updated: <api.external_url>/dashboard#/code/repos/<repo>/changes/<n>` | Nothing: the push is the change's next revision. The options shaped nothing — they shape a change a push opens. |
 | The options are no change's — a key the `change` options do not include, which the line names, a value its option refuses, a key given twice — or the push carries so many refs beside the branch that its record cannot hold the change too | `remote: crewlet: change not opened: bad_option: …` | Fix the option the line names; push the change's branch alone. |
 | The push set no branch — it pushed only tags or deletions — or its update of the branch was refused or found the branch already there, which the line says | `remote: crewlet: change not opened: no_source: …` | Push a commit to the branch with `-o change`; for a refused update, its own line says why. |
 | The push set several branches, and a change proposes one | `remote: crewlet: change not opened: ambiguous_source: …` | Push the change's branch alone with `-o change`. |

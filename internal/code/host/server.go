@@ -219,8 +219,9 @@ var Production = Timing{
 // receive.keepAlive default.
 const keepalive = 5 * time.Second
 
-// Options are how a Server is built. Every field but Current, Faults, Logger,
-// Metrics and Now is required, and New refuses a missing one by name.
+// Options are how a Server is built. Every field but Current, ExternalBase,
+// Faults, Logger, Metrics and Now is required, and New refuses a missing one
+// by name.
 //
 // FETCHED IS REQUIRED LIKE AUDIT: a code host that served a `visibility: unit`
 // repository's contents to somebody and recorded nothing would answer "who
@@ -291,6 +292,14 @@ type Options struct {
 	// NodeID is this node, which a proposal names as the one that received
 	// the push.
 	NodeID string
+	// ExternalBase is where a person reaches the deployment —
+	// `api.external_url` without its trailing slash, the engine's
+	// config.API.ExternalBase() — on which the line git prints for a push's
+	// change links the change's page (changeLink). Empty is a host told no
+	// address, which names the change alone: never an engine node that
+	// serves a push, since every push reaches it through the API listener
+	// `api.external_url` is required beside.
+	ExternalBase string
 	// Timing is every scaled duration (Production in the engine).
 	Timing Timing
 	// Faults is nil in production (internal/code/codefault).

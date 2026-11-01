@@ -13,6 +13,11 @@ import (
 // RepoName is the repository every case declares.
 const RepoName = "acme"
 
+// ExternalBase is the deployment's address every git node's host is told, as
+// the engine tells its own `api.external_url`: the base the line git prints
+// for a push's change links the change's page on.
+const ExternalBase = "https://crewlet.example.com"
+
 // Settings are what every case declares RepoName with: main, protected
 // `direct_push: persons`, owned by the unit ENG, and indexed for search — what
 // a declaration leaving search unset is recorded with.

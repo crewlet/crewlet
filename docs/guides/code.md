@@ -291,10 +291,12 @@ git push -o change origin feature
 ```
 
 The change proposes `feature` into the repository's default branch, titled by
-the subject of the commit you pushed, and git prints which one it opened:
+the subject of the commit you pushed, and git prints which one it opened, with
+the link to its page on the dashboard — on `api.external_url`, the address you
+reach the deployment at:
 
 ```text
-remote: crewlet: change web!42 opened
+remote: crewlet: change web!42 opened: https://crewlet.example.com/dashboard#/code/repos/web/changes/42
 ```
 
 It opens **in the push's own record**, so the commit and the change land
@@ -311,8 +313,8 @@ together or not at all. More options shape it:
 - **Push the change's branch alone.** A change proposes one branch, so a push
   that asks for one sets exactly one; tags beside it are fine.
 - **A branch heads one live change.** A push to a branch that already heads an
-  open change revises it — `change web!42 updated` — and opens no other: the
-  options shape only a change a push opens.
+  open change revises it — `change web!42 updated`, and the same link — and
+  opens no other: the options shape only a change a push opens.
 - **The push lands whatever becomes of its change.** An option the engine does
   not read, a target that is no branch, or a branch already at its target's
   commit leaves the push to land with no change, and git says why in the same

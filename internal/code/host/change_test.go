@@ -3,6 +3,7 @@ package host_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -39,14 +40,37 @@ func remoteSaid(res codetest.Pushed, line string) bool {
 	return strings.Contains(res.Stderr, "remote: crewlet: "+line)
 }
 
+// remoteRest is the rest of the line git printed as `remote: crewlet: `
+// then prefix, trimmed of the padding git's sideband ends a remote line with,
+// and whether git printed one.
+func remoteRest(res codetest.Pushed, prefix string) (string, bool) {
+	for line := range strings.SplitSeq(res.Stderr, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "remote: crewlet: "+prefix); ok {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return "", false
+}
+
+// changePage is the address of change n of the case's repository's page,
+// as git is to print it: the deployment's base the host was told, the
+// dashboard's shell and the change's route — spelled out here rather than
+// built by the function under test.
+func changePage(n int64) string {
+	return fmt.Sprintf("%s/dashboard#/code/repos/%s/changes/%d", codetest.ExternalBase, codetest.RepoName, n)
+}
+
 // THE RELAY READS PUSH OPTIONS FROM PROC-RECEIVE: a push carrying `-o change`
 // and the options that shape it — beside an option of a forge's, read by
 // nobody — lands, and its change is opened from what receive-pack handed the
 // hook: titled, described and targeted as the options say, from the branch
-// the push set, its pusher its owner; and git prints which change it opened.
+// the push set, its pusher its owner; and git prints which change it opened,
+// linking its page. The branch's next push names the same change, revised,
+// and links the same page.
 //
-// Mutation: answer git's version block `version=1` alone, and git hands the
-// hook no option: no change opens.
+// Mutations: answer git's version block `version=1` alone, and git hands the
+// hook no option: no change opens; print the opened line with no link — red;
+// print the updated line with no link — red.
 func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -60,8 +84,8 @@ func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 	if !res.OK("refs/heads/feature") {
 		t.Fatalf("a push with options did not land: %s", res)
 	}
-	if !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
-		t.Fatalf("git printed no change opened: %s", res)
+	if link, ok := remoteRest(res, "change "+codetest.RepoName+"!1 opened: "); !ok || link != changePage(1) {
+		t.Fatalf("git printed no change opened linking %s (%q, %v): %s", changePage(1), link, ok, res)
 	}
 	got, ok := changeNumbered(t, c, 1)
 	if !ok {
@@ -72,6 +96,15 @@ func TestTheRelayReadsPushOptionsFromProcReceive(t *testing.T) {
 		got.OwnerKind != code.PartyPerson || got.State != code.ChangeStateOpen {
 		t.Fatalf("the change the push opened is %+v, want ceo's change from feature into release at %s, as its "+
 			"options say", got.ChangeRow, head)
+	}
+
+	p.Commit(work, map[string]string{"README.md": "three\n"}, "Retry the upload twice")
+	res = p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:refs/heads/feature")
+	if !res.OK("refs/heads/feature") {
+		t.Fatalf("the change's next push did not land: %s", res)
+	}
+	if link, ok := remoteRest(res, "change "+codetest.RepoName+"!1 updated: "); !ok || link != changePage(1) {
+		t.Fatalf("git printed no change updated linking %s (%q, %v): %s", changePage(1), link, ok, res)
 	}
 }
 

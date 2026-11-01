@@ -47,6 +47,10 @@ export const FILL: Record<string, string> = {
   "{domain}": "tracker",
   // A CHANGE'S NUMBER on its repository, from 1 (`#/code/repos/{name}/changes/{n}`).
   "{n}": "42",
+  // The same two as prose writes them, in the line git prints for a push's
+  // change (`change <repo>!<n> opened: …#/code/repos/<repo>/changes/<n>`).
+  "<repo>": "web",
+  "<n>": "42",
   // A COMMIT'S WHOLE ID (`#/code/repos/{name}/commits/{sha}`).
   "{sha}": "0123456789abcdef0123456789abcdef01234567",
 };

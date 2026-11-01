@@ -297,7 +297,9 @@ var classified = map[string]struct {
 	"host.Options.Boxes": {seamNone, "a coding box's run tokens, the keyring's, and its run's rows, " +
 		"coordination state; neither is an epoch's value — the box's grant reaches the epoch only " +
 		"through Roster"},
-	"host.Options.NodeID":  {seamNone, "this node's name, which a proposal and a refusal name"},
+	"host.Options.NodeID": {seamNone, "this node's name, which a proposal and a refusal name"},
+	"host.Options.ExternalBase": {seamNone, "the deployment's address a change's link is printed on: " +
+		"Tier A's api.external_url, fixed at boot, never an epoch's value"},
 	"host.Options.Timing":  {seamNone, "the host's scaled waits"},
 	"host.Options.Faults":  {seamNone, "the suite's fault script, nil in production"},
 	"host.Options.Logger":  {seamNone, "where the host logs"},

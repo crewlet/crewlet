@@ -2,7 +2,9 @@ package code
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -390,6 +392,27 @@ func OpenChangeID(opID string) string {
 // ChangeRef is how a change is named to a person: its repository's name, a
 // bang and its number — web!42.
 func ChangeRef(repo string, number int64) string { return fmt.Sprintf("%s!%d", repo, number) }
+
+// changeAddress is the dashboard's address of a change, its route's own
+// placeholders standing for the repository's name and the change's number.
+//
+// ONE SPELLING, WRITTEN AS THE ROUTE: dashboard/src/app/links.test.ts reads
+// every string literal of the engine's Go for a dashboard address and holds
+// it to the router the dashboard runs, filling `{name}` and `{n}` from the
+// same table its route table is filled from — so a change page moved or
+// renamed fails that suite here, rather than leaving git printing a link to
+// a Not Found under every push that opened a change.
+const changeAddress = "#/code/repos/{name}/changes/{n}"
+
+// ChangeAddress is the dashboard's address of change number on repo — the
+// fragment its shell routes (`#/code/repos/web/changes/42`), the page the
+// change's name (web!42) is the short form of. The name is path-escaped,
+// which the dashboard's router undoes, so the address names the repository
+// whatever its grammar comes to admit.
+func ChangeAddress(repo string, number int64) string {
+	return strings.NewReplacer("{name}", url.PathEscape(repo), "{n}", strconv.FormatInt(number, 10)).
+		Replace(changeAddress)
+}
 
 // DeliveredTitle is the title of a change opened from branch, a branch's
 // short name, without a title of its own: subject — the subject of head, the

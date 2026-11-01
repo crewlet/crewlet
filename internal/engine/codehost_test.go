@@ -400,6 +400,41 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	}
 }
 
+// A PUSH'S CHANGE IS LINKED ON THE DEPLOYMENT'S ADDRESS: the founder pushes a
+// branch with `-o change` through the engine's own host, and git prints the
+// change it opened with the link to its page on `api.external_url` — the
+// address the engine took from its Tier A at construction, which the host is
+// built with, so a node serving a push never names a change and no page.
+//
+// Mutation: build the host with no ExternalBase (buildCodeHost) — git prints
+// the change's name alone, red.
+func TestAPushsChangeIsLinkedOnTheDeploymentsAddress(t *testing.T) {
+	t.Parallel()
+	b := gitNodeBootstrap(t, nil)
+	b.API.ExternalURL = "https://crewlet.example.com/"
+	e, err := newGitNode(t, b, gitCompany)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	url := serveWeb(t, b, e)
+
+	founder := codetest.PersonWithToken(t, opsToken)
+	dir := founder.Clone(url)
+	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
+	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
+		t.Fatalf("the founder's push did not land:\n%s", pushed)
+	}
+	founder.Commit(dir, map[string]string{"README.md": "# web, retried\n"}, "Retry the upload")
+	pushed := founder.PushArgs(t.Context(), dir, []string{"-o", "change"}, url, "HEAD:refs/heads/feature")
+	if !pushed.OK("refs/heads/feature") {
+		t.Fatalf("the founder's push with -o change did not land:\n%s", pushed)
+	}
+	const want = "remote: crewlet: change web!1 opened: https://crewlet.example.com/dashboard#/code/repos/web/changes/1"
+	if !strings.Contains(pushed.Stderr, want) {
+		t.Fatalf("git printed no %q:\n%s", want, pushed)
+	}
+}
+
 // A GIT NODE ANSWERS THE FLEET'S CODE STATUS, on the broker, as a peer asks it:
 // a question on topics.CodeStatus naming a repository is answered by the node
 // serving the code host with its host's own status — the node, its cache, and
