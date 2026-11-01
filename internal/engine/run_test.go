@@ -1036,7 +1036,8 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 // runtime from boot: the identity estate its first person is invited into, on
 // a log its first restart emptied. The vendor pairing is the second row
 // because it is the case the rule before that one missed: a company on Jira
-// and Confluence keeps no tracker or pages log, and still keeps its people.
+// and Confluence writes nothing to Worklet or Doclet — though every data node
+// applies their logs all the same — and still keeps its people.
 //
 // Mutation: ask the stream only when there is a company, and the first row
 // builds an engine; move the question below OpenBackends, and the store file
