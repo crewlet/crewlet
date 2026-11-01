@@ -1925,7 +1925,7 @@ func sandboxMCP(
 			// it ([serverSpec]); out of the scope, like a server turned off.
 			if problem := config.MCPAddressProblem(values.url); problem != "" {
 				log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
-					"detail", "the coding agent is not given this server: its url "+problem)
+					"detail", "the executor is not given this server: its url "+problem)
 				continue
 			}
 		}
