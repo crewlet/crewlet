@@ -748,7 +748,11 @@ type ChangeDue struct {
 // inside its setup budget, and a run that needs more is a task to split — so a
 // read of a run's pushes scans at most this many repositories' pushes above its
 // launch. The bound a run's repositories are held to where they are granted
-// may not pass it: a run given more could not be read whole.
+// (sandbox.MaxRunRepos) may not pass it: a run given more could not be read
+// whole, and a refused read reaches the run only as the sentence that its
+// pushes were unread — so internal/engine's
+// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
+// other, the one package that imports both.
 const MaxRunRepos = 8
 
 // RefQuery resolves refs of one repository — EVERY ONE IN ONE READ: one

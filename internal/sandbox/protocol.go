@@ -394,6 +394,12 @@ func mountsFit(placement Placement, mounts []Mount) error {
 // would share a box its template sized for one coding agent. In turn, the
 // clones cost a run with many repositories time; at once, they would cost
 // its box memory.
+//
+// NEVER PAST code.MaxRunRepos, the most a read of a run's pushes names: a run
+// given more would have every collected result's "what it pushed" refused,
+// seen only as the sentence that its push record was unread. internal/engine's
+// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
+// other.
 const MaxRunRepos = 8
 
 // MaxConePaths is the most directories one repository's cone names

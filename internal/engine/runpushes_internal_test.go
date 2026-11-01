@@ -105,6 +105,42 @@ func cmdNG(ref, from, to string) code.Command {
 	return code.Command{Ref: ref, Old: from, New: to, Result: code.ResultNG, Reason: "stale"}
 }
 
+// A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the bound a
+// run's repositories are admitted to — run_sandbox's `repos` and the launch's
+// grants, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
+// name, code.MaxRunRepos, which the code host refuses a read past. The two are
+// spelled in two packages that do not import each other, and a raise of the
+// first alone would refuse the "what it pushed" read of every collected run
+// given more, surfacing only as the sentence that its push record was unread.
+// Here, the one package that imports both.
+//
+// Mutation: sandbox.MaxRunRepos raised to 9 → red.
+func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
+	t.Parallel()
+	if sandbox.MaxRunRepos > code.MaxRunRepos {
+		t.Errorf("a run may be given %d repositories (sandbox.MaxRunRepos) and a read of its pushes may name "+
+			"at most %d (code.MaxRunRepos): a run given its most would have its pushes refused",
+			sandbox.MaxRunRepos, code.MaxRunRepos)
+	}
+	// AND THE READ THE COORDINATOR MAKES FOR SUCH A RUN NAMES THEM ALL: every
+	// repository it may push to, none dropped to fit.
+	run := sandbox.PendingRun{TurnID: "t1", LaunchID: runLaunch, AgentHandle: "swe",
+		CodeLaunch: runLaunchAt.String()}
+	for i := range sandbox.MaxRunRepos {
+		run.Repos = append(run.Repos, sandbox.RunRepo{Repo: fmt.Sprintf("r%d", i),
+			RepoID: fmt.Sprintf("0190d8f0-0000-7000-8000-0000000001%02x", i), Branch: "seats/swe/ENG-42",
+			Access: sandbox.RepoWrite})
+	}
+	reader := &pagedReader{pages: []code.ReadAnswer{{}}}
+	if _, _, err := readerOf(reader).Pushed(t.Context(), run); err != nil {
+		t.Fatalf("read the pushes of a run given %d repositories: %v", len(run.Repos), err)
+	}
+	if len(reader.asked) != 1 || len(reader.asked[0].RunPushes.Repos) != sandbox.MaxRunRepos {
+		t.Errorf("the read of a run given %d repositories asked %+v, want one read naming every one",
+			sandbox.MaxRunRepos, reader.asked)
+	}
+}
+
 // WHAT A RUN PUSHED IS READ FROM ITS LAUNCH'S PUSH ROWS, every page to the
 // last: the first LINEARIZABLE — one barrier a collected run, so "it pushed
 // nothing" is never a stale answer — and every later one at session at the
