@@ -30,7 +30,7 @@ func failedCheck(name string, attempt int, oid, state, owner, ownerAgent string)
 		Purpose: "head", ChangeID: "change-" + owner, Target: "refs/heads/main", State: state, Reason: "exit",
 		Placement: "container", Required: true}
 	if state == "failed" {
-		c.Owner, c.OwnerAgent = owner, ownerAgent
+		c.Owner, c.Agent = owner, ownerAgent
 		c.OwnerKind = "agent"
 		if ownerAgent == "" {
 			c.OwnerKind = "person"
@@ -44,7 +44,7 @@ func failedCheck(name string, attempt int, oid, state, owner, ownerAgent string)
 // ending that fails the head, so its writer names the owner.
 func erroredPastRequeue(name, oid, owner, ownerAgent string) types.CodeCheckFinished {
 	c := failedCheck(name, 3, oid, "errored", owner, ownerAgent)
-	c.Reason, c.Owner, c.OwnerKind, c.OwnerAgent = "runner_lost", owner, "agent", ownerAgent
+	c.Reason, c.Owner, c.OwnerKind, c.Agent = "runner_lost", owner, "agent", ownerAgent
 	return c
 }
 
@@ -77,11 +77,15 @@ func ejected(entry, owner, ownerAgent, enqueuer string) types.CodeQueueEjected {
 // — and a passing check and a failure of a person's change count on nobody; a
 // failure outside the window counts on another day. A failed check landing
 // moves the day's fingerprint, which is what makes the publisher derive the
-// day again.
+// day again — and an ending that names no seat on its promoted column moves
+// neither the count nor the fingerprint.
 //
 // Mutation: count the records rather than the attempts (key the item by the
 // event's id) — dev failed four, red; leave code_check_finished out of
-// usageEventTypes — the fingerprint does not move, red.
+// usageRecords — the fingerprint does not move, red; drop the check's
+// predicate from usageRecords — the passes move the fingerprint, red; decide
+// on the payload's agent rather than the column — the unnamed ending counts,
+// red.
 func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -121,6 +125,33 @@ func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 	if after == before {
 		t.Fatal("failed checks landed and the day's fingerprint did not move: the publisher would never " +
 			"derive it again")
+	}
+
+	// ENDINGS THAT NAME NO SEAT ARE NO DAY'S: a pass, a candidate's failure
+	// (which fails no change's head) and an ending whose promoted column names
+	// nobody, whatever its payload says, leave the count and the fingerprint
+	// where they were — so the checks a company runs never have the publisher
+	// derive a day again, and the count decides on the column, never by
+	// parsing each ending's payload.
+	candidate := failedCheck("unit", 1, "oid-d", "failed", "", "")
+	candidate.Purpose, candidate.ChangeID, candidate.Owner, candidate.OwnerKind = "candidate", "", "", ""
+	unnamed := gateRecord(t, "c-11", at(10), failedCheck("vet", 1, "oid-b", "failed", "dev", "a-dev"))
+	delete(unnamed.Tags, "agent_id")
+	for i, rec := range []store.EventRecord{
+		gateRecord(t, "c-9", at(8), failedCheck("unit", 3, "oid-b", "passed", "dev", "a-dev")),
+		gateRecord(t, "c-10", at(9), candidate),
+		unnamed,
+	} {
+		if err := log.Append(t.Context(), rec); err != nil {
+			t.Fatalf("append the ending %d no day counts: %v", i, err)
+		}
+	}
+	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{ChecksFailed: 3}) {
+		t.Fatalf("after endings naming no seat on its column the day counts %+v, want dev's three still", got)
+	}
+	if again, err := db.UsageMark(t.Context(), w); err != nil || again != after {
+		t.Fatalf("endings naming no seat moved the day's fingerprint from %+v to %+v (%v): every pass "+
+			"would have the publisher derive the whole day again", after, again, err)
 	}
 }
 

@@ -278,7 +278,22 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the ten records a day is derived from, taken from their
+// usageRecord is one record a day is derived from: its type, and — for a type
+// most of whose rows no day counts — the predicate on a row `e`'s promoted
+// columns that keeps the rows a day does count, "" for every row of it.
+type usageRecord struct {
+	kind  string
+	where string
+}
+
+// seatNamedSQL keeps the rows that name the seat they are about on the
+// promoted `agent_id` column: of a check's endings, the ones that fail a
+// change's head and name its owner's seat ([types.CodeCheckFinished.Agent]).
+// A COLUMN, never the payload, so a row no day counts is passed over without
+// its JSON being read.
+const seatNamedSQL = `e.agent_id != ''`
+
+// usageRecords are the ten records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions and
 // the auxiliary records the spend is summed from, the completions a turn's
 // figures are read off, the turn's SUMMARY record (`agent_turn_completed`),
@@ -293,31 +308,54 @@ type UsageMark struct {
 // ([DB.usageLegacyTurns]), whether it failed off the summary, and a summary
 // row that lands in a later custody batch than its turn's end must move the
 // fingerprint — and the settle's mark — when it does.
-func usageEventTypes() []any {
-	return []any{
-		phaseCompleted,
-		auxiliarySpendType,
-		turnCompleted,
-		types.AgentTurnCompleted{}.EventType(),
-		types.KnowledgeRead{}.EventType(),
-		types.CodeFetched{}.EventType(),
-		types.ChangeOpened{}.EventType(),
-		types.ReviewSubmitted{}.EventType(),
-		types.CodeCheckFinished{}.EventType(),
-		types.CodeQueueEjected{}.EventType(),
+//
+// A CHECK'S ENDINGS ONLY WHERE THEY NAME A SEAT ([seatNamedSQL]): every push of
+// every change ends each check its file defines, passes and candidate, tip
+// and bisect checks included, and only an ending that fails a change's head is
+// counted. Fingerprinted whole, every pass would move today's mark and have the
+// publisher derive the whole day again on its next tick for a figure that did
+// not change — a cost that followed the checks a company runs rather than what
+// its day counts. The predicate is on a column the type's index does not carry,
+// so the fingerprint reads each ending's row for it, where it walked the index
+// alone: a seek an ending a tick, against a derive of the whole day a pass.
+func usageRecords() []usageRecord {
+	return []usageRecord{
+		{kind: phaseCompleted},
+		{kind: auxiliarySpendType},
+		{kind: turnCompleted},
+		{kind: types.AgentTurnCompleted{}.EventType()},
+		{kind: types.KnowledgeRead{}.EventType()},
+		{kind: types.CodeFetched{}.EventType()},
+		{kind: types.ChangeOpened{}.EventType()},
+		{kind: types.ReviewSubmitted{}.EventType()},
+		{kind: types.CodeCheckFinished{}.EventType(), where: seatNamedSQL},
+		{kind: types.CodeQueueEjected{}.EventType()},
 	}
 }
 
-// usageTypesIn is `event_type IN (…)` over [usageEventTypes], and its
-// arguments.
-func usageTypesIn() (string, []any) {
-	kinds := usageEventTypes()
-	holders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
-	return "event_type IN (" + holders + ")", slices.Clone(kinds)
+// usageRowsSQL is the predicate on a row `e` that holds it to the rows a day
+// is derived from — `e.event_type IN (…)` over the [usageRecords] that count
+// every row of their type, OR a term of its own for each that counts some —
+// and its arguments.
+func usageRowsSQL() (string, []any) {
+	var every, some []any
+	var terms []string
+	for _, r := range usageRecords() {
+		if r.where == "" {
+			every = append(every, r.kind)
+			continue
+		}
+		terms = append(terms, "(e.event_type = ? AND "+r.where+")")
+		some = append(some, r.kind)
+	}
+	holders := strings.TrimSuffix(strings.Repeat("?,", len(every)), ",")
+	terms = append([]string{"e.event_type IN (" + holders + ")"}, terms...)
+	return "(" + strings.Join(terms, " OR ") + ")", append(every, some...)
 }
 
 // usageMarkSQL is the statement [DB.UsageMark] fingerprints a window's events
-// with, and its arguments.
+// with, and its arguments: the rows [usageRecords] counts and no other, so a
+// row no day counts never moves it.
 //
 // ONE BRANCH PER EVENT TYPE rather than `event_type IN (…)`, because the
 // planner seeks only the type for an IN list and walks every row of each type
@@ -326,11 +364,15 @@ func usageTypesIn() (string, []any) {
 func usageMarkSQL(w UsageWindow) (string, []any) {
 	var branches []string
 	var args []any
-	for _, kind := range usageEventTypes() {
+	for _, r := range usageRecords() {
+		where := ""
+		if r.where != "" {
+			where = "\n\t\t   AND " + r.where
+		}
 		branches = append(branches, `SELECT e.event_time FROM crewlet_events AS e
-		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?`+where+`
 		   AND `+keptRowSQL)
-		args = append(args, kind, EncodeTime(w.Start), EncodeTime(w.End))
+		args = append(args, r.kind, EncodeTime(w.Start), EncodeTime(w.End))
 	}
 	return `SELECT COUNT(*), COALESCE(MAX(event_time), 0) FROM (
 		` + strings.Join(branches, "\n\t\t UNION ALL ") + `)`, args
@@ -427,16 +469,17 @@ func (d *DB) ClearUsageRederive(ctx context.Context, seq int64) (bool, error) {
 // settle never walks the log.
 //
 // OF A USAGE ROW ONLY: a batch of rows no day is derived from — a
-// notification's outcome, a chat message — changes no day, and marking it
-// would have the publisher derive every day back to it for nothing.
+// notification's outcome, a chat message, a check's ending that names no seat —
+// changes no day ([usageRowsSQL]), and marking it would have the publisher
+// derive every day back to it for nothing.
 func markUsageRederiveSQL(batchID string) (string, []any) {
-	types, kinds := usageTypesIn()
+	counted, args := usageRowsSQL()
 	return `SELECT MIN(e.event_time)
 	  FROM custody_unsettled_rows AS u CROSS JOIN crewlet_events AS e
 	 WHERE u.batch_id = ?
 	   AND e.event_time = u.row_time
 	   AND e.event_id = u.row_id
-	   AND e.` + types, append([]any{batchID}, kinds...)
+	   AND ` + counted, append([]any{batchID}, args...)
 }
 
 // usageMarkDay is a mark's row: the UTC day its oldest instant falls on, in
@@ -1127,9 +1170,20 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 // (usage.CodeDay joins its publications by max), and a count a correction
 // lowered would stand only where the node had not yet published the day.
 //
-// READ OUT OF THE PAYLOAD, never promoted columns: a seat opens and reviews at
-// most a change a turn, so a day holds a few of these records against the tens
-// of thousands of spend and read rows node/0052 promoted columns for.
+// WHAT IS COUNTED IS READ OUT OF THE PAYLOAD, never columns of its own: a seat
+// opens and reviews at most a change a turn, a change is ejected at most once
+// an entry, and a check fails a head only where its owner has code to fix, so
+// a day counts a few of these rows against the tens of thousands of spend and
+// read rows node/0052 promoted columns for. A check's ENDINGS are the one
+// record here that is not rare — every push of every change ends each check
+// its file defines, passes included — so which of them are counted is decided
+// on the promoted `agent_id` column, which only an ending that fails a head
+// fills ([seatNamedSQL]): the branch reads that one column of every ending in
+// the window and the payload of the failures alone, so a passing ending is
+// passed over with its JSON unparsed. An opening and a review are found by the same column, their
+// opener's and reviewer's; a review's findings and an ejection by the owner
+// their payload names, since a review's column is its reviewer's and both are
+// few.
 func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *UsageSeat) error {
 	query, args := usageCodeSQL(w)
 	rows, err := d.sql.QueryContext(ctx, query, args...)
@@ -1190,16 +1244,14 @@ func usageCodeSQL(w UsageWindow) (string, []any) {
 				   AND COALESCE(json_extract(e.payload, '$.findings'), 0) > 0
 				   AND ` + keptRowSQL + `
 				 UNION ALL
-				SELECT json_extract(e.payload, '$.owner_agent_id'),
-				       COALESCE(json_extract(e.payload, '$.owner'), ''),
+				SELECT e.agent_id, COALESCE(json_extract(e.payload, '$.owner'), ''),
 				       'check:' || json_array(json_extract(e.payload, '$.repo_id'),
 				           json_extract(e.payload, '$.oid'), json_extract(e.payload, '$.target'),
 				           json_extract(e.payload, '$.name'), json_extract(e.payload, '$.attempt')),
 				       0, 0, 0, 1, 0
 				  FROM crewlet_events AS e
 				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
-				   AND COALESCE(json_extract(e.payload, '$.owner_agent_id'), '') != ''
-				   AND ` + keptRowSQL + `
+				   AND ` + seatNamedSQL + ` AND ` + keptRowSQL + `
 				 UNION ALL
 				SELECT json_extract(e.payload, '$.owner_agent_id'),
 				       COALESCE(json_extract(e.payload, '$.owner'), ''),

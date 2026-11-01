@@ -432,9 +432,11 @@ code_check_finished        # one attempt of a check of a commit ENDED, as
                            # `replaces`: a correction of that ending, never
                            # the attempt's second. An ending that FAILS a
                            # change's head (failed, or errored past the
-                           # home's own requeue) names the change's owner
-                           # with `owner_agent_id`, whose seat day counts it
-                           # once by its attempt as `checks_failed`. STORED
+                           # home's own requeue) names the change's owner,
+                           # and their seat on `agent_id`, the column the
+                           # seat's day counts it off, once by its attempt,
+                           # as `checks_failed`; every other ending names
+                           # no seat, so the day passes it over. STORED
                            # AND NOT FED (code-host.md, "Who records a
                            # check")
 change_merged              # a change a MERGE RECORD merged into its

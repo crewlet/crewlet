@@ -274,23 +274,39 @@ type CodeCheckFinished struct {
 	// an ending that FAILS that head — failed, or errored past the home's own
 	// requeue (internal/code's checks_failed wake) — and empty on every
 	// other: a seat by its handle, or a person by the human seat they hold,
-	// OwnerKind which (internal/code's PartyKind: agent, person). OwnerAgent
-	// is the owner's agent id, the key a seat's day is filed under — "" for a
-	// person or a seat the running company no longer has — and the day it
-	// names counts the failure once by its attempt (`checks_failed`,
-	// internal/store's usageCode), whatever the change and the attempt did
-	// since: a failure of a head the change moved past is still what its
-	// owner's code did, and one a correction replaced stays counted (the
-	// type's doc).
-	// Never `agent_id`, which the event store promotes and would file the
-	// ending under the seat as its actor.
-	Owner      string `json:"owner,omitempty"`
-	OwnerKind  string `json:"owner_kind,omitempty"`
-	OwnerAgent string `json:"owner_agent_id,omitempty"`
+	// OwnerKind which (internal/code's PartyKind: agent, person).
+	Owner     string `json:"owner,omitempty"`
+	OwnerKind string `json:"owner_kind,omitempty"`
+
+	// Agent is the owner's agent id on such an ending — "" for a person, a
+	// seat the running company no longer has, and every ending that fails no
+	// head — and the day it names counts the failure once by its attempt
+	// (`checks_failed`, internal/store's usageCode), whatever the change and
+	// the attempt did since: a failure of a head the change moved past is
+	// still what its owner's code did, and one a correction replaced stays
+	// counted (the type's doc).
+	//
+	// `agent_id`, THE COLUMN THE EVENT STORE PROMOTES, because these records
+	// are not rare: every push of every change ends each check its file
+	// defines, passes and candidate, tip and bisect checks among them, and
+	// only an ending that fails a head names a seat. A day reads the column,
+	// so an ending naming none neither moves the day's fingerprint nor has its
+	// payload read, and its cost follows the failures a day counts rather than
+	// the checks a company runs. The column says what the event is ABOUT —
+	// the seat whose code failed, as a read of the log by a seat's agent id
+	// asks — never who acted: the actor is the node that wrote the ending
+	// (its Source).
+	Agent string `json:"agent_id,omitempty"`
 }
 
 // EventType is the "code_check_finished" wire type.
 func (CodeCheckFinished) EventType() string { return "code_check_finished" }
+
+// AgentID is the seat whose head the ending failed, "" for every other
+// ending: what the event is about. The actor chain reaches it only for an
+// ending published with no source, which its writer never publishes — the
+// actor is the node that wrote it.
+func (e CodeCheckFinished) AgentID() string { return e.Agent }
 
 // SummaryFor names the check, its attempt, the commit's first twelve digits,
 // the repository and how it ended.
