@@ -708,22 +708,18 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	s := checkScope{repo: repo, change: change, oid: oid, target: target}
-	// EVERY ATTEMPT OF THE COMMIT'S CHECKS, read once: what each named
-	// check is keyed by — its commit and its target — and, for all_failed,
-	// which checks' latest attempts did not pass.
-	var rows []code.CheckRow
-	var seen statelog.Position
-	if all {
-		rows, seen, refusal = t.deps.attempts(ctx, turn, tool, c, s, "")
-	} else {
-		for _, a := range asks {
-			named, at, refusal := t.deps.attempts(ctx, turn, tool, c, s, a.name)
-			if refusal != nil {
-				return *refusal, nil
-			}
-			rows, seen = append(rows, named...), furthestOnLog(seen, at)
-		}
+	// THE COMMIT'S CHECKS, READ ONCE whatever the call names: what each
+	// named check is keyed by — its commit and its target — and, for
+	// all_failed, which checks' latest attempts did not pass. One listing
+	// behind one linearizable barrier, narrowed on the data node where the
+	// call names a single check ([CodeDeps.attempts]); never one listing per
+	// check named, which is as many barriers, one after another, each moving
+	// the same rows, before the first rerun is published.
+	narrow := ""
+	if !all && !slices.ContainsFunc(asks, func(a rerunAsk) bool { return a.name != asks[0].name }) {
+		narrow = asks[0].name
 	}
+	rows, seen, refusal := t.deps.attempts(ctx, turn, tool, c, s, narrow)
 	if refusal != nil {
 		return *refusal, nil
 	}

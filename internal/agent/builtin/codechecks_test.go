@@ -515,3 +515,39 @@ func TestACheckIsListedByItsName(t *testing.T) {
 			listed)
 	}
 }
+
+// A NAMED RERUN READS THE COMMIT'S CHECKS ONCE: a rerun naming three checks
+// finds all three in one listing of the commit's checks — one barrier, one
+// read — never one listing per check named; and one naming a single check
+// lists that check's attempts alone.
+//
+// Mutation: list the commit's checks once per check named → red.
+func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	host.checks = append(host.checks, failedChecks("lint", "vet")...)
+	reg := codeRegistry(t, writeDeps(host, writer))
+	listings := func() []code.ReadQuery {
+		reads, _, _ := host.asked()
+		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Kind != code.ReadChecks })
+	}
+
+	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "unit", "attempt": 1},
+			map[string]any{"name": "lint", "attempt": 1}, map[string]any{"name": "vet", "attempt": 1}}})
+	if got.Failed || len(writer.checksAsked()) != 3 {
+		t.Fatalf("a rerun of three checks answered %q, sending %d reruns", got.Output, len(writer.checksAsked()))
+	}
+	if l := listings(); len(l) != 1 || l[0].Checks.Name != "" {
+		t.Errorf("a rerun of three checks listed the commit's checks %d times (%+v), want once, whole", len(l), l)
+	}
+
+	got = callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "lint", "attempt": 1}}})
+	if got.Failed {
+		t.Fatalf("a rerun of one check answered %q", got.Output)
+	}
+	if l := listings()[1:]; len(l) != 1 || l[0].Checks.Name != "lint" {
+		t.Errorf("a rerun of lint listed the commit's checks as %+v, want once, narrowed to lint", l)
+	}
+}
