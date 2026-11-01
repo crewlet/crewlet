@@ -602,8 +602,8 @@ checks and code_green](../concepts/code-host.md#tip-checks-and-code_green)),
 and every git node runs a queued check in a box of the company's sandbox
 catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)). A
 change's readiness counts the checks its branch's gate requires, and a merge
-into that branch puts the change in its merge queue, which nothing lands yet
-([What it does not do
+into that branch puts the change in its merge queue, which the home git node
+lands as below — on a `post_land` branch, not yet ([What it does not do
 yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
 **A branch whose gate requires a check lands through its merge queue.** On a
