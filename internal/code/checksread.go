@@ -442,7 +442,7 @@ func (q ReadQuery) validateChecksRunning() error {
 //
 // BY CELL, because a runner reads only what it can claim now: the cells it
 // has room in (internal/code/checkrun's walk), each one seek, so one cell's
-// backlog never costs a node's walk in another (replicated 0102). OLDEST
+// backlog never costs a node's walk in another (replicated 0103). OLDEST
 // FIRST within it, because that is the order a fleet's runners take the queue
 // in: every git node walks it from its head, and the one a repository's git
 // order ranks first claims each attempt first, so the attempts waiting longest
