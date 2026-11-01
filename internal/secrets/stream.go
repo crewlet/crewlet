@@ -27,7 +27,7 @@ import (
 // CLI's captured session, internal/executordomain) would be read whole into an
 // engine process whose memory is sized for the CLIs it runs. So this format is
 // ONLINE: a writer seals while it streams and a reader opens while it streams,
-// each holding ONE CHUNK at a time.
+// each holding a chunk's buffers rather than the value.
 //
 // # The construction, and what each part is for
 //
@@ -39,11 +39,15 @@ import (
 //	chunk i  AES-256-GCM(key, nonce_i, plaintext_i, aad_i), the last one flagged final
 //
 //   - A PER-OBJECT KEY, HKDF-SHA256 over the keyring key the header names, the
-//     random salt, and an info string naming this format, its version and the
-//     key id. Every object is sealed under a key no other object shares, so a
-//     COUNTER is a safe nonce (it never repeats under one key) and nothing
-//     random is drawn per chunk. A header byte changed in transit (the key id,
-//     the salt, the version) derives another key, and the first chunk fails.
+//     random salt, and an info string naming this format and the key id.
+//     Every object is sealed under a key no other object shares, so a COUNTER
+//     is a safe nonce (it never repeats under one key) and nothing random is
+//     drawn per chunk. A header changed in transit fails before a byte is
+//     handed out: a changed salt, or a key id renamed to another key the ring
+//     holds, derives another key and the first chunk fails to open; a key id
+//     the ring does not hold is refused at the lookup; and the version is not
+//     derived at all but CHECKED, a reader of version 1 opening that version
+//     alone.
 //   - THE NONCE IS THE CHUNK'S INDEX, so a chunk moved to another place opens
 //     under the wrong nonce and fails: REORDERING IS DETECTED.
 //   - THE ASSOCIATED DATA IS THE CALLER'S, THEN THE INDEX, THEN THE FINAL FLAG
@@ -70,10 +74,15 @@ import (
 // StreamChunkBytes is how much plaintext one chunk of a sealed stream carries.
 //
 // SIXTY-FOUR KIBIBYTES, age's figure, chosen from the two things a chunk costs:
-//   - MEMORY, which bounds it from above. A reader and a writer each hold one
-//     chunk and its tag, so a node streaming a hundred sessions at once (a
-//     fleet of seats collecting together) holds about 6.4 MiB of buffers
-//     between them, where a mebibyte chunk would hold a hundred.
+//   - MEMORY, which bounds it from above. A writer holds the chunk it is
+//     filling and that chunk sealed; a reader holds its read-ahead (a chunk,
+//     its tag and the byte that says whether more follows) and the chunk it
+//     opens in place: two chunk buffers a side, so a node streaming a hundred
+//     sessions at once (a fleet of seats collecting together) holds about
+//     12.8 MiB of them, where a mebibyte chunk would hold two hundred. What
+//     the stream is written to or read from buffers on its own account below
+//     that — an S3 upload holds a part of several mebibytes per upload — and
+//     that is the backend's to bound, not this format's.
 //   - OVERHEAD, which bounds it from below. Each chunk adds a 16-byte tag and
 //     one AEAD call, so at 64 KiB the tags are 0.024% of the stream and the
 //     call is amortised over enough bytes that sealing runs at AES-GCM's
@@ -204,10 +213,13 @@ func (s *StreamSealer) Seal(dst io.Writer, aad []byte) (io.WriteCloser, string, 
 // further in is ErrDecrypt from the Read that reaches it, and the reader
 // answers it for good.
 //
-// NO BYTE IS RETURNED BEFORE THE CHUNK HOLDING IT HAS AUTHENTICATED, and none
-// at all from a stream whose end does not: a truncated stream reads as every
-// chunk up to the cut and then ErrDecrypt, never as a clean EOF, so a reader
-// that stops at the first error has trusted nothing it was not given.
+// NO BYTE IS RETURNED BEFORE THE CHUNK HOLDING IT HAS AUTHENTICATED, but what
+// is returned is PROVISIONAL UNTIL io.EOF. A truncated stream reads as every
+// chunk up to the cut and then ErrDecrypt, never as a clean EOF: so the bytes
+// before the cut are handed out first, each from a chunk that authenticated,
+// and only the Read past them says the stream was cut. A caller that acts on
+// the plaintext as it arrives — unpacking an archive — stages what it acts on
+// and keeps none of it unless the reader ended at io.EOF.
 func (s *StreamSealer) Open(src io.Reader, aad []byte) (io.Reader, error) {
 	in := bufio.NewReaderSize(src, s.chunk+streamTagBytes+1)
 	fixed := make([]byte, len(streamMagic)+2)

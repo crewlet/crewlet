@@ -123,8 +123,11 @@ func TestTheShippedChunkSizeRoundTrips(t *testing.T) {
 // header, a chunk or a tag) does not open, and says ErrDecrypt rather than
 // handing back a plaintext.
 //
-// Mutation: leave the key id or the salt out of the key derivation, or the
-// version check out of Open, and a flipped header byte opens.
+// Mutation: leave the salt out of the key derivation, or the version check out
+// of Open, and a flipped salt or version byte opens. (A flipped key-id byte
+// names an id this ring does not hold and is refused at the lookup whatever the
+// derivation does; leaving the id out of the derivation is caught by
+// TestAHeaderRenamedToAnotherKeyOfTheSameMaterialDoesNotOpen.)
 func TestEveryByteOfASealedStreamIsAuthenticated(t *testing.T) {
 	t.Parallel()
 	s := smallSealer(t, streamRing(t, "k1", "k2"), 16)
@@ -143,9 +146,11 @@ func TestEveryByteOfASealedStreamIsAuthenticated(t *testing.T) {
 // boundary (where a naive reader sees a clean end) and inside every chunk, it
 // fails with ErrDecrypt rather than ending at io.EOF.
 //
-// Mutation: open the last chunk read under the flag it was SEALED with rather
-// than the one its position implies (a reader that guesses final from length
-// alone and never peeks) and a cut at a boundary reads as a clean end.
+// Mutation: drop the final flag from streamAAD and a stream cut at a chunk
+// boundary opens its last whole chunk as the end. (A reader that guesses
+// final from a short read alone and never peeks fails a cut here too, on the
+// empty read after it; what catches that reader is the exact-multiple round
+// trip in TestASealedStreamOpensToWhatWasSealed.)
 func TestASealedStreamCutShortIsRefused(t *testing.T) {
 	t.Parallel()
 	const chunk = 16
@@ -168,8 +173,11 @@ func TestASealedStreamCutShortIsRefused(t *testing.T) {
 // A STREAM WITH CHUNKS REORDERED, OR ONE APPENDED, DOES NOT OPEN.
 //
 // Mutation: drop the index from the nonce and the associated data, and two
-// swapped chunks open; drop the final flag, and a stream extended by its own
-// last chunk opens.
+// swapped chunks open. (A stream extended by a copy of its own last chunk is
+// refused twice over — the original last chunk now reads as not final, and the
+// copy is opened at an index it was not sealed at — so no one mutation shows
+// here; what the final flag alone catches is a cut, in
+// TestASealedStreamCutShortIsRefused.)
 func TestASealedStreamReorderedOrExtendedIsRefused(t *testing.T) {
 	t.Parallel()
 	const chunk = 16
@@ -192,6 +200,36 @@ func TestASealedStreamReorderedOrExtendedIsRefused(t *testing.T) {
 	}
 	if _, err := openAll(s, append(bytes.Clone(stream), 0), aad); !errors.Is(err, ErrDecrypt) {
 		t.Errorf("one byte appended: %v, want ErrDecrypt", err)
+	}
+}
+
+// A HEADER RENAMED TO ANOTHER KEY OF THE SAME MATERIAL DOES NOT OPEN: the key
+// id is in the derivation, so a stream whose header is rewritten to name
+// another id of the ring derives another key even where the two ids hold the
+// same bytes — as two ids for one key do after a re-import under a new name.
+//
+// Mutation: leave the key id out of the info streamAEAD derives under and the
+// renamed stream opens.
+func TestAHeaderRenamedToAnotherKeyOfTheSameMaterialDoesNotOpen(t *testing.T) {
+	t.Parallel()
+	material := bytes.Repeat([]byte{5}, keyBytes)
+	s := smallSealer(t, Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": material, "k2": material}}, 16)
+	plain := random(t, 40)
+	stream := sealAll(t, s, plain, []byte("aad"))
+	if got, err := openAll(s, stream, []byte("aad")); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the premise: the stream opened as (%d bytes, %v)", len(got), err)
+	}
+	renamed := bytes.Clone(stream)
+	// THE ID'S LAST BYTE, right after the magic, the version and the id's
+	// length: "k1" becomes "k2", an id of the same length the ring holds.
+	at := len(streamMagic) + 2 + 1
+	if renamed[at] != '1' {
+		t.Fatalf("the premise: byte %d of the header is %q, want the id's last byte", at, renamed[at])
+	}
+	renamed[at] = '2'
+	if got, err := openAll(s, renamed, []byte("aad")); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("the header renamed to k2: opened (%d bytes, %v), want ErrDecrypt", len(got), err)
 	}
 }
 
