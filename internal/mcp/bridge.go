@@ -149,8 +149,8 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	s := b.newServer(spec, stop)
 	b.mu.Lock()
 	before := maps.Clone(b.tools)
-	tools := s.toolsFor(defs)
-	s.tools = tools
+	tools, refused := s.toolsFor(defs)
+	s.tools, s.refused = tools, refused
 	// RECORDED, NOT JUDGED. An override keyed on a name this instance does
 	// not list changes nothing here, and this is the one place that holds
 	// both the keys and the listing — but one instance's listing is not the
@@ -172,6 +172,9 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	attrs := []any{"server", spec.Name, "tool_count", len(tools), "tool_names", toolNames(tools)}
 	if len(unlisted) > 0 {
 		attrs = append(attrs, "annotation_keys_unlisted", unlisted)
+	}
+	if len(refused) > 0 {
+		attrs = append(attrs, "tools_refused", len(refused))
 	}
 	b.log.Info("tools_discovered", attrs...)
 	return change, nil
@@ -232,7 +235,7 @@ func (b *Bridge) revived(s *server, c *client, defs []toolDef) (Change, bool) {
 		return Change{}, false
 	}
 	before := maps.Clone(b.tools)
-	s.tools = s.toolsFor(defs)
+	s.tools, s.refused = s.toolsFor(defs)
 	s.unlisted = unlistedOverrides(s.spec, defs)
 	s.up(c)
 	return b.reindexLocked(before), true
@@ -667,7 +670,8 @@ func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
 		for _, t := range b.servers[server].tools {
 			if incumbent, taken := next[t.Name()]; taken {
 				b.log.Warn("tool_name_collision", "tool", t.Name(),
-					"serving", incumbent.Instance(), "shadowed", t.Instance())
+					"serving", incumbent.Instance(), "shadowed", t.Instance(),
+					"detail", ShadowSentence(t.Name(), ServerName(incumbent.Instance())))
 				continue
 			}
 			next[t.Name()] = t

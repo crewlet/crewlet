@@ -9159,6 +9159,22 @@ instance started there is nothing to judge, and the list is empty. Each
 instance's own keys are on its `tools_discovered` log line
 (`annotation_keys_unlisted`).
 
+`refused_tools` are the server's tools that are not offered for their name,
+and `shadowed_tools` the ones another server's tool of the same name is
+offered in place of ([Naming a server and its tools](../guides/tools-and-mcp.md#naming-a-server-and-its-tools)).
+Each is `{tool, reason, message}` or `{tool, by, message}`: `tool` is the name
+it would be filed under (the server's `tool_prefix` and its own name),
+`reason` is `characters`, `too_long` or `builtin`, `by` is the configured name
+of the server whose tool is offered instead, and `message` is the engine's
+sentence saying why and what would offer it (a shorter `tool_prefix`, one
+where two servers share a name), which a screen shows as written. Each tool is
+listed once across the fleet, sorted, every one any node named; a node names
+at most 8 of each on its heartbeat, so `refused_count` and `shadowed_count`
+say how many there are, as the node counting the most counts them, and never
+fewer than are listed. Both lists are always present, empty where every tool
+is offered. The node's own log names each one too (`mcp_tool_refused`,
+`tool_name_collision`).
+
 ```json
 {
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
@@ -9168,6 +9184,11 @@ instance's own keys are on its `tools_discovered` log line
      "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "waiting": 0, "tools": 26,
      "unlisted_annotations": [],
+     "refused_tools": [
+       {"tool": "gh_add_pull_request_review_comment_to_pending_review", "reason": "too_long",
+        "message": "\"gh_add_pull_request_review_comment_to_pending_review\" is not offered: it is 52 characters, and 50 fit beside the longest prefix a coding CLI gives the engine's tools. Shorten the tool_prefix \"gh_\" by 2 to offer it"}
+     ],
+     "refused_count": 1, "shadowed_tools": [], "shadowed_count": 0,
      "nodes": [
        {"node": "node-1", "reported": true, "started": 2, "failed": 0, "waiting": 0, "tools": 26,
         "error": "", "error_seat": "", "wait": "", "wait_seat": ""},

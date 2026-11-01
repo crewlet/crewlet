@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -169,8 +170,38 @@ type MCPServerRow struct {
 	// that key is right for the others. Empty where no instance started,
 	// since nothing listed anything to judge against. ALWAYS A LIST.
 	UnlistedAnnotations []string `json:"unlisted_annotations"`
+	// RefusedTools are the tools an instance on a reporting node lists that
+	// are not offered for their name: one no model can be handed (a
+	// character, the length) or one a built-in holds. ShadowedTools are the
+	// ones another server's tool of the same name is offered in place of.
+	// Each once across the fleet, sorted by tool, every one any node named
+	// (a node names at most [coord.MaxMCPToolNotes] of each). RefusedCount
+	// and ShadowedCount are how many there are, as the node counting the
+	// most counts them, and never fewer than are listed. ALWAYS LISTS.
+	RefusedTools  []MCPRefusedTool  `json:"refused_tools"`
+	RefusedCount  int               `json:"refused_count"`
+	ShadowedTools []MCPShadowedTool `json:"shadowed_tools"`
+	ShadowedCount int               `json:"shadowed_count"`
 	// Nodes is one cell per live node, in [MCPStatusAnswer.Nodes] order.
 	Nodes []MCPServerNode `json:"nodes"`
+}
+
+// MCPRefusedTool is one tool not offered for its name: the name it would be
+// filed under, why, and the engine's sentence saying so and what would offer
+// it ([mcp.NameRefusal.Sentence]), which a screen shows as written.
+type MCPRefusedTool struct {
+	Tool    string          `json:"tool"`
+	Reason  mcp.NameRefusal `json:"reason"`
+	Message string          `json:"message"`
+}
+
+// MCPShadowedTool is one tool another server's tool of the same name is
+// offered in place of: that server's configured name, and the engine's
+// sentence ([mcp.ShadowSentence]).
+type MCPShadowedTool struct {
+	Tool    string `json:"tool"`
+	By      string `json:"by"`
+	Message string `json:"message"`
 }
 
 // MCPServerNode is what one node did with one server.
@@ -255,12 +286,16 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	}
 
 	rows := map[string]*MCPServerRow{}
+	// prefixes are each configured server's tool_prefix, which a refusal's
+	// sentence says how to shorten.
+	prefixes := map[string]string{}
 	var organization *org.Organization
 	if s.Company != nil {
 		company, roster := s.Company()
 		if company != nil {
 			for i := range company.MCPServers {
 				rows[company.MCPServers[i].Name] = configuredRow(&company.MCPServers[i])
+				prefixes[company.MCPServers[i].Name] = company.MCPServers[i].ToolPrefix
 			}
 			organization = roster
 		}
@@ -286,6 +321,8 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// fleet.
 		var unlisted []string
 		judged := false
+		refused := map[coord.MCPToolRefusal]struct{}{}
+		shadowed := map[coord.MCPToolShadow]struct{}{}
 		for _, r := range reports {
 			cell := MCPServerNode{Node: r.node, Reported: r.reported}
 			if m, ok := r.servers[name]; ok {
@@ -298,6 +335,14 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 				row.Failed += m.Failed
 				row.Waiting += m.Waiting
 				row.Tools = max(row.Tools, m.Tools)
+				for _, note := range m.Refused {
+					refused[note] = struct{}{}
+				}
+				for _, note := range m.Shadowed {
+					shadowed[note] = struct{}{}
+				}
+				row.RefusedCount = max(row.RefusedCount, m.RefusedCount)
+				row.ShadowedCount = max(row.ShadowedCount, m.ShadowedCount)
 				if m.Started > 0 {
 					if !judged {
 						unlisted, judged = slices.Clone(m.Unlisted), true
@@ -312,10 +357,43 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		}
 		slices.Sort(unlisted)
 		row.UnlistedAnnotations = append([]string{}, unlisted...)
+		row.RefusedTools, row.ShadowedTools = refusedTools(refused, prefixes[name]), shadowedTools(shadowed)
+		row.RefusedCount = max(row.RefusedCount, len(row.RefusedTools))
+		row.ShadowedCount = max(row.ShadowedCount, len(row.ShadowedTools))
 		row.State = mcpState(row.Enabled, anyReported, row.Started, row.Failed, row.Waiting)
 		out.Servers = append(out.Servers, *row)
 	}
 	return out, nil
+}
+
+// refusedTools is the fleet's refusals of one server's tools, sorted by tool,
+// each worded with prefix, the server's configured tool_prefix.
+func refusedTools(notes map[coord.MCPToolRefusal]struct{}, prefix string) []MCPRefusedTool {
+	out := make([]MCPRefusedTool, 0, len(notes))
+	for note := range notes {
+		reason := mcp.NameRefusal(note.Reason)
+		out = append(out, MCPRefusedTool{
+			Tool: note.Tool, Reason: reason, Message: reason.Sentence(note.Tool, prefix),
+		})
+	}
+	slices.SortFunc(out, func(a, b MCPRefusedTool) int {
+		return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.Reason, b.Reason))
+	})
+	return out
+}
+
+// shadowedTools is the fleet's shadowed tools of one server, sorted by tool.
+func shadowedTools(notes map[coord.MCPToolShadow]struct{}) []MCPShadowedTool {
+	out := make([]MCPShadowedTool, 0, len(notes))
+	for note := range notes {
+		out = append(out, MCPShadowedTool{
+			Tool: note.Tool, By: note.By, Message: mcp.ShadowSentence(note.Tool, note.By),
+		})
+	}
+	slices.SortFunc(out, func(a, b MCPShadowedTool) int {
+		return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.By, b.By))
+	})
+	return out
 }
 
 // instanceSeat names the seat a failed instance was launched for, or a waiting

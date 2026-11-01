@@ -113,6 +113,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 4,
       unlisted_annotations: [],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -171,6 +175,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 26,
       unlisted_annotations: ["create_pull_reqest"],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -231,6 +239,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 0,
       unlisted_annotations: [],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -498,6 +510,10 @@ test("a server waiting for a provisioned credential names what it waits for, not
         waiting: 1,
         tools: 0,
         unlisted_annotations: [],
+        refused_tools: [],
+        refused_count: 0,
+        shadowed_tools: [],
+        shadowed_count: 0,
         nodes: [
           {
             node: "node-a",
