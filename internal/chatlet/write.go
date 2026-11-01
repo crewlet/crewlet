@@ -2865,7 +2865,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		}
 		routing.ThreadParticipants, routing.Followers = parties, followers
 	}
-	routing.Answerer = s.answerer(room, actor, routing.Members)
+	routing.Answerer = s.answerer(room, actor, routing)
 
 	candidates, truncated := Resolve(routing)
 	return &Notify{
@@ -2889,7 +2889,9 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 //
 // ASKED ONLY WHERE IT CAN BE USED ([answerable]): a record carries an answerer
 // for exactly the messages the routing would wake one for, so a reader of the
-// record never has to wonder whether a named seat was ever eligible.
+// record never has to wonder whether a named seat was ever eligible. A
+// message that named a seat the company has, a person included, was
+// addressed to them and carries none ([Routing.namesASeat]).
 //
 // A UNIT'S ROOM IS ANSWERED BY THE UNIT'S LEAD, through the chart rather than
 // the membership, because whose a unit room is belongs to the chart: a unit
@@ -2897,8 +2899,8 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 // its lead must not go on answering it. Every OTHER named room is answered by
 // its most senior agent member. A private room's answerer is therefore always
 // somebody who can read it, and a room with no agent member has none.
-func (s *Store) answerer(room Channel, actor Actor, members []Member) string {
-	if !answerable(room.Kind, actor.Kind) {
+func (s *Store) answerer(room Channel, actor Actor, routing Routing) string {
+	if !answerable(room.Kind, actor.Kind) || routing.namesASeat(s.roster.Seat, actor.Name()) {
 		return ""
 	}
 	if room.Kind == KindUnit {
@@ -2907,7 +2909,7 @@ func (s *Store) answerer(room Channel, actor Actor, members []Member) string {
 		}
 		return s.roster.Lead(room.Unit, room.Name)
 	}
-	return s.roster.Senior(memberHandles(members))
+	return s.roster.Senior(memberHandles(routing.Members))
 }
 
 // employed drops the handles the company no longer has.

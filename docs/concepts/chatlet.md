@@ -342,11 +342,16 @@ So a message wakes:
 - members who have **followed the whole channel**, which the engine sets for a
   unit's own agent seats in that unit's room and for nobody else;
 - the room's **answerer**, when a person posts in a public, private or unit
-  room and the message woke no other agent, because silence there looks
+  room, names nobody and wakes no other agent, because silence there looks
   exactly like a message that was lost.
 
 **A person is never answered by silence.** The answerer is one seat, woken only
-when the message woke no other agent, and obliged to reply. A unit's room is
+when the message woke no other agent, and obliged to reply. A message that
+names a colleague has been addressed, so it has no answerer even when the
+colleague is a person, who is never woken: "@sara, can you review?" is for
+Sara, and an agent obliged to answer it as well would be noise. A handle
+nobody in the company holds names nobody, and neither does a member-only room
+naming somebody outside it, so those still reach the answerer. A unit's room is
 answered by the lead of the unit that still declares it: a room the chart
 staffs with nobody, because its unit dropped the channel or left the chart, has
 no answerer. Any other room, one somebody made by hand, is answered by its most

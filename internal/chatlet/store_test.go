@@ -1652,6 +1652,69 @@ func TestAHandMadeRoomIsAnsweredByItsMostSeniorAgentMember(t *testing.T) {
 	}
 }
 
+// A MESSAGE THAT NAMES A SEAT HAS BEEN ADDRESSED, AND HAS NO ANSWERER.
+//
+// The answerer is for a person talking to an empty room. "@sara can you
+// review?" is aimed at Sara: Sara is a person and is never woken, so the
+// routing reaches nobody at all, and an agent obliged to answer it anyway is
+// noise. The same holds in a unit's room, where the lead used to be woken for
+// it. A handle the company does not have reached nobody, so the answerer still
+// answers; and an agent named is the one seat woken. Each case is also held to
+// writer and parser agreement on the record it wrote.
+//
+// Mutation: drop the mention check from the write path's answerer and the
+// person-to-person cases each wake the answerer.
+func TestAMessageThatNamesASeatHasNoAnswerer(t *testing.T) {
+	t.Parallel()
+	roster := agents().withPeople("jane", "sara").withGone("ghost").
+		withRank("cto", "dev").withLead("eng", "engineering", "amir")
+	r := newWriteRound(t, roster)
+	open := r.room(person("jane"), "review", "cto", "dev", "sara")
+	unit := r.unitRoom("engineering", "eng", "amir", "dev", "sara")
+
+	for _, tc := range []struct {
+		name     string
+		room     chatlet.Written
+		named    string
+		answerer string
+		woken    []chatlet.Recipient
+	}{
+		{"a person names a person", open, "sara", "", nil},
+		{"a person names a person in a unit's room", unit, "sara", "", nil},
+		{"a person names a handle nobody holds", open, "ghost", "cto",
+			[]chatlet.Recipient{{Handle: "cto", Reason: chatlet.ReasonAnswerer}}},
+		{"a person names an agent", open, "dev", "",
+			[]chatlet.Recipient{{Handle: "dev", Reason: chatlet.ReasonMention}}},
+		{"a person names an agent in a unit's room", unit, "dev", "",
+			[]chatlet.Recipient{{Handle: "dev", Reason: chatlet.ReasonMention}}},
+	} {
+		if _, err := r.store.Post(t.Context(), keyed(person("jane"), requested("k-"+tc.name)),
+			tc.room.Channel.ID, chatlet.NewMessage{
+				Body: "@" + tc.named + " can you review?", Mentions: []string{tc.named},
+			}); err != nil {
+			t.Fatalf("%s: post: %v", tc.name, err)
+		}
+		r.drain()
+		notify := r.lastRecord().Notify
+		if notify == nil {
+			t.Fatalf("%s: the post carried no routing snapshot", tc.name)
+		}
+		if notify.Answerer != tc.answerer {
+			t.Errorf("%s: the record carries answerer %q, want %q", tc.name,
+				notify.Answerer, tc.answerer)
+		}
+		if !slices.Equal(notify.Recipients, tc.woken) {
+			t.Errorf("%s: the post wakes %v, want %v", tc.name, notify.Recipients, tc.woken)
+		}
+		reRouted := chatlet.RecipientsOf(chatlet.Route(chatlet.Candidates(notify),
+			roster.Seat, "jane"))
+		if !slices.Equal(reRouted, notify.Recipients) {
+			t.Errorf("%s: the writer routed %v and the parser re-routed %v from "+
+				"the record it wrote", tc.name, notify.Recipients, reRouted)
+		}
+	}
+}
+
 // A PERSON'S `@channel` ASKS EVERY AGENT IN THE ROOM, AT THE WRITE.
 //
 // The address is a request when a person writes it and news when an agent

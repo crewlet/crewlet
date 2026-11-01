@@ -390,6 +390,41 @@ func answerable(kind Kind, author AuthorKind) bool {
 	return kind.Named() && author == AuthorHuman
 }
 
+// namesASeat reports a message that NAMED a seat the company has, other than
+// its author: a mention the mention arm resolved ([Routing.mentioned]), of a
+// person or an agent alike.
+//
+// SUCH A MESSAGE HAS BEEN ADDRESSED, AND HAS NO ANSWERER. The answerer exists
+// for a person talking to an empty room, and "@sara can you review?" is aimed
+// at Sara: an agent obliged to answer it as well is noise, even though Sara,
+// a person, is never woken and so nobody is routed at all. It holds in a
+// unit's room exactly as in any other.
+//
+// THE MENTION ARM'S OWN ANSWER, so a private room's rule carries over: a
+// non-member named there was not reached (the room is unreadable to them), so
+// the message still owes the room an answer. And a handle the company does
+// not have reached nobody, so it addresses nobody either.
+//
+// READ BY THE WRITE PATH ALONE, when it resolves the answerer, because it
+// needs the roster and the people a message named, and the record carries
+// neither in a form the parser could re-read: its recipients are the routed
+// set, which holds no person. The writer therefore decides it and carries the
+// outcome, an answerer or none ([Notify.Answerer]), which both halves then
+// route identically.
+func (r Routing) namesASeat(known func(handle string) (exists, human bool),
+	author string) bool {
+
+	for _, handle := range r.mentioned() {
+		if handle == "" || handle == author {
+			continue
+		}
+		if exists, _ := known(handle); exists {
+			return true
+		}
+	}
+	return false
+}
+
 // answererOf is the answerer arm's whole condition, in ONE place because
 // both halves of the file need it and neither may answer differently.
 func answererOf(kind Kind, author AuthorKind, answerer string) []string {

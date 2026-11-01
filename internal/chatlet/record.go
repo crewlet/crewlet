@@ -272,8 +272,10 @@ const (
 	ReasonCollectiveRequest Reason = "collective_request"
 
 	// ReasonAnswerer is a person posting in a named room (public, private
-	// or a unit's) where the routing reached nobody else: the room's
-	// ANSWERER is woken to reply. A unit's room is answered by the unit's
+	// or a unit's), naming no seat, where the routing reached nobody else:
+	// the room's ANSWERER is woken to reply. A message that names a seat
+	// the company has, a person included, was addressed to them and has
+	// no answerer. A unit's room is answered by the unit's
 	// lead; any other room by its most senior agent member
 	// ([Roster.Senior]).
 	//

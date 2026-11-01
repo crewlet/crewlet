@@ -310,10 +310,10 @@ func answererLine(kind Kind) string {
 	if kind == KindUnit {
 		why = "you lead the unit this room belongs to"
 	}
-	return "A person spoke in this room and it reached no other agent, so it " +
-		"comes to you: " + why + ". Answer it, or bring in the colleague who " +
-		"should; a room where this resolves to silence is a person talking to " +
-		"an empty screen."
+	return "A person spoke in this room without naming a colleague, and it " +
+		"reached no other agent, so it comes to you: " + why + ". Answer it, " +
+		"or bring in the colleague who should; a room where this resolves to " +
+		"silence is a person talking to an empty screen."
 }
 
 // handling is what to do about it, with the tools this build ships.
