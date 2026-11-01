@@ -30,7 +30,7 @@ var goPackages = map[string]bool{
 	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
 	"dashspec": true, "datadog": true, "datasetsapi": true, "decision": true,
 	"docindex": true, "doclet": true, "docsgate": true, "e2e": true, "embeddings": true,
-	"engine": true, "envfile": true, "envref": true, "estate": true,
+	"engine": true, "envfile": true, "envref": true, "estate": true, "executordomain": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,
 	"extension": true, "externaltest": true, "fleetsecrets": true, "flock": true,
 	"foldername": true, "github": true, "gitlab": true, "hostbox": true,
