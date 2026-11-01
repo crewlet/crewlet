@@ -380,6 +380,13 @@ func sandboxNode(t *testing.T, company *config.Company) *Engine {
 // listening before the node takes a seat.
 func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	t.Helper()
+	return newSandboxNodeIn(t, company, nil)
+}
+
+// newSandboxNodeIn is [newSandboxNode] booted with environment, for a case
+// whose subject is a variable the node reads at boot; nil is none.
+func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.Source) *Engine {
+	t.Helper()
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
@@ -395,6 +402,7 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 		Bootstrap: &b, Company: company,
 		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		SandboxPollInterval: 50 * time.Millisecond,
+		Environment:         environment,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

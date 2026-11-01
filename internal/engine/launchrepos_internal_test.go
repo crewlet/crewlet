@@ -776,6 +776,63 @@ func TestACheckoutHoldsWhatItResolvesOnItsJobsRow(t *testing.T) {
 	}
 }
 
+// A LAUNCH IS GIVEN ITS BOX'S GIT EXACTLY WHERE A CHECKOUT CAN GRANT IT A
+// REPOSITORY (ADR-0086): on a node that serves the company's code host and has
+// a box base, every launch of an executor gets its run's git environment —
+// its credential, the base its clones dial and git's configuration — and on a
+// node serving no code host, or one with no base, none, since nothing there
+// could check a repository out to it. Asked of booted nodes, because "serves"
+// is the running runtime's answer ([OperatorCode]) and no field a rig sets.
+//
+// Mutations: gate the launch on Engine.CodeUnserved() == nil, which answers
+// no node that serves code → "serving code" given no git, red (what left the
+// coding run of internal/e2e's A1 case cloning from an empty base); drop the
+// served check → "hosting none" given git, red.
+func TestALaunchIsGivenGitWhereTheCodeHostIsServed(t *testing.T) {
+	t.Parallel()
+	const base = "https://git.example.com/box/git"
+	withBase := config.MapSource{sandbox.BoxGitURLVar: base}
+	for _, tc := range []struct {
+		name    string
+		company string
+		env     config.Source
+		given   bool
+	}{
+		{"serving code", codeHostCompany, withBase, true},
+		{"hosting none", nativeCleanupCompany, withBase, false},
+		{"no box base", codeHostCompany, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newSandboxNodeIn(t, parseCompany(t, tc.company), tc.env)
+			seat := e.Company().Org.Role("ceo")
+			if seat == nil {
+				t.Fatal("the premise: the company has the seat ceo")
+			}
+			mint := e.launchBoxGit(seat, uuid.NewString(), nil, nil)
+			if !tc.given {
+				if mint != nil {
+					t.Fatal("a launch on a node that can check nothing out was given the box's git")
+				}
+				return
+			}
+			if mint == nil {
+				t.Fatal("a launch on a node serving the code host was given no git: every checkout of " +
+					"its run would clone from an empty base")
+			}
+			env, err := mint(uuid.NewString())
+			if err != nil {
+				t.Fatalf("the launch's git environment: %v", err)
+			}
+			if env[sandbox.GitURLVar] != base || env[sandbox.GitTokenVar] == "" || env["GIT_CONFIG_COUNT"] == "" {
+				t.Errorf("the launch's git environment names base %q, a token of %d bytes and %q "+
+					"configuration entries; want %q, a token and the engine's entries",
+					env[sandbox.GitURLVar], len(env[sandbox.GitTokenVar]), env["GIT_CONFIG_COUNT"], base)
+			}
+		})
+	}
+}
+
 // A BOX IS CONFIGURED BY ENVIRONMENT (ADR-0086), the one every executor launch
 // on a node serving the code host is given ([Engine.boxGitEnv], its
 // [sandbox.LaunchRequest.RunEnv]): its run's credential — a token the code host
