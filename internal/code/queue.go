@@ -983,49 +983,16 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 			"leaves it", q.EntryID, entry.TargetRef, entry.State))
 	}
 	handle, kind := p.Asker.party()
-	if kind == PartyPerson {
-		_, d.payload = p.stamped()
-		return d, nil
-	}
-	ownerHandle, ownerKind, err := changeOwnerIn(ctx, tx, entry.ChangeID)
-	if err != nil {
-		return queueDecision{}, err
-	}
-	owner := Party{Handle: ownerHandle, Kind: ownerKind}
-	// mine is whether party, a principal of standing grant, may take the
-	// entry out: its enqueuer, its change's owner, or one that maintains the
-	// repository.
-	mine := func(party Party, grant Grant) bool {
-		return party.Kind != "" && (party == entry.EnqueuedBy || party == owner) || grant.Access >= AccessMaintain
-	}
-	asker := Party{Handle: handle, Kind: kind}
-	grant := GrantOf(p.Asker, repo.grantRef(q.RepoID), seats.Roster)
-	if !mine(asker, grant) {
-		return d.refuse(MergeRefusalNotPermitted, fmt.Sprintf("an entry leaves its queue at its enqueuer's "+
-			"ask, its change's owner's, a principal's that maintains the repository or a person's, and "+
-			"this asker holds %s on %s", grant.Access, repo.name))
-	}
-	// THE SEAT'S DEQUEUE, HELD TO WHOEVER ITS TURN WORKS FOR (Ceiling): its
-	// own work — an entry it enqueued, its own change's, or one into a branch
-	// of its own namespace or of a repository it owns — steered by anybody,
-	// as every write's is; a colleague held to what it may take out itself;
-	// nobody steering nothing else.
-	if c := p.Ceiling; c != nil && asker != entry.EnqueuedBy && asker != owner &&
-		!grant.OwnWork(Command{Ref: entry.TargetRef}) {
-
-		if c.Kind != WriteCeilingSeat {
-			return d.refuse(MergeRefusalNotPermitted, "this work is for whoever started its turn, who may "+
-				"change nothing of this company's code; an entry this seat did not enqueue, of a change it does "+
-				"not own, is not its own work")
+	// A person takes any entry out; anybody else is judged. Either way the
+	// record goes on to its routing below: a person's dequeue tells the
+	// change's authors and its enqueuer as a seat's does.
+	if kind != PartyPerson {
+		why, err := whyNoDequeue(ctx, tx, p, entry, repo, seats)
+		if err != nil {
+			return queueDecision{}, err
 		}
-		colleague := Principal{Kind: PrincipalAgent, Seat: c.Seat}
-		if cg := GrantOf(colleague, repo.grantRef(q.RepoID), seats.Roster); !mine(Party{Handle: c.Seat,
-			Kind: PartyAgent}, cg) {
-
-			return d.refuse(MergeRefusalNotPermitted, fmt.Sprintf("this work is for seat %s, whose ask started "+
-				"its turn, and an entry leaves its queue at its enqueuer's ask, its change's owner's or a "+
-				"principal's that maintains the repository: that seat is none of them, holding %s on %s",
-				c.Seat, cg.Access, repo.name))
+		if why != "" {
+			return d.refuse(MergeRefusalNotPermitted, why)
 		}
 	}
 	// WHOM IT CONCERNS: the change's authors and its enqueuer, told it left
@@ -1045,6 +1012,57 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	}
 	d.payload = payload
 	return d, nil
+}
+
+// whyNoDequeue is why a principal that is not a person may not take entry out
+// of its queue, empty when it may: it is the entry's enqueuer, its change's
+// owner or a principal that maintains the repository — and, for a seat's
+// dequeue made for somebody else (p.Ceiling), that somebody may too.
+func whyNoDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, entry queueEntry, repo pushRepo,
+	seats SeatRules) (string, error) {
+
+	q := p.Dequeue
+	handle, kind := p.Asker.party()
+	ownerHandle, ownerKind, err := changeOwnerIn(ctx, tx, entry.ChangeID)
+	if err != nil {
+		return "", err
+	}
+	owner := Party{Handle: ownerHandle, Kind: ownerKind}
+	// mine is whether party, a principal of standing grant, may take the
+	// entry out: its enqueuer, its change's owner, or one that maintains the
+	// repository.
+	mine := func(party Party, grant Grant) bool {
+		return party.Kind != "" && (party == entry.EnqueuedBy || party == owner) || grant.Access >= AccessMaintain
+	}
+	asker := Party{Handle: handle, Kind: kind}
+	grant := GrantOf(p.Asker, repo.grantRef(q.RepoID), seats.Roster)
+	if !mine(asker, grant) {
+		return fmt.Sprintf("an entry leaves its queue at its enqueuer's ask, its change's owner's, a "+
+			"principal's that maintains the repository or a person's, and this asker holds %s on %s",
+			grant.Access, repo.name), nil
+	}
+	// THE SEAT'S DEQUEUE, HELD TO WHOEVER ITS TURN WORKS FOR (Ceiling): its
+	// own work — an entry it enqueued, its own change's, or one into a branch
+	// of its own namespace or of a repository it owns — steered by anybody,
+	// as every write's is; a colleague held to what it may take out itself;
+	// nobody steering nothing else.
+	c := p.Ceiling
+	if c == nil || asker == entry.EnqueuedBy || asker == owner || grant.OwnWork(Command{Ref: entry.TargetRef}) {
+		return "", nil
+	}
+	if c.Kind != WriteCeilingSeat {
+		return "this work is for whoever started its turn, who may change nothing of this company's code; " +
+			"an entry this seat did not enqueue, of a change it does not own, is not its own work", nil
+	}
+	colleague := Principal{Kind: PrincipalAgent, Seat: c.Seat}
+	if cg := GrantOf(colleague, repo.grantRef(q.RepoID), seats.Roster); !mine(Party{Handle: c.Seat,
+		Kind: PartyAgent}, cg) {
+
+		return fmt.Sprintf("this work is for seat %s, whose ask started its turn, and an entry leaves its "+
+			"queue at its enqueuer's ask, its change's owner's or a principal's that maintains the "+
+			"repository: that seat is none of them, holding %s on %s", c.Seat, cg.Access, repo.name), nil
+	}
+	return "", nil
 }
 
 // queueWrite publishes one write of a target's queue and answers it — the
