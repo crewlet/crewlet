@@ -751,9 +751,10 @@ func registeredStatements() map[string]statement {
 		// standing verdicts that approve, the standing asks and the
 		// mergeabilities of a page of changes, each driven from the list of
 		// their ids, one seek of a key an element; the facts of a list of
-		// (change, revision) pairs, one seek of their key a pair; and one
-		// change's standing blockers, the oldest raised first, a seek of the
-		// partial index that holds them alone.
+		// (change, revision) pairs, one seek of their key a pair; the cut of
+		// each of a list of changes, a walk of the partial index that holds
+		// their standing blockers alone; and the standing blockers of a list
+		// of (change, cut) bounds, a range of that index up to each cut.
 		"readiness counters": {readinessCountersSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"readiness authors": {readinessAuthorsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
@@ -921,8 +922,11 @@ func registeredStatements() map[string]statement {
 		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit"],["repo-1","` +
 			oid("c") + `","refs/heads/main","lint"]]`}, []string{"SCAN json_each AS j",
 			checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
-			[]string{blockersKey + " (change_id=?)"}},
+		"blocker cuts": {blockerCutsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=?)"}},
+		"standing blockers": {standingBlockersSQL,
+			[]any{`[["repo-1-change-000001",3000],["repo-1-change-000002",9223372036854775807]]`},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=? AND position<=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the
