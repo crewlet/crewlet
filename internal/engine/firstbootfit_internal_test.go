@@ -520,6 +520,76 @@ func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
 	}
 }
 
+// A SHARE AT THE CODE LOG'S BYTE RATE COSTS EVERY COMPANY FAR MORE.
+//
+// The code log's derived share, two thirds of the mutation log's ceiling, is a
+// reservation every node makes before the company document says whether it
+// hosts any code, so its reason is what it costs the logs beside it, not the
+// code log's byte rate: a reference company whose seats work through changes
+// writes two to nine times the mutation log's day there (internal/tracker's
+// TestTheDocsPrintTheMeasuredDay), and a share at that rate would be taken
+// from every company, codeless ones included. The pages that give the reason
+// print what such a share costs, and this computes it with the boot's own fit:
+// a code log set at k times the mutation log a first boot on 100 GiB free
+// creates beside it, for k two and three — the least set ceiling at which it
+// is, since each byte more of it is a byte less for the derived logs — how
+// much shorter that mutation log is than without the code log, and whether
+// the vector changelog beside it still holds a year-five re-embedding.
+//
+// Mutation: compare against the mutation log beside a derived code log
+// rather than without one, and the figures the pages print fall by about a
+// third; hold the share at k one and a half, and the re-embedding fits.
+func TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore(t *testing.T) {
+	t.Parallel()
+	trackerLog, vectors, codeLog := tracker.Domain{}.Name(), search.Domain{}.Name(), code.Domain{}.Name()
+	const example = 100 * gib
+	without := firstBootFit(t, config.Stream{}, example, codeLog)[trackerLog].Bytes
+	// AT K TIMES: the mutation log and the vector changelog a first boot
+	// creates beside the least code log set at no less than k times the
+	// mutation log beside it.
+	at := func(k int64) (mutation, vectorLog int64) {
+		lo, hi := config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			fit := firstBootFit(t, config.Stream{CodeLogMaxBytes: mid}, example, "")
+			if mid >= k*fit[trackerLog].Bytes {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		fit := firstBootFit(t, config.Stream{CodeLogMaxBytes: lo}, example, "")
+		return fit[trackerLog].Bytes, fit[vectors].Bytes
+	}
+	shorter := make(map[int64]int64)
+	for _, k := range []int64{2, 3} {
+		mutation, vectorLog := at(k)
+		shorter[k] = int64(math.Round(100 * (1 - float64(mutation)/float64(without))))
+		if vectorLog >= yearFivePeak {
+			t.Errorf("a code log at %d times the mutation log on %d GiB free leaves the vector "+
+				"changelog %d bytes, which holds the year-five re-embedding's %d: the pages say it "+
+				"does not, so reword them", k, example/gib, vectorLog, yearFivePeak)
+		}
+	}
+	// TWO THIRDS, beside it: the fifth the pages already print, held by
+	// TestThePagesPrintTheCeilingsAFirstBootCreates, is far below either.
+	if derived := firstBootFit(t, config.Stream{}, example, "")[trackerLog].Bytes; 2*int64(
+		math.Round(100*(1-float64(derived)/float64(without)))) >= shorter[2] {
+		t.Errorf("two thirds makes the mutation log on %d GiB free %d bytes against %d without the "+
+			"code log, which is no longer far less than twice the mutation log's %d %%", example/gib,
+			derived, without, shorter[2])
+	}
+	want := fmt.Sprintf("at twice the mutation log's ceiling a first boot on 100 GiB free creates "+
+		"the mutation log about %d %% shorter than without the code log, and at three times about "+
+		"%d %% shorter, and the vector changelog beside it too small for a year-five re-embedding",
+		shorter[2], shorter[3])
+	for _, file := range []string{"docs/guides/replication.md", "internal/config/retention.go"} {
+		if !strings.Contains(prose(t, file), want) {
+			t.Errorf("%s does not say %q", file, want)
+		}
+	}
+}
+
 // fitRow is one row of replication.md's table of what the code log's
 // reservation costs: the volume it is for, whether it is the row of every
 // volume from there up, and the line as the guide writes it.

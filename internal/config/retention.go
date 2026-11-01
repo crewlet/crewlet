@@ -224,12 +224,31 @@ const (
 	// CodeLogMaxBytes is TWO THIRDS of the mutation log's ceiling, set or
 	// derived.
 	//
-	// THE RATIO IS THE BYTE RATE, the rule DerivedPagesLogDivisor states
-	// for the knowledge base: both logs hold a trailing window, so at the
-	// ratio of what each takes a day a blocked trim fills both in the same
-	// time. What each takes is its records and the barriers its
-	// linearizable reads append (176 bytes each in their signed frames,
-	// code.BarrierRecordBytes), at the reference company:
+	// THE SHARE IS A RESERVATION EVERY NODE MAKES, whether or not the
+	// company hosts any code: a node sizes its state logs on its first
+	// boot, before the company document says whether it does, so the share
+	// is weighed against what it costs the logs beside it, not set at what
+	// the code log takes a day. Below about 626 GiB free it is room the
+	// other logs give up in the fit (docs/guides/replication.md, "What the
+	// code log's reservation costs", whose figures internal/engine's
+	// TestThePagesPrintTheCeilingsAFirstBootCreates computes): two thirds
+	// makes a first boot's mutation log about a fifth shorter, and a
+	// year-five re-embedding still fits the vector changelog at 100 GiB
+	// free with about a fifth of it to spare. A share at the code log's
+	// byte rate — the rule DerivedPagesLogDivisor states for the knowledge
+	// base, at which a blocked trim fills both logs in the same time —
+	// would cost every company far more, codeless ones included: at twice
+	// the mutation log's ceiling a first boot on 100 GiB free creates the
+	// mutation log about 42 % shorter than without the code log, and at
+	// three times about 52 % shorter, and the vector changelog beside it
+	// too small for a year-five re-embedding (internal/engine's
+	// TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore).
+	//
+	// SO A COMPANY WHOSE SEATS WORK THROUGH CHANGES GIVES THE CODE LOG THE
+	// RATIO ITS BYTE RATE IS, below. What each log takes a day is its
+	// records and the barriers its linearizable reads append (176 bytes
+	// each in their signed frames, code.BarrierRecordBytes), at the
+	// reference company:
 	//
 	//   - the mutation log about 12.1 MB a day: 9.9 MB of records,
 	//     MEASURED for the reference company's tasks, comments, edits and
@@ -289,10 +308,7 @@ const (
 	// its push records alone (0.49 of the tracker's records) — and TWO
 	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
 	// thirds of the mutation log's ceiling fills in 0.37 of the mutation
-	// log's time at the least and 0.08 at the most. The ratio is the one
-	// the code log was sized at while its day was a seat's pushes, their
-	// compactions and its git clients' barriers, before the publications
-	// and the changes' records were priced into it. Even a company whose
+	// log's time at the least and 0.08 at the most. Even a company whose
 	// seats only push takes 0.65–1.13 of the mutation log's day here — the
 	// publications of a young repository's every push and a CI's polls are
 	// the width of it — and two thirds is at the least of that range: such
@@ -697,14 +713,15 @@ func (s Stream) UsageMaxBytes() (int64, bool) {
 
 // CodeMaxBytes is the code log's ceiling, and whether it was derived.
 //
-// DERIVED FROM THE MUTATION LOG'S CEILING, set or derived, on the rule
-// [Stream.PagesMaxBytes] states: both logs hold a trailing window of records
-// as long as a blocked trim lasts, so in the ratio of the bytes each takes a
-// day a blocked trim fills both in the same time — two thirds here
-// ([DerivedCodeLogNumerator]), the reference company's pushes and its git
-// clients' reads against its tracker writes and its seats' reads. An operator
-// who sized the mutation log for their company therefore sizes this log with
-// it.
+// DERIVED FROM THE MUTATION LOG'S CEILING, set or derived: both logs hold a
+// trailing window of records as long as a blocked trim lasts, so an operator
+// who sized the mutation log for their company sizes this log with it. The
+// share is two thirds ([DerivedCodeLogNumerator]) and not the byte rate
+// [Stream.PagesMaxBytes] derives the knowledge base's log at: every node
+// reserves this log whether or not the company hosts code, so the share is
+// weighed against what it costs the other logs, and one at the rate a company
+// whose seats work through changes writes here would shorten every company's
+// far more. Such a company sets stream.code_log_max_bytes to its own ratio.
 //
 // Held inside the bounds Tier A accepts for the field, so a node never derives
 // a ceiling its own validation would refuse to be told.

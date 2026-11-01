@@ -195,8 +195,10 @@ const (
 	// an unset stream.code_log_max_bytes derives beside a mutation log of
 	// the tracker's declared size (TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers),
 	// so the log the suites provision and the log a node creates are sized
-	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
-	// what this log takes a day at the reference company, each push priced
+	// by one rule — config's DerivedCodeLogNumerator, which weighs the share
+	// against what it costs the logs beside it, since every node reserves
+	// this log whether or not the company hosts code, and prices what this
+	// log takes a day at the reference company, each push priced
 	// as a coding box's, the most a seat's push takes: 3 000 pushes at the
 	// MEASURED 1 604 bytes a seat's coding box's push alone in its record
 	// (BenchmarkPushLogBytes), 4.8 MB, the compactions that merge their
@@ -211,8 +213,8 @@ const (
 	// whose seats open changes sets its own ratio (DerivedCodeLogNumerator
 	// says how).
 	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and
-	// no barriers, which put the two logs on "the same order" rather than at
-	// the ratio a blocked trim fills both in the same time.
+	// no barriers, which put the two logs on "the same order" rather than
+	// weighing the share against what it costs the logs beside it.
 	CodeLogMaxBytes = (16 << 30) * config.DerivedCodeLogNumerator / config.DerivedCodeLogDenominator
 
 	// CodeLogDuplicates is the window the broker collapses a repeated
