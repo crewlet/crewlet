@@ -48,6 +48,10 @@ func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	if h.Session == nil || h.Session.Turn != parked {
 		t.Fatalf("the head is %+v, want the parked turn's session", h.Session)
 	}
+	if h.Position != e.at() {
+		t.Errorf("the head was read at %s, want the position this node had applied, %s",
+			h.Position, e.at())
+	}
 	if !slices.Equal(turnsOf(h.Endings), []string{failed}) {
 		t.Fatalf("the next turn is told of %v, want the failed turn that ended beside the "+
 			"parked one", turnsOf(h.Endings))
@@ -178,9 +182,9 @@ func TestASeatsPagesKeepEveryRowInItsPlace(t *testing.T) {
 // untouched first and none touched since the cutoff: a row past it, the
 // tombstone an absorbed turn left, and a removed seat's removal.
 //
-// Mutation: drop the tombstone query from Expired and an absorbed turn's
-// tombstone lives for ever; drop the removals' and a removed seat's record
-// does.
+// Mutation: drop the tombstone query from Expired, or the tombstone arm from
+// expiredIn, and an absorbed turn's tombstone lives for ever; drop the
+// removals' query and a removed seat's record does.
 func TestTheRetentionNominatesRowsTombstonesAndRemovals(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -213,6 +217,13 @@ func TestTheRetentionNominatesRowsTombstonesAndRemovals(t *testing.T) {
 	}
 	if got, _ := e.reader().Expired(t.Context(), cutoff, 1); len(got) != 1 || got[0].Turn != absorbed {
 		t.Errorf("a listing of one nominates %+v, want the oldest", got)
+	}
+	// AND THE ROW-LESS TOMBSTONE GOES BY ITS OWN INSTANT, which is all an
+	// absorbed turn has left.
+	e.apply(ConversationSubject("ana", "chat:room", absorbed), OpDelete, ScopeSet{Subject: true},
+		Delete{V: 1, Handle: "ana", Turn: absorbed, ConversationKey: "chat:room", Cutoff: cutoff})
+	if _, tombed := e.tombed("ana", absorbed); tombed {
+		t.Error("the retention of an absorbed turn left its tombstone")
 	}
 }
 
