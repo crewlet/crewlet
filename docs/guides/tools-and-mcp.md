@@ -555,8 +555,9 @@ write that breaks one is refused at the field, saying what to write instead:
 | A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
 | `url` | `https`, or plain `http` only to this host or a private network, with no user name or password in it | Every request carries the server's credentials, which plain http to a public host hands to every network on the way, and an address is shown wherever the server is: a credential goes in a header |
 
-Plain http is accepted for a loopback, private or link-local address, a
-one-label name (a container's or a pod's service name), `localhost`, and
+Plain http is accepted for an address the public internet does not route
+(loopback, private, link-local, shared or otherwise reserved, judged by the
+same rule every outbound dial is), a one-label name (a container's or a pod's service name), `localhost`, and
 names under `.localhost`, `.local` (a Kubernetes cluster's `svc.cluster.local`
 included), `.home.arpa` and `.internal`: by what the address says, never by
 what it resolves to. An address written with a `${VAR}` in it is judged once

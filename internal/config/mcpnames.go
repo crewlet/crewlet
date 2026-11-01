@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
@@ -210,8 +211,8 @@ func MCPAddressProblem(address string) string {
 }
 
 // privateHost reports whether host names a machine no public network routes
-// to: a loopback, private or link-local address, or a name that resolves
-// nowhere on the internet. A one-label name (a container's or a pod's service
+// to: an address httpx.Public does not route (a loopback, private, link-local
+// or reserved one), or a name that resolves nowhere on the internet. A one-label name (a container's or a pod's service
 // name), localhost, and the suffixes set aside for private use: `.localhost`
 // (RFC 6761), `.local` (RFC 6762, and a Kubernetes cluster's
 // `svc.cluster.local`), `.home.arpa` (RFC 8375) and `.internal` (reserved by
@@ -223,8 +224,10 @@ func MCPAddressProblem(address string) string {
 // tomorrow.
 func privateHost(host string) bool {
 	if ip, err := netip.ParseAddr(host); err == nil {
-		ip = ip.Unmap()
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+		// httpx.Public is the one rule of which addresses the public internet
+		// routes (ADR-0072), so an address it does not route is one plain http
+		// may reach, judged the way every dial is.
+		return !httpx.Public(ip)
 	}
 	name := strings.TrimSuffix(strings.ToLower(host), ".")
 	if name == "" {

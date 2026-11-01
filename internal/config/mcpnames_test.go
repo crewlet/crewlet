@@ -203,6 +203,9 @@ func TestAnAddressIsHTTPSOrPrivate(t *testing.T) {
 		"http://192.168.1.20:8000/mcp",
 		"http://169.254.10.10/mcp",
 		"http://[fd12:3456::1]/mcp",
+		// Shared address space (RFC 6598): no public network routes it, and a
+		// tailnet addresses its machines in it. httpx.Public decides, as for a dial.
+		"http://100.64.1.1/mcp",
 		"http://github-mcp:8080/mcp",
 		"http://github-mcp.tools.svc.cluster.local:8080/mcp",
 		"http://dev.localhost:3000/mcp",
@@ -216,8 +219,9 @@ func TestAnAddressIsHTTPSOrPrivate(t *testing.T) {
 	}
 	for _, refused := range []string{
 		"http://mcp.example.com/mcp",
-		"http://100.64.1.1/mcp",
 		"http://8.8.8.8/mcp",
+		"http://[2606:4700::1111]/mcp",
+		"http://[64:ff9b::808:808]/mcp",
 		"http://mcp.example.local.example.com/mcp",
 		"https://user:secret-password@mcp.example.com/mcp",
 		"https://token@mcp.example.com/mcp",
