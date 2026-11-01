@@ -93,3 +93,24 @@ type MCPInstanceFailure struct {
 // at most two bounded sentences, about 1.2 KiB) stays well under the broker's
 // one-megabyte message. The count travels whole beside them.
 const MaxMCPInstances = 200
+
+// MCPInstanceRead is every instance of one server the nodes asked hold, and
+// what each of them said.
+type MCPInstanceRead struct {
+	// Instances are the instances, by node then seat id.
+	Instances []MCPInstance
+	// Nodes is one entry per node asked, in id order.
+	Nodes []MCPInstanceNode
+}
+
+// MCPInstanceNode is what one node asked for its instances said.
+type MCPInstanceNode struct {
+	Node string
+	// Answered is whether the node answered in time; Reason says why not
+	// where it did not.
+	Answered bool
+	Reason   string
+	// Count is how many instances of the server the node holds, never fewer
+	// than it listed ([MaxMCPInstances]).
+	Count int
+}

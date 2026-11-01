@@ -79,27 +79,6 @@ type mcpInstancesReply struct {
 	Count     int                 `json:"count"`
 }
 
-// MCPInstanceRead is every instance of one server the nodes asked hold, and
-// what each of them said.
-type MCPInstanceRead struct {
-	// Instances are the instances, by node then seat id.
-	Instances []coord.MCPInstance
-	// Nodes is one entry per node asked, in id order.
-	Nodes []MCPInstanceNode
-}
-
-// MCPInstanceNode is what one node asked for its instances said.
-type MCPInstanceNode struct {
-	Node string
-	// Answered is whether the node answered in time; Reason says why not
-	// where it did not.
-	Answered bool
-	Reason   string
-	// Count is how many instances of the server the node holds, never fewer
-	// than it listed ([coord.MaxMCPInstances]).
-	Count int
-}
-
 // mcpReading is one instance as this node holds it at the moment it is read:
 // its start's outcome, judged against what its bridge says now.
 type mcpReading struct {
@@ -261,10 +240,10 @@ func (e *Engine) localMCPInstances(ctx context.Context, server string) ([]coord.
 // [mcpInstanceReadBudget]. Each node asked is named in the answer, with
 // whether it answered; a node that did not is never read as one holding
 // nothing. An error is a request this node could not make at all.
-func (e *Engine) MCPInstances(ctx context.Context, server string, nodes []string) (MCPInstanceRead, error) {
+func (e *Engine) MCPInstances(ctx context.Context, server string, nodes []string) (coord.MCPInstanceRead, error) {
 	self := e.selfNode()
 	nodes = slices.Compact(slices.Sorted(slices.Values(nodes)))
-	out := MCPInstanceRead{Instances: []coord.MCPInstance{}, Nodes: make([]MCPInstanceNode, 0, len(nodes))}
+	out := coord.MCPInstanceRead{Instances: []coord.MCPInstance{}, Nodes: make([]coord.MCPInstanceNode, 0, len(nodes))}
 	var peers []string
 	for _, node := range nodes {
 		if node != self {
@@ -277,23 +256,23 @@ func (e *Engine) MCPInstances(ctx context.Context, server string, nodes []string
 		var err error
 		replies, reason, err = e.askMCPInstances(ctx, server, peers)
 		if err != nil {
-			return MCPInstanceRead{}, err
+			return coord.MCPInstanceRead{}, err
 		}
 	}
 	for _, node := range nodes {
 		if node == self {
 			instances, count := e.localMCPInstances(ctx, server)
 			out.Instances = append(out.Instances, instances...)
-			out.Nodes = append(out.Nodes, MCPInstanceNode{Node: node, Answered: true, Count: count})
+			out.Nodes = append(out.Nodes, coord.MCPInstanceNode{Node: node, Answered: true, Count: count})
 			continue
 		}
 		reply, answered := replies[node]
 		if !answered {
-			out.Nodes = append(out.Nodes, MCPInstanceNode{Node: node, Reason: reason})
+			out.Nodes = append(out.Nodes, coord.MCPInstanceNode{Node: node, Reason: reason})
 			continue
 		}
 		out.Instances = append(out.Instances, reply.Instances...)
-		out.Nodes = append(out.Nodes, MCPInstanceNode{Node: node, Answered: true,
+		out.Nodes = append(out.Nodes, coord.MCPInstanceNode{Node: node, Answered: true,
 			Count: max(reply.Count, len(reply.Instances))})
 	}
 	return out, nil

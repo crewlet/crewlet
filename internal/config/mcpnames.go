@@ -183,7 +183,7 @@ func (m *MCPServer) keyProblem(key string) string {
 // tool server carries its credentials (an Authorization header, a seat's own
 // token), and plain http to the public internet hands them to every network
 // on the way. A server on this host or a private network is the operator's
-// own to run unencrypted ([privateHost]). No user name or password in the
+// own to run unencrypted ([MCPPrivateHost]). No user name or password in the
 // address: the address is published wherever the server is shown (its row on
 // `GET /mcp-servers`, a config read, every log line naming it), and a
 // credential belongs in a header, where the engine keeps it out of all of
@@ -202,7 +202,7 @@ func MCPAddressProblem(address string) string {
 		return "carries a user name or password, and an address is shown wherever the " +
 			"server is: send the credential as a header instead (headers: " +
 			"{Authorization: \"Bearer ${TOKEN}\"}), which the engine keeps secret"
-	case u.Scheme == "http" && !privateHost(u.Hostname()):
+	case u.Scheme == "http" && !MCPPrivateHost(u.Hostname()):
 		return "is plain http to a host on a public network, where every request and the " +
 			"credentials in it travel unencrypted: use https. Plain http is for a server " +
 			"on this host or a private network"
@@ -210,7 +210,7 @@ func MCPAddressProblem(address string) string {
 	return ""
 }
 
-// privateHost reports whether host names a machine no public network routes
+// MCPPrivateHost reports whether host names a machine no public network routes
 // to: an address httpx.Public does not route (a loopback, private, link-local
 // or reserved one), or a name that resolves nowhere on the internet. A one-label name (a container's or a pod's service
 // name), localhost, and the suffixes set aside for private use: `.localhost`
@@ -222,7 +222,11 @@ func MCPAddressProblem(address string) string {
 // operator's own address, which names where they run the server, and a public
 // name that resolves to a private address today can resolve to anything
 // tomorrow.
-func privateHost(host string) bool {
+//
+// EXPORTED as the one reading of an MCP server's address the engine makes
+// beside the dial: the rule above, and a server's page warning that a box in a
+// cloud cell cannot reach a server on a private network (internal/api/queries).
+func MCPPrivateHost(host string) bool {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		// httpx.Public is the one rule of which addresses the public internet
 		// routes (ADR-0072), so an address it does not route is one plain http

@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // MCPListingReader is the fleet's listings of its MCP servers' tools
@@ -65,6 +67,27 @@ type MCPServerAnswer struct {
 	// ([configapi.Service.ServerDependants]): empty lists for a server the
 	// configuration does not declare.
 	Dependants configapi.MCPDependants `json:"dependants"`
+
+	// Instances is every instance of the server on the nodes said to hold
+	// one, read from each node at query time (ADR-0021), by node then seat;
+	// InstanceNodes names each node asked, whether it answered and why not,
+	// and how many instances it holds, so a short list is never read as a
+	// server with fewer instances. ALWAYS LISTS.
+	Instances     []MCPInstanceView     `json:"instances"`
+	InstanceNodes []MCPInstanceNodeView `json:"instance_nodes"`
+
+	// LastSuccess is when an instance last answered, and LastFailure the
+	// latest failure of any instance read, kept after it came back: null
+	// where none has, or no node holding one answered.
+	LastSuccess *time.Time      `json:"last_success"`
+	LastFailure *MCPFailureView `json:"last_failure"`
+
+	// Resolved is what the engine decides about the server from its
+	// configuration: how it signs in, where it runs, the timeouts in force,
+	// the integration it reads, the boxes it is given and the placements
+	// expected to fail. Null for a server the configuration does not
+	// declare, which has nothing to resolve.
+	Resolved *MCPResolved `json:"resolved"`
 }
 
 // MCPServerListing is one live node's listing of the server.
@@ -133,11 +156,16 @@ var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of th
 // ([coord.LiveMCPListings]): a node that died, drained or restarted stops
 // counting with its presence, before any sweep removes its record.
 //
+// ITS INSTANCES ARE READ WHERE THEY LIVE: every node whose last beat reports
+// an instance of it, or that carried no report, is asked at query time
+// ([Sources.MCPInstances]), and each is named with whether it answered.
+//
 // THE CONFIGURATION READER'S, as `mcp_servers_status` is admin's and for its
 // reason: the row names the launch command and the first line of each
 // failure. [ErrBadParams] for an empty name, [ErrNotFound] for a server no
 // node configures, reports or lists, [ErrMCPDetailUnavailable] on a node with
-// no copy, and any other error is a store that could not be read.
+// no copy, and any other error is a store that could not be read or a read of
+// the instances this node could not make.
 func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -167,6 +195,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	}
 	out := MCPServerAnswer{
 		Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
+		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -180,6 +209,17 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			Shared: listings[0].Shared, State: MCPNotStarted, UnlistedAnnotations: []string{},
 			RefusedTools: []MCPRefusedTool{}, ShadowedTools: []MCPShadowedTool{}, Nodes: []MCPServerNode{}}
 	}
+	var organization *org.Organization
+	if s.Company != nil {
+		company, roster := s.Company()
+		organization = roster
+		if company != nil {
+			if i := slices.IndexFunc(company.MCPServers, func(m config.MCPServer) bool { return m.Name == name }); i >= 0 {
+				resolved := resolvedOf(company, &company.MCPServers[i])
+				out.Resolved = &resolved
+			}
+		}
+	}
 	if out.Server.Configured {
 		dependants, found, readErr := s.Config.ServerDependants(ctx, name)
 		if readErr != nil {
@@ -188,6 +228,13 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		if found {
 			out.Dependants = dependants
 		}
+	}
+	if s.MCPInstances != nil {
+		read, readErr := s.MCPInstances.MCPInstances(ctx, name, instanceNodes(out.Server))
+		if readErr != nil {
+			return MCPServerAnswer{}, readErr
+		}
+		out.Instances, out.InstanceNodes, out.LastSuccess, out.LastFailure = instancesOf(read, organization)
 	}
 	for _, l := range listings {
 		out.Listed = append(out.Listed, MCPServerListing{

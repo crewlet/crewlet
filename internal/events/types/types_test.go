@@ -76,6 +76,8 @@ func catalogue() []events.Payload {
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
 		OperatorActed{}, BackupRequested{}, ModelActed{},
+		// mcpservers.go
+		MCPServerActed{},
 		// assistant_read.go
 		AssistantConversationRead{},
 		// assistant.go
@@ -110,6 +112,7 @@ var wireTypes = []string{
 	"auxiliary_spend",
 	"backup_requested",
 	"model_acted",
+	"mcp_server_acted",
 	"budget_exhausted",
 	"budget_meters",
 	"compaction_completed",
@@ -339,6 +342,8 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
+	"mcp_server_acted": {"action", "actor", "actor_kind", "failed", "mcp_server", "operator_id",
+		"outcome", "refusal", "seat"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},

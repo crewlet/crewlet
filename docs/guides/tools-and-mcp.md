@@ -1033,8 +1033,9 @@ changes until a revision does.
 **An apply asks every server it finds down to try again at once**, shared or a
 held seat's own, and starts its schedule again. It does not wait for the
 attempt, and it does not restart the server: the spec has not moved, so there
-is nothing to restart it into. Re-activating the revision is therefore the
-gesture for a vendor you know is back. The down server's tools stay where the
+is nothing to restart it into. Re-activating the revision is therefore one
+gesture for a vendor you know is back; [restarting the server](#restarting-a-server-now)
+is the direct one, and it restarts a server that is serving too. The down server's tools stay where the
 apply files them, in the same order as when it is up, refusing until it is
 back.
 
@@ -1064,12 +1065,94 @@ server that is down counts as failed, with what took it down, until it is back.
 | `server_start_retry_scheduled` | info | A shared server's start failed and will be retried |
 | `server_restarted` | info | The server is back: `attempt`, `down_seconds`, and what took it down in `was` |
 | `server_catalogue_changed` | info | It came back with different tools: `added`, `removed` |
+| `server_restart_requested` | info | A person's [restart](#restarting-a-server-now) ended its session, and a fresh one is starting at once |
+| `mcp_restart_applied` | info | A node restarted, or tried now, what a person's restart asked of it: `restarted` and `retried` instances, `by` |
 
 A server that keeps logging `server_exited` soon after each `server_restarted`
 is crashing on something it is asked to do or on its own environment, and its
 `stderr_tail` usually says which. A run of `server_restart_failed` is a server
 that cannot start at all, which is the same diagnosis as a failed first start
 (`server_stderr_tail` above).
+
+### A server's health
+
+Every node keeps each instance it runs in its own memory (a shared server's
+one child, and each held seat's own), and a server's page asks the nodes
+holding its instances when you open it, rather than every node publishing
+every child on every heartbeat. So
+[`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
+lists each **instance**: the seat it runs for, the node running it, whether it
+is running, failed or waiting, since when, how many times it was restarted,
+the tools it serves, why it failed if it did, its last failure even once it is
+back, and when it last answered (a start that listed its tools, or a tool call
+that came back). Each node asked is named with whether it answered within two
+seconds; a node that did not is never read as one holding nothing.
+
+The heartbeat still carries what every reader needs on every beat, bounded:
+per node and server, since when its longest-failed instance has been down
+(the same instant across every retry of one outage), the class of the failure
+it names, and how many times its instances came back. A count that climbs
+while the server stays up is a server that flaps.
+
+The page also carries what the engine decides from the configuration, so no
+screen works it out again: how the engine signs in to the server (an
+integration's per-agent credential, values the configuration sets, or
+nothing), that a local server runs on the engine host, the startup and per-call
+timeouts in force (120 and 300 seconds where none is set), the integration a
+per-agent server reads and the keys it is started with, the seats whose box is
+given the server and the cell each box runs in, and two placements expected to
+fail: a server on a private network given to an `e2b` box, which runs outside
+the company's network, and a local server given to a box that runs its own
+image (`container` or `e2b`), whose image or setup steps must provide the
+command. A server's address is shown with any credential in its query withheld.
+
+### Why a server failed
+
+A failure the engine records about a server carries a **class** beside its
+sentence, decided where the facts are: the HTTP status a remote server
+answered, what became of a local server's process, the dial. The page words
+each class and its remedy; the sentence is the engine's, with what the server
+or its process said (redacted, and cut to 512 bytes).
+
+| Class | What happened |
+|---|---|
+| `blocked_address` | An address a remote party named is one the engine does not dial: private, loopback or cloud metadata |
+| `dns` | The host did not resolve |
+| `unreachable` | Nothing answered: a refused or timed out connection, a gateway answering 5xx for a server behind it, or a handshake past `startup_timeout_seconds` |
+| `tls` | The server's certificate is expired, self-signed or names another host |
+| `needs_sign_in` | A 401 asking for a Bearer token the engine did not send |
+| `credential_rejected` | Any other 401: the credential was refused or has expired |
+| `missing_permission` | A 403: the credential signs in and may not do what was asked |
+| `no_endpoint` | A 404 or 405: no MCP endpoint at that address (a retired SSE address answers this way) |
+| `not_mcp` | The address answered with a web page (a login page, a proxy, a captive portal), or a 400 that is not about the protocol's version |
+| `old_protocol` | The server speaks none of the protocol versions the engine does |
+| `rate_limited` | A 429: the server asked the engine to slow down |
+| `empty_tools` | The server answered and listed no tool |
+| `command_not_found` | A local server's command is not on the host's `PATH`, or is a path to nothing |
+| `exited` | A local server's process exited, before it answered or after it had been serving |
+
+A failure that fits none of them has no class, and its sentence says what
+happened: the engine never guesses a class, since a wrong remedy sends you to
+fix the wrong thing.
+
+### Restarting a server now
+
+**Restart** on a server's page
+([`POST /mcp-servers/{name}/retry`](../reference/api-endpoints.md#post-mcp-serversnameretry))
+restarts every instance of the server on every node, or one agent's instance
+on the node holding that agent's seat. An administrator may restart a server
+without stepping up, since it changes no configuration and no credential; Ask
+Crewlet prepares one for your approval.
+
+The request is a stamp every node hears: each restarts the instances whose
+state began before it. A serving instance's session ends and a fresh one starts
+at once; an instance that is down is tried now, its schedule started again
+rather than at its next attempt up to six minutes away; and an agent's instance
+whose first start failed gets a pass now. A restart naming a seat is carried out
+only by the node that holds the seat and can prove it. Calls in flight when a
+session ends are refused as possibly having taken effect, as for any server
+that goes down. A restart is never logged as the server failing, and it is
+recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 
 ---
 

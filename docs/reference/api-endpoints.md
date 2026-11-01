@@ -383,6 +383,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-catalogue)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `admin`** (see [below](#get-mcp-serversname)) |
+| `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9251,6 +9252,19 @@ it against the integration's latest report), and its `server_exited` or
 integration minting them — bounded the same way, and `wait_seat` its seat; the
 node's `mcp_server_awaiting_credential` line carries it.
 
+`error_class` is why that instance failed, in the classes a person tells apart
+by what fixes them ([Tools and MCP › Why a server failed](../guides/tools-and-mcp.md#why-a-server-failed)),
+or `""` where none fits. `down_since` is when the longest-failed instance on the
+node stopped serving, or first failed to start, and stays the same instant
+across the retries of one outage (`null` when none has failed). `restarts` is
+how many times the node brought the server's instances back since each was
+started from its spec, summed: a count that climbs while the server stays up is
+a server that flaps. The `url` is answered with its credentials withheld: the
+value of any query parameter whose name marks a credential (`key`, `token`,
+`secret`, `sig`, `pass`, `auth`, `session`, `credential` and the like, in any
+case) or whose value has a known credential's shape reads `redacted`, as does a
+user name in the address.
+
 `unlisted_annotations` are the entry's `tool_annotations` keys that no
 instance started on a reporting node lists a tool for — by the server's own
 name or with the entry's `tool_prefix` — sorted: each overrides nothing
@@ -9296,9 +9310,11 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
      "refused_count": 1, "shadowed_tools": [], "shadowed_count": 0,
      "nodes": [
        {"node": "node-1", "reported": true, "started": 2, "failed": 0, "waiting": 0, "tools": 26,
-        "error": "", "error_seat": "", "wait": "", "wait_seat": ""},
+        "error": "", "error_seat": "", "wait": "", "wait_seat": "",
+        "error_class": "", "down_since": null, "restarts": 0},
        {"node": "node-2", "reported": true, "started": 1, "failed": 1, "waiting": 0, "tools": 26,
-        "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": ""}
+        "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": "",
+        "error_class": "credential_rejected", "down_since": "2026-11-01T08:52:10Z", "restarts": 4}
      ]}
   ],
   "builtin": [
@@ -9449,6 +9465,45 @@ it under, so a node that drained, died or restarted stops counting at once.
   answers it: the `mcp_env` blocks and box entries it clears, and the stored
   values nothing reads once it is gone. Empty lists for a server the
   configuration does not declare.
+- `instances` is every instance of the server, **read from the nodes holding
+  them when you ask** ([Tools and MCP › A server's health](../guides/tools-and-mcp.md#a-servers-health)):
+  each node whose last heartbeat reports an instance of it, and each node whose
+  heartbeat carried no report, is asked over the broker within two seconds. Each
+  instance names its `seat` (`""` for a shared server's one instance), `node`,
+  `state` (`running`, `failed` or `waiting`), `since` (when that state began:
+  its session's start, when it stopped serving or first failed, or when it was
+  first held back), `restarts`, `tools`, `failure` (why a failed instance is not
+  serving: `{class, said, at, node, seat}`, `null` otherwise), `wait` (what a
+  waiting one waits for) and `last_failure` (its latest failure, kept after it
+  came back), and `last_answer` (when it last answered: a start that listed its
+  tools, or a tool call that came back). Every `said` is the engine's sentence
+  carrying what a server or its process said: redacted, cut to 512 bytes, and
+  somebody else's text. A node answers at most 200 instances of a server.
+- `instance_nodes` names each node asked: whether it `answered`, the `reason`
+  it is named for where it did not, and `count`, how many instances of the
+  server it holds, never fewer than it listed. A node that did not answer is
+  never read as one holding nothing.
+- `last_success` and `last_failure` are the latest answer and the latest
+  failure across the instances read, `null` where there is none.
+- `resolved` is what the engine decides about the server from its
+  configuration, so a screen never re-derives it, `null` for a server the
+  configuration does not declare: `auth` (`integration` for a per-agent server
+  that reads each agent's own credential from one of the company's
+  integrations, `headers` for one the engine sends values the configuration
+  sets, HTTP headers or a local server's environment, and `none`); `runs_on`
+  (`engine_host` for a local server, `""` for a remote one); `timeouts`
+  (`startup_seconds` and `request_seconds` in force, the engine's 120 and 300
+  applied where the configuration sets none, and whether each is the default);
+  `binding` (the integration a per-agent server reads: its `vendor`, `by`
+  `declared` in `seat_credentials` or `recognised` from its address or command,
+  and the `keys` it is started with, `{field, key}` by name; `null` for none);
+  `box_seats` (the seats whose executor box is given the server through
+  `sandbox.mcp.servers`, each with the `cell` its box runs in); and `warnings`
+  (placements expected to fail, `{kind, seat, cell, message}`:
+  `private_address_in_cloud_box` for a server on a private network given to a
+  box in the `e2b` cell, which runs outside that network, and `command_in_box`
+  for a local server given to a box that runs its own image, `container` or
+  `e2b`, which must provide its command).
 
 Never a credential: no `env`, no `headers`, no seat's `mcp_env` value. A server
 no node configures, reports or lists is `404 not_found`. A node that has not yet
@@ -9482,9 +9537,68 @@ read the fleet's listings, or could not read its store, answers
   "tool_count": 42,
   "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
   "instructions": "",
-  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []}
+  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []},
+  "instances": [
+    {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
+     "restarts": 1, "tools": 42, "failure": null, "wait": "",
+     "last_failure": {"class": "exited", "said": "its process exited (exit status 1)",
+                      "at": "2026-11-01T08:39:58Z", "node": "node-a", "seat": "backend-dev"},
+     "last_answer": "2026-11-01T09:02:11Z"}
+  ],
+  "instance_nodes": [{"node": "node-a", "answered": true, "reason": "", "count": 1}],
+  "last_success": "2026-11-01T09:02:11Z",
+  "last_failure": {"class": "exited", "said": "its process exited (exit status 1)",
+                   "at": "2026-11-01T08:39:58Z", "node": "node-a", "seat": "backend-dev"},
+  "resolved": {"auth": "integration", "runs_on": "engine_host",
+               "timeouts": {"startup_seconds": 120, "request_seconds": 300,
+                            "startup_default": true, "request_default": true},
+               "binding": {"vendor": "github", "by": "recognised",
+                           "keys": [{"field": "TOKEN", "key": "GITHUB_PERSONAL_ACCESS_TOKEN"}]},
+               "box_seats": [{"seat": "backend-dev", "cell": "container"}],
+               "warnings": [{"kind": "command_in_box", "seat": "backend-dev", "cell": "container",
+                             "message": "seat backend-dev's executor runs in a container box, which starts this server's command from its own image: the image, or a setup step, must provide github-mcp-server"}]}
 }
 ```
+
+### `POST /mcp-servers/{name}/retry`
+
+Restarts one MCP server now, for the **Restart** action on its page under
+**Settings › MCP & tools**: every instance of it on every node, or, with a
+`seat`, that agent's instance on the node holding the seat. It is decided by
+`tools.retry`, **an administrator's at any recency** and Ask Crewlet's only on
+the person's approval: it changes runtime state, never the configuration or a
+credential, since each instance starts again from the spec it already runs.
+
+The body is empty to restart every instance, or `{"seat": "<handle>"}` for one
+agent's. The answer is `202 Accepted` with the request as recorded:
+
+```json
+{"server": "tracker", "seat": "", "at": "2026-11-01T09:05:00Z", "node": "node-a"}
+```
+
+**A stamp, not a command.** The request is one record in the coordination
+store, which every node watches; each node restarts every instance it runs
+whose state began **before** `at`: a serving instance's session is ended and a
+fresh one starts at once, an instance that is down is tried now with its
+restart schedule started again, and an agent's instance whose first start
+failed gets a pass now. A request naming a seat is acted on by the node that
+holds the seat alone. So the restart has happened on a node once its instances
+read a `since` after `at` in [the server's detail](#get-mcp-serversname), and
+the same request heard twice, late, or after a node restarts restarts nothing
+more. The record goes when the configuration stops declaring the server or the
+seat.
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | The configuration declares no such server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
+| `404` | `no_such_seat` | The organization has no agent seat by that handle |
+| `503` | `unavailable` | The node could not record the request; ask again |
+
+Every call is recorded in the runtime audit as one `mcp_server_acted`, the
+guard's refusals included: who asked, which server, the seat if one, and how it
+ended, never anything the server is started with.
 
 ### `GET /fleet`
 
