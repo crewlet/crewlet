@@ -112,7 +112,13 @@ func launchRecoverable(t *testing.T) recoverableRun {
 		model: "claude-golden", runIn: config.PlacementE2B})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
-	if err := c.Tools.Register(tool, tools.OriginBuiltin); err != nil {
+	// AN MCP SERVER'S TOOL, never a builtin: every builtin is decided by the
+	// authority table (builtin.TestEveryRegisteredToolHasAnAuthorityRule),
+	// and a seat's surface leaves off one the table refuses before any
+	// object is named ([Company.withheldFrom]) — which a builtin with no row,
+	// as the probe would be, always is. The recovery rebuilds the surface
+	// the seat is offered, so the probe has to be a tool it is offered.
+	if err := c.Tools.Register(tool, tools.Origin("probe")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	e, jobs := launchRig(t, c, launched)
