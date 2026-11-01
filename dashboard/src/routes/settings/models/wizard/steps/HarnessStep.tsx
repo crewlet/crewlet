@@ -1,12 +1,12 @@
 /**
- * The model's name and the coding CLI it runs.
+ * The model's name and the harness it runs.
  *
  * BOTH ARE THE MODEL'S IDENTITY ON AN EDIT (decision D4). Seats and the
  * assistant name the model by its name, and the engine refuses a rename; a
- * model on another CLI is another model. So an edit shows both, the name read
- * only and the other CLIs unavailable with the way to get there.
+ * model on another harness is another model. So an edit shows both, the name read
+ * only and the other harnesses unavailable with the way to get there.
  *
- * THE CARDS SAY WHAT EACH CLI CAN DO, as "Jobs" (design QA M7): whether it can
+ * THE CARDS SAY WHAT EACH HARNESS CAN DO, as "Jobs" (design QA M7): whether it can
  * run a seat's coding is the one difference that decides the rest.
  */
 
@@ -17,15 +17,15 @@ import { HARNESSES, KEY_MAX, canExecute, type Harness, type Draft } from "../dra
 
 const HARNESS_WORDS: Record<Harness, { description: string; methods: string }> = {
   "claude-code": {
-    description: "Anthropic's coding CLI.",
+    description: "Anthropic's harness.",
     methods: "Key, token, login or cloud",
   },
   codex: {
-    description: "OpenAI's coding CLI.",
+    description: "OpenAI's harness.",
     methods: "API key or ChatGPT",
   },
   opencode: {
-    description: "An open CLI for many providers.",
+    description: "An open harness for many providers.",
     methods: "The provider's API key",
   },
 };
@@ -76,7 +76,7 @@ export function HarnessStep({
         )}
       </FormField>
       <ChoiceCards
-        label="Coding CLI"
+        label="Harness"
         minCardWidth="sm"
         density="compact"
         value={draft.harness}
@@ -96,7 +96,7 @@ export function HarnessStep({
             ...(other
               ? {
                   disabled: true,
-                  disabledReason: `A model keeps its CLI. To run ${product(a)}, add a model on it, then remove this one with its jobs moved.`,
+                  disabledReason: `A model keeps its harness. To run ${product(a)}, add a model on it, then remove this one with its jobs moved.`,
                 }
               : {}),
           };

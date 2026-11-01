@@ -338,10 +338,10 @@ export interface PhaseRound {
 }
 
 /**
- * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * One harness run of a phase (`types.PhaseInvocation`): one process driving its
  * own loop over the phase's tools, from launch to exit — the unit the engine
- * observes for every CLI, where a round is one model request that a CLI's
- * record shows for most CLIs and not for all.
+ * observes for every harness, where a round is one model request that a harness's
+ * record shows for most harnesses and not for all.
  */
 export interface PhaseInvocation {
   started_at: string;
@@ -350,7 +350,7 @@ export interface PhaseInvocation {
   provider_key?: string;
   model?: string;
   /**
-   * How the run ended: `end` (its model stopped), `cap` (its CLI's own turn
+   * How the run ended: `end` (its model stopped), `cap` (its harness's own turn
    * cap), `stopped` (the engine ended it) or `failed`. A string rather than a
    * union, so an outcome a newer engine records arrives as itself.
    */
@@ -363,7 +363,7 @@ export interface PhaseInvocation {
   first_round: number;
   last_round: number;
   /**
-   * False for a run whose CLI's record showed no model requests: the whole
+   * False for a run whose harness's record showed no model requests: the whole
    * run is then ONE round, which nothing timed on its own — its span is the
    * run's.
    */
@@ -378,7 +378,7 @@ export interface PhaseInvocation {
 
 /**
  * One tool call a phase is running right now (`types.RunningCall`) — one entry
- * of `running_calls`, since a coding CLI may run a response's calls at once.
+ * of `running_calls`, since a harness may run a response's calls at once.
  */
 export interface RunningCall {
   /** The call's own id: what its `tool_executions` row carries as `call_id`
@@ -463,10 +463,10 @@ export interface ProviderLimit {
   resets_at: string | null;
   /** When the condition began, in UTC. */
   since: string;
-  /** The CLI the limited entry drives (`claude-code`), a key of
+  /** The harness the limited entry drives (`claude-code`), a key of
    *  `HARNESS_PRODUCTS`; empty where the report did not say. */
   harness: string;
-  /** Whether that CLI signs in on a plan rather than a metered key. */
+  /** Whether that harness signs in on a plan rather than a metered key. */
   subscription: boolean;
 }
 
@@ -541,7 +541,7 @@ export interface LiveCall {
   /** Each round's own timing and tokens, as the loop recorded it. */
   rounds?: PhaseRound[] | null;
   /**
-   * The phase's CLI runs that have ENDED, in order. The run in flight is not
+   * The phase's harness runs that have ENDED, in order. The run in flight is not
    * on it until it ends: its rounds are the ones past every entry's
    * `last_round`. Status, like `rounds`: a reader withheld the body is sent
    * it.
@@ -559,14 +559,14 @@ export interface LiveCall {
    */
   round_started_at?: string;
   /**
-   * When the CLI run in flight was launched — the run whose rounds are past
+   * When the harness run in flight was launched — the run whose rounds are past
    * every entry in `invocations`, which lists only the runs that have ended.
    * Absent between runs.
    */
   run_started_at?: string;
   /**
    * Every tool call running RIGHT NOW, in the order they arrived — a coding
-   * CLI may run a response's calls at once. Absent between calls.
+   * harness may run a response's calls at once. Absent between calls.
    */
   running_calls?: RunningCall[] | null;
   /**
@@ -872,7 +872,7 @@ export interface ExecutorRow {
    * What this run called through the MCP bridge, in order.
    *
    * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
-   * made by its coding CLI, a process outside the engine, over the MCP bridge
+   * made by its harness, a process outside the engine, over the MCP bridge
    * — minutes or hours apart and possibly across a restart. ALWAYS AN ARRAY on
    * a row the store answered, empty for a run that has called nothing yet;
    * absent where it is not known — a live entry whose row is not read yet, or
@@ -923,7 +923,7 @@ export interface BridgeCall {
  * One slice of spend, in TOKENS — the one unit every call is measured in.
  *
  * THE ENGINE'S BUCKET CARRIES A PRICE BESIDE THESE, AND THIS DECLARES NONE OF
- * IT. Only a subscription coding CLI quotes what a run cost, so a currency
+ * IT. Only a subscription harness quotes what a run cost, so a currency
  * figure covers the minority of calls that quote one while the token count
  * beside it covers all of them — and on a screen the first reads as the
  * company's spend. The dashboard renders tokens only, never money (rule 19 in
@@ -7816,7 +7816,7 @@ export interface QueryMap {
   llm_entries: ModelEntriesAnswer;
   /** Where a model's executors can run, on each node. Admin. */
   llm_runners: RunnersAnswer;
-  /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
+  /** The models a harness can run (`harness`, and `provider` for OpenCode). Admin. */
   llm_models: ModelsAnswer;
   /** One device sign-in (`id`). Admin. */
   llm_device_sign_in: ModelDevice;

@@ -137,7 +137,7 @@ export function ByJob({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
   const options = Object.fromEntries(
     CATEGORY_ORDER.map((c) => [
       c,
-      // CODING IS OFFERED ONLY ON A CLI THAT CAN RUN A SEAT'S EXECUTOR.
+      // CODING IS OFFERED ONLY ON A HARNESS THAT CAN RUN A SEAT'S EXECUTOR.
       optionsFor(c === "coding" ? data.models.filter((m) => m.executor) : data.models),
     ]),
   ) as Record<JobCategory, SelectOption[]>;

@@ -247,7 +247,7 @@ test("every alarm's fix opens its flow at the right step, and arrives neutral", 
  */
 test("a limit offers to move the seats it holds to a model that answers, with them added", () => {
   const data = company();
-  // A READY MODEL whose CLI runs no coding cannot take coding, which these seats need.
+  // A READY MODEL whose harness runs no coding cannot take coding, which these seats need.
   data.models.push(
     ...modelsData({
       entries: [

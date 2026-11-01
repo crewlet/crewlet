@@ -50,7 +50,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 		chainMember{key: "plan", agent: "claude-code", model: "opus"},
 		chainMember{key: "spare", agent: "claude-code", model: "haiku", env: map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com"}},
 	)
-	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm", At: time.Now()}) {
+	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Answer: limitReport(time.Now()), At: time.Now()}) {
 		t.Fatal("the premise: the plan entry sits out")
 	}
 	e := epochEngine(c)

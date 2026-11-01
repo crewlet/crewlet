@@ -166,7 +166,7 @@ test("each row opens the model's page, and its actions column is named", () => {
 });
 
 /**
- * NOTHING IN A ROW IS A CONTROL PRETENDING NOT TO BE. The CLI's mark is an
+ * NOTHING IN A ROW IS A CONTROL PRETENDING NOT TO BE. The harness's mark is an
  * image the row's link lies over, never raised and never pressed; the names
  * are raised only so a pointer reaches their tip, and so they are a real link
  * to the page the row opens, out of the tab order and hidden from assistive
@@ -189,7 +189,7 @@ test("the mark is an inert image, and the names are a real link to the row's pag
 });
 
 /**
- * A ROW READS AS ONE: its CLI's mark centred against the two lines beside it,
+ * A ROW READS AS ONE: its harness's mark centred against the two lines beside it,
  * and the secret a model signs in with set exactly as its model id is (the
  * same type, tone and one-line clamp), each under its label at the same
  * spacing, because both pairs are one rule (`.models-pair`).

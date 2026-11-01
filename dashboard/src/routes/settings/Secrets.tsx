@@ -226,7 +226,7 @@ async function readReferences(
  * integration's setup `setup`, and an integration's provisioning pass
  * `provision`. A `crewlet` command run while its node's engine is stopped
  * writes the store directly and keeps its own word: `cli` for
- * `crewlet secrets set`, `llm-login` for a coding CLI's captured token or
+ * `crewlet secrets set`, `llm-login` for a harness's captured token or
  * exported login, `provision` for a provisioning run.
  *
  * `iam` marks the engine's own keys, which the listing never names, and a
@@ -238,7 +238,7 @@ const PROVENANCE: Record<string, string> = {
   setup: "written by an integration's setup",
   provision: "minted by an integration's provisioning pass",
   cli: "set with crewlet secrets set while its node's engine was stopped",
-  "llm-login": "a coding CLI's login, stored by crewlet llm while its node's engine was stopped",
+  "llm-login": "a harness's login, stored by crewlet llm while its node's engine was stopped",
   models:
     "a model's credential, stored from Settings › Models once it signed the model in on a test call",
 };
@@ -254,7 +254,7 @@ const SOURCE_WORDS: Record<string, string> = {
   setup: "Integration setup",
   provision: "Provisioning pass",
   cli: "CLI",
-  "llm-login": "CLI login",
+  "llm-login": "Harness login",
   models: "Models",
 };
 

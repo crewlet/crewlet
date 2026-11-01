@@ -5,7 +5,7 @@
 
 import type { Invocation, PhaseRecord, ToolCall } from "~/lib/phases.ts";
 
-/** One CLI run that made round 1, observed and ended by its model, unless the
+/** One harness run that made round 1, observed and ended by its model, unless the
  *  suite says otherwise. */
 export function invocation(over: Partial<Invocation> = {}): Invocation {
   return {

@@ -183,7 +183,7 @@
   gap: var(--spacing-1);
 }
 
-/* A named CLI mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
+/* A named harness mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
 .models-cli-mark {
   display: inline-flex;
   flex: none;
@@ -262,7 +262,7 @@
 }
 
 /*
- * A model's row head: its CLI's mark centred against the two lines beside it
+ * A model's row head: its harness's mark centred against the two lines beside it
  * (the owner's call, over the earlier level-with-the-key), and the key and
  * model id one line each with an ellipsis, whole in the tooltip (design QA
  * M15).

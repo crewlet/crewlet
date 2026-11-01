@@ -38,7 +38,7 @@ function seatsFor(draft: Draft, seats: readonly string[]): string {
 export function modelDraftFields(seats: readonly string[]): readonly DraftFieldSpec<Draft>[] {
   return [
     { path: "name", label: "Name", read: (d) => d.key },
-    { path: "harness", label: "Coding CLI", read: (d) => product(d.harness) },
+    { path: "harness", label: "Harness", read: (d) => product(d.harness) },
     { path: "method", label: "Method", read: (d) => METHOD_WORDS[d.method].label },
     { path: "model", label: "Model", read: (d) => d.model },
     {

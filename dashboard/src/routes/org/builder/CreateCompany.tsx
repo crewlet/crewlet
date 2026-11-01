@@ -446,7 +446,7 @@ export function NextSteps({
           {managedBy === null ? (
             <>
               <span className="t-caption">
-                Agents can’t work until one is added. Every model runs through a coding CLI: Models
+                Agents can’t work until one is added. Every model runs through a harness: Models
                 adds one, signs it in and tests it.
               </span>
               <div className="row">

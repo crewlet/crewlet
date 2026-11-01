@@ -104,15 +104,15 @@ describe("buildWaterfall", () => {
     expect(w.open).toBe(false);
   });
 
-  // A PHASE'S CLI RUNS hold the rounds each names, by round number — never by
+  // A PHASE'S HARNESS RUNS hold the rounds each names, by round number — never by
   // instant: the second run's first round here STARTS before that run was
   // launched (the engine dates a request from the last thing it saw end), and
   // it is still the second run's. A run that failed is marked, and a run whose
-  // CLI showed no requests is one round drawn over the run itself.
+  // harness showed no requests is one round drawn over the run itself.
   //
   // Mutation: file a round under the run whose span holds its start, or leave
   // an unobserved run's round untimed, and this fails.
-  test("nests each CLI run's rounds under it, by the rounds the run names", () => {
+  test("nests each harness run's rounds under it, by the rounds the run names", () => {
     const timed = (round: number, startMs: number, durationMs: number, toolCalls = 0) => ({
       round,
       startedAt: startMs ? iso(startMs) : "",
@@ -176,14 +176,14 @@ describe("buildWaterfall", () => {
     expect(w.spans.map((s) => `${s.depth}:${s.kind}:${s.label}`)).toEqual([
       "0:turn:Turn",
       "1:phase:Execute",
-      "2:invocation:CLI run 1",
+      "2:invocation:Harness run 1",
       "3:model:Round 1",
       "4:tool:look",
       "3:model:Round 2",
-      "2:invocation:CLI run 2",
+      "2:invocation:Harness run 2",
       // Round 3 began at 4.5s, before run 2's launch at 5s — and is run 2's.
       "3:model:Round 3",
-      "2:invocation:CLI run 3",
+      "2:invocation:Harness run 3",
       "3:model:Round 4",
       "4:tool:post",
     ]);
@@ -240,9 +240,9 @@ describe("buildWaterfall", () => {
     expect(w.spans.map((s) => `${s.depth}:${s.kind}:${s.label}`)).toEqual([
       "0:turn:Turn",
       "1:phase:Execute",
-      "2:invocation:CLI run 1",
+      "2:invocation:Harness run 1",
       "3:model:Round 1",
-      "2:invocation:CLI run 2",
+      "2:invocation:Harness run 2",
       "3:model:Round 2",
       "4:tool:run_tests",
     ]);
@@ -251,8 +251,8 @@ describe("buildWaterfall", () => {
   });
 
   // THE LAUNCH THE FRAME STATES is where the run in flight begins: its first
-  // round starts once the CLI is up and its model has begun, which is later.
-  // And a run with nothing timed under it yet — the CLI starting, its model
+  // round starts once the harness is up and its model has begun, which is later.
+  // And a run with nothing timed under it yet — the harness starting, its model
   // writing the first request — is still a run, drawn open from its launch.
   test("draws the run in flight from the launch the frame states, with or without rounds", () => {
     const now = T0 + 30_000;
@@ -374,7 +374,7 @@ describe("buildWaterfall", () => {
     expect(order).toContain("2:writer");
   });
 
-  // EVERY CALL IN FLIGHT IS A SPAN, each by its own id: a CLI runs a
+  // EVERY CALL IN FLIGHT IS A SPAN, each by its own id: a harness runs a
   // response's calls side by side, and a waterfall that drew one of them hid
   // the call the turn was actually waiting on.
   test("a running phase, its round in flight and every call running now end at now", () => {

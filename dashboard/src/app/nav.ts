@@ -1000,7 +1000,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Models",
         icon: "cpu",
         path: ["settings", "models"],
-        hint: "Models, the CLIs they run through, and how each signs in",
+        hint: "Models, the harnesses they run through, and how each signs in",
         keywords: ["models", "keys", "llm", "provider", "cli", "api key", "subscription"],
         group: "Runtime",
         // EVERY MEMBER'S: each model's condition is what tells a member why

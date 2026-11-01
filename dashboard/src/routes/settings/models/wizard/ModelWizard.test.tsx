@@ -129,7 +129,7 @@ beforeEach(() => {
     source: "models.dev",
     fetched_at: null,
     provider: "anthropic",
-    aliases: [{ id: "sonnet", name: "Sonnet", detail: "The CLI's latest Sonnet" }],
+    aliases: [{ id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet" }],
     models: [{ id: "claude-opus-5-5", name: "Claude Opus 5.5" }],
     docs_url: "https://example.com/models",
   };
@@ -690,7 +690,7 @@ test("a seat the company no longer has, named in the address, is not preselected
   ]);
 });
 
-test("coding named in the address is not preselected on a CLI that runs no coding", () => {
+test("coding named in the address is not preselected on a harness that runs no coding", () => {
   const d = data();
   d.models.push(
     ...modelsData({

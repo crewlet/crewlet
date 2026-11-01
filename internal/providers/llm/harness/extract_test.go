@@ -619,7 +619,12 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			prov := &Provider{profile: p, model: "haiku", harness: "claude-code", key: "default", now: time.Now}
+			// Pinned to reportedAt (00:16 in Berlin), when the case's 3pm
+			// reset lies ahead. On the real clock, the case would find no
+			// sit-out from 3pm to 3:05 Berlin time, when the reset has
+			// passed by less than clockResetGrace.
+			prov := &Provider{profile: p, model: "haiku", harness: "claude-code", key: "default",
+				now: func() time.Time { return reportedAt }}
 			if out := extract(p, tc.stdout); out.located {
 				t.Fatalf("the answer was located (%q) — this case is about one that is not", out.text)
 			}

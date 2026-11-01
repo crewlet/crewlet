@@ -1,5 +1,5 @@
 /**
- * How many CLI processes the model runs at once, how long one may go without
+ * How many harness processes the model runs at once, how long one may go without
  * progress, and its web tools.
  *
  * NUMBERS ARE NUMBERS (design QA Minor 6): narrow fields for a few digits,
@@ -41,7 +41,7 @@ export function LimitsStep({
       <FormField
         label="Processes at once"
         optional
-        helper={`CLI processes on the engine host for this model. Executors are not counted. Empty means ${DEFAULT_HARNESS_MAX_CONCURRENT}.`}
+        helper={`Harness processes on the engine host for this model. Executors are not counted. Empty means ${DEFAULT_HARNESS_MAX_CONCURRENT}.`}
         error={errors.concurrent}
       >
         {(field) => (
@@ -85,7 +85,7 @@ export function LimitsStep({
         )}
       </FormField>
       <Switch
-        label="Deny the CLI's web tools"
+        label="Deny the harness's web tools"
         description={
           held
             ? `${WEB_TOOLS_HELP} Ask Crewlet runs on this model, so they stay denied.`

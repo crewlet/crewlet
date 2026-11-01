@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { andList } from "./words.ts";
 
 describe("andList", () => {
-  // THE ENGINE'S RULE BY DEFAULT, so a list the CLI says through
+  // THE ENGINE'S RULE BY DEFAULT, so a list the harness says through
   // `internal/words` reads the same on a screen. Mutation: add the serial
   // comma by default and the three-item case fails.
-  it("says a list the way the CLI does", () => {
+  it("says a list the way the harness does", () => {
     expect(andList([])).toBe("");
     expect(andList(["a"])).toBe("a");
     expect(andList(["a", "b"])).toBe("a and b");

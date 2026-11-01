@@ -289,7 +289,7 @@ export interface PromptWeight {
  * claim a structure nobody measured and present two prompts as a range of
  * one. So each is drawn, in publish order, keyed by its event.
  *
- * The executor's own launch measures the prompt its coding CLI was handed
+ * The executor's own launch measures the prompt its harness was handed
  * once, as the phase opens; a run's collection re-enters no conversation, so
  * it publishes no measurement of its own.
  */

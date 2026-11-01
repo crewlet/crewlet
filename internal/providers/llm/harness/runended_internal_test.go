@@ -85,6 +85,12 @@ func TestAnExecutorRunThatSpentThePlanSitsItsEntryOut(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			p := shipped(t, tc.agent, tc.model)
+			// The provider's clock is pinned to reportedAt (16:16 in
+			// Vancouver, 23:16 UTC), when both resets the cases name lie
+			// ahead. On the real clock, a case would find its reset passed
+			// less than clockResetGrace ago for five minutes of each day,
+			// and so no sit-out.
+			p.now = func() time.Time { return reportedAt }
 			end := RunEnd{Answer: tc.answer, Error: tc.err, Event: tc.event, Failed: tc.failed}
 			if got := p.RunEnded(t.Context(), end); got != tc.wantBenched {
 				t.Fatalf("RunEnded = %v, want %v", got, tc.wantBenched)

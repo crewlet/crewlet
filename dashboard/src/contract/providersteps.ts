@@ -19,7 +19,7 @@
  * values through it — and the import then takes the offline route, and the
  * node publishes the revision when it starts again.
  *
- * `-capture-token` stores a headless token in the secret store under the CLI's
+ * `-capture-token` stores a headless token in the secret store under the harness's
  * own token variable, which an entry naming no `auth.token` reads, so the
  * entry needs nothing but its model. With the node stopped it reaches the
  * fleet's store through the node's own broker — except on a member of a
@@ -48,7 +48,7 @@ providers:
     local: {}
     default_run_in: direct
 
-# 3. Sign its CLI in to your subscription, and check it end to end
+# 3. Sign its harness in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
 #    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
 #    reach the fleet's store)

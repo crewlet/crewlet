@@ -3,7 +3,7 @@
  *
  * The dashboard measures spend in TOKENS and never in a currency
  * (`docs/reference/dashboard-design.md`, rule 19). The engine records a price
- * where one is reported — a subscription coding CLI quotes what a run cost and
+ * where one is reported — a subscription harness quotes what a run cost and
  * nothing else does — and that figure is on the wire. On a screen it is a lie
  * of omission: a currency covering the minority of calls that quote one, beside
  * a token count covering all of them, reads as the company's spend and is a
@@ -257,7 +257,7 @@ describe("the source", () => {
   // prices something, which is the failure this whole file is against.
   test.each([
     ["a price field on a type", "interface B { cost_usd: number }", "names the price field"],
-    ["a CLI's own total", "const t = p.total_cost_usd;", "names the price field"],
+    ["a harness's own total", "const t = p.total_cost_usd;", "names the price field"],
     ["a parsed copy", "const r = { costUSD: 0 };", "names the price field"],
     ["the priced-call count", "const n = totals.priced_calls;", "names the price field"],
     ["a field read by a string key", 'const c = p["cost_usd"];', "spells the price field"],
@@ -319,7 +319,7 @@ const DRAWN = "4,321";
 
 /**
  * Every name a price travels under, all on one object: the engine's own
- * `cost_usd` and `priced_calls`, and the coding CLIs' `total_cost_usd` and
+ * `cost_usd` and `priced_calls`, and the harnesses' `total_cost_usd` and
  * `estimated_cost_usd` that it is read from — so a screen that learned to
  * reach for any of them, wherever a fixture carries it, is caught.
  */

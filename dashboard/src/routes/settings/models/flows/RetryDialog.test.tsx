@@ -89,13 +89,19 @@ test("a limit that still holds says until when, and the dialog stays", async () 
 
 test("a probe that failed for another reason clears nothing and says why", async () => {
   retryModel.mockResolvedValueOnce(
-    ok({ cleared: false, mode: "probe", node: "node-1", still: null, failed: "the CLI timed out" }),
+    ok({
+      cleared: false,
+      mode: "probe",
+      node: "node-1",
+      still: null,
+      failed: "the harness timed out",
+    }),
   );
   const { onClose } = open();
   await press("Retry now");
   expect(screen.getByText("Nothing was cleared")).toBeDefined();
   expect(
-    screen.getByText(/failed for a reason other than a limit: the CLI timed out/),
+    screen.getByText(/failed for a reason other than a limit: the harness timed out/),
   ).toBeDefined();
   expect(onClose).not.toHaveBeenCalled();
 });

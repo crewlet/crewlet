@@ -255,7 +255,7 @@ const NOTHING_HELD: Record<string, unknown> = {
 
 /**
  * The heavy fields that are STATUS — each round's timing and tokens, and each
- * CLI run's — which a call whose body is withheld from this reader still
+ * harness run's — which a call whose body is withheld from this reader still
  * carries and versions. Every other detail is the seat's BODY
  * (`LiveCall.body_withheld`).
  */

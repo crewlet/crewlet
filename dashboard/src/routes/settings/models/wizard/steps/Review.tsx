@@ -195,8 +195,8 @@ export function Review({
     token: stored("Subscription token"),
     cloud: CLOUD_FIELDS[draft.cloud].label,
     "host-login": editing
-      ? "CLI login on the host"
-      : "CLI login on the host, made after it is saved",
+      ? "Harness login on the host"
+      : "Harness login on the host, made after it is saved",
     device: editing
       ? "ChatGPT sign-in with a device code"
       : "ChatGPT sign-in with a device code, right after it is saved",
@@ -304,7 +304,7 @@ export function Review({
           <Spinner size="sm" />
           <Text variant="body">
             {check.what === "credential"
-              ? `Testing the ${draft.method === "token" ? "token" : "key"} with the CLI…`
+              ? `Testing the ${draft.method === "token" ? "token" : "key"} with the harness…`
               : "Checking the change with the engine…"}
           </Text>
         </div>
