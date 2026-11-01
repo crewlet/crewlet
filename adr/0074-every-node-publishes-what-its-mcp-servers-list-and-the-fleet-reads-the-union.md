@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
-- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
+- **Enforced-by:** `internal/coord.TestAListingCountsOnlyForItsNodesCurrentIncarnation`, `internal/coord/memory.TestFleetContract`, `internal/coord/kv.TestFleetContract`, `internal/engine.TestANodesListingIsTheUnionOfItsInstances`, `internal/engine.TestAListingKeepsItsSchemasWithinItsBudgetInNameOrder`, `internal/engine.TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch`, `internal/engine.TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive`, `internal/engine.TestTheSweepRemovesOnlyWhatNoReaderCounts`, `internal/engine.TestANodeThatStopsRemovesItsOwnListings`, `internal/api/queries.TestTwoNodesListingsOfAServerMergeIntoItsDetail`, `internal/api/queries.TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds`
 - **Cost-when-tried:** the tool catalogue was each node's own registry, which holds a shared server's tools and none of a per-agent server's, whose children run only on the node holding each seat. A company running GitHub's and Datadog's servers per agent showed none of their tools on any screen, though every agent was offered them, and a node's answer about a server depended on which seats it happened to hold.
 - **Tag-status:** unreleased
 
@@ -33,9 +33,13 @@ named for two sweeps in a row.
 
 **Every listing is bounded where it is built and again by the store**: at most
 256 tools (the count travels whole), each text cut, schemas past 64 KiB listed
-without being stored. A record's key names its server and node and the store
-stamps both from it, so a node describes only its own listing of the server
-the key names.
+without being stored. **The schemas one listing stores are bounded too**, to
+1 MiB in all (`coord.MaxMCPListingSchemaBytes`), kept in tool-name order while
+they fit, by the node that builds the listing, since the store names schemas
+by digest and cannot weigh them: 256 definitions at their own bound would be
+16 MiB per (server, node), minted again by every restart that changes them. A
+record's key names its server and node and the store stamps both from it, so
+a node describes only its own listing of the server the key names.
 
 ## Why the obvious alternatives are wrong
 

@@ -118,7 +118,10 @@ func IsMCPDigest(s string) bool {
 // each, plus the instructions and the server's identity), half the 1 MiB
 // payload an external NATS server allows by default, so a server listing
 // thousands of tools with essays for descriptions costs the fleet one bounded
-// record rather than a write the broker refuses.
+// record rather than a write the broker refuses; and the schemas one listing
+// stores to [MaxMCPListingSchemaBytes] in all, so a server that lists many
+// large schemas, or mints new definitions at every restart, costs the fleet a
+// bounded amount per listing rather than up to 256 times a definition's bound.
 const (
 	// MaxMCPListedTools is the most tools one listing names, the first by
 	// name; [MCPListing.ToolCount] travels whole beside them. 256 is past
@@ -145,6 +148,15 @@ const (
 	// listed without them ([MCPListedTool.SchemaKept] false) rather than
 	// stored: 64 KiB is past any schema a model is usefully offered.
 	MaxMCPToolSchemaBytes = 64 << 10
+
+	// MaxMCPListingSchemaBytes bounds the schemas one listing keeps, every
+	// kept definition's input and output together, as encoded: the tools'
+	// schemas are kept in name order while they fit, and a tool past the
+	// budget is listed without them. Held by the node that builds the
+	// listing, since a listing names its schemas by digest and a store
+	// writing it cannot weigh them. 1 MiB is sixteen of the largest
+	// definitions, and hundreds of the schemas real servers publish.
+	MaxMCPListingSchemaBytes = 1 << 20
 )
 
 // The three words a hint is written in on a listing, as internal/mcp's Hint
@@ -220,7 +232,8 @@ type MCPListedTool struct {
 
 	// Digest names the server's definition (internal/mcp's digest.go),
 	// and SchemaKept whether its schemas are stored under it
-	// ([MCPToolSchema]): false for schemas past [MaxMCPToolSchemaBytes].
+	// ([MCPToolSchema]): false for schemas past [MaxMCPToolSchemaBytes],
+	// and for a tool past its listing's [MaxMCPListingSchemaBytes].
 	Digest     string `json:"digest"`
 	SchemaKept bool   `json:"schema_kept"`
 

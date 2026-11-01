@@ -522,7 +522,9 @@ reads (`GET /mcp-servers/{name}`, `admin`, see the
 - **Bounded.** Everything in a listing came from a remote server, so a listing
   names at most 256 tools (the count travels whole), a description is cut to
   1,024 bytes, the instructions to 4,096, and a tool's schemas past 64 KiB are
-  listed without being stored.
+  listed without being stored. A listing stores at most 1 MiB of schemas in
+  all, kept in tool-name order while they fit; a tool past that is listed
+  without its arguments.
 
 In the catalogue, a listed tool is added under a name nothing on the node
 already holds: one tool per name, as a model is offered, so a name a built-in

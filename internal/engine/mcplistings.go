@@ -556,10 +556,39 @@ func (e *Engine) nodeMCPListings(node string, epoch int64, now time.Time) map[st
 		out[in.server] = entry
 	}
 	for server, entry := range out {
-		entry.listing = entry.listing.Bounded()
-		out[server] = entry
+		out[server] = entry.bounded(coord.MaxMCPListingSchemaBytes)
 	}
 	return out
+}
+
+// bounded is the listing held to its bounds ([coord.MCPListing.Bounded]), its
+// schemas kept within budget bytes in all: each listed tool's in name order
+// while what remains of the budget holds them, and any tool past it listed
+// with [coord.MCPListedTool.SchemaKept] false and its schemas not stored.
+// Schemas of a tool the bounds cut from the listing go with it.
+func (n nodeListing) bounded(budget int) nodeListing {
+	n.listing = n.listing.Bounded()
+	kept := make(map[string]coord.MCPToolSchema, len(n.listing.Tools))
+	spent := 0
+	for i := range n.listing.Tools {
+		t := &n.listing.Tools[i]
+		if !t.SchemaKept {
+			continue
+		}
+		schema, ok := n.schemas[t.Digest]
+		if _, counted := kept[t.Digest]; counted {
+			continue
+		}
+		size := len(schema.Input) + len(schema.Output)
+		if !ok || spent+size > budget {
+			t.SchemaKept = false
+			continue
+		}
+		spent += size
+		kept[t.Digest] = schema
+	}
+	n.schemas = kept
+	return n
 }
 
 // listedTool is one tool as a listing names it, and its schemas as they are

@@ -9433,8 +9433,9 @@ it under, so a node that drained, died or restarted stops counting at once.
   how many different definitions the fleet lists under the name (more than one
   while a server is mid-upgrade). `instances` and `nodes` are summed across the
   fleet. `input_schema` and `output_schema` are the definition's schemas, or
-  `null` where none is kept: a tool that publishes no output schema, or schemas
-  past 64 KiB.
+  `null` where none is kept: a tool that publishes no output schema, schemas
+  past 64 KiB, or a tool past its listing's 1 MiB of schemas (kept in name
+  order).
 - `tool_count` is how many tools the server lists, never fewer than `tools`
   holds: a node's listing names at most 256 of them.
 - `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`

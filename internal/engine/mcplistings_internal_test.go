@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -138,8 +139,7 @@ func fakeListing(server, node string, epoch int64, tools ...string) nodeListing 
 		out.schemas[digest] = coord.MCPToolSchema{Digest: digest, Input: []byte(`{"type":"object"}`),
 			At: out.listing.At}
 	}
-	out.listing = out.listing.Bounded()
-	return out
+	return out.bounded(coord.MaxMCPListingSchemaBytes)
 }
 
 func testDigest(seed string) string {
@@ -271,6 +271,66 @@ func TestASchemaIsStoredAgainWhenTheListingNamingItWasNeverWritten(t *testing.T)
 	}
 	if _, found, err := fleet.MCPToolSchema(ctx, added); err != nil || !found {
 		t.Errorf("the listing now names a schema that is not stored (%v)", err)
+	}
+}
+
+// A LISTING KEEPS ITS SCHEMAS WITHIN ITS BUDGET, IN NAME ORDER: each tool's
+// schemas are bounded alone, and a server listing many large ones (or minting
+// new definitions at every restart) would otherwise store up to 256 of them per
+// listing. Past the budget a tool is listed without its schemas, which are not
+// stored; a later tool small enough for what remains is still kept.
+//
+// Mutation: drop the budget, or keep a tool's flag once it is past it, and
+// this is red.
+func TestAListingKeepsItsSchemasWithinItsBudgetInNameOrder(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	sized := func(n int) []byte { return []byte(`{"description":"` + strings.Repeat("x", n-18) + `"}`) }
+	var names []string
+	for i := range 20 {
+		names = append(names, fmt.Sprintf("tool_%02d", i))
+	}
+	names = append(names, "zz_small")
+	listing := fakeListing("github", "node-a", 3, names...)
+	for _, tool := range listing.listing.Tools {
+		size := 60 << 10
+		if tool.Name == "zz_small" {
+			size = 2 << 10
+		}
+		schema := listing.schemas[tool.Digest]
+		schema.Input = sized(size)
+		listing.schemas[tool.Digest] = schema
+	}
+
+	got := listing.bounded(coord.MaxMCPListingSchemaBytes)
+	var kept []string
+	spent := 0
+	for _, tool := range got.listing.Tools {
+		schema, stored := got.schemas[tool.Digest]
+		if tool.SchemaKept != stored {
+			t.Errorf("%s is kept = %v with its schema held = %v", tool.Name, tool.SchemaKept, stored)
+		}
+		if tool.SchemaKept {
+			kept = append(kept, tool.Name)
+			spent += len(schema.Input) + len(schema.Output)
+		}
+	}
+	// SEVENTEEN OF 60 KIB FIT IN 1 MIB, the eighteenth does not, and the
+	// small one after the rest fits what remains.
+	want := append(slices.Clone(names[:17]), "zz_small")
+	if !slices.Equal(kept, want) || spent > coord.MaxMCPListingSchemaBytes {
+		t.Errorf("kept %v (%d bytes), want %v within %d", kept, spent, want, coord.MaxMCPListingSchemaBytes)
+	}
+	if len(got.listing.Tools) != len(names) {
+		t.Errorf("the budget dropped tools from the listing: %d of %d", len(got.listing.Tools), len(names))
+	}
+
+	// AND ONLY THOSE ARE STORED.
+	fleet := coordmemory.NewFleet()
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e.writeMCPListings(ctx, "node-a", 3, map[string]nodeListing{"github": got})
+	if stored, err := fleet.ListMCPToolSchemas(ctx); err != nil || len(stored) != len(want) {
+		t.Errorf("the fleet stores %d schemas (%v), want %d", len(stored), err, len(want))
 	}
 }
 
