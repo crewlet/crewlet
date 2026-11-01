@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/bits"
 	"slices"
 	"strings"
 	"sync"
@@ -1026,6 +1027,43 @@ func (l CodeLanding) Resolved() CodeLanding {
 		l.Batch = CodeDefaultQueueBatch
 	}
 	return l
+}
+
+// LandingCapacity is the most changes a pre_land queue lands over a span:
+// ⌊depth × batch × over / round⌋ (M5-D28). Each round tests depth candidates
+// at once, each taking at most batch waiting changes, and lands its green
+// prefix — at most depth × batch changes — once its checks finish, so a round
+// lasting round lands that many at most every round. A queue asked to land
+// more than this in a span falls behind for as long as the asking lasts:
+// its waiting entries grow, and a change waits rounds longer for every
+// round's worth of changes ahead of it.
+//
+// THE ONE FORMULA both judgments of a queue's rate read — `crewlet
+// validate`'s advisory, at code.checks.max_timeout_seconds and over a day,
+// and code_merge_rate_over_capacity, at the round its home observed and over
+// internal/code's MergeRateWindow — so the threshold the alarm borrows is the
+// queue's own capacity and never a number of the alarm's (ADR-0015).
+//
+// Exact in integers, never rounded through a float: depth × batch × over is
+// taken as a 128-bit product before the division. A round of zero or less
+// lands without bound, and a product past the int range answers the range's
+// top; a depth, batch or span under one lands nothing.
+func LandingCapacity(depth, batch int, round, over time.Duration) int {
+	if depth < 1 || batch < 1 || over <= 0 {
+		return 0
+	}
+	if round <= 0 {
+		return math.MaxInt
+	}
+	hi, lo := bits.Mul64(uint64(depth)*uint64(batch), uint64(over))
+	if hi >= uint64(round) {
+		return math.MaxInt
+	}
+	q, _ := bits.Div64(hi, lo, uint64(round))
+	if q > math.MaxInt {
+		return math.MaxInt
+	}
+	return int(q)
 }
 
 // CodeGate is a protection rule's merge gate RESOLVED — every field its value
@@ -2198,7 +2236,10 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 //     `release/*` warns about main and `**` does not. Located at the field to
 //     ADD, the repository's protect;
 //   - has a rule whose merge gate sets a field that does nothing as the rule
-//     stands ([idleGateFields]), located at that field.
+//     stands ([idleGateFields]), located at that field;
+//   - has a pre_land queue that cannot land one change a day for every seat
+//     that may merge into it ([Company.mergeRateWarnings]), located at the
+//     rule's landing.
 //
 // NOT AN ARCHIVED REPOSITORY'S BRANCH: it takes no push at all — the decide
 // refuses the whole push — so nobody can force-push or delete its branch, and
@@ -2223,6 +2264,15 @@ func (c *Company) codeWarnings() []Warning {
 	out = append(out, c.directBoxWarnings()...)
 	o, _ := c.organization()
 	units := o.Index()
+	// EVERY HUMAN SEAT IS A PERSON WHO MAY MERGE: a person maintains every
+	// repository (ADR-0055), so the merge-rate advisory counts them on every
+	// queue — once, here, rather than once a rule.
+	persons := 0
+	for s := range o.AllRoles() {
+		if s.IsHuman() {
+			persons++
+		}
+	}
 	for i, r := range c.Code.Repos {
 		if w, ok := unitWithNoLead(units, i, r); ok {
 			out = append(out, w)
@@ -2241,6 +2291,7 @@ func (c *Company) codeWarnings() []Warning {
 		if r.Archived {
 			continue
 		}
+		out = append(out, c.mergeRateWarnings(units, persons, i, r)...)
 		branch := r.ResolvedDefaultBranch()
 		ref := "refs/heads/" + branch
 		if !gitref.ValidBranch(branch) || gitref.ReservedSeatBranch(branch) {
@@ -2370,6 +2421,106 @@ func idleGateFields(i int, r CodeRepo) []Warning {
 		}
 	}
 	return out
+}
+
+// codeMergeRateDay is the span `crewlet validate` prices a queue's capacity
+// over: a DAY, at one landing a seat — a seat that may merge and lands one
+// change a day is a quiet writer, so a queue that cannot keep up even with
+// that falls behind on an ordinary day (M5-D28).
+const codeMergeRateDay = 24 * time.Hour
+
+// mergeRateWarnings is a warning for every rule of code.repos[i], r, whose
+// branch is a pre_land queue — a merge gate requiring a check, its landing
+// pre_land — that lands fewer changes a day than the seats that may merge
+// into it, at one change a day each (M5-D28): [LandingCapacity] at the rule's
+// depth and batch, a round as long as code.checks.max_timeout_seconds — the
+// longest a check of the company may run, so the slowest round the company
+// allows — over [codeMergeRateDay]. Located at the rule's landing, the field
+// whose depth and batch raise it.
+//
+// `crewlet validate` CANNOT OBSERVE A RATE: it warns from what is configured,
+// and code_merge_rate_over_capacity, raised by the repository's home from the
+// enqueues it counts and the rounds it times, is the observed half.
+//
+// WHO MAY MERGE is counted through the chart's index ([seatsThatMayMerge]),
+// under the stricter of the rule's merge_by and code.merge_by_floor (M5-D2).
+func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo) []Warning {
+	var out []Warning
+	floor := c.Code.MergeByFloor.Resolved()
+	round := c.Code.Checks.MaxTimeout()
+	for k, rule := range r.Protect {
+		if rule.Branch == "" || rule.Tag != "" {
+			continue
+		}
+		g := rule.Gate()
+		if g == nil || len(g.Checks) == 0 || g.Landing.Policy != CodeLandingPreLand {
+			continue
+		}
+		by := g.MergeBy
+		if slices.Index(CodeMergeBys, floor) > slices.Index(CodeMergeBys, by) {
+			by = floor
+		}
+		seats := seatsThatMayMerge(units, persons, r.Owner, by)
+		capacity := LandingCapacity(g.Landing.Depth, g.Landing.Batch, round, codeMergeRateDay)
+		if capacity >= seats {
+			continue
+		}
+		out = append(out, advisory(at(idx(at(idx(field("code.repos"), i), "protect"), k), "landing"),
+			fmt.Sprintf("%s's queue on %s lands at most %d change(s) a day — %d candidate(s) of up to %d "+
+				"change(s) a round, a round as long as the longest check may run (%s, "+
+				"code.checks.max_timeout_seconds) — fewer than the %d seat(s) that may merge into it "+
+				"(merge_by %s), at one change a day each, so its queue falls behind once they merge "+
+				"(raise landing.depth or landing.batch, or lower code.checks.max_timeout_seconds to what "+
+				"its checks take)", r.Name, rule.Branch, capacity, g.Landing.Depth, g.Landing.Batch, round,
+				seats, by)))
+	}
+	return out
+}
+
+// seatsThatMayMerge is how many seats may merge into a branch of a repository
+// owned by owner under merge authority by (M5-D2), counted through the chart's
+// index as the code host's grant rules relate a seat to a repository:
+//
+//   - every HUMAN seat, persons: a person maintains every repository;
+//   - under writers, every agent seat that WRITES the repository — owned by a
+//     unit, its effective lead and every seat of its subtree; owned by a seat,
+//     that seat — under maintainers, the one that MAINTAINS it, the unit's
+//     effective lead or the owning seat; under persons, none;
+//
+// each agent seat only at code.access full_access, the one tier past
+// review, which is where a seat's grant on any repository is capped.
+// An owner the chart does not resolve is validation's refusal and relates no
+// seat here.
+func seatsThatMayMerge(units *org.Index, persons int, owner CodeOwner, by CodeMergeBy) int {
+	n := persons
+	if by == CodeMergeByPersons {
+		return n
+	}
+	may := func(s *org.Role) bool { return s != nil && !s.IsHuman() && s.CodeAccess == TierFullAccess }
+	switch {
+	case strings.TrimSpace(owner.Unit) != "":
+		u := units.UnitByRef(strings.TrimSpace(owner.Unit))
+		if u == nil {
+			return n
+		}
+		lead := units.EffectiveLead(u)
+		if may(lead) {
+			n++
+		}
+		if by == CodeMergeByMaintainers {
+			return n
+		}
+		for _, s := range units.Members(u) {
+			if s != lead && may(s) {
+				n++
+			}
+		}
+	case owner.Seat != "":
+		if may(units.Role(owner.Seat)) {
+			n++
+		}
+	}
+	return n
 }
 
 // unitWithNoLead is the warning about code.repos[i], r, when it is

@@ -45,3 +45,12 @@ func MergeChange(ctx context.Context, l *Loop, repoID string, due code.ChangeDue
 
 	return l.changes.merge(ctx, repoID, due, at)
 }
+
+// MergeRateTargets is how many targets l's queue worker holds a merge rate
+// for, measured or timing a train: what a suite reads to prove a target this
+// node no longer turns is forgotten rather than kept for the node's life.
+func MergeRateTargets(l *Loop) int {
+	l.merges.rate.mu.Lock()
+	defer l.merges.rate.mu.Unlock()
+	return len(l.merges.rate.targets)
+}

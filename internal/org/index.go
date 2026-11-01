@@ -324,6 +324,19 @@ func (x *Index) EffectiveLead(u *Unit) *Role {
 	return x.roles[run.first]
 }
 
+// Members is every seat of u's subtree — its own seats, then each child's
+// subtree's, in walk order — against the indexed chart: one slice of the
+// walk the index already holds, where [Unit.AllRoles] walks the subtree
+// again. Nothing for a unit the Index was not built over. A copy: the caller
+// may keep it.
+func (x *Index) Members(u *Unit) []*Role {
+	s, held := x.spans[u]
+	if !held {
+		return nil
+	}
+	return slices.Clone(x.roles[s.start:s.end])
+}
+
 // UnitByRef is [Organization.UnitByRef] against the indexed chart: the unit a
 // durable reference names — by its key, exactly and then folded, or by a name
 // one unit alone carries — or nil.

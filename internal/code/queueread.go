@@ -130,6 +130,11 @@ type GreenRow struct {
 // work its home reads, a target a page.
 type QueueDueQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
+	// EnqueuedSince, beside a RepoID, asks each page's target's enqueues at
+	// or after it counted ([QueueDue.Enqueued]): the home's queue worker
+	// states now less [MergeRateWindow], the window its merge rate is
+	// measured over. Zero counts none.
+	EnqueuedSince time.Time `json:"enqueued_since,omitzero"`
 }
 
 // The pages of the queue's reads: a queue's entries a listing of changes'
@@ -181,6 +186,9 @@ func (q ReadQuery) validateQueueDue() error {
 	case d.RepoID != "" && !canonicalUUID(d.RepoID):
 		return refused("queue_due.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
 			"lowercase spelling", d.RepoID))
+	case d.RepoID == "" && !d.EnqueuedSince.IsZero():
+		return refused("queue_due.enqueued_since", "the enqueues counted are a repository's targets', so "+
+			"they are asked beside its repo_id, never of the listing")
 	}
 	for _, f := range []struct {
 		field string
@@ -347,7 +355,7 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 // a page (queuework.go).
 func (r *Reader) queueDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if q.QueueDue.RepoID != "" {
-		return dueQueue(ctx, tx, q.QueueDue.RepoID, q.Cursor, out)
+		return dueQueue(ctx, tx, q.QueueDue.RepoID, q.Cursor, q.QueueDue.EnqueuedSince, out)
 	}
 	rows, err := tx.QueryContext(ctx, queueDueReposSQL, q.Cursor, r.pageRows)
 	if err != nil {

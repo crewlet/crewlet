@@ -54,6 +54,10 @@ type queueRows struct {
 	// or a landing stating another is refused expunging, as the decide
 	// refuses it.
 	epoch int64
+	// enqueued is what the rows count of main's enqueues since the instant a
+	// read asks, and since every instant a read asked from.
+	enqueued int
+	since    []time.Time
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
@@ -138,8 +142,13 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	if len(r.entries) == 0 {
 		return code.ReadAnswer{Position: r.position()}, nil
 	}
-	d := &code.QueueDue{TargetRef: queueMain, Tip: r.tip, Policy: code.LandingPreLand, Depth: r.depth,
-		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries), DropEpoch: r.epoch}
+	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Policy: code.LandingPreLand,
+		Depth: r.depth, Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
+		DropEpoch: r.epoch}
+	if since := q.QueueDue.EnqueuedSince; !since.IsZero() {
+		r.since = append(r.since, since)
+		d.Enqueued = r.enqueued
+	}
 	for _, c := range r.train {
 		c.Commits = slices.Clone(c.Commits)
 		for i := range c.Commits {

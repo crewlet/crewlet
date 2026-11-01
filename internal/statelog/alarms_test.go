@@ -226,6 +226,14 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"more than 1024 queued check attempt(s) have waited for a runner longer than their own timeout — " +
 				"the longest of those counted, web@111111111111 for main: lint (attempt 2), for 3h",
 		},
+		"merge queues asked past their own capacity": {
+			statelog.KindCodeMergeRateOver,
+			statelog.Reading{CodeMergeRateOver: 1, CodeMergeRateOverTarget: "main of web",
+				CodeMergeRateOverAsked: 140, CodeMergeRateOverCapacity: 96,
+				CodeMergeRateOverRound: 10 * time.Minute, CodeMergeRateWindow: time.Hour},
+			"1 merge queue(s) this node is home to were asked to land more changes in the last 1h than they " +
+				"can land in it — the furthest, main of web, 140 enqueue(s) against 96 at its mean round of 10m",
+		},
 		"repositories setting refs fast enough to reach the bound within the window": {
 			statelog.KindCodeRefsNearLimit,
 			statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 60_000,
@@ -613,6 +621,38 @@ func TestTheCompactionBehindAlarmBorrowsThePackBound(t *testing.T) {
 		if fired && !strings.Contains(alarm.Detail, c.reading.CodeCompactionBehindRepo) {
 			t.Errorf("%s: the detail %q names no repository, and an operator is told the node is behind "+
 				"on nothing they can find", name, alarm.Detail)
+		}
+	}
+}
+
+// THE MERGE-RATE ALARM FIRES AT THE QUEUE'S OWN CAPACITY, never at a rate of
+// its own (ADR-0015, M5-D28): every queue the reading counts was judged by its
+// home against its depth × batch at the rounds it timed (config's
+// LandingCapacity), so one is the alarm, and figures with no queue counted —
+// however many enqueues they name — are nothing.
+//
+// Mutation: fire on the asked figure past a rate of the rule's own (a hundred
+// an hour, say), and the reading that counts no queue raises it — red.
+func TestTheMergeRateAlarmFiresAtTheQueuesCapacity(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one queue past its capacity": {statelog.Reading{CodeMergeRateOver: 1, CodeMergeRateOverTarget: "main of web",
+			CodeMergeRateOverAsked: 5, CodeMergeRateOverCapacity: 4, CodeMergeRateOverRound: time.Hour,
+			CodeMergeRateWindow: time.Hour}, true},
+		"figures the home counted no queue at": {statelog.Reading{CodeMergeRateOverTarget: "main of web",
+			CodeMergeRateOverAsked: 4_000, CodeMergeRateOverCapacity: 96, CodeMergeRateWindow: time.Hour}, false},
+		"a node home to no queue": {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMergeRateOver)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if fired && !strings.Contains(alarm.Detail, c.reading.CodeMergeRateOverTarget) {
+			t.Errorf("%s: the detail %q names no queue, and an operator is told a queue is behind on "+
+				"nothing they can find", name, alarm.Detail)
 		}
 	}
 }

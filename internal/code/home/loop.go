@@ -237,6 +237,18 @@ func New(o Options) (*Loop, error) {
 	return l, nil
 }
 
+// AlarmReading fills the reading's merge-rate half from the merge queues this
+// node is home to: how many were asked to land more within the window than
+// they can, and the one asked furthest past its capacity — what raises
+// code_merge_rate_over_capacity. A node home to no queue, or one whose queues
+// keep up, leaves the fields zero, which the alarm table reads as nothing
+// wrong here. Assigned through the queue worker's own concrete method, so the
+// reading's producers gate reaches each field (internal/engine's
+// TestEveryAlarmReadingFieldHasAProducer).
+func (l *Loop) AlarmReading(out *statelog.Reading) {
+	l.merges.AlarmReading(out)
+}
+
 // Register adds a worker before the loop starts: its repositories are listed
 // at every pass and nudged as every worker's are. A worker named twice, or one
 // registered once the loop runs, is refused.

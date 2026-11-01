@@ -147,6 +147,27 @@ const (
 // code_queue_live_idx.
 const MaxQueueEntries = 1024
 
+// MergeRateWindow is the span a pre_land queue's merge rate is measured over:
+// an HOUR. JUDGMENT (M5-D28): about six rounds at ten-minute checks — enough
+// rounds that one slow round moves the mean little, and short enough that a
+// burst of enqueues is seen while it lasts. The repository's home counts a
+// target's enqueues within it ([QueueDueQuery.EnqueuedSince]) and prices its
+// queue's capacity over it (config.LandingCapacity, at the round its own
+// trains took), which is what raises code_merge_rate_over_capacity.
+const MergeRateWindow = time.Hour
+
+// MergeRateScan is the most enqueues of one target a `queue_due` read counts
+// within [MergeRateWindow]: 4 096. A queue at both bounds — depth 8, batch 8
+// — lands 3 840 changes an hour at one-minute rounds, so for every round of a
+// minute or longer a count stopped at the bound is still above the capacity
+// it is compared with, and says what the whole count would; only a queue
+// whose rounds take seconds has a capacity past it, and there the comparison
+// errs quiet. It bounds what the read counts, not what it walks: the live
+// seek walks the target's live entries, at most [MaxQueueEntries] waiting
+// and the trains testing, and the ended seek the repository's entries ended
+// within the window, which its queues' landings and dequeues bound.
+const MergeRateScan = 4096
+
 // QueueEntryID is the entry an enqueue under opID makes — derived from the
 // operation id, so an enqueue asked again under it is the same entry, which
 // the ledger collapses.

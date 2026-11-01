@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A TARGET'S QUEUE WORK, READ FROM THE ROWS (M5-D12, M5-D13): a `queue_due`
@@ -35,6 +37,9 @@ import (
 // ([ReadAnswer.DueQueue]).
 type QueueDue struct {
 	TargetRef string `json:"target_ref"`
+	// Repo is the repository's name, as an operator knows it: what the
+	// merge-rate alarm names the target by.
+	Repo string `json:"repo,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
 	// Policy, Depth, Batch and Required are the target's gate as its queue
@@ -62,6 +67,13 @@ type QueueDue struct {
 	// read the train at: one begun between the read and the decide is
 	// refused `expunging`, and the next turn reads the train again.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
+	// Enqueued is how many entries were enqueued on the target at or after
+	// the read's [QueueDueQuery.EnqueuedSince] — live, landed, ejected or
+	// dequeued alike, since each was a change asked to land — up to
+	// [MergeRateScan]; zero where the read asked no count, or the target is
+	// no pre_land queue requiring a check, whose merge rate nothing prices
+	// (M5-D28).
+	Enqueued int `json:"enqueued,omitempty"`
 }
 
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
@@ -123,8 +135,9 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 // "" for its first — into out, with that target as the next page's cursor.
 // The target is the first holding a live entry past cursor: the first page's
 // one row of queueOfRepoSQL, a later page's of queueOfRepoAfterSQL past every
-// seq of the cursor's target.
-func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, out *ReadAnswer) error {
+// seq of the cursor's target. A non-zero since counts the target's enqueues
+// from it ([enqueuedSince]) where it is a pre_land queue requiring a check.
+func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
 	stmt, args := queueOfRepoSQL, []any{repoID, 1}
 	if cursor != "" {
 		stmt, args = queueOfRepoAfterSQL, []any{repoID, cursor, cursor, cursor, int64(math.MaxInt64), 1}
@@ -156,7 +169,12 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, out *ReadA
 	case err != nil:
 		return err
 	case ok:
-		due.DropEpoch = repo.dropEpoch
+		due.DropEpoch, due.Repo = repo.dropEpoch, repo.name
+	}
+	if !since.IsZero() && gate.Landing == LandingPreLand && len(gate.Checks) > 0 {
+		if due.Enqueued, err = enqueuedSince(ctx, tx, repoID, target, since); err != nil {
+			return err
+		}
 	}
 	for _, e := range scanned {
 		w, err := workEntryOf(ctx, tx, e)
@@ -175,6 +193,39 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, out *ReadA
 	out.DueQueue, out.Next = due, target
 	return nil
 }
+
+// enqueuedSince is how many entries were enqueued on repoID's target at or
+// after since, up to [MergeRateScan] — what a pre_land queue was asked to
+// land within its merge rate's window (M5-D28). Two seeks, each counting at
+// most the scan: the live entries over code_queue_live_idx, and the entries
+// ENDED since — an entry enqueued within the window that has ended ended
+// within it — over code_queue_ended_idx, each filtered on its enqueue's
+// instant.
+func enqueuedSince(ctx context.Context, tx *sql.Tx, repoID, target string, since time.Time) (int, error) {
+	at := store.EncodeTime(since)
+	var live, ended int
+	if err := tx.QueryRowContext(ctx, enqueuedLiveSQL, repoID, target, at, MergeRateScan).Scan(&live); err != nil {
+		return 0, fmt.Errorf("code: count %s's live entries enqueued since %s: %w", target, since, err)
+	}
+	if err := tx.QueryRowContext(ctx, enqueuedEndedSQL, repoID, at, target, at, MergeRateScan).Scan(
+		&ended); err != nil {
+		return 0, fmt.Errorf("code: count %s's ended entries enqueued since %s: %w", target, since, err)
+	}
+	return min(live+ended, MergeRateScan), nil
+}
+
+// The merge rate's two counts (registered in plan_test.go): a target's live
+// entries over code_queue_live_idx, and a repository's entries ended from an
+// instant over code_queue_ended_idx, each index's partial predicate spelled
+// as it declares it, the target and the enqueue's instant filtered from the
+// row.
+const (
+	enqueuedLiveSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND enqueued_at >= ? LIMIT ?)`
+	enqueuedEndedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_queue INDEXED BY code_queue_ended_idx
+		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at >= ? AND target_ref = ?
+			AND enqueued_at >= ? LIMIT ?)`
+)
 
 // workEntryOf is e as the home's queue reads it, its change read by its key:
 // its row, its body and its authors.

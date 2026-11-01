@@ -76,6 +76,12 @@ type TaskClose struct {
 //
 // A post_land target is no train's: its queue lands no candidate.
 //
+// Each pre_land target's MERGE RATE is measured as its queue work is read —
+// its enqueues within code.MergeRateWindow against what its depth and batch
+// land at the rounds this node timed its trains at (mergerate.go) — and
+// handed to the node's alarm reading ([queue.AlarmReading]), which raises
+// code_merge_rate_over_capacity (M5-D28).
+//
 // A candidate and a landing state the repository's DROP EPOCH (M6-D4): the
 // candidate the epoch of the copy its chain was built from (code.ChainResult),
 // the landing the epoch its snapshot read (code.QueueDue) — so a train built
@@ -95,9 +101,18 @@ type queue struct {
 	// checks is the check work's own writer: a candidate's checks are
 	// queued, and the checks file read, as a head's and a tip's are.
 	checks *checks
-	node   string
-	log    *slog.Logger
-	now    func() time.Time
+	// rate is the queue's merge rate, measured from each target's queue
+	// work and the rounds this node timed (mergerate.go).
+	rate mergeRate
+	node string
+	log  *slog.Logger
+	now  func() time.Time
+}
+
+// AlarmReading fills the reading's merge-rate half from the queues this node
+// is home to ([mergeRate]): what raises code_merge_rate_over_capacity.
+func (w *queue) AlarmReading(out *statelog.Reading) {
+	w.rate.reading(w.now(), out)
 }
 
 // Name is [WorkerQueue].
@@ -116,10 +131,17 @@ func (w *queue) Due(ctx context.Context, floor statelog.Position, cursor string)
 
 // Work is one repository's queue work, a target a page: each target's next
 // step, a failure of one left for the next pass while the others are worked.
+// Every page counts its target's enqueues within the merge rate's window, and
+// a turn that read every page drops the merge rate of each target it did not
+// meet, whose queue has drained ([mergeRate]).
 func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position) error {
-	q := code.ReadQuery{Kind: code.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &code.QueueDueQuery{RepoID: repoID}}
+	q := code.ReadQuery{Kind: code.ReadQueueDue, Fresh: freshAt(floor), QueueDue: &code.QueueDueQuery{
+		RepoID: repoID, EnqueuedSince: w.now().Add(-code.MergeRateWindow)}}
 	memo := newDefsMemo()
-	var failed []error
+	var (
+		failed []error
+		met    []string
+	)
 	for {
 		a, err := w.estate.Read(ctx, q)
 		if err != nil {
@@ -127,9 +149,13 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 				err))...)
 		}
 		if a.DueQueue != nil {
+			met = append(met, a.DueQueue.TargetRef)
 			if err := w.target(ctx, repoID, *a.DueQueue, memo, a.Position); err != nil {
 				failed = append(failed, err)
 			}
+		}
+		if a.Next == "" {
+			w.rate.seen(repoID, met)
 		}
 		if a.Next == "" || ctx.Err() != nil {
 			return errors.Join(append(failed, ctx.Err())...)
@@ -142,6 +168,7 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo *defsMemo,
 	at statelog.Position) error {
 
+	w.rate.measure(repoID, d, w.now())
 	switch {
 	case d.Policy != code.LandingPreLand || len(d.Required) == 0 || len(d.Entries) == 0:
 		return nil
@@ -273,6 +300,9 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		return fmt.Errorf("home: record the train of %s: %w", about, err)
 	}
 	applied = res.Outcome == statelog.OutcomeApplied
+	if applied && res.Refusal == "" {
+		w.rate.built(repoID, d.TargetRef, train, w.now())
+	}
 	if res.Refusal != "" {
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "candidate",
 			"refusal", res.Refusal, "detail", res.Detail)
@@ -451,6 +481,7 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 			"detail", "the landing is appended and not applied here, so its work items are not closed")
 		return nil
 	}
+	w.rate.landed(repoID, d.TargetRef, l.Train, w.now())
 	var failed []error
 	for _, e := range landed {
 		if !e.CloseTask || e.WorkItem == nil {

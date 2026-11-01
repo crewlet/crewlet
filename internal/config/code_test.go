@@ -947,6 +947,122 @@ func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 	}
 }
 
+// A QUEUE'S CAPACITY IS ITS ROUNDS OVER A SPAN (M5-D28): ⌊depth × batch ×
+// over / round⌋, exact — PLAN's 576 and 1 152 a day at depths 4 and 8 with
+// ten-minute checks and one change a candidate, a product floored once rather
+// than a count of whole rounds (three candidates of seven minutes land 25 an
+// hour, not 24), a round of no length unbounded, a product past the int range
+// its top, and a queue of no depth, no batch or no span nothing.
+//
+// Mutation: floor over/round before multiplying → 24, red; return 0 for a
+// round of no length → red; drop the overflow guard → Div64 panics, red.
+func TestAQueuesCapacityIsItsRoundsOverASpan(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	for _, tc := range []struct {
+		depth, batch int
+		round, over  time.Duration
+		want         int
+	}{
+		{4, 1, 10 * time.Minute, day, 576},
+		{8, 1, 10 * time.Minute, day, 1_152},
+		{4, 2, 10 * time.Minute, time.Hour, 48},
+		{3, 1, 7 * time.Minute, time.Hour, 25},
+		{1, 1, 6 * time.Hour, day, 4},
+		{1, 1, 0, time.Hour, math.MaxInt},
+		{8, 8, time.Nanosecond, math.MaxInt64, math.MaxInt},
+		{0, 4, time.Minute, time.Hour, 0},
+		{4, 0, time.Minute, time.Hour, 0},
+		{4, 4, time.Minute, 0, 0},
+	} {
+		if got := config.LandingCapacity(tc.depth, tc.batch, tc.round, tc.over); got != tc.want {
+			t.Errorf("LandingCapacity(%d, %d, %s, %s) = %d, want %d", tc.depth, tc.batch, tc.round, tc.over,
+				got, tc.want)
+		}
+	}
+}
+
+// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a pre_land queue
+// that cannot land one change a day for every seat that may merge into its
+// branch is advised at the rule's landing, from the configured depth, batch
+// and code.checks.max_timeout_seconds — `crewlet validate` observes no rate.
+// Who may merge is counted through the chart: every human seat, and each
+// full_access agent seat that writes the repository — the owning unit's lead
+// and every seat of its subtree, a child unit's included, never a review seat
+// nor one outside it — under the stricter of the rule's merge_by and
+// code.merge_by_floor. Here five may merge, against a queue of one candidate
+// of one change at six-hour rounds, four a day: warned; a queue of two
+// candidates, the fifty-minute default rounds, merge_by maintainers or a
+// maintainers floor (two may merge) and merge_by persons (the founder alone)
+// are each silent.
+//
+// Mutation: count the unit's own seats and not its subtree's → four, silent,
+// red; count a review seat → six named, red; read the rule's merge_by and not
+// the floor → the floor's case warns, red; count the agent seats under
+// merge_by persons → the persons case warns, red.
+func TestValidateWarnsAQueueSlowerThanItsWriters(t *testing.T) {
+	t.Parallel()
+	const chart = `name: Acme
+roles:
+  - {name: Founder, handle: founder, kind: human}
+units:
+  - name: Engineering
+    id: eng
+    lead: lead
+    roles:
+      - {name: Lead, handle: lead, code: {access: full_access}}
+      - {name: Dev A, handle: dev-a, code: {access: full_access}}
+      - {name: Dev B, handle: dev-b, code: {access: review}}
+    children:
+      - name: Web
+        id: web-team
+        roles:
+          - {name: Dev C, handle: dev-c, code: {access: full_access}}
+          - {name: Dev D, handle: dev-d, code: {access: full_access}}
+  - name: Ops
+    id: ops
+    roles:
+      - {name: Ops, handle: ops, code: {access: full_access}}
+code:
+  native: true
+`
+	const slow = "{branch: main, checks: [unit], landing: {depth: 1, batch: 1}"
+	for name, tc := range map[string]struct {
+		code, rule string
+		warns      bool
+	}{
+		"slower than its writers":   {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + "}", warns: true},
+		"two candidates a round":    {code: "  checks: {max_timeout_seconds: 21600}\n", rule: "{branch: main, checks: [unit], landing: {depth: 2, batch: 1}}"},
+		"the default rounds":        {rule: slow + "}"},
+		"merged by its maintainers": {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + ", merge_by: maintainers}"},
+		"merged by persons alone":   {code: "  checks: {max_timeout_seconds: 21600}\n", rule: slow + ", merge_by: persons}"},
+		"a maintainers floor":       {code: "  checks: {max_timeout_seconds: 21600}\n  merge_by_floor: maintainers\n", rule: slow + "}"},
+	} {
+		doc := chart + tc.code + "  repos:\n    - name: web\n      owner: {unit: eng}\n      protect:\n        - " +
+			tc.rule + "\n"
+		c, err := config.ParseCompany([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: refused: %v", name, err)
+		}
+		var found []config.Warning
+		for _, w := range c.Warnings() {
+			if strings.Contains(w.Message, "that may merge") {
+				found = append(found, w)
+			}
+		}
+		switch {
+		case !tc.warns && len(found) != 0:
+			t.Errorf("%s: warned %+v, want nothing", name, found)
+		case !tc.warns:
+		case len(found) != 1 || found[0].Path != "code.repos[0].protect[0].landing" ||
+			found[0].Kind != config.WarningAdvisory || !strings.Contains(found[0].Message, "at most 4 change(s)") ||
+			!strings.Contains(found[0].Message, "the 5 seat(s) that may merge"):
+			t.Errorf("%s: warned %+v, want one advisory at code.repos[0].protect[0].landing naming 4 a day "+
+				"against 5 seats", name, found)
+		}
+	}
+}
+
 // THE SCHEMA ADMITS THE LANDING THE VALIDATOR DOES: the js tags are a second
 // spelling of the queue's bounds.
 func TestTheCodeLandingIsTheSchemasBounds(t *testing.T) {

@@ -1,7 +1,9 @@
 package code_test
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -87,6 +89,68 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	q.Cursor = answer.Next
 	if after, err := n.reader.Read(t.Context(), q); err != nil || after.DueQueue != nil || after.Next != "" {
 		t.Fatalf("the page after main reads %+v (next %q, %v), want none", after.DueQueue, after.Next, err)
+	}
+}
+
+// THE HOME'S QUEUE WORK COUNTS WHAT ITS TARGET WAS ASKED TO LAND (M5-D28):
+// asked to, a `queue_due` read counts the entries enqueued on main at or
+// after an instant — the live ones and the ended ones alike, each by its
+// ENQUEUE's broker instant — and names the repository, which the merge-rate
+// alarm names the target by. An entry enqueued an hour before the window and
+// dequeued inside it is no enqueue of the window; the entry enqueued in it is;
+// a read that asks for no count gets none.
+//
+// Mutation: count the live entries alone → the second dequeued entry is
+// missed, red; judge an ended entry by when it ended rather than when it was
+// enqueued → the first entry, dequeued inside the window, is counted, red.
+func TestTheHomesQueueWorkCountsItsTargetsEnqueues(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	// stamp publishes what follows at the broker instant at.
+	stamp := func(at time.Time) {
+		n.storedAt = func(uint64, time.Time) time.Time { return at }
+	}
+	window := harnessAt.Add(-code.MergeRateWindow)
+	stamp(window.Add(-time.Hour))
+	first := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), first)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	stamp(window.Add(10 * time.Minute))
+	res, err = c.ProposeQueue(t.Context(), dequeueing(repo, first.Enqueue.EntryID, ada))
+	requireQueued(t, res, err, code.QueueDequeued, 0)
+	second := enqueueing(repo, change, ada, oidOf("B"))
+	res, err = c.ProposeQueue(t.Context(), second)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	stamp(window.Add(20 * time.Minute))
+	res, err = c.ProposeQueue(t.Context(), dequeueing(repo, second.Enqueue.EntryID, ada))
+	requireQueued(t, res, err, code.QueueDequeued, 0)
+	res, err = c.ProposeQueue(t.Context(), enqueueing(repo, change, ada, oidOf("B")))
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+
+	read := func(since time.Time) code.QueueDue {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue,
+			QueueDue: &code.QueueDueQuery{RepoID: repo, EnqueuedSince: since}})
+		if err != nil || answer.DueQueue == nil {
+			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
+		}
+		return *answer.DueQueue
+	}
+	if d := read(window); d.Enqueued != 2 || d.Repo != "web" {
+		t.Fatalf("main's queue work counts %d enqueue(s) since the window opened, of %q; want 2 of web — "+
+			"the one ended inside it and the one live, never the one enqueued before it", d.Enqueued, d.Repo)
+	}
+	if d := read(time.Time{}); d.Enqueued != 0 {
+		t.Fatalf("a read asking no count counts %d enqueue(s), want none", d.Enqueued)
+	}
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue,
+		QueueDue: &code.QueueDueQuery{EnqueuedSince: window}}); !errors.Is(err, code.ErrInvalid) {
+		t.Fatalf("the listing asked to count enqueues answers %v, want invalid: the count is a repository's", err)
 	}
 }
 

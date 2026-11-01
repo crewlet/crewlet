@@ -627,6 +627,36 @@ tip. [What the home does with a
 queue](../concepts/code-host.md#what-the-home-does-with-a-queue) has the
 detail.
 
+### Choosing a queue's depth and batch
+
+A queue lands at most `depth` × `batch` changes a round, and a round lasts as
+long as the slowest required check: at ten-minute checks and one change a
+candidate, the default depth of four lands 576 changes a day and the most,
+eight, 1 152. Size it for how many changes the branch is asked to land:
+
+```yaml
+code:
+  checks:
+    max_timeout_seconds: 1800      # what the slowest check really takes
+  repos:
+    - name: web
+      owner: {unit: engineering}
+      protect:
+        - branch: main
+          checks: [unit, lint]
+          landing: {depth: 6, batch: 2}   # up to 6 candidates of up to 2 changes a round
+```
+
+`crewlet validate` warns at a rule's `landing` when the queue cannot land one
+change a day for every seat that may merge into the branch, priced at a round
+as long as `code.checks.max_timeout_seconds` — the longest a check may run —
+so set that to what your checks actually take. A running queue asked past
+what it lands raises `code_merge_rate_over_capacity` on its home git node,
+priced at the rounds its trains really took over the last hour. Either way,
+raise `depth` or `batch`, make the required checks faster or fewer, or split
+the work over more branches or repositories ([How fast a queue
+lands](../concepts/code-host.md#how-fast-a-queue-lands)).
+
 ## Reading a failed check
 
 A check that fails says why in four places, each on its attempt — read whole

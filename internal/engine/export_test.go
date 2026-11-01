@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -166,6 +167,18 @@ func WithGitMemory(opts Options, memory int64) Options {
 // bound without two thousand packs pushed into it.
 func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact.Estate) Options {
 	opts.compactorEstate = wrap
+	return opts
+}
+
+// WithHomeSeams is opts with wrap standing between a git node's home change
+// work and the router's code seam and the code host's chain builder it works
+// through ([codehome.Options.Estate], [codehome.Options.Chains]), for a case
+// outside the package whose subject is what a running node's queue worker
+// raises — a queue asked past its capacity, shown it without the changes, the
+// passed checks and the hour of rounds a real queue needs to fall behind.
+func WithHomeSeams(opts Options,
+	wrap func(codehome.Estate, codehome.Chains) (codehome.Estate, codehome.Chains)) Options {
+	opts.homeSeams = wrap
 	return opts
 }
 

@@ -5665,6 +5665,47 @@ lands no candidate.
   finished is left as it is; one on a vendor's tracker is closed there, by
   whoever closes it, and the home logs that it closed nothing.
 
+#### How fast a queue lands
+
+A `pre_land` queue lands at most `depth` × `batch` changes a **round** — one
+train, from the record that builds it to the landing of its green prefix — and
+a round lasts as long as its candidates' slowest required check. So its
+**capacity** over a span is ⌊`depth` × `batch` × span ÷ round⌋: at ten-minute
+checks and one change a candidate, 576 changes a day at the default depth of
+four and 1 152 at eight. A branch asked to land more than that falls behind
+for as long as the asking lasts: its waiting entries grow, each change waits a
+round longer for every round's worth ahead of it, and once 1 024 changes wait
+the queue refuses the next enqueue `queue_full`. Two judgments read that one formula, and neither holds a
+rate of its own:
+
+- **Observed, by the repository's home.** Each turn of a queue's work counts
+  the branch's enqueues within the last **hour** — live, landed, ejected or
+  dequeued alike, each by when it was enqueued, from the rows — and prices the
+  queue's capacity over the same hour at the **mean round** the home timed its
+  own trains at, each from its build to its landing, over the rounds that
+  ended within the hour. A train still testing counts as one more round, at
+  its age so far, once it has outlasted that mean: a queue whose checks have
+  stopped finishing lands nothing, and is not priced at the rounds it ran
+  before. A queue asked past its capacity raises
+  [`code_merge_rate_over_capacity`](../reference/alarms.md) on the home, naming
+  the branch asked furthest past its own, its enqueues, its capacity and the
+  round it was priced at; it clears once the hour's enqueues are within the
+  capacity again or the queue drains. Only the home builds a queue's trains,
+  so only it times them: a home new to a queue judges it from the first train
+  it builds.
+- **Configured, by `crewlet validate`**, which observes no rate: a queue's
+  capacity over a day at a round as long as the longest a check may run
+  (`code.checks.max_timeout_seconds`), against one landing a day for every
+  seat that may merge into the branch — every human seat, and every
+  `full_access` agent seat that writes the repository (the owning unit's lead
+  and every seat of its subtree, or the owning seat), under the stricter of
+  the rule's `merge_by` and `code.merge_by_floor`. A queue that cannot keep up
+  even with that is advised at the rule's `landing`.
+
+The remedy for both is the same: a deeper queue or a larger batch lands more
+a round, faster or fewer required checks shorten it, and more branches or
+repositories each have a queue of their own.
+
 ### Tip checks and code_green
 
 **Every protected tip is checked.** A `pre_land` landing proved its branch's

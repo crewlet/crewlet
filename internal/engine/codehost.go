@@ -447,9 +447,16 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// Stopped BEFORE the compactor, first in the one bounded stop
 	// ([native.stopCodeHost]): its facts reads are answered by this node's git
 	// reads, and its merges read the cache, which that stop ends after it.
+	var (
+		homeEstate codehome.Estate = seam
+		chains     codehome.Chains = h
+	)
+	if e.homeSeams != nil {
+		homeEstate, chains = e.homeSeams(homeEstate, chains)
+	}
 	homeLoop, err := codehome.New(codehome.Options{
-		Estate: seam, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
-		Cache: c, Git: pool, Chains: h, Tasks: e.queueTasks(), NodeID: nodeID, Metrics: e.metrics,
+		Estate: homeEstate, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
+		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), NodeID: nodeID, Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))
@@ -676,6 +683,11 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 	n.gitCache.AlarmReading(out)
 	if n.compactor != nil {
 		n.compactor.AlarmReading(out)
+	}
+	if n.home != nil {
+		// THE MERGE RATE, from the queues this node is home to: only the
+		// home builds a queue's trains, so only it times their rounds.
+		n.home.AlarmReading(out)
 	}
 }
 

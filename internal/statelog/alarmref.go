@@ -200,6 +200,17 @@ var alarmMeaning = map[Kind]string{
 		"where no git node runs checks at all; past a thousand it says there " +
 		"are more rather than how many. A deleted repository's queued attempts " +
 		"are not counted: no runner may claim them, and its purge removes them.",
+	KindCodeMergeRateOver: "Merge queues this node is home to — pre_land " +
+		"branches whose merges wait for checks — were asked to land more " +
+		"changes in the last hour than they can land in it: their " +
+		"enqueues within the hour, live or ended, past depth × batch " +
+		"changes a round at the mean round their trains took, the round " +
+		"timed by this node from a train's build to its landing (a train " +
+		"still testing counts at its age once it outlasts the mean). " +
+		"Raised by the repository's home git node alone, for as long as " +
+		"the hour's enqueues stay past the capacity; a node that has timed " +
+		"no round of a queue yet — a home new to it — judges it from its " +
+		"first train.",
 	KindCodeRefsNearLimit: "Active repositories set refs so fast that they reach " +
 		"the most live refs a repository may hold (100 000) within the ref " +
 		"lifecycle's window (14 days) unless refs are deleted: their live refs " +

@@ -379,6 +379,7 @@ const (
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
 	KindCodeCommitBusy         Kind = "code_commit_busy"
 	KindCodeChecksBacklog      Kind = "code_checks_backlog"
+	KindCodeMergeRateOver      Kind = "code_merge_rate_over_capacity"
 	KindCodeRefsNearLimit      Kind = "code_refs_near_limit"
 )
 
@@ -770,6 +771,34 @@ type Reading struct {
 	CodeChecksBacklogMore   bool
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
+
+	// CodeMergeRateOver is how many pre_land queues this node is the home of
+	// were asked to land more changes within the merge rate's window than
+	// they can land in it: their enqueues within CodeMergeRateWindow — live
+	// or ended — past the queue's own capacity over it, depth × batch
+	// changes a round at the mean round its trains took (config's
+	// LandingCapacity). CodeMergeRateOverTarget is the one asked furthest
+	// past its capacity, by its branch and its repository's name,
+	// CodeMergeRateOverAsked its enqueues within the window,
+	// CodeMergeRateOverCapacity what it can land in it and
+	// CodeMergeRateOverRound the mean round it was priced at.
+	// CodeMergeRateWindow is the window itself — internal/code's
+	// MergeRateWindow — handed in by the node that measured over it, since
+	// this framework imports no code-host package and the detail names it.
+	//
+	// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): the
+	// depth and the batch its gate lands under and the rounds its home
+	// timed, judged by the home's queue worker, so the alarm fires at any
+	// count and never at a rate of its own. Raised by the repository's HOME
+	// git node, the one node that builds and times its trains. All zero on
+	// a node that is home to no queue — no git role, or a company that hosts
+	// no code — and on one whose every queue keeps up.
+	CodeMergeRateOver         int
+	CodeMergeRateOverTarget   string
+	CodeMergeRateOverAsked    int
+	CodeMergeRateOverCapacity int
+	CodeMergeRateOverRound    time.Duration
+	CodeMergeRateWindow       time.Duration
 
 	// CodeRefsNearLimit is how many active repositories, as this node's rows
 	// hold them, set refs so fast that they reach the most live refs a
@@ -1695,6 +1724,41 @@ var table = []rule{
 			"check waits cannot merge until it runs, and an attempt cancelled " +
 			"meanwhile — its head moved on — leaves the queue. See " +
 			"docs/concepts/code-host.md.",
+	},
+	{
+		// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): how
+		// many changes its depth and batch land at the mean round its home
+		// timed its trains at, over the window its enqueues are counted in.
+		// This framework imports no code-host package, so the home's queue
+		// worker judges each queue against its own capacity and the rule
+		// fires at any count — never at a rate of its own, which would fire
+		// on every deep queue's ordinary day and never on a depth-one queue
+		// with hour-long checks. Raised by each queue's home git node, the
+		// one node that builds its trains and so the one that times them.
+		kind: KindCodeMergeRateOver,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d merge queue(s) this node is home to were asked to land more changes in "+
+					"the last %s than they can land in it — the furthest, %s, %d enqueue(s) against %d at "+
+					"its mean round of %s — so their waiting entries grow for as long as the asking lasts",
+					r.CodeMergeRateOver, spoken(r.CodeMergeRateWindow), r.CodeMergeRateOverTarget,
+					r.CodeMergeRateOverAsked, r.CodeMergeRateOverCapacity, spoken(r.CodeMergeRateOverRound)),
+				r.CodeMergeRateOver > 0
+		},
+		remedy: "A pre_land queue lands at most depth × batch changes a " +
+			"round, a round as long as its candidates' slowest required " +
+			"check takes, so a branch asked faster than that falls further " +
+			"behind every round: each change waits a round longer for every " +
+			"round's worth ahead of it, and once 1 024 changes wait the " +
+			"queue refuses the next enqueue `queue_full`. Raise the rule's `landing.depth` (at " +
+			"most 8) or `landing.batch` (at most 8) to land more a round, " +
+			"make the required checks faster — `crewlet.code.checks.duration` " +
+			"says how long each takes — or require fewer of them on this " +
+			"branch, and spread the work over more branches or " +
+			"repositories, each of which has a queue of its own. Nothing is " +
+			"lost meanwhile: every waiting entry lands in its turn or is " +
+			"ejected naming why. `crewlet validate` gives the same judgment " +
+			"from the configured figures at the longest a check may run. " +
+			"See docs/concepts/code-host.md.",
 	},
 	{
 		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
