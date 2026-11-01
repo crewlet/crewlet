@@ -910,8 +910,8 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	}
 	if runChat {
 		// NOTHING TO CONFIGURE, and that is the record rather than a
-		// shortcut. The lead a `lead_fallback` wake names is resolved at
-		// WRITE time, inside the decide, and rides the record — so a
+		// shortcut. The seat an `answerer` wake names is resolved at
+		// WRITE time, inside the decide, and rides the record, so a
 		// parser handed a lead map here would answer with whoever holds
 		// the role now, which for a message somebody sent last week is a
 		// different person. It is the tracker's arm's reasoning rather
@@ -1699,7 +1699,7 @@ func (c liveChannels) UnitChannels() []string {
 	return out
 }
 
-// liveRoster is chat's three-method view of the company, resolved against the
+// liveRoster is chat's four-method view of the company, resolved against the
 // epoch current when the WRITE runs.
 //
 // PER CALL, for every other live seam's reason here: a chat store is built
@@ -1748,6 +1748,42 @@ func (l liveRoster) Lead(unit, room string) string {
 		return ""
 	}
 	return unitRoomLead(company.Org, unit, room)
+}
+
+// Senior names the most senior AGENT seat among handles, or empty:
+// [seniorAgent] against the CURRENT epoch.
+func (l liveRoster) Senior(handles []string) string {
+	company := l.engine.Company()
+	if company == nil {
+		return ""
+	}
+	return seniorAgent(company.Org, handles)
+}
+
+// seniorAgent is who answers for a room made by hand: the most senior AGENT
+// seat among its members' handles, by [org.Organization.Senior], or empty.
+//
+// IT IS WHAT [chatlet.Roster.Senior] ANSWERS, and the chat write path puts it
+// on the record a person's post publishes as the room's answerer
+// ([chatlet.ReasonAnswerer]). A PERSON IS NEVER IT: a person is addressable and
+// runs no turn, so a room whose most senior member is a person is answered by
+// its most senior agent. And a handle the chart no longer holds is not a seat
+// at all, so a member who has left the company is never ranked.
+func seniorAgent(chart *org.Organization, handles []string) string {
+	if chart == nil || len(handles) == 0 {
+		return ""
+	}
+	named := make(map[string]bool, len(handles))
+	for _, h := range handles {
+		named[h] = true
+	}
+	senior := chart.Senior(func(r *org.Role) bool {
+		return !r.IsHuman() && named[r.Handle()]
+	})
+	if senior == nil {
+		return ""
+	}
+	return senior.Handle()
 }
 
 // Seats is every seat handle of the CURRENT epoch's chart, people and agents

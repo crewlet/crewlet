@@ -1494,21 +1494,22 @@ func TestAPostCarriesTheRoutingItsRoomSupported(t *testing.T) {
 	}
 }
 
-// A UNIT ROOM'S LEAD IS RESOLVED AT THE WRITE AND RIDES THE RECORD.
+// A UNIT ROOM'S ANSWERER IS ITS LEAD, RESOLVED AT THE WRITE AND CARRIED ON THE
+// RECORD.
 //
-// The routing arithmetic is never handed a roster to look a lead up in: the
-// node that derives a wake from a record is rarely the node that wrote it, so
-// a lead resolved at READ time would be whoever leads the unit when the record
-// is read rather than who led it when somebody spoke. The decide asks the
-// roster ONCE, for the room and its unit, and copies the answer onto the record.
-// This is the only path in the engine that resolves one.
+// The routing arithmetic is never handed a roster to look an answerer up in:
+// the node that derives a wake from a record is rarely the node that wrote it,
+// so an answerer resolved at READ time would be whoever leads the unit when
+// the record is read rather than who led it when somebody spoke. The decide
+// asks the roster ONCE, for the room and its unit, and copies the answer onto
+// the record. This is the only path in the engine that resolves one.
 //
-// The fallback it feeds is the narrow one: a PERSON spoke to a unit room and
-// the arithmetic reached nobody else at all. And the roster is asked about the
-// ROOM as well as its unit, since whose a unit room is belongs to the chart —
+// The answerer it feeds is the narrow one: a PERSON spoke to a room and the
+// arithmetic reached nobody else at all. And the roster is asked about the
+// ROOM as well as its unit, since whose a unit room is belongs to the chart;
 // a roster that answered for the unit alone is held to it by
 // [TestARoomNoUnitAnswersForWakesNoLead].
-func TestAUnitRoomsLeadIsResolvedAtTheWrite(t *testing.T) {
+func TestAUnitRoomsAnswererIsItsLeadResolvedAtTheWrite(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane").withLead("eng", "engineering", "amir"))
 	room := r.unitRoom("engineering", "eng")
@@ -1522,16 +1523,16 @@ func TestAUnitRoomsLeadIsResolvedAtTheWrite(t *testing.T) {
 	if notify == nil {
 		t.Fatal("a person's post in a unit room carried no routing snapshot")
 	}
-	if notify.Lead != "amir" {
-		t.Fatalf("the record carries lead %q, want \"amir\" — resolved at the "+
-			"write, a lead is who led the unit when somebody spoke; resolved "+
-			"later it is whoever leads it now", notify.Lead)
+	if notify.Answerer != "amir" {
+		t.Fatalf("the record carries answerer %q, want \"amir\": resolved at "+
+			"the write, a lead is who led the unit when somebody spoke; resolved "+
+			"later it is whoever leads it now", notify.Answerer)
 	}
 	if got := chatlet.RecipientsOf(chatlet.Candidates(notify)); len(got) != 1 ||
-		got[0].Handle != "amir" || got[0].Reason != chatlet.ReasonLeadFallback {
-		t.Fatalf("the record wakes %v, want amir alone under the lead "+
-			"fallback — nobody else in this room was listening, and a unit "+
-			"nobody answers is the case the fallback exists for", got)
+		got[0].Handle != "amir" || got[0].Reason != chatlet.ReasonAnswerer {
+		t.Fatalf("the record wakes %v, want amir alone as the room's answerer "+
+			"(nobody else in this room was listening, and a unit nobody "+
+			"answers is the case the answerer exists for)", got)
 	}
 }
 
@@ -1540,7 +1541,7 @@ func TestAUnitRoomsLeadIsResolvedAtTheWrite(t *testing.T) {
 // A unit that stops declaring its room — or leaves the chart — leaves a room
 // the chart staffs with nobody, and the roster says so by answering no lead
 // for it. Its unit's lead must not go on being woken, and obliged to answer,
-// from a room no prompt names as theirs: the record carries no lead and
+// from a room no prompt names as theirs: the record carries no answerer and
 // routes nobody. The CONTROL is the same post in the unit's other room, which
 // the roster still names a lead for — a write path that asked about the unit
 // alone answers both or neither.
@@ -1566,19 +1567,131 @@ func TestARoomNoUnitAnswersForWakesNoLead(t *testing.T) {
 			t.Fatalf("a person's post in #%s carried no routing snapshot",
 				tc.room.Channel.Name)
 		}
-		var fallback []string
+		var answered []string
 		for _, c := range chatlet.RecipientsOf(chatlet.Candidates(notify)) {
-			if c.Reason == chatlet.ReasonLeadFallback {
-				fallback = append(fallback, c.Handle)
+			if c.Reason == chatlet.ReasonAnswerer {
+				answered = append(answered, c.Handle)
 			}
 		}
 		want := []string(nil)
 		if tc.lead != "" {
 			want = []string{tc.lead}
 		}
-		if notify.Lead != tc.lead || !slices.Equal(fallback, want) {
-			t.Errorf("#%s carries lead %q and wakes %v under the fallback, want "+
-				"%q and %v", tc.room.Channel.Name, notify.Lead, fallback, tc.lead, want)
+		if notify.Answerer != tc.lead || !slices.Equal(answered, want) {
+			t.Errorf("#%s carries answerer %q and wakes %v as it, want %q and %v",
+				tc.room.Channel.Name, notify.Answerer, answered, tc.lead, want)
+		}
+	}
+}
+
+// A PERSON IS NEVER ANSWERED BY SILENCE IN A ROOM MADE BY HAND.
+//
+// The failure this holds shut: a person posted in a public room six agents
+// had joined, none of them following every message, named nobody, and the
+// routing woke nobody at all, with nothing to say so. A room nobody's chart
+// names still has a seat responsible for it: its most senior agent member,
+// resolved by the roster at the write and carried on the record like a unit's
+// lead.
+//
+// EACH CASE IS ALSO A WRITER AND PARSER AGREEMENT. The record carries the
+// routed set and the answerer, and the parser re-routes from the record
+// through the same arithmetic; with the roster unmoved, the two must name the
+// same seats for the same reasons.
+func TestAHandMadeRoomIsAnsweredByItsMostSeniorAgentMember(t *testing.T) {
+	t.Parallel()
+	roster := agents().withPeople("jane", "bob").withRank("ceo", "cto", "amir", "dev")
+	r := newWriteRound(t, roster)
+	open := r.room(person("jane"), "engineering", "dev", "amir", "cto", "bob")
+	closed, err := r.store.CreateChannel(t.Context(), person("jane"), chatlet.NewChannel{
+		Name: "leads", Kind: chatlet.KindPrivate, Members: members("dev", "amir"),
+	})
+	if err != nil {
+		t.Fatalf("create the private room: %v", err)
+	}
+	r.drain()
+	people := r.room(person("jane"), "people", "bob")
+
+	for _, tc := range []struct {
+		name     string
+		actor    chatlet.Actor
+		room     chatlet.Written
+		answerer string
+	}{
+		// The most senior of the room's agents: ceo ranks higher but
+		// is not in the room, and the people in it run no turn.
+		{"a public room", person("jane"), open, "cto"},
+		{"a private room, answered by a member who can read it", person("jane"), closed, "amir"},
+		{"a room with no agent member", person("jane"), people, ""},
+		// A COMPANY MUST NOT TALK TO ITSELF: an agent's post that
+		// reached nobody has reached exactly who it should.
+		{"an agent's own post", seat("dev", "run-1"), open, ""},
+	} {
+		r.say(tc.actor, tc.room.Channel.ID, "where are we on the release?",
+			"k-"+tc.name)
+		notify := r.lastRecord().Notify
+		if notify == nil {
+			t.Fatalf("%s: the post carried no routing snapshot", tc.name)
+		}
+		if notify.Answerer != tc.answerer {
+			t.Errorf("%s: the record carries answerer %q, want %q", tc.name,
+				notify.Answerer, tc.answerer)
+		}
+		want := []chatlet.Recipient(nil)
+		if tc.answerer != "" {
+			want = []chatlet.Recipient{{Handle: tc.answerer, Reason: chatlet.ReasonAnswerer}}
+		}
+		if !slices.Equal(notify.Recipients, want) {
+			t.Errorf("%s: the post wakes %v, want %v", tc.name, notify.Recipients, want)
+		}
+		reRouted := chatlet.RecipientsOf(chatlet.Route(chatlet.Candidates(notify),
+			roster.Seat, tc.actor.Name()))
+		if !slices.Equal(reRouted, notify.Recipients) {
+			t.Errorf("%s: the writer routed %v and the parser re-routed %v from "+
+				"the record it wrote", tc.name, notify.Recipients, reRouted)
+		}
+	}
+}
+
+// A PERSON'S `@channel` ASKS EVERY AGENT IN THE ROOM, AT THE WRITE.
+//
+// The address is a request when a person writes it and news when an agent
+// does, and the record carries the reason each recipient was routed under, so
+// the verdict every later reader takes from it is fixed here. The people in
+// the room are addressable and never woken, and the author is never woken by
+// their own message.
+func TestAPersonsChannelAddressAsksEveryAgentAtTheWrite(t *testing.T) {
+	t.Parallel()
+	roster := agents().withPeople("jane", "bob").withRank("cto", "amir", "dev")
+	r := newWriteRound(t, roster)
+	room := r.room(person("jane"), "engineering", "dev", "amir", "cto", "bob")
+
+	for _, tc := range []struct {
+		actor  chatlet.Actor
+		reason chatlet.Reason
+		woken  []string
+	}{
+		{person("jane"), chatlet.ReasonCollectiveRequest, []string{"amir", "cto", "dev"}},
+		{seat("dev", "run-1"), chatlet.ReasonCollective, []string{"amir", "cto"}},
+	} {
+		if _, err := r.store.Post(t.Context(), keyed(tc.actor, requested("k-"+tc.actor.Handle)),
+			room.Channel.ID, chatlet.NewMessage{
+				Body: "@channel status by end of day, please", Collective: true,
+			}); err != nil {
+			t.Fatalf("post as %s: %v", tc.actor.Handle, err)
+		}
+		r.drain()
+		notify := r.lastRecord().Notify
+		var got []string
+		for _, c := range notify.Recipients {
+			if c.Reason != tc.reason {
+				t.Errorf("%s's `@channel` woke %s under %q, want %q",
+					tc.actor.Handle, c.Handle, c.Reason, tc.reason)
+			}
+			got = append(got, c.Handle)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, tc.woken) {
+			t.Errorf("%s's `@channel` woke %v, want %v", tc.actor.Handle, got, tc.woken)
 		}
 	}
 }

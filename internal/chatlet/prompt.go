@@ -1,6 +1,7 @@
 package chatlet
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -228,8 +229,9 @@ func AuthorLabel(handle string, kind AuthorKind, parties notify.Parties) string 
 // conversation and a mention are what the shared prompt's "**Addressed to
 // you:**" line says, read from this domain's own rule, and a line here beside
 // it told the seat one reason twice. Every other reason says what the verdict
-// cannot: that the thread is the seat's own, that it leads the unit nobody
-// else answered in, or which kind of news an unaddressed wake is.
+// cannot: that the thread is the seat's own, that a person asked the whole
+// room and how many seats share the question, that the seat answers for a
+// room nobody else answered in, or which kind of news an unaddressed wake is.
 func whyYou(meta map[string]string) string {
 	var line string
 	switch Reason(meta[notify.FollowReasonField]) {
@@ -237,16 +239,16 @@ func whyYou(meta map[string]string) string {
 		// The shared verdict's: see above.
 	case ReasonReplyToOwnRoot:
 		line = "This is a reply in a thread YOU started."
-	case ReasonLeadFallback:
-		line = "Somebody spoke in your unit's room and nobody else here was " +
-			"reached. It comes to you as the unit's lead — a room where this " +
-			"resolves to silence is a person talking to an empty screen."
+	case ReasonCollectiveRequest:
+		line = collectiveRequestLine(meta[MetaAsked])
+	case ReasonAnswerer:
+		line = answererLine(Kind(meta[notify.ChannelTypeField]))
 	case ReasonReply:
 		line = "You have spoken in this thread, so you are hearing the rest " +
 			"of it. That is not an ask."
 	case ReasonCollective:
-		line = "The message addressed the whole room (`@channel`) rather " +
-			"than anybody in it."
+		line = "An agent addressed the whole room (`@channel`) to tell it " +
+			"something, not to ask you anything."
 	case ReasonFollow:
 		line = "You follow this thread."
 	case ReasonFollowAll:
@@ -274,11 +276,51 @@ func whyYou(meta map[string]string) string {
 	return out
 }
 
+// collectiveRequestLine is why a person's `@channel` reached this seat, and
+// what answering it means when the question went to many seats at once.
+//
+// THE COUNT IS SAID because it changes the answer: one of three seats asked
+// owes the room a full reply, while one of thirty owes it the part that is
+// its own and nothing that restates its colleagues. It is the parser's count
+// of the seats the message obliged ([MetaAsked]), and a wake that lost it
+// still reads as a request to many.
+func collectiveRequestLine(asked string) string {
+	who := "one of the seats it asked"
+	if n, err := strconv.Atoi(asked); err == nil && n > 1 {
+		who = "one of " + strconv.Itoa(n) + " seats it asked"
+	} else if err == nil && n == 1 {
+		who = "the only seat it asked"
+	}
+	return "A person addressed the whole room (`@channel`), so this is a " +
+		"request to every seat in it, and you are " + who + " to answer. " +
+		"Answer for your own role only: what you know, what you will do, or " +
+		"that you have nothing to add. Keep it short, and leave the parts " +
+		"that belong to other seats to them."
+}
+
+// answererLine is why a seat was woken as the room's answerer, in the terms
+// of the room it answers for.
+//
+// TWO ROOMS, TWO REASONS TO BE THE ONE: a unit's room is answered by its
+// lead, any other named room by its most senior agent member. Saying which is
+// what tells the seat whether the room is its own team's or one it was
+// placed in, and so whether to answer itself or bring in whoever should.
+func answererLine(kind Kind) string {
+	why := "you are the most senior agent in this room"
+	if kind == KindUnit {
+		why = "you lead the unit this room belongs to"
+	}
+	return "A person spoke in this room and it reached no other agent, so it " +
+		"comes to you: " + why + ". Answer it, or bring in the colleague who " +
+		"should; a room where this resolves to silence is a person talking to " +
+		"an empty screen."
+}
+
 // handling is what to do about it, with the tools this build ships.
 //
 // TWO BRANCHES, on the verdict the routing already reached rather than on the
 // reason again: being asked and being told are what a recipient does
-// differently, and the eight reasons collapse to those two.
+// differently, and the nine reasons collapse to those two.
 //
 // WHAT A SEAT OWES WHEN IT DECLINES IS NOT HERE. The executor's contract
 // states it for every surface and the delivery check enforces it, which is

@@ -235,13 +235,17 @@ type MutationRecord struct {
 // about what a record means.
 type Reason string
 
-// The eight reasons.
+// The nine reasons.
 //
 // `reply` and `reply_to_own_root` are one event split in two, and the split is
 // the whole point of the vocabulary: a reply in a thread you merely take part
 // in is news, while a reply to the thread YOU STARTED is a question put back
 // to you. Collapsing them would make every busy thread oblige every past
 // speaker to answer again.
+//
+// `collective_request` and `collective` are the same split for `@channel`, on
+// the AUTHOR rather than the thread: a person who addresses the whole room is
+// asking it something, while an agent that does is telling it something.
 const (
 	// ReasonDM is a message in a conversation that exists only between
 	// these parties. Nothing addresses it more directly than that.
@@ -253,21 +257,39 @@ const (
 	// ReasonReplyToOwnRoot is a reply in a thread this recipient started.
 	ReasonReplyToOwnRoot Reason = "reply_to_own_root"
 
-	// ReasonLeadFallback is a person posting in a unit's room where the
-	// routing reached nobody else.
+	// ReasonCollectiveRequest is a PERSON'S `@channel`: the message asked
+	// the whole room, so every seat it reached owes an answer for its own
+	// role (what it knows, what it will do, or that it has nothing to
+	// add).
+	//
+	// A REASON OF ITS OWN rather than [ReasonCollective] read together
+	// with the author, because whether a wake obliges an answer is a
+	// property of the reason ([Reason.Addressed]) that the delivery gate,
+	// the prompt and the working indicator all read through one rule. A
+	// verdict that also depended on the author would be a second input
+	// to that rule which only this domain could supply, and the three
+	// readers would no longer be one evaluation.
+	ReasonCollectiveRequest Reason = "collective_request"
+
+	// ReasonAnswerer is a person posting in a named room (public, private
+	// or a unit's) where the routing reached nobody else: the room's
+	// ANSWERER is woken to reply. A unit's room is answered by the unit's
+	// lead; any other room by its most senior agent member
+	// ([Roster.Senior]).
 	//
 	// IT ARISES ONLY IN THE ABSENCE OF EVERY OTHER REASON, which is what
 	// puts it last among the addressed ones although it obliges an answer
-	// as much as a mention does: it is the answer to "somebody spoke to
-	// this unit and nobody was listening", and a room where that resolved
+	// as much as a mention does: it is the answer to "a person spoke to
+	// this room and nobody was listening", and a room where that resolved
 	// to silence is a person talking to an empty screen.
-	ReasonLeadFallback Reason = "lead_fallback"
+	ReasonAnswerer Reason = "answerer"
 
 	// ReasonReply is a reply in a thread this recipient takes part in.
 	ReasonReply Reason = "reply"
 
-	// ReasonCollective is an `@channel`: the message addressed the room
-	// rather than anybody in it.
+	// ReasonCollective is an AGENT'S `@channel`: the message addressed the
+	// room rather than anybody in it, and it is news to every seat it
+	// reached.
 	ReasonCollective Reason = "collective"
 
 	// ReasonFollow is a thread this recipient follows.
@@ -278,29 +300,30 @@ const (
 	ReasonFollowAll Reason = "follow_all"
 )
 
-// Reasons are the eight, IN PRECEDENCE ORDER: a recipient appears once, under
+// Reasons are the nine, IN PRECEDENCE ORDER: a recipient appears once, under
 // the first of these that applies to them.
 //
 // # The ordering, and the two rules it is built from
 //
 // EVERY ADDRESSED REASON OUTRANKS EVERY UNADDRESSED ONE. An obligation to
-// answer is a stronger claim than an FYI, so the four [Reason.Addressed] ones
-// come first — and that is a property a test can assert over this slice rather
+// answer is a stronger claim than an FYI, so the five [Reason.Addressed] ones
+// come first, and that is a property a test can assert over this slice rather
 // than a convention somebody maintains.
 //
 // WITHIN EACH HALF, WHAT THIS MESSAGE DID TO YOU OUTRANKS THE ROLE YOU HOLD.
 // That is the tracker's own routing precedence, and it decides the rest: a DM
 // exists for you, a mention named you, a reply answered the thread you
-// started; then a reply in a thread you are in and an `@channel` are both
-// about this message, while following a thread or a room is a standing
-// arrangement. A reply outranks a collective address because a reply is about
-// a conversation you are already in and `@channel` is about everybody.
+// started, and a person's `@channel` asked everybody you are among; then a
+// reply in a thread you are in and an agent's `@channel` are both about this
+// message, while following a thread or a room is a standing arrangement. A
+// reply outranks a collective address because a reply is about a
+// conversation you are already in and `@channel` is about everybody.
 //
 // THE ORDER IS THE VOCABULARY'S, NOT THE ARITHMETIC'S. Nothing in this package
 // computes a precedence; recipients.go walks this slice.
 var Reasons = []Reason{
-	ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonLeadFallback,
-	ReasonReply, ReasonCollective, ReasonFollow, ReasonFollowAll,
+	ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
+	ReasonAnswerer, ReasonReply, ReasonCollective, ReasonFollow, ReasonFollowAll,
 }
 
 // Valid reports whether a reason off the wire is one this build knows.
@@ -308,16 +331,17 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // Addressed reports whether being woken for this reason OBLIGES A REPLY.
 //
-// FOUR, AND IT IS A CLOSED SET: a direct conversation, a mention, a reply to
-// the thread you started, and the lead fallback. Each is somebody speaking TO
-// this recipient.
+// FIVE, AND IT IS A CLOSED SET: a direct conversation, a mention, a reply to
+// the thread you started, a person's `@channel`, and the room's answerer.
+// Each is a person or a colleague speaking TO this recipient.
 //
-// THE OTHER FOUR ARE NOT, and each would be a false obligation: a collective
-// address is spoken to the room, a plain reply reaches everybody who ever
-// posted in the thread, and both follow reasons are standing arrangements the
-// recipient made rather than anything this message did. A seat that treats
-// them as addressed answers every remark in every room it follows, which is a
-// company that talks to itself instead of working.
+// THE OTHER FOUR ARE NOT, and each would be a false obligation: an agent's
+// collective address is news spoken to the room, a plain reply reaches
+// everybody who ever posted in the thread, and both follow reasons are
+// standing arrangements the recipient made rather than anything this message
+// did. A seat that treats them as addressed answers every remark in every
+// room it follows, which is a company that talks to itself instead of
+// working.
 //
 // This is the one value the delivery gate, the prompt and the working
 // indicator all read, through
@@ -325,7 +349,8 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // never disagree about whether somebody owes an answer.
 func (r Reason) Addressed() bool {
 	switch r {
-	case ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonLeadFallback:
+	case ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
+		ReasonAnswerer:
 		return true
 	}
 	return false
@@ -381,14 +406,18 @@ type Notify struct {
 	// named them.
 	Mentions []string `json:"mentions,omitempty"`
 
-	// Lead is the seat a [ReasonLeadFallback] resolved to, RESOLVED AT
-	// WRITE TIME inside the decide.
+	// Answerer is the seat a [ReasonAnswerer] resolves to, RESOLVED AT
+	// WRITE TIME inside the decide: the unit's lead for a unit's room, the
+	// most senior agent member for any other named room, and empty where
+	// the room has none or the author is not a person.
 	//
-	// ON THE RECORD rather than looked up by the parser, because who leads
-	// a unit is a fact about the EPOCH: a parser resolving it later would
-	// route a message posted under one org chart to whoever leads under
-	// the next one.
-	Lead string `json:"lead,omitempty"`
+	// ON THE RECORD rather than looked up by the parser, because both
+	// answers are facts about the EPOCH and the instant: who leads a unit
+	// and who ranks highest in the chart change with the org chart, and who
+	// is in a room changes with its membership. A parser resolving it later
+	// would route a message posted under one chart, to one room, to
+	// whoever answers under the next.
+	Answerer string `json:"answerer,omitempty"`
 
 	// Recipients is the resolved wake set, each under its strongest
 	// reason, computed once at write time so the feed never has to

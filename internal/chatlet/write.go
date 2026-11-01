@@ -157,7 +157,7 @@ type Store struct {
 
 // Roster is what the write path asks about the company the rooms belong to.
 //
-// A CONSUMER-DEFINED SEAM of three methods, because three of them is all this
+// A CONSUMER-DEFINED SEAM of four methods, because four of them is all this
 // package needs: the org chart is a large surface and a write path that could
 // reach all of it would be one that could decide things the log has no record
 // of.
@@ -177,9 +177,9 @@ type Roster interface {
 	// [Route].
 	Seat(handle string) (exists, human bool)
 
-	// Lead names the seat that answers for a unit's ROOM — the room named
-	// room, recorded as unit's — or empty where nobody does. It is read for
-	// one room kind and one reason: a person who posts in a unit's room and
+	// Lead names the seat that answers for a unit's ROOM (the room named
+	// room, recorded as unit's), or empty where nobody does. It is the
+	// [ReasonAnswerer] of a unit's room: a person who posts there and
 	// names nobody is addressing whoever leads it.
 	//
 	// THE ROOM AS WELL AS ITS UNIT, because whose a unit room is belongs to
@@ -190,6 +190,26 @@ type Roster interface {
 	// that; the implementation answers it by the same rule that decides
 	// who is in the room.
 	Lead(unit, room string) string
+
+	// Senior names the AGENT seat among handles that stands highest in the
+	// org chart: the fewest managers above it, ties broken by the chart's
+	// own order. Empty where none of them is an agent seat the company
+	// has. It is the [ReasonAnswerer] of every named room that is not a
+	// unit's, asked over that room's members.
+	//
+	// THE CHART RATHER THAN THE ROOM decides, because a room made by hand
+	// carries nothing about who is responsible in it: the membership says
+	// who is there, and only the chart says who among them answers for
+	// the others. Seniority is the one ranking every company's chart
+	// already states, so a person who asks a room of six agents a
+	// question is answered by the one the rest report to, or the nearest
+	// thing to it.
+	//
+	// THE RANKING LIVES BEHIND THIS SEAM rather than in this package,
+	// because it is a walk of the chart, and this package reads the chart
+	// through nothing else: a second copy of "who manages whom" here would
+	// be a second answer to it.
+	Senior(handles []string) string
 
 	// Seats is every seat handle the company has, people and agents: the
 	// company an auto-join room accounts for when the setting is turned on
@@ -2845,9 +2865,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		}
 		routing.ThreadParticipants, routing.Followers = parties, followers
 	}
-	if room.Kind == KindUnit && room.Unit != "" {
-		routing.Lead = s.roster.Lead(room.Unit, room.Name)
-	}
+	routing.Answerer = s.answerer(room, actor, routing.Members)
 
 	candidates, truncated := Resolve(routing)
 	return &Notify{
@@ -2855,7 +2873,7 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		ChannelKind: room.Kind, ThreadRoot: message.ThreadRoot,
 		Author: message.Author, AuthorKind: message.AuthorKind,
 		Excerpt: Excerpt(message.Body), Mentions: message.Mentions,
-		Lead: routing.Lead,
+		Answerer: routing.Answerer,
 		// ROUTED AT WRITE TIME, so the feed never has to subtract and
 		// can never forget to. The parser routes again against the
 		// roster IT has — a seat may have left between the commit and
@@ -2864,6 +2882,32 @@ func (s *Store) notifyOf(ctx context.Context, tx *sql.Tx, actor Actor, room Chan
 		Recipients:     RecipientsOf(Route(candidates, s.roster.Seat, actor.Name())),
 		WakesTruncated: truncated,
 	}, nil
+}
+
+// answerer resolves the seat a person's post in this room is answered by when
+// it reaches nobody else, or empty.
+//
+// ASKED ONLY WHERE IT CAN BE USED ([answerable]): a record carries an answerer
+// for exactly the messages the routing would wake one for, so a reader of the
+// record never has to wonder whether a named seat was ever eligible.
+//
+// A UNIT'S ROOM IS ANSWERED BY THE UNIT'S LEAD, through the chart rather than
+// the membership, because whose a unit room is belongs to the chart: a unit
+// that stops declaring its room leaves a room the chart gives to nobody, and
+// its lead must not go on answering it. Every OTHER named room is answered by
+// its most senior agent member. A private room's answerer is therefore always
+// somebody who can read it, and a room with no agent member has none.
+func (s *Store) answerer(room Channel, actor Actor, members []Member) string {
+	if !answerable(room.Kind, actor.Kind) {
+		return ""
+	}
+	if room.Kind == KindUnit {
+		if room.Unit == "" {
+			return ""
+		}
+		return s.roster.Lead(room.Unit, room.Name)
+	}
+	return s.roster.Senior(memberHandles(members))
 }
 
 // employed drops the handles the company no longer has.

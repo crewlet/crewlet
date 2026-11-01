@@ -422,9 +422,10 @@ func TestAWakeCarriesBothTheRoomsOwnKindAndTheCanonicalOne(t *testing.T) {
 // Here they are one evaluation read twice: the parser evaluates
 // [chatlet.AddressRule] once and stamps the verdict, the prompt reads the stamp,
 // and the indicator evaluates the same rule over the same metadata. The case
-// that proves it is a reason notify has never heard of — `reply_to_own_root`
-// and `lead_fallback` are not follows on any vendor — which a rule that fell
-// back to the vendor vocabulary would read as "does not address".
+// that proves it is a reason notify has never heard of (`reply_to_own_root`,
+// `collective_request` and `answerer` are not follows on any vendor), which a
+// rule that fell back to the vendor vocabulary would read as "does not
+// address".
 func TestTheStampedVerdictIsTheRuleTheIndicatorEvaluates(t *testing.T) {
 	t.Parallel()
 	prompt := chatlet.NewPrompt()
@@ -437,7 +438,7 @@ func TestTheStampedVerdictIsTheRuleTheIndicatorEvaluates(t *testing.T) {
 			rec := aPost()
 			rec.Notify.ChannelKind = chatlet.KindPublic
 			rec.Notify.ThreadRoot = "msg-0"
-			rec.Notify.Lead = "eng"
+			rec.Notify.Answerer = "eng"
 			rec.Notify.AuthorKind = chatlet.AuthorHuman
 			rec.Notify.Recipients = []chatlet.Recipient{{Handle: "eng", Reason: reason}}
 			routed := wakes(t, rec, company(t, []string{"jane", "eng"}))

@@ -8,9 +8,9 @@ import (
 // WHO A MESSAGE CONCERNS, and why the answer is THREE functions rather than
 // one.
 //
-// [Resolve] is the WRITE side: it turns the rows a room actually has —
-// its membership, who has spoken in the thread, who follows it, who leads the
-// unit — into the recipient set that rides the record. It is the only half
+// [Resolve] is the WRITE side: it turns the rows a room actually has (its
+// membership, who has spoken in the thread, who follows it, who answers for
+// the room) into the recipient set that rides the record. It is the only half
 // that can see those rows, because it runs inside the decide's own snapshot.
 //
 // [Candidates] is PURE OVER THE RECORD: no clock, no store, no roster. That is
@@ -60,8 +60,9 @@ type Routing struct {
 	// where a mention of a non-member wakes nobody.
 	ChannelKind Kind
 
-	// AuthorKind is read by the fallback arm alone — see the arm for why
-	// an agent's own post never raises one.
+	// AuthorKind is read by two arms: the answerer, which only a person's
+	// post raises (see [answererOf]), and the collective address, whose
+	// reason it decides (see [collectiveReason]).
 	AuthorKind AuthorKind
 
 	// Members is the room's membership, and the only collection here that
@@ -88,12 +89,13 @@ type Routing struct {
 	ThreadParticipants []string
 	Followers          []string
 
-	// Lead is the seat that answers for this unit room, RESOLVED AT WRITE
-	// TIME ([Roster.Lead]): who leads a unit — and whether the chart still
-	// gives the room to one — is a fact about the EPOCH, so a parser
+	// Answerer is the seat that answers for this room when nobody else is
+	// reached, RESOLVED AT WRITE TIME ([Roster.Lead] for a unit's room,
+	// [Roster.Senior] over the agent members for any other named room):
+	// both are facts about the EPOCH and the membership, so a parser
 	// resolving it later would route a message posted under one org chart
-	// to whoever leads under the next one.
-	Lead string
+	// to whoever answers under the next one.
+	Answerer string
 }
 
 // Resolve turns a room's rows into the recipient set, reporting whether a cap
@@ -108,17 +110,17 @@ func Resolve(r Routing) ([]Candidate, bool) {
 	for _, reason := range routedReasons() {
 		c.add(reason, limitFor(reason), r.arm(reason))
 	}
-	// THE FALLBACK IS OFFERED LAST, which is the one place this walk
-	// departs from [Reasons] — and the vocabulary itself says why: a lead
-	// fallback "ARISES ONLY IN THE ABSENCE OF EVERY OTHER REASON". Its
+	// THE ANSWERER IS OFFERED LAST, which is the one place this walk
+	// departs from [Reasons], and the vocabulary itself says why: the
+	// answerer "ARISES ONLY IN THE ABSENCE OF EVERY OTHER REASON". Its
 	// place among the addressed reasons is a statement about whether it
 	// obliges an answer, not about which reason claims a handle.
 	//
-	// OFFERED WHERE ITS PRECEDENCE SITS, a lead who had also spoken in the
-	// thread would be claimed as the FALLBACK — and [Route] drops a
-	// fallback the moment anybody else is reached, so the one person the
+	// OFFERED WHERE ITS PRECEDENCE SITS, an answerer who had also spoken in
+	// the thread would be claimed as the ANSWERER, and [Route] drops that
+	// candidate the moment anybody else is reached, so the one seat the
 	// room was addressed to would be the only one not woken.
-	c.add(ReasonLeadFallback, 0, r.arm(ReasonLeadFallback))
+	c.add(ReasonAnswerer, 0, r.arm(ReasonAnswerer))
 	return c.out, c.truncated
 }
 
@@ -190,13 +192,13 @@ func Candidates(n *Notify) []Candidate {
 	for _, cand := range unknown {
 		c.add(cand.Reason, 0, []string{cand.Handle})
 	}
-	// THE FALLBACK ARM IS THE RECORD'S OWN PLUS THE LEAD IT NAMED, and the
-	// second half is what makes the parser's re-route worth running: a
+	// THE ANSWERER ARM IS THE RECORD'S OWN PLUS THE ANSWERER IT NAMED, and
+	// the second half is what makes the parser's re-route worth running: a
 	// record whose ordinary recipients have all left the company since it
-	// was written still reaches the lead, because the lead rides the
-	// record and this offers it again under today's roster.
-	c.add(ReasonLeadFallback, 0, append(slices.Clone(byReason[ReasonLeadFallback]),
-		leadOf(n.ChannelKind, n.AuthorKind, n.Lead)...))
+	// was written still reaches the room's answerer, because the answerer
+	// rides the record and this offers it again under today's roster.
+	c.add(ReasonAnswerer, 0, append(slices.Clone(byReason[ReasonAnswerer]),
+		answererOf(n.ChannelKind, n.AuthorKind, n.Answerer)...))
 	return c.out
 }
 
@@ -216,10 +218,10 @@ func Candidates(n *Notify) []Candidate {
 //     spends on nothing, and there is no reason here that wakes its own author
 //     — a chat message has no equivalent of the tracker's unblocked notice,
 //     which is about somebody else's task.
-//  4. If no ordinary candidate survived, keep the fallback and only the
-//     fallback. The other two conditions on it — a unit room, and a person
-//     speaking — are facts about the RECORD, so they are applied
-//     where the candidate is offered rather than here.
+//  4. If no ordinary candidate survived, keep the answerer and only the
+//     answerer. The other two conditions on it (a named room, and a person
+//     speaking) are facts about the RECORD, so they are applied where the
+//     candidate is offered rather than here.
 //
 // A NIL PREDICATE ROUTES NOBODY. It cannot tell a seat this company still has
 // from one it does not, nor a person from an agent, and both answers are
@@ -232,7 +234,7 @@ func Route(candidates []Candidate, known func(handle string) (exists, human bool
 		return nil
 	}
 	actor = strings.TrimSpace(actor)
-	var ordinary, fallback []Candidate
+	var ordinary, answerers []Candidate
 	for _, c := range candidates {
 		if c.Handle == "" || c.Handle == actor {
 			continue
@@ -241,8 +243,8 @@ func Route(candidates []Candidate, known func(handle string) (exists, human bool
 		if !exists || human {
 			continue
 		}
-		if c.Reason == ReasonLeadFallback {
-			fallback = append(fallback, c)
+		if c.Reason == ReasonAnswerer {
+			answerers = append(answerers, c)
 			continue
 		}
 		ordinary = append(ordinary, c)
@@ -250,14 +252,14 @@ func Route(candidates []Candidate, known func(handle string) (exists, human bool
 	if len(ordinary) > 0 {
 		return ordinary
 	}
-	if len(fallback) == 0 {
+	if len(answerers) == 0 {
 		return nil
 	}
-	// THE FIRST SURVIVING FALLBACK AND NOTHING ELSE. There is one lead per
-	// room, so the slice holds more than one entry only when a record
-	// named a lead and carried another, and waking both would make the
-	// absence of every other reason reach more people than a mention does.
-	return fallback[:1]
+	// THE FIRST SURVIVING ANSWERER AND NOTHING ELSE. A room has one
+	// answerer, so the slice holds more than one entry only when a record
+	// named one and carried another, and waking both would make the
+	// absence of every other reason reach more seats than a mention does.
+	return answerers[:1]
 }
 
 // RecipientsOf renders a routed candidate set as the record carries it.
@@ -310,8 +312,11 @@ func (r Routing) arm(reason Reason) []string {
 		}
 		return r.ThreadParticipants
 
-	case ReasonCollective:
-		if !r.Collective {
+	case ReasonCollectiveRequest, ReasonCollective:
+		// ONE ADDRESS, TWO REASONS, and the author picks which: the arm
+		// whose reason [collectiveReason] does not name is silent, so a
+		// message raises exactly one of them.
+		if !r.Collective || collectiveReason(r.AuthorKind) != reason {
 			return nil
 		}
 		return memberHandles(r.Members)
@@ -331,8 +336,8 @@ func (r Routing) arm(reason Reason) []string {
 		}
 		return out
 
-	case ReasonLeadFallback:
-		return leadOf(r.ChannelKind, r.AuthorKind, r.Lead)
+	case ReasonAnswerer:
+		return answererOf(r.ChannelKind, r.AuthorKind, r.Answerer)
 	}
 	return nil
 }
@@ -363,26 +368,54 @@ func (r Routing) mentioned() []string {
 	return out
 }
 
-// leadOf is the lead fallback's own two conditions, in ONE place because both
-// halves of the file need them and neither may answer differently.
+// answerable reports a message a room owes an answer to when nobody else was
+// reached: a PERSON speaking in a NAMED room.
 //
-// A UNIT ROOM, AND A PERSON SPEAKING. The first is what a lead even means: a
-// room nobody's org chart names has no lead to fall back to. The second is
-// what stops a company talking to itself — an agent's post that reached
-// nobody has reached exactly who it should, while a person who posted in a
-// unit's room and was answered by silence is somebody talking to an empty
-// screen. A person writes as [AuthorHuman], always.
-func leadOf(kind Kind, author AuthorKind, lead string) []string {
-	if lead == "" || kind != KindUnit {
-		return nil
-	}
-	if author != AuthorHuman {
-		return nil
-	}
-	return []string{lead}
+// ONE PREDICATE, read by the write path to decide whether to resolve an
+// answerer at all and by [answererOf] on both halves of this file, so the
+// writer never snapshots an answerer the routing would refuse and the parser
+// never routes one the writer would not have resolved.
+//
+// A NAMED ROOM ([Kind.Named]): public, private or a unit's. A direct
+// conversation needs no answerer, because every participant in it is already
+// woken under [ReasonDM], and an unknown kind a newer build wrote is not a
+// room this build can say anything about.
+//
+// A PERSON SPEAKING ([AuthorHuman]). That is what stops a company talking to
+// itself: an agent's post that reached nobody has reached exactly who it
+// should, while a person who posted in a room and was answered by silence is
+// somebody talking to an empty screen. A credential acting as itself speaks in
+// no room at all ([Actor.speaks]).
+func answerable(kind Kind, author AuthorKind) bool {
+	return kind.Named() && author == AuthorHuman
 }
 
-// routedReasons is [Reasons] without the fallback, in the vocabulary's order.
+// answererOf is the answerer arm's whole condition, in ONE place because
+// both halves of the file need it and neither may answer differently.
+func answererOf(kind Kind, author AuthorKind, answerer string) []string {
+	if answerer == "" || !answerable(kind, author) {
+		return nil
+	}
+	return []string{answerer}
+}
+
+// collectiveReason is the reason a `@channel` by this author wakes the room
+// under.
+//
+// A PERSON ASKS, AN AGENT ANNOUNCES. A person who addresses the whole room is
+// putting a request to it, and a room that read it as news would ignore the
+// one gesture a person has for instructing everybody at once. An agent that
+// does the same is reporting, and making that an obligation would have every
+// seat in the room answer every broadcast, which is a company that talks to
+// itself instead of working.
+func collectiveReason(author AuthorKind) Reason {
+	if author == AuthorHuman {
+		return ReasonCollectiveRequest
+	}
+	return ReasonCollective
+}
+
+// routedReasons is [Reasons] without the answerer, in the vocabulary's order.
 //
 // DERIVED FROM THE SLICE rather than typed again, so a reason added to the
 // vocabulary is walked by both halves of this file without anybody
@@ -391,7 +424,7 @@ func leadOf(kind Kind, author AuthorKind, lead string) []string {
 func routedReasons() []Reason {
 	out := make([]Reason, 0, len(Reasons))
 	for _, r := range Reasons {
-		if r != ReasonLeadFallback {
+		if r != ReasonAnswerer {
 			out = append(out, r)
 		}
 	}
@@ -401,19 +434,20 @@ func routedReasons() []Reason {
 // limitFor is the cap on one arm, and 0 means the arm is bounded only by
 // [MaxRecipients].
 //
-// THREE ARMS CARRY THEIR OWN, and each bounds a different unbounded thing: the
-// handles a body may name, the voices a thread may have collected, and the
-// members one `@channel` may reach. The rest — a direct conversation's
-// participants, a thread's followers, a room's full followers — carry none and
-// are cut at the total, which sits above everything the three capped arms can
-// take together so that it bites only on these.
+// THREE THINGS CARRY THEIR OWN, and each bounds a different unbounded thing:
+// the handles a body may name, the voices a thread may have collected, and the
+// members one `@channel` may reach, under whichever of its two reasons the
+// author raised. The rest (a direct conversation's participants, a thread's
+// followers, a room's full followers) carry none and are cut at the total,
+// which sits above everything the capped arms can take together so that it
+// bites only on these.
 func limitFor(reason Reason) int {
 	switch reason {
 	case ReasonMention:
 		return MaxMentions
 	case ReasonReply:
 		return MaxThreadParticipants
-	case ReasonCollective:
+	case ReasonCollectiveRequest, ReasonCollective:
 		return MaxCollectiveRecipients
 	}
 	return 0

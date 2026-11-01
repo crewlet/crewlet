@@ -121,9 +121,17 @@ func say(t *testing.T, n *node, actor chatlet.Actor, channelID, key, body string
 	mentions ...string) chatlet.Written {
 
 	t.Helper()
+	return sayWhole(t, n, actor, channelID, key, chatlet.NewMessage{Body: body, Mentions: mentions})
+}
+
+// sayWhole is [say] for a message the case states whole: an `@channel`, which
+// a person's composer marks by the flag the message carries.
+func sayWhole(t *testing.T, n *node, actor chatlet.Actor, channelID, key string,
+	in chatlet.NewMessage) chatlet.Written {
+
+	t.Helper()
 	actor.OpKey = statelog.DeriveOpID(chatKeysBegan, "", "crewlet.e2e.chat", key)
-	written, err := n.engine.ChatStore().Post(t.Context(), actor, channelID,
-		chatlet.NewMessage{Body: body, Mentions: mentions})
+	written, err := n.engine.ChatStore().Post(t.Context(), actor, channelID, in)
 	if err != nil {
 		t.Fatalf("post to %s: %v", channelID, err)
 	}
@@ -261,10 +269,14 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 			"then no member this wake has to cross to", writer.id, held)
 	}
 
+	// NO AGENT IN THE ROOM: the seat is reached by being named, which a
+	// public room carries to a seat that has not joined. With it a member,
+	// the founder's second line, which names nobody, would wake it again as
+	// the room's answerer, and this claim is about one turn racing that
+	// line rather than a second turn answering it.
 	created := room(t, writer, speaker(t, "founder"), chatlet.NewChannel{
 		Name: "rollbacks", Kind: chatlet.KindPublic,
-		Topic:   "what to do when a deploy hangs",
-		Members: []chatlet.Member{{Handle: "ceo"}},
+		Topic: "what to do when a deploy hangs",
 	})
 	made := created.Channel
 	// EVERY MEMBER APPLIES THE ROOM before anything is said in it. The
@@ -912,9 +924,13 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	waitForSeat(t, n, "ceo")
 
+	// NO AGENT IN THE ROOM, so the line said first wakes nobody: a person's
+	// message in a room with an agent member is answered by its most senior
+	// agent ([TestAPersonIsNeverAnsweredBySilence]), and that turn would
+	// take this case's script. The seat is reached below by being named,
+	// which a public room carries to a seat that has not joined.
 	made := room(t, n, speaker(t, "founder"), chatlet.NewChannel{
 		Name: "incidents", Kind: chatlet.KindPublic,
-		Members: []chatlet.Member{{Handle: "ceo"}},
 	}).Channel
 	// SOMETHING SAID EARLIER, ADDRESSED TO NOBODY, and it is what the seat
 	// acknowledges. It is not scene-setting: the wake is derived from the
@@ -988,6 +1004,79 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	// AND THEN TOOK THE SAME CLAIM, citing the post: the other direction of
 	// the one rule, and the half a gate that refused everything would fail.
 	deliveredThrough(t, n, chatlet.PostMessageTool)
+}
+
+// A PERSON IS NEVER ANSWERED BY SILENCE, AND A PERSON'S `@channel` IS A
+// REQUEST.
+//
+// The two failures these hold shut, as a person met them: they posted in a
+// room made by hand, its agents members who follow nothing in particular, and
+// named nobody, and nothing was woken and nothing said so; and their
+// `@channel` reached every agent as news, which each was told to leave alone.
+// Now the first wakes the room's answerer, its most senior agent member, and
+// the second asks every agent in the room, and both oblige an answer.
+//
+// THE ANSWER IN THE ROOM IS THE ASSERTION, and it is evidence of the obligation
+// rather than of the wake alone: the scripted seat posts only after the engine
+// refuses its claim to have delivered with nothing said, and the engine
+// refuses that claim only on a turn the routing addressed. A seat woken as
+// news ends on the claim, and the room holds no answer. The seat is also
+// shown why, in the routing's own words.
+func TestAPersonIsNeverAnsweredBySilence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   chatlet.NewMessage
+		why  string
+	}{
+		{"a message naming nobody", chatlet.NewMessage{Body: "where are we on the release?"},
+			"you are the most senior agent in this room"},
+		{"a person's @channel", chatlet.NewMessage{
+			Body: "@channel where are we on the release?", Collective: true},
+			"so this is a request to every seat in it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := start(t)
+			waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
+			waitForSeat(t, n, "ceo")
+			// A ROOM MADE BY HAND, its one agent a member that follows
+			// nothing in particular: before, this was a room nobody heard.
+			made := room(t, n, speaker(t, "founder"), chatlet.NewChannel{
+				Name: "release", Kind: chatlet.KindPublic,
+				Members: []chatlet.Member{{Handle: "ceo"}},
+			}).Channel
+			const answer = "The branch is cut; the notes go out tomorrow."
+			n.model.script(&chatScript{channel: made.ID, answer: answer})
+			t.Cleanup(func() { n.model.script(nil) })
+
+			sayWhole(t, n, speaker(t, "founder"), made.ID, "silence-"+tc.name, tc.in)
+
+			var page chatlet.Transcript
+			waitFor(t, "the seat to answer in the room", func() bool {
+				page = transcript(t, n, "founder", made.ID)
+				return slices.ContainsFunc(page.Messages, func(v chatlet.MessageView) bool {
+					return v.Message.Author == "ceo"
+				})
+			}, func() string {
+				return fmt.Sprintf("room holds %v; the model saw %v", bodies(page),
+					n.model.seen())
+			})
+			if said := posts(page)[0]; said.Message.Body != answer {
+				t.Errorf("the seat said %q", said.Message.Body)
+			}
+			if !n.model.sawText(chatRefusal) {
+				t.Errorf("the seat was never refused %q, so its answer is not "+
+					"evidence that the wake obliged one", chatRefusal)
+			}
+			if !n.model.sawText(tc.why) {
+				t.Errorf("the seat was never told %q, the routing's reason for "+
+					"waking it", tc.why)
+			}
+			waitFor(t, "the seat to submit citing its answer", n.model.chatSubmitted)
+			deliveredThrough(t, n, chatlet.PostMessageTool)
+		})
+	}
 }
 
 // ---- a node that was not there while the company talked ---------------- //
