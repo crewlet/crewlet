@@ -1,6 +1,10 @@
 package sandbox
 
-import "io"
+import (
+	"context"
+	"io"
+	"time"
+)
 
 // A HARNESS'S OWN SESSION, CARRIED BETWEEN BOXES.
 //
@@ -71,3 +75,69 @@ type CarryCheck struct {
 	// Why says, in a person's words, why it cannot; "" where it can.
 	Why string
 }
+
+// SessionTaker is a [Runner] whose harness's session a capture takes out of a
+// box (internal/sandbox/executor's Runner, for a harness it packs and restores):
+// the archive the run packed when its harness exited, or one packed now, on
+// demand, for a job that never got to — a stopped job, one its turn's cap
+// ended while it still ran, one lost with its engine whose box is still there.
+//
+// OPTIONAL, as [noteReader] is: a runner that carries no session — a harness not
+// taught to pack one, a test's — keeps nothing, and every capture of its runs
+// is no capture at all.
+type SessionTaker interface {
+	TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error)
+}
+
+// SessionTake is what a capture asks of a box ([SessionTaker]).
+type SessionTake struct {
+	// Pack says the session is packed NOW, by the runner's own pack, rather
+	// than taken as the run's script left it when its harness exited: a job
+	// that never reached that pack, or one that may have gone on since.
+	// The pack records the archive's digest in the box as the script's
+	// does, so the box never takes its own archive for another box's.
+	Pack bool
+
+	// Scrub is every secret the engine itself put in the box, by value — its
+	// login, its environment's credentials — which is taken out of every
+	// file of the archive in its raw form and in the form a JSON string
+	// holds it in, before the redaction every text leaving a box passes.
+	Scrub []string
+}
+
+// TakenSession is a session archive on its way out of its box: described, and
+// streamed as it is to be kept — every value of [SessionTake.Scrub] taken out
+// and every file redacted, each in a way that leaves the file what it was (a
+// JSON document still JSON, a transcript still one JSON value a line).
+//
+// The zero value is a box that holds no session to take.
+type TakenSession struct {
+	// Archive describes the archive as the box packed it; its Size is the
+	// box's archive, before the scrub, which may change it.
+	Archive SessionArchive
+
+	// Body streams the archive scrubbed, a piece at a time. The caller
+	// closes it, which is safe while a Read is in flight and ends one.
+	Body io.ReadCloser
+
+	// Keep records in the box that its own copy of the session holds the
+	// archive Body yielded — the digest a carried archive is compared with
+	// before it is restored ([RunRequest.Carried]) — so that this archive,
+	// carried back into the box it was taken from, is never restored over
+	// the copy that box went on with. It refuses a Body not read to its end,
+	// whose digest is no archive's.
+	Keep func(ctx context.Context) error
+}
+
+// SessionPackWait bounds a runner's on-demand pack of a session in its box
+// ([SessionTake.Pack]).
+//
+// TWO MINUTES: a minute for what a box's harness takes to come up on a
+// contended box (an OpenCode export runs against a private server it starts,
+// which takes about a second and is given a minute — the room a run's own
+// server is given to listen), and a minute for tar and gzip over a session at
+// its bound, which reads some hundreds of mebibytes of JSON at the tens of
+// mebibytes a second a contended box still packs at. A pack that has not
+// finished by then is not going to, and the capture is refused rather than
+// left holding the box.
+const SessionPackWait = 2 * time.Minute

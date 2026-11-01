@@ -211,6 +211,18 @@ type carrier interface {
 	// A release that cannot be read is taken for a current one, as the
 	// notes gate takes it ([claudeNotesGate]).
 	Continues(box, writer string) (bool, string)
+
+	// Pack is the script that packs session NOW, as the run's script packs
+	// it once its harness exits — the same pack, into
+	// [Paths.SessionPackStaging], its digest kept the same way — for a job
+	// that never got to ([Runner.PackCapture]). Run in a login shell with
+	// the box's bin directory first on its PATH, as the run's wrapper runs.
+	Pack(paths Paths, session string) string
+
+	// layout is how the harness's archive is laid out, which is what the
+	// scrub a capture streams it through has to read and write it as
+	// ([scrubArchive]).
+	layout() archiveLayout
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
@@ -467,7 +479,8 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-			p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
+			p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(),
+			p.OpenCodeSkillsPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
