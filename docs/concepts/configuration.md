@@ -293,7 +293,8 @@ git:
   the volume's free space when that is unset — a share of the same free space,
   so a budget taken beside it claimed the same bytes twice) **and less the
   request spools' allowance** (64 MiB a transfer slot, on this volume and never
-  in the budget). Of that room the cache takes half where the volume also holds
+  in the budget) **and the revision facts' patch spools** (two patches at once
+  of up to 256 MiB each, 512 MiB, there too). Of that room the cache takes half where the volume also holds
   the store, the replicated estate, the snapshots or the broker's streams — the
   other half is the store's to grow into, a snapshot's to be written beside the
   one it replaces — and seven eighths of a volume of its own (the eighth left

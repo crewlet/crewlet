@@ -39,3 +39,20 @@ func SetClassedBounds(s *Server, blob, bytes int64) { s.classedBlob, s.classedBy
 // SetSearchBudget scales what one of s's searches may spend — production's
 // code.SearchBudget — so a case runs a search out of it.
 func SetSearchBudget(s *Server, d time.Duration) { s.searchBudget = d }
+
+// HoldPatchSpools takes n of s's patch spools as n facts reads spooling their
+// patches would, and gives them back when the returned function is called.
+func HoldPatchSpools(s *Server, n int) func() {
+	for range n {
+		s.patchSpools <- struct{}{}
+	}
+	return func() {
+		for range n {
+			<-s.patchSpools
+		}
+	}
+}
+
+// SetPatchSpoolWait scales how long s's facts reads wait for a patch spool —
+// production's code.GitShareWait — so a case waits milliseconds.
+func SetPatchSpoolWait(s *Server, d time.Duration) { s.patchSpoolWait = d }

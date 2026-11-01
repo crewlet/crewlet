@@ -1873,10 +1873,12 @@ cache on its own disk. What such a node needs from its host:
   since filled. Size for that, or set `stream.store_max_bytes` and
   `git.cache_max_bytes` to divide the volume yourself; the node says what it
   chose, and every figure it chose from, as `code_cache_sized`, at warning
-  level when the budget comes out under 1 GiB. Where the broker's claim and the
-  request spools (64 MiB for each of `git.max_transfers`) leave no room at all
-  — on that layout, a cold cache whose quarter of the free space is no more
-  than the spools, as under 16 GiB free on a sixteen-core node — the node
+  level when the budget comes out under 1 GiB. Where the broker's claim, the
+  request spools (64 MiB for each of `git.max_transfers`) and the revision
+  facts' patch spools (512 MiB: two patches at once of up to 256 MiB each)
+  leave no room at all — on that layout, a cold cache whose quarter of the free
+  space is no more than the spools, as under 18 GiB free on a sixteen-core
+  node — the node
   refuses to host code rather than fill the volume the store lives on, and the
   error names the figures and each setting that gives the cache room. Behind
   the serving, the node also reads every byte of each repository it serves

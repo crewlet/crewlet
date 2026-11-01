@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
@@ -587,6 +588,42 @@ func TestABoundCutsClassificationIncomplete(t *testing.T) {
 	case a.RevisionFacts.PatchID == "" || len(a.RevisionFacts.Touched) != 3 || a.RevisionFacts.HeadTree == "":
 		t.Errorf("a classification out of the budget answered the facts %+v, want the rest of them whole",
 			a.RevisionFacts)
+	}
+}
+
+// A NODE SPOOLS SO MANY PATCHES AT ONCE. Every revision's facts write their
+// patch into a spool on the cache's volume, and the node holds at most
+// query.MaxPatchSpools of them, so what they take of the volume is a bound
+// the cache's room is sized beside (query.PatchSpoolAllowance), never one
+// that grows with the read share: a facts read finding every spool taken
+// waits for one, then answers unready (share) for another node; one finding
+// one free takes the id, and gives the spool back when it ends, so the next
+// read takes it again.
+//
+// Mutations: spool without taking one — the read beside every spool held
+// takes its id, red; never give one back — the second read beside the rest
+// held is refused, red.
+func TestANodeSpoolsSoManyPatchesAtOnce(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{"a.txt": "one\n"}, "base")
+	head := x.commit(map[string]string{"a.txt": "two\n"}, "head")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{})
+	query.SetPatchSpoolWait(s, 50*time.Millisecond)
+
+	give := query.HoldPatchSpools(s, query.MaxPatchSpools)
+	if a, err := s.Read(t.Context(), factsQ(repo, head, base)); !unready(err, code.UnreadyShare) {
+		t.Errorf("the facts read beside %d spools held = %v (%+v), want ErrGitUnready{share}",
+			query.MaxPatchSpools, err, a.RevisionFacts)
+	}
+	give()
+
+	defer query.HoldPatchSpools(s, query.MaxPatchSpools-1)()
+	for i := range 2 {
+		if f := x.facts(s, repo, head, base); f.PatchID == "" || f.PatchIDOmission != "" {
+			t.Errorf("facts read %d beside one spool free = %+v, want its id", i+1, f)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -78,7 +79,8 @@ import (
 // once, and a lane filled with first halves would wait on itself for the
 // second. A patch held in memory instead would be MaxPatchIDDiffBytes a read,
 // and a spool is no file of the cache's: the kernel removes it however the
-// read ends.
+// read ends. The NODE holds MaxPatchSpools of them at once, whatever its read
+// share, so the room they take is one the cache is sized beside.
 //
 // AN ID IS OPTIONAL, AND ITS OMISSION THE SAFE SIDE: past MaxPatchIDDiffBytes
 // the facts answer with the id omitted PAST ITS BOUND (code.OmittedPastBound)
@@ -120,10 +122,35 @@ import (
 // outlast the attempt a git read's asker waits (estate.GitReadAttempt, which
 // that budget is a term of), answered late rather than omitted. A spool at
 // the bound is a quarter of a gigabyte on the cache's volume for the second
-// or two its read runs. A change whose diff passes it — a vendored tree, data
+// or two its read runs, two of them on a node at most (MaxPatchSpools). A
+// change whose diff passes it — a vendored tree, data
 // files — carries an approval from one revision to the next by its code alone:
 // the same base and head trees (code.ChangeClassNoCodeChange).
 const MaxPatchIDDiffBytes = 256 << 20
+
+// MaxPatchSpools is how many revisions' patches one git node spools at once:
+// TWO, the facts reads one home asks at once — its loop works
+// internal/code/home's Concurrency repositories at a time, each turn's facts
+// read one after another, and the router's walk asks a repository's home
+// first, so a node's facts reads are its own home's in the steady state
+// (engine.TestEveryFactsReadOfAHomeHasASpool holds the two equal). A third,
+// from another home's walk past a copy that could not answer, waits for a
+// spool as a read waits for a unit of the share — code.GitShareWait at most —
+// and is then answered unready (share) for the walk's next node.
+//
+// THE BOUND IS THE NODE'S, NOT THE READ'S, because the volume is: a read's
+// spool is held to MaxPatchIDDiffBytes, but the reads at once were bounded
+// only by the share (half the read lane — 8 × 256 MiB = 2 GiB on a 16-core
+// git node, 8 GiB on 64 cores) and none of it was in the room the cache is
+// sized against, which on the shared layout is the store's headroom.
+// PatchSpoolAllowance is what these spools may hold, which the engine takes
+// out of the cache's room beside the host's request spools.
+const MaxPatchSpools = 2
+
+// PatchSpoolAllowance is the most every revision's patch spooled on a git
+// node's cache volume at once holds: MaxPatchSpools of MaxPatchIDDiffBytes,
+// 512 MiB.
+const PatchSpoolAllowance = MaxPatchSpools * MaxPatchIDDiffBytes
 
 // emptyTree is git's id of the tree with nothing in it, which every git holds
 // without an object: the base a change whose history shares none with its
@@ -539,6 +566,11 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, code.Fac
 		// THE BASE AND THE PATHS SPENT the read's whole budget.
 		return "", code.OmittedOutOfTime, nil
 	}
+	release, err := r.takePatchSpool(ctx, head)
+	if err != nil {
+		return "", "", err
+	}
+	defer release()
 	spool, err := r.s.o.Cache.Spool()
 	if err != nil {
 		return "", "", r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not make a spool for the "+
@@ -596,6 +628,29 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, code.Fac
 			"id", truncated(res.Stdout), w.wrote)
 	}
 	return fields[0], "", nil
+}
+
+// takePatchSpool holds one of the node's MaxPatchSpools for the patch of
+// head, waiting for one to come free at most as long as a read waits for a
+// unit of its share (code.GitShareWait): past it, or where the read's answer
+// falls due first, unready (share), so the walk asks its next node and the
+// home's next pass asks again; its caller's own end is its caller's error.
+// release gives it back.
+func (r *read) takePatchSpool(ctx context.Context, head string) (release func(), err error) {
+	wait := time.NewTimer(r.s.patchSpoolWait)
+	defer wait.Stop()
+	select {
+	case r.s.patchSpools <- struct{}{}:
+		return func() { <-r.s.patchSpools }, nil
+	case <-ctx.Done():
+		if !code.AnswerDue(ctx) {
+			return nil, ctx.Err()
+		}
+	case <-wait.C:
+	}
+	return nil, r.unready(code.UnreadyShare, fmt.Sprintf("%s spools the patches of %d revisions' facts, all it "+
+		"spools at once, and none came free for the patch of %s within %s; another git node answers meanwhile",
+		r.s.o.NodeID, MaxPatchSpools, head, r.s.patchSpoolWait))
 }
 
 // omission is what a run of the patch, its id or the classes left out where
