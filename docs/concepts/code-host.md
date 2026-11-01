@@ -3358,7 +3358,12 @@ size, 67 for the commit-graph and 100 MiB beside it whatever the
 repository's size, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. The commit-graph's 100 MiB are its changed-path filters':
+its whole history. While an [expunge](#expunge) is open the connectivity
+check also walks the packs it keeps in the copy's dropping view, every object
+of which git marks as it marks a live one, so the check is charged its figure
+for each of their objects as well — a person's purge may leave far more there
+than the repository's live objects — and room beside it for a clone of the
+live objects alone, the only ones a clone sends. The commit-graph's 100 MiB are its changed-path filters':
 each filter is a diff of a commit against its parent, whose trees git keeps
 in its delta base cache up to that cache's 96 MiB cap — 112.8 MiB in all
 over a 100 MB history whose every commit rewrites a directory of a thousand

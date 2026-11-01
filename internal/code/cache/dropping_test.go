@@ -528,3 +528,68 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/code/query/search.go", "cat-file", queryServes},
 	{"internal/code/query/tree.go", "ls-tree", queryServes},
 }
+
+// A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS. Verify's connectivity
+// check runs through the copy's dropping view while an expunge is open, and
+// git marks every object of every object directory it is handed, so the
+// check holds FsckBytesPerObject an object of the dropping packs as much as of
+// the live ones; the room kept beside it is for a clone of the live objects
+// alone, which is all a clone sends. A budget that holds the check's charge
+// over the live objects and not that over both refuses it with ErrNoMemory —
+// re-charged before it reads anything, where it was admitted on the copy
+// from before the expunge and its sync brought the view, and at its
+// admission, where the copy it is admitted on holds the view — and a budget
+// that holds the charge over both runs it, clean.
+//
+// Mutations: charge Verification.charge by the live objects alone, and the
+// check admitted before the expunge runs on the smaller budget; charge
+// AdmitVerify so, and the copy's own check is admitted on it; let placeMoved
+// count no dropping pack's objects, and both are.
+func TestACheckIsChargedForTheDroppingViewItWalks(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	base, first := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	w.sync(t, c, repo).Release()
+	before := cache.FsckCharge(c, repo)
+
+	gone, second := w.push(t, repo, "refs/heads/gone", nil)
+	w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+	kept, dropping := w.expungeBegin(t, repo, []string{gone}, first, second, third)
+	live := kept.Objects * (cache.FsckBytesPerObject + gitproc.TransferBytesPerObject)
+	both := live + dropping.Objects*cache.FsckBytesPerObject
+	if dropping.Objects == 0 || before > live {
+		t.Fatalf("the case is no test: the dropping pack holds %d objects, and the copy before the expunge is "+
+			"charged %d, over the %d its live objects are after it", dropping.Objects, before, live)
+	}
+
+	cache.SetMaintenanceBudget(c, live)
+	v, err := c.AdmitVerify(repo)
+	if err != nil {
+		t.Fatalf("a check of the copy before the expunge, on a budget of %d past its charge of %d: %v", live,
+			before, err)
+	}
+	if _, err := v.Run(t.Context(), cache.VerifyRun{}); !errors.Is(err, cache.ErrNoMemory) {
+		t.Errorf("the check admitted before the expunge, its sync having placed a dropping view of %d objects, "+
+			"on a budget of %d = %v, want ErrNoMemory: its fsck walks the view, %d bytes in all", dropping.Objects,
+			live, err, both)
+	}
+	v.Release()
+
+	if v, err := c.AdmitVerify(repo); !errors.Is(err, cache.ErrNoMemory) {
+		if err == nil {
+			v.Release()
+		}
+		t.Errorf("a check of the copy holding a dropping view of %d objects, on a budget of %d, admitted = %v; "+
+			"want ErrNoMemory: its fsck walks the view, %d bytes in all", dropping.Objects, live, err, both)
+	}
+
+	cache.SetMaintenanceBudget(c, both)
+	if r, err := verify(t.Context(), c, repo, false); err != nil || len(r.Problems) != 0 {
+		t.Errorf("Verify at its charge over the live and the dropping objects, %d = %+v, %v; want it run, and "+
+			"clean", both, r, err)
+	}
+}

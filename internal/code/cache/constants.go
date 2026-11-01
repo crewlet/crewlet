@@ -615,7 +615,11 @@ const PublishTailBytesPerObject = 350
 const GraphLayerBytesPerObject = 350
 
 // FsckBytesPerObject is the memory Verify's connectivity check (fsck
-// --connectivity-only) holds for every object of its repository.
+// --connectivity-only) holds for every object of its repository — every
+// object of every object directory it is handed, so while an expunge is open
+// the objects of the packs the copy's dropping view holds as much as the live
+// ones (Cache.AdmitVerify), though a clone, whose room is kept beside it,
+// sends none of them.
 //
 // 192 BYTES, a fifth past the larger repository's figure: 452 MiB over the
 // gigabyte (160 bytes an object) and 110 MiB over 100 MB (390, a fixed part of

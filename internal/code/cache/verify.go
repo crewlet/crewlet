@@ -157,10 +157,11 @@ type Verification struct {
 //     node with more memory can run it;
 //   - [ErrStopped] and [ErrInvalid] as for every request of a cache.
 //
-// The charge is the incarnation's objects at [FsckBytesPerObject], and room
-// beside it for one transfer of the repository (charge): what the check's
-// fsck holds, and the most of the node's memory any step of it holds — its
-// hashing reads through one buffer. Every holder defers the answer's Release.
+// The charge is the incarnation's objects at [FsckBytesPerObject] — those of
+// the packs its dropping view holds included — and room beside it for one
+// transfer of the repository (verifyCharge): what the check's fsck holds, and
+// the most of the node's memory any step of it holds — its hashing reads
+// through one buffer. Every holder defers the answer's Release.
 func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 	switch {
 	case c.isStopped():
@@ -182,7 +183,7 @@ func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 	}
 	held := c.pin(e, inc, SyncNone)
 	label := cmp.Or(inc.repo.Name, repoID)
-	mem := chargeOver(inc.objects, FsckBytesPerObject, inc.objects)
+	mem := verifyCharge(inc)
 	e.mu.Unlock()
 
 	slot, err := c.git.Reserve()
@@ -198,6 +199,20 @@ func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 	}
 	return &Verification{c: c, e: e, label: label, held: held, slot: slot, unhold: c.holdMaintainer(e), mem: mem},
 		nil
+}
+
+// verifyCharge is what a check of inc holds of the node's memory: its
+// connectivity check's [FsckBytesPerObject] for every object it walks — the
+// objects/pack objects the incarnation counts AND those of the packs its
+// dropping view holds, since fsck runs through the view (heldView) and git
+// marks every object of every object directory it is handed — and room
+// beside it for one transfer of the objects a clone sends, which are
+// objects/pack's alone: charged by objects alone, a check run while an
+// expunge is open (a person's purge has no bound on its dropping view beside
+// the live objects) would be admitted for less than its fsck holds, beside
+// background work the budget had no room for. e.mu is held.
+func verifyCharge(inc *incarnation) int64 {
+	return chargeOver(inc.objects+inc.droppingObjects, FsckBytesPerObject, inc.objects)
 }
 
 // admitCheck charges a check's memory against the node's budget: mem in all,
@@ -227,7 +242,7 @@ func (c *Cache) admitCheck(label string, mem, already int64) error {
 // meanwhile.
 func (v *Verification) charge(s Synced) error {
 	s.entry.mu.Lock()
-	mem := chargeOver(s.inc.objects, FsckBytesPerObject, s.inc.objects)
+	mem := verifyCharge(s.inc)
 	s.entry.mu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1239,9 +1254,10 @@ func (r *refLines) Write(p []byte) (int, error) {
 // Its memory was charged at the admission, and raised to the incarnation it
 // runs over (Verification.charge): a connectivity check holds
 // FsckBytesPerObject an object of its repository — some 11 GB over the
-// largest the defaults admit — and is charged that and room beside it for one
-// transfer of the repository against the budget the maintenance in flight
-// shares (memory.go).
+// largest the defaults admit, and an object of the dropping view's beside
+// them while an expunge is open — and is charged that and room beside it for
+// one transfer of the repository against the budget the maintenance in flight
+// shares (verifyCharge, memory.go).
 func (c *Cache) fsck(ctx context.Context, e *entry, inc *incarnation, label string,
 	slot *gitproc.Reserved) (string, error) {
 
