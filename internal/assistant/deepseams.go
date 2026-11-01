@@ -129,7 +129,7 @@ type DeepOutcome struct {
 type DeepBox struct {
 	Placement string `json:"placement"`
 	Sandbox   string `json:"sandbox"`
-	Agent     string `json:"agent"`
+	Harness   string `json:"harness"`
 	Session   string `json:"session,omitempty"`
 }
 

@@ -404,9 +404,9 @@ func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 					started)
 			}
 			row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
-			if row.CodingAgent != "opencode" || row.Launch.ProviderKey != "oc" {
+			if row.Harness != "opencode" || row.Launch.ProviderKey != "oc" {
 				t.Errorf("the row records %q on %q, want the opencode job the member took",
-					row.CodingAgent, row.Launch.ProviderKey)
+					row.Harness, row.Launch.ProviderKey)
 			}
 		})
 	}

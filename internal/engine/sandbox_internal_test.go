@@ -685,12 +685,12 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 	}
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: chargeAgent, Role: "SWE",
-		CodingAgent: "claude-code",
+		Harness: "claude-code",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, "t1", sandbox.BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -708,7 +708,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		fleet: fleet, coordinator: coordinator,
 		completion: types.ExecutorFinished{
 			TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: "swe", Agent: chargeAgent,
-			RoleName: "SWE", SandboxID: box.ID(), CodingAgent: "claude-code",
+			RoleName: "SWE", SandboxID: box.ID(), Harness: "claude-code",
 		},
 	}
 }

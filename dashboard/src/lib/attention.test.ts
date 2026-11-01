@@ -97,7 +97,7 @@ describe("what it surfaces", () => {
       role: "Dev A",
       agent_handle: "dev-a",
       status,
-      coding_agent: "claude-code",
+      harness: "claude-code",
       placement: "direct",
       task_description: "",
       question: "Which branch should I target?",
@@ -601,7 +601,7 @@ describe("a model at its usage limit", () => {
     parked: true,
     resets_at: "2026-01-01T12:30:00Z",
     since: "2026-01-01T11:59:00Z",
-    cli: "claude-code",
+    harness: "claude-code",
     subscription: true,
   };
   const failed = {

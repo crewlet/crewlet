@@ -223,9 +223,9 @@ func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 	payload, err := json.Marshal(types.ExecutorCollected{
 		Agent: "a-1", RoleName: "Lead", TurnID: "run-1", WorkKey: "wk-1",
 		Iteration: 2, LaunchID: "job-1",
-		CodingAgent: "claude-code", Model: "claude-sonnet-5", ProviderKey: "plan",
+		Harness: "claude-code", Model: "claude-sonnet-5", ProviderKey: "plan",
 		InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700,
-		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42, CLITurns: 31,
+		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42, HarnessTurns: 31,
 		ActivityTranscript: "[tool] bash: go test ./...",
 	})
 	if err != nil {

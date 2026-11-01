@@ -486,7 +486,7 @@ type ExecutorEntry struct {
 	Role        string `json:"role"`
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
-	CodingAgent string `json:"coding_agent"`
+	Harness     string `json:"harness"`
 	// ProviderKey and Model are the executor-chain member the run was
 	// launched on and the model it runs under — see
 	// [types.ExecutorLaunched.ProviderKey]. Empty on a run whose

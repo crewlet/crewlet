@@ -851,7 +851,7 @@ type AgentPhaseCompleted struct {
 	// prompt names only by server. Disjoint from ToolsAvailable. Empty for
 	// every phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
-	// CodingAgent is the harness an executor ran as, and SandboxID the box it ran
+	// Harness is the harness an executor ran as, and SandboxID the box it ran
 	// in: on the execute record that collected a run, and empty on every
 	// other — a phase that ran on this host, and an executor whose launch
 	// never opened a box.
@@ -864,8 +864,8 @@ type AgentPhaseCompleted struct {
 	// its harness's price, its turns and its activity transcript are on that
 	// launch's own [ExecutorCollected] record, which a launch that parked on
 	// a question also gets — the resumed executor's record never had one.
-	CodingAgent string `json:"coding_agent"`
-	SandboxID   string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
+	SandboxID string `json:"sandbox_id"`
 	// DeliveredRefs are the branches and pull requests the collected run
 	// reported, and DeliveredRefsElided how many more it reported than
 	// DeliveredRefs lists: refs are read from the whole report with no count
@@ -920,8 +920,8 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 	if head := upperFirst(subject(actor, e.Phase)); head != "" {
 		parts = append(parts, head)
 	}
-	if e.CodingAgent != "" || e.SandboxID != "" {
-		agent := e.CodingAgent
+	if e.Harness != "" || e.SandboxID != "" {
+		agent := e.Harness
 		if agent == "" {
 			agent = "?"
 		}

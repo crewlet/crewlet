@@ -96,8 +96,8 @@ func TestACollectedLaunchIsPublishedOnceWithItsTokens(t *testing.T) {
 	}
 	// AND ITS CALLS: the model turns its harness's loop took, as it reported
 	// them, which every spend figure counts this record by.
-	if rec.CLITurns != 31 {
-		t.Errorf("cli_turns = %d, want the run's 31", rec.CLITurns)
+	if rec.HarnessTurns != 31 {
+		t.Errorf("harness_turns = %d, want the run's 31", rec.HarnessTurns)
 	}
 	// THE IDENTITY: the executor iteration that launched it and the job.
 	if rec.TurnID != "t1" || rec.Iteration != rigIteration || rec.LaunchID != launched.LaunchID {
@@ -111,8 +111,8 @@ func TestACollectedLaunchIsPublishedOnceWithItsTokens(t *testing.T) {
 	if rec.DurationMS != int((7 * time.Minute).Milliseconds()) {
 		t.Errorf("duration = %dms, want the 7 minutes from launch to collection", rec.DurationMS)
 	}
-	if rec.Model != "claude-sonnet-5" || rec.CodingAgent != "claude-code" || rec.SandboxID != launched.SandboxID {
-		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.CodingAgent, rec.SandboxID)
+	if rec.Model != "claude-sonnet-5" || rec.Harness != "claude-code" || rec.SandboxID != launched.SandboxID {
+		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.Harness, rec.SandboxID)
 	}
 	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.WorkKey {
 		t.Errorf("work item/key = %+v/%q, want the launch's", rec.WorkItem, rec.WorkKey)
@@ -446,7 +446,7 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 	}
 	// A NEGATIVE TURN COUNT IS NONE REPORTED, which counts the run as the
 	// one call the engine asked for rather than as calls taken off.
-	if rec.CLITurns != 0 {
-		t.Errorf("cli_turns = %d, want a negative count read as none", rec.CLITurns)
+	if rec.HarnessTurns != 0 {
+		t.Errorf("harness_turns = %d, want a negative count read as none", rec.HarnessTurns)
 	}
 }

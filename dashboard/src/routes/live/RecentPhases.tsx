@@ -233,7 +233,7 @@ export function RecentPhases({
             <span className="row gap-1">
               <PhaseTag phase={r.phase} />
               <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-                {r.codingAgent || "sandbox"}
+                {r.harness || "sandbox"}
               </Tag>
             </span>
           ) : (

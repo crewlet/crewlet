@@ -331,7 +331,7 @@ func TestAnAnswerNoWaitGetsIsNotAnsweredComeBack(t *testing.T) {
 func TestAModelAtItsLimitAnswersTheWaitAndTheModelsRemedy(t *testing.T) {
 	t.Parallel()
 	limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
-		Model: "aux", Agent: "claude-code", Subscription: true,
+		Model: "aux", Harness: "claude-code", Subscription: true,
 		RetryAt: time.Now().Add(14 * time.Minute), ResetsAt: time.Now().Add(14 * time.Minute),
 		Err: errors.New("x")}
 	h := guarded(newSurface(t, operator.Options{

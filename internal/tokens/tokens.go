@@ -227,7 +227,7 @@ func PhaseCalls(c PhaseCounts) int {
 
 // LaunchCalls is the provider calls one launch of an executor's run covers,
 // off its own record (`executor_collected`): the model turns its harness's own
-// loop took, as the harness reported them (`cli_turns`), and one where it reported
+// loop took, as the harness reported them (`harness_turns`), and one where it reported
 // none — the one run the engine asked for, which is the most it can say.
 //
 // ITS OWN RULE BESIDE [PhaseCalls], not a phase word folded into that one: a

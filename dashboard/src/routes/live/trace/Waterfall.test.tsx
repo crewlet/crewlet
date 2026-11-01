@@ -68,7 +68,7 @@ const PARKED = [
   event("executor_launched", 1_000, {
     launch_id: "L1",
     started_at: iso(1_000),
-    coding_agent: "claude-code",
+    harness: "claude-code",
   }),
 ];
 
@@ -435,7 +435,7 @@ describe("a collected launch's span", () => {
     const run = phaseRecord({
       key: "turn-1|execute|1|L1",
       launch: true,
-      codingAgent: "claude-code",
+      harness: "claude-code",
       launchId: "L1",
       at: iso(31_000),
       durationMs: 30_000,
@@ -595,7 +595,7 @@ const SETTLED = [
   event("executor_launched", 1_000, {
     launch_id: "L1",
     started_at: iso(1_000),
-    coding_agent: "claude-code",
+    harness: "claude-code",
   }),
 ];
 

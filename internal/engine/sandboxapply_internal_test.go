@@ -462,12 +462,12 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
+		Harness: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: sandboxID, CodingAgent: "claude-code", Placement: string(sandbox.Direct),
+		SandboxID: sandboxID, Harness: "claude-code", Placement: string(sandbox.Direct),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

@@ -393,7 +393,7 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // box it ran in.
 //
 // It is what lets the executor's record name the harness that did the work, the
-// box it ran in and what it delivered — `coding_agent`, `sandbox_id` and
+// box it ran in and what it delivered — `harness`, `sandbox_id` and
 // `delivered_refs`, which the harnesses report and nothing else on the
 // resuming side knows. What the run itself cost is NOT here: that is each
 // launch's own fact, on the `executor_collected` record its collection
@@ -405,9 +405,9 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // of the seat's executor chain that took the launch is the launch's own
 // answer, not the chain's head.
 type RunRecord struct {
-	// CodingAgent is the harness that did the work; SandboxID the box it ran in.
-	CodingAgent string
-	SandboxID   string
+	// Harness is the harness that did the work; SandboxID the box it ran in.
+	Harness   string
+	SandboxID string
 
 	// ProviderKey is the providers.llm entry the run was launched on, and
 	// Model the model it ran — the member of the seat's executor chain that
@@ -435,7 +435,7 @@ type RunRecord struct {
 // Sandboxed reports whether the record names the run's harness or its box: whether
 // the phase collected a run at all, rather than closing on a launch that never
 // opened one.
-func (r RunRecord) Sandboxed() bool { return r.CodingAgent != "" || r.SandboxID != "" }
+func (r RunRecord) Sandboxed() bool { return r.Harness != "" || r.SandboxID != "" }
 
 // Runner implements [turn.Phases] against real models and real tools.
 //

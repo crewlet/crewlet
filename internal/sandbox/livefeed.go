@@ -411,7 +411,7 @@ func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 	// ATTACHED, NEVER RECONNECTED: a read changes nothing, and Connect wakes
 	// a paused box — which a read that took a running record a moment
 	// before the collection paused the box would have done.
-	box, runner, err := m.Attach(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	box, runner, err := m.Attach(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return LiveRead{}, fmt.Errorf("sandbox: reach the box of run %s: %w", run.TurnID, err)
 	}

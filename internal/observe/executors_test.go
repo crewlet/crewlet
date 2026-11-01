@@ -60,7 +60,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 	item := &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1"}
 	runs := []sandbox.PendingRun{
 		{
-			TurnID: "tn-parked", Role: "Coder", AgentHandle: "coder", CodingAgent: "claude-code",
+			TurnID: "tn-parked", Role: "Coder", AgentHandle: "coder", Harness: "claude-code",
 			SandboxID: "sb-1", Status: sandbox.StatusAwaiting, Owner: "core-2",
 			TaskDescription: "Add retry to the webhook client\nand the rest of the brief",
 			Label:           "Add retry to the webhook client",

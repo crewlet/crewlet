@@ -741,7 +741,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		}
 		var failure *llm.Error
 		if errors.As(f.Err, &failure) {
-			fromCLI, fromSubscription = failure.Agent, failure.Subscription
+			fromCLI, fromSubscription = failure.Harness, failure.Subscription
 		}
 	}
 	e.publish(ctx, events.New(types.ProviderFallback{
@@ -759,7 +759,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		ErrorKind:       f.Kind.String(),
 		ResetsAt:        resets,
 
-		FromCLI:          fromCLI,
+		FromHarness:      fromCLI,
 		FromSubscription: fromSubscription,
 	}, e.traceFor(ctx)))
 }
@@ -1144,9 +1144,9 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
 	// harness, the box, what it delivered and which launch it was. Nothing else
 	// says where the phase ran — the phase does (see
-	// [types.AgentPhaseCompleted.CodingAgent]).
+	// [types.AgentPhaseCompleted.Harness]).
 	if rec.Run.Sandboxed() {
-		ev.CodingAgent = rec.Run.CodingAgent
+		ev.Harness = rec.Run.Harness
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.DeliveredRefsElided = rec.Run.RefsElided

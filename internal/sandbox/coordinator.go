@@ -1636,7 +1636,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 	if manager == nil {
 		return
 	}
-	runner, err := manager.RunnerFor(run.CodingAgent)
+	runner, err := manager.RunnerFor(run.Harness)
 	if err != nil {
 		return
 	}
@@ -1644,7 +1644,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 		return
 	}
 	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "agent", run.CodingAgent,
+		"launch_id", run.LaunchID, "agent", run.Harness,
 		"detail", "the run succeeded and its harness never asked for its turn's notes, so a "+
 			"note sent while it worked waited for its review instead of reaching it between its "+
 			"steps. Something in the box switched the harness's reading off: for Claude Code, a "+
@@ -1667,7 +1667,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // box next, and a pause would only be one more call to a box about to go.
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	manager := c.mgr()
-	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -1883,9 +1883,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		CacheWriteTokens:              result.CacheWriteTokens,
 		// The launch's own model turns, as its harness reported them: the calls
 		// every spend figure counts this record as (tokens.LaunchCalls).
-		CLITurns:      result.Turns,
+		HarnessTurns:  result.Turns,
 		WorkItem:      run.WorkItem,
-		CodingAgent:   run.CodingAgent,
+		Harness:       run.Harness,
 		SandboxID:     run.SandboxID,
 		CostUSD:       result.CostUSD,
 		DeliveredRefs: result.DeliveredRefs,
@@ -3453,7 +3453,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		ev = events.New(types.ExecutorStopped{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-			CodingAgent: run.CodingAgent, LaunchID: run.LaunchID,
+			Harness: run.Harness, LaunchID: run.LaunchID,
 			StoppedBy: stop.By, StoppedByKind: stop.ByKind,
 			OperatorID: stop.OperatorID, Reason: stop.Reason,
 		}, trace)
@@ -3465,8 +3465,8 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		ev = events.New(types.ExecutorFailed{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-			CodingAgent: run.CodingAgent,
-			Reason:      ending.Reason, Detail: redact.Secrets(detail),
+			Harness: run.Harness,
+			Reason:  ending.Reason, Detail: redact.Secrets(detail),
 		}, trace)
 	}
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()

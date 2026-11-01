@@ -714,7 +714,7 @@ func countOf(list []string, want string) int {
 // the harness that did the work or the box it ran in — which only the executor's
 // record that collected one does.
 func collectedARun(rec map[string]any) bool {
-	agent, _ := rec["coding_agent"].(string)
+	agent, _ := rec["harness"].(string)
 	box, _ := rec["sandbox_id"].(string)
 	return agent != "" || box != ""
 }
@@ -750,7 +750,7 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	if parked["question"] != codingQuestion {
 		t.Fatalf("question = %v", parked["question"])
 	}
-	if parked["agent_handle"] != "swe" || parked["coding_agent"] != "claude-code" {
+	if parked["agent_handle"] != "swe" || parked["harness"] != "claude-code" {
 		t.Fatalf("row = %v", parked)
 	}
 	if parked["box_exists"] != true || parked["paused_at"] == "" {

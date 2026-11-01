@@ -576,7 +576,7 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 	inbox := boundInbox(t, runs, store, "run-1", launch)
 
 	if err := store.AttachSandbox(ctx, "run-1", sandbox.BoxRef{SandboxID: "box-1",
-		CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+		Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
 	sandboxtest.Ask(t, store, "run-1", sandbox.Ask{Question: "which branch?",

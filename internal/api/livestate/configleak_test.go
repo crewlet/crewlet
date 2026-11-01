@@ -23,13 +23,13 @@ func leakyState() *livestate.LiveState {
 	s := livestate.New()
 	call := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
 	s.Apply(env("executor_launched", map[string]any{"agent_id": "Lead", "turn_id": "tn-0",
-		"role": "Lead", "agent_handle": "lead", "coding_agent": "claude-code",
+		"role": "Lead", "agent_handle": "lead", "harness": "claude-code",
 		"provider_key": entryKey, "model": "opus", "sandbox_id": "sb-1", "task": "fix it",
 	}, at("2026-10-27T23:15:00Z"), id("sr")))
 	s.Apply(env("agent_phase_started", call, at("2026-10-27T23:16:00Z"), id("ps")))
 	s.Apply(env("provider_fallback", with(call, map[string]any{
 		"from_provider_key": entryKey, "to_provider_key": "metered-" + entryKey,
-		"error_kind": "rate_limit", "from_cli": "claude-code", "from_subscription": true,
+		"error_kind": "rate_limit", "from_harness": "claude-code", "from_subscription": true,
 	}), at("2026-10-27T23:16:01Z"), id("fb")))
 	s.Apply(env("agent_phase_completed", with(call, map[string]any{
 		"failed": true, "error_kind": "rate_limit", "error": rawFailure, "provider_key": entryKey,

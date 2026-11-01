@@ -225,7 +225,7 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 
 	before := time.Now().UTC()
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "the run succeeded",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.StartedAt.Before(before) {
@@ -271,7 +271,7 @@ func TestACollectedRunStatesOneTimedRoundOverTheRun(t *testing.T) {
 	time.Sleep(ran)
 
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "shipped it",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.RoundsUsed != 1 || len(done.Rounds) != 1 {

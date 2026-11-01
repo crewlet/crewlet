@@ -66,7 +66,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,

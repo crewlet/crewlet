@@ -202,7 +202,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// box handed to the launch is exactly the one the write replaced.
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
-			CodingAgent: existing.CodingAgent, Status: existing.Status,
+			Harness: existing.Harness, Status: existing.Status,
 			LaunchNode: existing.LaunchNode,
 		}
 		// And whether the job it replaces asked, which the reset clears
@@ -883,7 +883,7 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		if box.Node != "" {
 			run.LaunchNode = box.Node
 		}
-		run.CodingAgent = box.CodingAgent
+		run.Harness = box.Harness
 		run.SessionID = box.SessionID
 		run.PauseTTLSeconds = box.PauseTTLSec
 		// A box being attached is a box that is RUNNING, so the snapshot

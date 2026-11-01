@@ -257,7 +257,7 @@ func (rig *chatAnswerRig) park(t *testing.T, wake *events.Event) {
 	}
 	run := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE",
-		CodingAgent: "claude-code", ConversationKey: conv, PartitionKey: part,
+		Harness: "claude-code", ConversationKey: conv, PartitionKey: part,
 	}
 	if _, err := rig.store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

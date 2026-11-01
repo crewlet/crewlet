@@ -857,10 +857,10 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		})
 	}
 	for _, rec := range launches {
-		turns, _ := rec["cli_turns"].(float64)
+		turns, _ := rec["harness_turns"].(float64)
 		wantCalls += tokens.LaunchCalls(int(turns))
 		if turns < 1 {
-			t.Errorf("the launch's record carries no cli_turns; its harness reported "+
+			t.Errorf("the launch's record carries no harness_turns; its harness reported "+
 				"the turns its loop took, which are the run's calls: %v", rec)
 		}
 	}

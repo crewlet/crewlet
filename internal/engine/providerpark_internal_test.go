@@ -62,7 +62,7 @@ func (m *limitedModel) Complete(context.Context, llm.Request) (*llm.Completion, 
 		}
 		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "opus", Key: "default", RetryAt: retry, ResetsAt: m.reset,
-			Agent: "claude-code", Subscription: true,
+			Harness: "claude-code", Subscription: true,
 			Err: errors.New("You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)")}
 	}
 	return &llm.Completion{Content: "done", Model: "opus"}, nil
@@ -205,7 +205,7 @@ func TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce(t *testing.T) {
 	parks := r.parks()
 	if len(parks) != 1 || parks[0].ResetsAt == nil || !parks[0].ResetsAt.Equal(reset) ||
 		!slices.Equal(parks[0].ProviderKeys, []string{"default"}) || parks[0].AgentHandle != "lead" ||
-		parks[0].CLI != "claude-code" || !parks[0].Subscription {
+		parks[0].Harness != "claude-code" || !parks[0].Subscription {
 		t.Fatalf("parks published = %+v, want one naming the reset and the chain", parks)
 	}
 

@@ -581,7 +581,7 @@ func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingSt
 	seatID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: seatID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
+		Harness: "claude-code", ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
 		CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

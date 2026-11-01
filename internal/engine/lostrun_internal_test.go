@@ -32,7 +32,7 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
 	}
 	first := rig.row(t, "run-lost")
-	runner := rig.runners[first.CodingAgent]
+	runner := rig.runners[first.Harness]
 
 	// THE ENGINE'S RESTART TOOK THE JOB, and its host's waiter said so.
 	runner.Lose(sandbox.Result{Text: "half way through the fix", InputTokens: 300, OutputTokens: 30})
@@ -44,7 +44,7 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 	completion := types.ExecutorFinished{
 		Agent: first.AgentID, AgentHandle: first.AgentHandle, RoleName: first.Role,
 		TurnID: first.TurnID, WorkKey: first.WorkKey, LaunchID: first.LaunchID,
-		SandboxID: first.SandboxID, CodingAgent: first.CodingAgent,
+		SandboxID: first.SandboxID, Harness: first.Harness,
 	}
 	ev := events.New(completion, events.TraceContext{TraceID: first.TraceID, ParentSpanID: first.SpanID})
 	if err := e.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev); err != nil {

@@ -48,7 +48,7 @@ func steersOver(t *testing.T, ring statelog.Keyring, store sandbox.PendingStore)
 func workingRun(t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID string) string {
 	t.Helper()
 	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
 		TraceID: "tr-1", CreatedAt: time.Now().UTC(),
 		Steer: sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
 	}, sandbox.Fence{})
@@ -337,7 +337,7 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 			turnID := "run-" + strings.ReplaceAll(tc.name, " ", "-")
 			if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 				TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
-				CodingAgent: "claude-code", Steer: sandbox.RunSteer{Seat: tc.anchor(turnID)},
+				Harness: "claude-code", Steer: sandbox.RunSteer{Seat: tc.anchor(turnID)},
 			}, sandbox.Fence{}); err != nil {
 				t.Fatal(err)
 			}
@@ -370,7 +370,7 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 	stranger, _ := steersOver(t, statelog.OneKey("k-x", "another fleet's key material"), store)
 	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", Steer: sandbox.RunSteer{Seat: stranger.anchor("run-1", sweAgent, "swe")},
+		Harness: "claude-code", Steer: sandbox.RunSteer{Seat: stranger.anchor("run-1", sweAgent, "swe")},
 	}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +559,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
 	}
 	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", CodingAgent: "opencode",
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "opencode",
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("relaunch: %v", err)
