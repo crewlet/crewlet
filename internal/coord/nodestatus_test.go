@@ -399,3 +399,40 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 			row.ParkedSince, row.Parked[0].Since, want)
 	}
 }
+
+// AN MCP ROW'S OUTAGE, CLASS AND RESTARTS CROSS THE LEASE whole, through the
+// JSON round trip the lease store makes, and a healthy row carries none of
+// them: absent reads as no outage, no class and no restart, which is every
+// row of a company whose servers are up.
+func TestAnMCPRowCarriesItsOutageClassAndRestartsAcrossTheLease(t *testing.T) {
+	t.Parallel()
+	down := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{
+		{Server: "tracker", Failed: 1, Error: "would not start", ErrorClass: "dns", DownSince: down, Restarts: 3},
+		{Server: "search", Shared: true, Started: 1, Tools: 2},
+	}}
+	raw, err := json.Marshal(map[string]any{coord.StatusKey: status.Meta()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := coord.StatusFromMeta(meta)
+	if !ok || len(got.MCP) != 2 {
+		t.Fatalf("read back %+v (%v)", got, ok)
+	}
+	if row := got.MCP[0]; row.ErrorClass != "dns" || !row.DownSince.Equal(down) || row.Restarts != 3 {
+		t.Errorf("the failing row read back as %+v", row)
+	}
+	if row := got.MCP[1]; row.ErrorClass != "" || !row.DownSince.IsZero() || row.Restarts != 0 {
+		t.Errorf("the healthy row read back as %+v", row)
+	}
+	rows, _ := status.Meta()["mcp"].([]map[string]any)
+	for _, key := range []string{"error_class", "down_since", "restarts"} {
+		if _, sent := rows[1][key]; sent {
+			t.Errorf("a healthy row sends %q", key)
+		}
+	}
+}

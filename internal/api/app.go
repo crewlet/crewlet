@@ -681,10 +681,10 @@ type Options struct {
 	// would then never be ready.
 	Estate EstateFloor
 
-	// Audit is where a backup publishes its runtime audit record — this
-	// node's own queue, whose publish listener writes the event store. The
-	// operator surface is handed the same one by whoever builds it
-	// ([operator.Options.Audit]). REQUIRED: copying every credential the
+	// Audit is where a backup, and an MCP server's restart, publish their
+	// runtime audit record: this node's own queue, whose publish listener
+	// writes the event store. The operator surface is handed the same one by
+	// whoever builds it ([operator.Options.Audit]). REQUIRED: copying every credential the
 	// company holds to a directory somebody named is the one call an audit
 	// is most often opened to find.
 	Audit operator.AuditPublisher
@@ -868,6 +868,9 @@ func New(opts Options) (*App, error) {
 	// And what every node's MCP servers list, which only the engine
 	// watches.
 	sources.MCPListings = opts.Runtime.Listings()
+	// And how each server's instances are, which only the engine can ask
+	// the nodes holding them.
+	sources.MCPInstances = opts.Runtime.MCPInstances()
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
 	// company this node applied, the community registry it names and, for
 	// one server's detail, the sources as they stand here, every field the
@@ -879,7 +882,7 @@ func New(opts Options) (*App, error) {
 		}
 		company, _ := sources.Company()
 		return company
-	}, Detail: sources.MCPServer})
+	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Audit: opts.Audit})
 	if err != nil {
 		return nil, err
 	}

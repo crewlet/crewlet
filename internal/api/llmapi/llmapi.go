@@ -413,9 +413,9 @@ func (s *Service) audited(action types.ModelAction, h func(http.ResponseWriter, 
 		by := actor(r)
 		rec := &types.ModelActed{ActorName: by.Name, ActorKind: string(by.Kind),
 			OperatorID: by.OperatorID, Action: action, ProviderKey: r.PathValue("key")}
-		watched := &watcher{ResponseWriter: w}
+		watched := operator.RecordAnswer(w)
 		h(watched, r, rec)
-		rec.Outcome, rec.Refusal = watched.outcome()
+		rec.Outcome, rec.Refusal = watched.Outcome()
 		operator.Audit(r.Context(), s.audit, types.NewModelActed(*rec))
 	}
 }
@@ -428,51 +428,9 @@ func (s *Service) refusedAudited(action types.ModelAction) authz.Refusal {
 		by := actor(r)
 		rec := types.ModelActed{ActorName: by.Name, ActorKind: string(by.Kind),
 			OperatorID: by.OperatorID, Action: action, ProviderKey: r.PathValue("key")}
-		watched := &watcher{ResponseWriter: w}
+		watched := operator.RecordAnswer(w)
 		authz.EnvelopeRefusal(watched, r, p, d)
-		rec.Outcome, rec.Refusal = watched.outcome()
+		rec.Outcome, rec.Refusal = watched.Outcome()
 		operator.Audit(r.Context(), s.audit, types.NewModelActed(rec))
 	}
-}
-
-// watcher is a ResponseWriter that keeps the status written and the refusal
-// code of an error answer.
-type watcher struct {
-	http.ResponseWriter
-	status int
-	body   bytes.Buffer
-}
-
-func (w *watcher) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
-	}
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *watcher) Write(b []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	// THE HEAD OF A REFUSAL, which is where its code is: an envelope's
-	// `error` is one of its first keys whatever else it carries.
-	if w.status >= 400 && w.body.Len() < 64<<10 {
-		w.body.Write(b)
-	}
-	return w.ResponseWriter.Write(b)
-}
-
-// outcome is what the answer says became of the call.
-func (w *watcher) outcome() (types.AuditOutcome, string) {
-	switch {
-	case w.status < 400:
-		return types.AuditApplied, ""
-	case w.status >= 500 && w.status != http.StatusBadGateway:
-		return types.AuditFailed, ""
-	}
-	var envelope struct {
-		Error string `json:"error"`
-	}
-	_ = json.Unmarshal(w.body.Bytes(), &envelope)
-	return types.AuditRefused, envelope.Error
 }

@@ -206,7 +206,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS THIRTEEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS FOURTEEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -222,11 +222,13 @@ type PositionRegister interface {
 // record that its readers keep ([DeviceSignIn.Lapsed]) because a bucket age
 // would restart at every update. The eleventh is [SeatAccessKey], the ledger
 // of accounts the engine created at a vendor, which an age would forget while
-// the account still exists there. The last two are an MCP server's: [MCPListingKey], one node's listing of
+// the account still exists there. The twelfth and thirteenth are an MCP server's: [MCPListingKey], one node's listing of
 // one server, which an age would forget while the server lists exactly that,
 // and [MCPSchemaKey], one tool definition's schemas, which go when no listing
 // names them; both are removed by a decision, the node's own or the
-// maintenance sweep's (mcplisting.go).
+// maintenance sweep's (mcplisting.go). The fourteenth is [MCPRestartKey], a
+// person's request to restart an MCP server, which ages out of meaning by its
+// own stamp as a model retry does (mcprestart.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention

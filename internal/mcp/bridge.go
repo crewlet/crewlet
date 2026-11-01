@@ -212,7 +212,9 @@ func (b *Bridge) launch(ctx context.Context, spec Spec) (*client, []toolDef, err
 func (b *Bridge) retain(ctx context.Context, spec Spec, cause error) {
 	supervised, stop := supervision(ctx)
 	s := b.newServer(spec, stop)
-	s.down = &outage{cause: "would not start: " + cause.Error(), since: time.Now()}
+	now := time.Now()
+	s.down = &outage{cause: "would not start: " + cause.Error(), class: ClassOf(cause), since: now}
+	s.failure = &Failure{Class: s.down.class, Said: s.down.cause, At: now}
 	s.attempt = 1
 	b.mu.Lock()
 	b.servers[spec.Name] = s
@@ -456,6 +458,33 @@ func (b *Bridge) RetryNow(name string) bool {
 	return true
 }
 
+// RestartBefore restarts one server whose current state began before the
+// instant before, and reports what it did ([RestartOutcome]): a serving
+// server's session is ended and a fresh one started at once, a down server's
+// supervisor is asked for an attempt now, and either way its restart schedule
+// starts again. A server that came up, or went down, at or after before is
+// left alone, as is a name the bridge does not supervise.
+//
+// AN INSTANT, NOT A COMMAND, so a request is idempotent and order-free: a
+// caller that hands the same instant twice, or late, restarts exactly what it
+// would have restarted on time, and nothing that started since, which is
+// what lets the fleet's record of a request (internal/coord's MCPRestart) stand for
+// ever without restarting a server again on every node that reads it.
+//
+// cause is what the end is told as, in the server's down sentence while it
+// comes back. It does not wait for the restart, and it does not lift
+// [Supervision.MayStart]: an attempt the owner may not make now is still held
+// back.
+func (b *Bridge) RestartBefore(name string, before time.Time, cause string) RestartOutcome {
+	b.mu.RLock()
+	s, ok := b.servers[name]
+	b.mu.RUnlock()
+	if !ok {
+		return RestartAbsent
+	}
+	return s.restartBefore(before, cause)
+}
+
 // liveToolsOf is one server's contribution to the LIVE catalogue — its tools
 // minus any that another server currently wins the name for.
 func (b *Bridge) liveToolsOf(name string) []*Tool {
@@ -612,7 +641,11 @@ func (b *Bridge) Call(ctx context.Context, instance, tool string, args map[strin
 	if c == nil || c.gone() {
 		return nil, fmt.Errorf("%w: %s: %s", ErrNotRunning, instance, s.health(0).Down)
 	}
-	return c.callTool(ctx, tool, args)
+	blocks, err := c.callTool(ctx, tool, args)
+	if err == nil {
+		s.noteAnswer()
+	}
+	return blocks, err
 }
 
 // StderrTail returns a stdio server's last words, for diagnostics — the

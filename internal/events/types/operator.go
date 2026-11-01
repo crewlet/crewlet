@@ -50,6 +50,7 @@ var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
 	ModelActed{}.EventType(),
+	MCPServerActed{}.EventType(),
 	AssistantConversationRead{}.EventType(),
 	AssistantTurnCompleted{}.EventType(),
 }

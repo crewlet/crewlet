@@ -158,6 +158,7 @@ var resources = []resource{
 	// say what they do or to what ([acted]).
 	{Path: "/config/revisions/{id}/revert", Action: "revert the configuration to"},
 	{Path: "/fleet/broker/remove-peer/{peer}", Action: "remove"},
+	{Path: "/mcp-servers/{name}/retry", Action: "restart", Noun: "MCP server"},
 	{Path: "/worklet/items/{key}/depend", Action: "change the dependencies of"},
 	{Path: "/worklet/items/{key}/relate", Action: "change the relations of"},
 	{Path: "/worklet/projects/{key}/tags", Action: "change the tags of"},

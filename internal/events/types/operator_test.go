@@ -66,6 +66,20 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 		actor:   "token:ops",
 		summary: "token:ops retried model default",
 	}, {
+		name: "an MCP server restarted on every node",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			OperatorID: "session:0f3c", Action: MCPServerRestart, Server: "tracker",
+			Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder restarted MCP server tracker",
+	}, {
+		name: "one seat's instance of an MCP server, refused",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "token:ops", ActorKind: "operator",
+			Action: MCPServerRestart, Server: "tracker", Seat: "cto", Outcome: AuditRefused,
+			Refusal: "conflict"}),
+		actor:   "token:ops",
+		summary: "token:ops restarted MCP server tracker for seat cto: refused (conflict)",
+	}, {
 		name: "a device sign-in cancelled, said apart from its start",
 		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
 			Action: ModelDeviceSignInCancel, ProviderKey: "codex", Outcome: AuditApplied}),

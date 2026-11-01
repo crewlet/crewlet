@@ -328,6 +328,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (Result, error) {
 			Failed: true,
 		}, nil
 	}
+	t.srv.noteAnswer()
 	out := renderBlocks(blocks)
 	if out == "" {
 		// A server that answers with nothing at all is not an error, but a

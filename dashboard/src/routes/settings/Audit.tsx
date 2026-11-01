@@ -59,7 +59,7 @@
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
  * nothing anywhere. The runtime audit is that record (`operator_acted`,
- * `backup_requested`, `model_acted`, and the Dashboard Assistant's `assistant_turn_completed`
+ * `backup_requested`, `model_acted`, `mcp_server_acted`, and the Dashboard Assistant's `assistant_turn_completed`
  * and `assistant_conversation_read`, each with the envelope source
  * `operator`), and it is read
  * here as `Runtime`: every call, whatever became of it, under the author and
@@ -254,6 +254,14 @@ const RUNTIME_ROW: Record<
     subject: row.tags?.provider_key ?? "",
     path: ["settings", "models"],
     noSubject: "No model recorded",
+  }),
+  // AN MCP SERVER GESTURE NAMES ITS SERVER AND WHAT WAS DONE TO IT (a
+  // restart), and the seat whose instance it named, if one, in its summary.
+  mcp_server_acted: (row) => ({
+    kind: row.tags?.action ? `MCP server ${row.tags.action.replaceAll("_", " ")}` : "MCP server",
+    subject: row.tags?.mcp_server ?? "",
+    path: ["settings", "mcp-tools"],
+    noSubject: "No server recorded",
   }),
   // A COMPLIANCE READ NAMES THE CONVERSATION IT OPENED: the reader is the
   // row's actor and the reason is its summary, and what was read stays sealed.
