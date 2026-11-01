@@ -7,8 +7,12 @@
  * the ref resolved to, whole; the lines an address picks are the lines marked,
  * and pressing a line's number writes them to the address; the blame is read
  * at the commit the file was; a branch opens its files; the history is read
- * at the revision and the path; and a declared repository's settings are
- * shown, never edited, with the way to Settings › Configuration.
+ * at the revision and the path; a declared repository's settings are shown,
+ * never edited, with the way to Settings › Configuration; a tool-made
+ * repository's search mode is one settings change; a purge names who keeps
+ * copies before it is asked and only its confirmation sends it; a reader
+ * holding no human seat is held from a mirror and a purge; and the Overview
+ * says how far an import went and where the mirrors stand.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -21,6 +25,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { DECLARED, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 afterEach(() => {
@@ -107,14 +112,21 @@ const byRef = (url: URL, part: Record<string, unknown>) => ({
  * The engine: the repository, its refs, a root holding `src/` and a README, a
  * file of three lines, its blame and a history — and every request made.
  */
-function stubEngine(repo: Record<string, unknown> = detail()) {
+function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = []) {
   const asked: URL[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       asked.push(url);
       const p = url.searchParams;
+      if (url.pathname.startsWith("/operator/act/")) {
+        acted.push({
+          tool: decodeURIComponent(url.pathname.split("/operator/act/")[1] ?? ""),
+          args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
+        });
+        return json({ outcome: "applied" });
+      }
       switch (url.pathname) {
         case "/auth/session":
           return new Promise<Response>(() => {});
@@ -259,13 +271,26 @@ function stubEngine(repo: Record<string, unknown> = detail()) {
   return asked;
 }
 
-function mount(hash: string, repo = "web") {
+/** One write the page sent, as `POST /operator/act/{tool}` carried it. */
+interface Acted {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** A person the engine serves the repository writes for: Jane, an admin on her own human seat. */
+const WRITER = {
+  ...ADMIN_VIEWER,
+  acts: ["code_update_repo", "code_purge_unreachable", "code_import_repo"],
+};
+
+function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(ORG);
+  store.setConnected(true);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    what === "viewer" ? Promise.resolve(ADMIN_VIEWER) : new Promise(() => {});
+    what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -422,4 +447,113 @@ test("a name no repository can have is said in place and never asked", async () 
   mount("#/code/repos/Not_A_Repo", "Not_A_Repo");
   expect(await screen.findByText("Not a repository")).toBeTruthy();
   expect(reads(asked, "code_repo")).toHaveLength(0);
+});
+
+// A DECLARED REPOSITORY'S SEARCH MODE AND MIRRORS ARE HELD WITH THE
+// DOCUMENT'S SENTENCE, drawn and never pressable, while its purge — which
+// changes none of its settings — is offered. Mutation: let a declared
+// repository's mode or mirror through, hold its purge, or hide a held control,
+// and this fails.
+test("a declared repository's search mode and mirrors are held, and its purge is offered", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ search: "grep" }), acted);
+  mount("#/code/repos/web?tab=settings", "web", WRITER);
+
+  const index = await screen.findByRole("button", { name: "Index it" });
+  await waitFor(() => expect(index.getAttribute("title")).toBe(DECLARED));
+  expect(screen.getByRole("button", { name: "Make it a pull mirror" }).getAttribute("title")).toBe(
+    DECLARED,
+  );
+  expect(screen.getByRole("button", { name: "Add a push mirror" }).getAttribute("title")).toBe(
+    DECLARED,
+  );
+  fireEvent.click(index);
+  expect(acted).toHaveLength(0);
+  expect(
+    screen.getByRole("button", { name: "Purge unreachable history" }).getAttribute("title"),
+  ).toBeNull();
+});
+
+// A TOOL-MADE REPOSITORY'S SEARCH MODE IS ONE code_update_repo NAMING IT AND
+// THE MODE, and the mode it has is held as no change. Mutation: send another
+// argument, the mode it has, or let the held mode through, and this fails.
+test("a tool-made repository's search mode is one settings change naming the mode", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools", search: "grep" }), acted);
+  mount("#/code/repos/web?tab=settings", "web", WRITER);
+
+  const grep = await screen.findByRole("button", { name: "Search it with grep" });
+  await waitFor(() => expect(grep.getAttribute("title")).toMatch(/searched this way already/));
+  fireEvent.click(grep);
+  const index = screen.getByRole("button", { name: "Index it" });
+  await waitFor(() => expect(index.getAttribute("title")).toBeNull());
+  fireEvent.click(index);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_update_repo", args: { repo: "web", search: "indexed" } });
+});
+
+// THE PURGE NAMES WHO KEEPS COPIES BEFORE IT IS ASKED, and only its Confirm
+// sends it: ONE code_purge_unreachable naming the repository and nothing else,
+// never on the first press and never on Keep it. Mutation: send on the first
+// press, drop a keeper from the confirmation, or send more than the repository,
+// and this fails.
+test("a purge names every keeper of a copy before it is asked, and only Purge sends it", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/code/repos/web?tab=settings", "web", WRITER);
+
+  const purge = await screen.findByRole("button", { name: "Purge unreachable history" });
+  await waitFor(() => expect(purge.getAttribute("title")).toBeNull());
+  fireEvent.click(purge);
+  const dialog = await screen.findByRole("alertdialog");
+  for (const keeper of PURGE_KEEPERS) expect(dialog.textContent).toContain(keeper);
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Keep it" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(acted).toHaveLength(0);
+
+  fireEvent.click(purge);
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Purge" }),
+  );
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_purge_unreachable", args: { repo: "web" } });
+});
+
+// A READER HOLDING NO HUMAN SEAT IS HELD FROM A MIRROR AND A PURGE with the
+// person-only sentence, the controls still drawn. Mutation: hide them, or let
+// an agent-bound reader through, and this fails.
+test("a reader holding no human seat is held from a mirror and a purge, with the reason", async () => {
+  stubEngine(detail({ managed_by: "tools" }));
+  mount("#/code/repos/web?tab=settings", "web", { ...WRITER, kind: "agent", handle: "cto" });
+
+  const purge = await screen.findByRole("button", { name: "Purge unreachable history" });
+  await waitFor(() => expect(purge.getAttribute("title")).toBe(PERSON_ONLY));
+  expect(screen.getByRole("button", { name: "Add a push mirror" }).getAttribute("title")).toBe(
+    PERSON_ONLY,
+  );
+});
+
+// AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
+// stand, on the Overview's rail. Mutation: drop the import's progress or the
+// pull mirror's line from the rail, and this fails.
+test("the overview's rail says how far an import went and where the mirrors stand", async () => {
+  const source = { url: "https://forge.example.com/acme/web.git" };
+  stubEngine(
+    detail({
+      managed_by: "tools",
+      status: "importing",
+      remotes: { mirror_from: source, import: { source, chunks: 3 } },
+    }),
+  );
+  mount("#/code/repos/web");
+
+  expect(
+    await screen.findByText(
+      "Importing from https://forge.example.com/acme/web.git: 3 chunks landed so far.",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
+  ).toBeTruthy();
 });

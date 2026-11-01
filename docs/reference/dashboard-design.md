@@ -7155,9 +7155,18 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
   engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
-  opens the repository's page. Nothing here writes: a repository's settings
-  are the company document's `code.repos`, and an empty listing offers the
-  configuration to a reader who may open it.
+  opens the repository's page. A declared repository's settings are the
+  company document's `code.repos`, and an empty listing offers the
+  configuration to a reader who may open it. The listing's one write is
+  **Import a repository**, a person's alone (`code_import_repo`, which the
+  authority table refuses every seat): a new project, named in the engine's
+  grammar and owned by a unit picked from the chart, filled from an https URL
+  at another host — with the token a variable NAMES, typed as the name and
+  never as the token, which the tool refuses — or made a pull mirror of it
+  (**Keep following it**). It is drawn for every reader and held, with the
+  sentence, for one holding no human seat; the dialog's Import is held until
+  the form is one the engine takes. The new repository reads `importing`
+  until its home git node has landed the source.
 - **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
   read at the tab's floor and again every minute) and its CONTENT, which its
   home git node answers: a directory's listing (`code_tree`, and `code_blob`
@@ -7174,10 +7183,15 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's
   whole id: an address that says the same thing tomorrow, which the engine
-  answers immutably. **Overview** is what the repository holds and the README
+  answers immutably. **Overview** is what the repository holds, a rail of how
+  code search reads it and where it stands with other hosts — its search mode,
+  its import's progress (the chunks landed so far, or how it ended), the pull
+  mirror it follows and its last sync, the push mirror it pushes to and as
+  which seat, each from the repository's own row (`remotes`) — and the README
   at its default branch's root, read at the commit that root was listed at
   and rendered by the dashboard's own Markdown renderer, which builds every
-  element itself. **Commits** is the history at a revision, of the path the
+  element itself. While an import runs, the header's state pill says
+  `importing`, its title how far it went. **Commits** is the history at a revision, of the path the
   address names or of every path, with who pushed each commit where the
   answering node's index holds the push — who pushed, which the commit's own
   author line is not. **Pushes** is the repository's push history, as Code ›
@@ -7185,11 +7199,29 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   protection rules with their merge gates — a gate that requires a check
   with how its queue lands a change (each change tested merged on the branch
   before it lands) —
-  and its path owners, and NEVER
-  edits them: a declared repository's are the company document's, settled by
-  every activation, and lead to Settings › Configuration; one a tool made is
-  changed by the code tools' lifecycle requests (`code_update_repo`,
-  `code_protect_branch`). Content is not polled: a reader reading a file reads
+  and its path owners, and makes three writes, each through `useAct` and a
+  WriteButton, never optimistic — the page is redrawn from the read the
+  write's position brings — and each drawn for every reader, held with the
+  sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
+  button a mode of `REPO_SEARCH_MODES`, held to `code.SearchModes`: the mode
+  it has is no change, and a scratch repository is never indexed);
+  **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
+  `mirror_to`, each set whole from a dialog or removed — an https URL, the
+  credential as a variable's name, and a push mirror's seat and refs — and
+  refused every seat by the deciding data node); and **Unreachable
+  history**, where **Purge unreachable history** (`code_purge_unreachable`, a
+  person's alone, on a repository they maintain) opens a confirmation that
+  names, BEFORE the press, who keeps copies of what it drops — every git
+  node's copy until it syncs past the purge, every backup taken before it,
+  and the object store for a day (a versioned S3 bucket for as long as its
+  own rules keep a deleted object) — and only its Purge asks the repository's
+  maintainer; the section says where the last purge stands. A declared
+  repository's search mode and mirrors are the company document's, settled
+  by every activation: they are held with that sentence and the tab leads to
+  Settings › Configuration, while its purge, which changes none of its
+  settings, is offered. Its other settings are changed by the code tools'
+  lifecycle requests (`code_update_repo`, `code_protect_branch`), which a
+  seat or a person's assistant makes. Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.
 - **A commit's page**, `#/code/repos/{name}/commits/{sha}`, names its commit

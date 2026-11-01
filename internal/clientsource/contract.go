@@ -250,6 +250,7 @@ var contract = []Entry{
 
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
+	{"REPO_SEARCH_MODES", ReadLiteral, "internal/code.TestTheDashboardOffersEverySearchModeOfARepository"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},

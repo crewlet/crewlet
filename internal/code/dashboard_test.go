@@ -45,6 +45,36 @@ func TestTheDashboardKnowsEveryRepositoryState(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD OFFERS EVERY SEARCH MODE OF A REPOSITORY, in the engine's
+// order, and no other.
+//
+// A repository's Settings tab sets its search mode from `REPO_SEARCH_MODES`
+// (`contract/code.ts`), one button a mode, as code_update_repo's `search`: a
+// mode the engine grew that the list lacks is one nobody can set from it, and
+// a mode the list keeps that the engine dropped is a press every repository
+// refuses. Read from the client's own source, both ways, in order.
+//
+// Mutation: drop a mode from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardOffersEverySearchModeOfARepository(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "REPO_SEARCH_MODES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	if len(got) == 0 {
+		t.Fatal("REPO_SEARCH_MODES reads as empty, so this gate certifies nothing")
+	}
+	want := make([]string, 0, len(code.SearchModes()))
+	for _, m := range code.SearchModes() {
+		want = append(want, string(m))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's REPO_SEARCH_MODES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY OUTCOME OF A COMMAND, in the engine's order, and
 // no other.
 //

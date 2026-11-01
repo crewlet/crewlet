@@ -20,13 +20,15 @@
  * who owns it, which seats read it, its default branch and where that stands,
  * its last push, its size and the rules that protect it.
  *
- * # Nothing here writes
+ * # One write: an import
  *
+ * "Import a repository" (`ImportRepo.tsx`) is the listing's one write, a
+ * person's: a new project filled from another host, or a pull mirror of one.
  * A declared repository's settings are the company document's (`code.repos`,
  * its `managed_by` is `config`), and every activation settles them: the way to
  * change one is the configuration, which the empty state offers a reader who
- * may open it. One a tool made (`managed_by` `tools`) is changed by the tools'
- * lifecycle requests, which this workspace does not make either.
+ * may open it. One a tool made (`managed_by` `tools`) is changed on its own
+ * page's Settings tab.
  */
 
 import { useMemo } from "react";
@@ -56,6 +58,7 @@ import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
+import { ImportRepoButton } from "./ImportRepo.tsx";
 import { repoHref } from "./paths.ts";
 
 /**
@@ -115,6 +118,7 @@ export function Repositories() {
           ariaLabel="Which repositories"
           active={status !== ""}
         />
+        <ImportRepoButton />
       </div>
       {paged.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading repositories" />

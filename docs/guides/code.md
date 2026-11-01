@@ -1314,7 +1314,9 @@ time it dials. A blob past `code.limits.max_blob_bytes` or a history past
 `active` holding what landed, and the import is not tried again. A **pull mirror**
 (`-mirror`) is imported the same way and then moves only by its home's syncs
 from the source, so every push to it is refused. Your own assistant does the
-same with `code_import_repo`; no seat is offered it. Every flag is in
+same with `code_import_repo`, and so does **Import a repository** on the
+dashboard's Code › Repositories, where the repository's Overview then says
+how far the import went; no seat is offered it. Every flag is in
 [`crewlet code import`](../reference/cli.md#crewlet-code-import).
 
 #### Your machine pushes it
@@ -1590,7 +1592,9 @@ credential that was ever pushed is in every clone that fetched it, so:
    ```
 
    or `code_purge_unreachable` from your assistant ([`crewlet code
-   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)).
+   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)),
+   or **Purge unreachable history** on the repository's Settings tab in the
+   dashboard, which names who still keeps copies before you confirm.
    It is a person's alone, on your own token, and it keeps no grace: every
    object nothing reaches goes, whoever left it and however recently. The
    answer comes once the request is recorded; `crewlet code status -repo web`

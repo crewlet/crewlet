@@ -17,6 +17,17 @@
 export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "purging"] as const;
 
 /**
+ * How code search reads a repository (`code.SearchModes`), in the engine's
+ * order: `indexed`, from a trigram index of its default branch, searched by
+ * every search; `grep`, read only by a search naming it. What a repository's
+ * Settings tab offers as its search mode. HELD BOTH WAYS, in order, by
+ * `internal/code.TestTheDashboardOffersEverySearchModeOfARepository`: a mode
+ * the engine grew that this lacks is one nobody can set, and one this keeps
+ * that the engine dropped is a press every repository refuses.
+ */
+export const REPO_SEARCH_MODES = ["indexed", "grep"] as const;
+
+/**
  * What became of one command of a push, in the engine's order
  * (`code.CommandCounts`' fields): a ref made, moved, moved by force or
  * removed; asked for the value it already had; or refused. The words a row

@@ -1233,7 +1233,8 @@ publication, one rewrite of a repository at a time
   week. The 64 MiB is provisional, until the expunge's benchmark has priced a
   cycle against what it frees.
 - **At once, when a person purges** the repository's unreachable objects —
-  `code_purge_unreachable` from your own assistant, or
+  `code_purge_unreachable` from your own assistant, **Purge unreachable
+  history** on the repository's Settings tab in the dashboard, or
   [`crewlet code purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable).
   The purge is a request recorded on the repository's subject and answered
   as soon as it is, long before it is served; its maintainer serves it at its
