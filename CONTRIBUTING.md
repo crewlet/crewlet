@@ -1552,13 +1552,13 @@ nothing sets yet, is fine. A stub or a `TODO` is not.
   says `Closes #N`. Add each pull request's link to the checklist as it opens.
 - **Land one piece, then start the next on `main`.** Each pull request is
   green in CI and titled as a release note on its own.
-- **If a piece is waiting on review, stack the next one on it.** Branch from
-  the previous piece's branch and open the pull request against that branch,
-  saying in the description which pull request it builds on. When the lower
-  one merges, rebase onto `main` and retarget. Stacking against another
-  branch needs that branch in this repository. From a fork, open the next
-  pull request against `main` and say which one it builds on; its diff
-  includes the lower piece until that one merges.
+- **If a piece is waiting on review, build the next one on it.** Branch from
+  the previous piece's branch, but open the pull request against `main` and
+  say in its description which one it builds on (`Builds on #N`). Its diff
+  includes the lower piece until that one merges; then rebase onto `main`.
+  Don't open a pull request against another pull request's branch: GitHub
+  then treats the two as a stack, which its merge API refuses to merge and
+  whose base can no longer be changed.
 - **The series is the change.** It is done when the last piece merges and
   the issue closes.
 
