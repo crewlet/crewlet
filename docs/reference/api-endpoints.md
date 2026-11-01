@@ -6396,7 +6396,7 @@ finds that question no longer waiting.
 It refuses `stale_version` for a `launch_id` that is not the launch the executor waits on now, the question you read having been answered and followed by another. It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the executor's row in `GET /executors` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for an executor that is not waiting for an answer, or has no
 record at all (one that ended has none). It is
 served on every company, whether it runs Worklet, Doclet and Chatlet or not: the executors' record is the
-fleet's, and a company on Jira runs coding agents too.
+fleet's, and a company on Jira runs executors too.
 
 ### Pausing and resuming a seat
 
