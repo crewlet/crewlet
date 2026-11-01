@@ -695,7 +695,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.No, OpenWorld: mcp.No,
 		}
-	case AnswerRunTool:
+	case AnswerExecutorTool:
 		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
 		// coding run, whose next moves reach the company, so OpenWorld
 		// is Yes. Not destructive — it supplies what a run asked for and
@@ -714,8 +714,8 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No}
 	case SteerTurnTool:
-		// A WRITE SOMEBODY ELSE ACTS ON, like answer_run: the note changes
-		// what a running turn does next, and its next moves reach the
+		// A WRITE SOMEBODY ELSE ACTS ON, like answer_executor: the note
+		// changes what a running turn does next, and its next moves reach the
 		// company, so OpenWorld is Yes. Not destructive — it replaces
 		// nothing — and NOT idempotent as a tool: a second call with other
 		// words is a second note. A retry of ONE request is collapsed by

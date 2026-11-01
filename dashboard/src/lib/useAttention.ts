@@ -27,7 +27,7 @@ export function useAttention(): Attention[] {
   // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
   // this queue has by construction — it is waiting for a person — and what the
   // row says about it is how long its box is still held, which is the pause
-  // window only the durable record carries. On the runs board's own poll, so
+  // window only the durable record carries. On the Executors board's own poll, so
   // the queue and the board cannot disagree about a run — see RUNS_POLL_MS.
   const { data: runs } = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   return useMemo(

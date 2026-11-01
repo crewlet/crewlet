@@ -141,7 +141,7 @@ there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided on the seat its coding run's record names once the run
 is out, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
-or an administrator; `answer_run`, for the person who asked the parked
+or an administrator; `answer_executor`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
 asks the company's knowledge a question on the auxiliary model of the asker's
 seat, so it needs either app (it searches the pages only for a `doclet`

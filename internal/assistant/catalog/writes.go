@@ -62,10 +62,10 @@ func write(name string, verb authz.Action, destructive bool, phrase, description
 
 // answersRun is a write whose request answers with a coding run's question
 // beside its receipt: what the resumed turn reads of it is fenced by the one
-// rule for a coding run's words (provenance.CodingRun), as every read of that
+// rule for a coding run's words (provenance.Executor), as every read of that
 // question is.
 func answersRun(t Tool) Tool {
-	t.Trust = provenance.CodingRun("").Trust
+	t.Trust = provenance.Executor("").Trust
 	return t
 }
 
@@ -158,7 +158,7 @@ func writeTools() []Tool {
 				"turn_id": text("The running turn's id.", nameBytes),
 				"note":    text("The note, verbatim.", 8<<10),
 			})),
-		answersRun(write("answer_coding_run", authz.ActionRunAnswer, false, "answer coding runs",
+		answersRun(write(answerExecutorTool, authz.ActionExecutorAnswer, false, "answer coding runs",
 			"Propose an answer to a coding run parked on a question for the person.",
 			object([]string{"turn_id", "launch_id"}, map[string]*schema{
 				"turn_id": text("The run's turn id.", nameBytes),
@@ -166,7 +166,8 @@ func writeTools() []Tool {
 					"its question.", nameBytes),
 				"choice": text("The id of the option chosen, where the question offers "+
 					"options (its decision).", nameBytes),
-				// The bound answer_run itself refuses past (builtin.MaxRunAnswerBytes).
+				// The bound answer_executor itself refuses past
+				// (builtin.MaxRunAnswerBytes).
 				"answer": text("The answer in words, verbatim: the whole answer to an open "+
 					"question, or what to add to a choice.", 16<<10),
 			}))),

@@ -256,10 +256,10 @@ func TestAFailedLaunchIsTheSeatsLastError(t *testing.T) {
 
 	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
 		"iteration": 1, "launch_id": "job-2", "failed": true,
-		"error": "the coding agent exited with status 1", "error_kind": "coding_run_failed",
+		"error": "the coding agent exited with status 1", "error_kind": "launch_failed",
 	}), id("broke"), at("2026-06-14T12:40:00Z")))
 	got := overlayOf(t, s, "Lead").LastError
-	if got == nil || got.Kind != "coding_run_failed" || got.Phase != "execute" ||
+	if got == nil || got.Kind != "launch_failed" || got.Phase != "execute" ||
 		got.TurnID != "tn-1" || got.EventID != "broke" {
 		t.Fatalf("last error = %+v, want the failed launch's kind, in execute, on its turn", got)
 	}

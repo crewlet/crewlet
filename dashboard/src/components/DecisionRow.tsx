@@ -12,7 +12,7 @@
  *    line saying what the answer sets off: the asker is woken with it, and
  *    posts it to the channel it promised where the ask carries an `inform`;
  *  - a CODING RUN parked on a question: whose, the question's title quoted,
- *    and how long its box is still held; answered by its turn (`answer_run`),
+ *    and how long its box is still held; answered by its turn (`answer_executor`),
  *    with one of its options where it asked to choose;
  *  - a SEAT the engine STOPPED for its token budget: which window is spent,
  *    the item it was on, and the two ways out — raise the ceiling, or hand

@@ -21,23 +21,23 @@ import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Runs.tsx";
+import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Executors.tsx";
 import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
 
 const ROWS = 5;
 
-function CodingRuns() {
+function Executors() {
   const now = useNow();
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
   const live = useExecutors();
-  // The Runs screen's own read: durable runs have no push behind them.
+  // The Executors screen's own read: durable runs have no push behind them.
   const { data, loading, error, refusal } = useQuery("executors", undefined, {
     pollMs: RUNS_POLL_MS,
   });
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
   return (
-    <WidgetCard title="Coding runs" from="live-runs">
+    <WidgetCard title="Executors" from="live-executors">
       <WidgetQuery
         error={error}
         refusal={refusal}
@@ -58,7 +58,7 @@ function CodingRuns() {
           {rows.slice(0, ROWS).map((run) => (
             <ListItem
               key={run.turn_id}
-              href={href(["live", "runs", run.turn_id])}
+              href={href(["live", "executors", run.turn_id])}
               trailing={<RunStatus status={run.status} />}
             >
               <span className="home-widget-line">
@@ -76,7 +76,7 @@ function CodingRuns() {
           ))}
         </List>
         {rows.length > ROWS ? (
-          <a className="home-card-more t-link" href={href(["live", "runs"])}>
+          <a className="home-card-more t-link" href={href(["live", "executors"])}>
             {`All ${plural(rows.length, "run")}`}
           </a>
         ) : null}
@@ -193,15 +193,15 @@ function FailedTurns() {
 
 export const widgets = defineWidgets([
   {
-    key: "live.runs",
-    from: "live-runs",
-    label: "Coding runs",
+    key: "live.executors",
+    from: "live-executors",
+    label: "Executors",
     description: "Runs in flight and any waiting on an answer",
     icon: SquareTerminalGlyph,
     hue: "cyan",
     size: { w: 6, minW: 4, minH: 8, vertical: true },
     once: true,
-    Component: CodingRuns,
+    Component: Executors,
   },
   {
     key: "live.events",

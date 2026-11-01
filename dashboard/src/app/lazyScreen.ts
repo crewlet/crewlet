@@ -176,7 +176,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   live: "live",
   turns: "live",
   turn: "live",
-  runs: "live",
+  executors: "live",
   a2a: "live",
   trace: "live",
   events: "live",

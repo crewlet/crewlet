@@ -7627,7 +7627,7 @@ a.work-cal-chip {
   color: var(--color-text-tertiary);
 }
 
-/* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
+/* A PARKED RUN'S BANNER (routes/live/Executors.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one
    caption line of 180 characters is a line nobody finds the end of. */

@@ -66,7 +66,7 @@ export const CHECK: Record<ModelCheckName, string> = {
   smoke: "Answers a call",
   shell: "Shell and files",
   web: "Web tools",
-  executor: "Coding runs",
+  executor: "Executor",
 };
 
 /** Where a device sign-in is, as its panel says it. */

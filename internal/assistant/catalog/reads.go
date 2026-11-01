@@ -364,7 +364,7 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
 			// An ask is a colleague's; a coding run's is not, and is read by
-			// the one rule for a coding run's words (provenance.CodingRun).
+			// the one rule for a coding run's words (provenance.Executor).
 			TrustOf: outsideWhere(decisionRows, runAskField),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /worklet/decisions", nil, nil)
@@ -559,12 +559,12 @@ func readTools() []Tool {
 			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
 			// working from a brief that may be an outside chat message or a
 			// webhook's payload, read by the one rule for a coding run's
-			// words (provenance.CodingRun) wherever it is read.
+			// words (provenance.Executor) wherever it is read.
 			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /executors", nil, nil)
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Executors", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
 				Columns: []cards.Column{seat("agent", "Seat", "agent_handle"),
 					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
@@ -957,13 +957,13 @@ func artifactKinds() []string {
 
 // outsideWhere is the trust of an answer whose rows (at rows) may carry a
 // coding run's question at field: the one trust decided for a coding run's
-// words (provenance.CodingRun) where any row carries one, and where none does
+// words (provenance.Executor) where any row carries one, and where none does
 // the engine's own records, a colleague's by the one rule for a surface the
 // engine hosts.
 func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
 	return func(_ Args, answer any) provenance.Trust {
 		if carriesRunAsk(answer, rows, field) {
-			return provenance.CodingRun("").Trust
+			return provenance.Executor("").Trust
 		}
 		return provenance.TrustForHosted("", nil, false)
 	}

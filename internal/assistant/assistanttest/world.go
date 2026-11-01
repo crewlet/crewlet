@@ -134,7 +134,7 @@ var ProposalArgs = map[string]map[string]any{
 	"pause_agent":               {"handle": "pm", "reason": "Too many hand-offs.", "stop_running": true},
 	"resume_agent":              {"handle": "pm"},
 	"steer_turn":                {"turn_id": RecordID, "note": "Use the staging branch."},
-	"answer_coding_run":         {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
+	"answer_executor":           {"turn_id": RecordID, "launch_id": "launch-1", "choice": "main"},
 	"create_page":               {"title": "Onboarding", "body": "Welcome."},
 	"edit_page":                 {"page": RecordID, "base_version": float64(2), "body": "Step one, then two."},
 	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},

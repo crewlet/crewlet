@@ -84,7 +84,7 @@ class InertWebSocket {
 
 const EVERY_TOOL = [
   "comment_on_work_item",
-  "answer_run",
+  "answer_executor",
   "update_work_item",
   "mark_inbox",
   "write_page",
@@ -1240,7 +1240,7 @@ describe("the pane", () => {
     };
     // THE ENGINE'S ANSWER AND ITS RECORD: pending, then recorded on the run.
     actAnswers = {
-      answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+      answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
     };
     mount({
       answers: {
@@ -1252,7 +1252,7 @@ describe("the pane", () => {
         executors: () =>
           Promise.resolve({
             runs: [
-              posted.some((p) => p.tool === "answer_run")
+              posted.some((p) => p.tool === "answer_executor")
                 ? { ...run, status: "answered", answer_ids: ["a1"] }
                 : run,
             ],
@@ -1547,7 +1547,7 @@ describe("the pane", () => {
         },
       });
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
@@ -1557,7 +1557,7 @@ describe("the pane", () => {
           executors: () =>
             Promise.resolve({
               runs: [
-                posted.some((p) => p.tool === "answer_run")
+                posted.some((p) => p.tool === "answer_executor")
                   ? { ...run.run, status: "resumed", answer_ids: ["a1"] }
                   : run.run,
               ],
@@ -1587,7 +1587,7 @@ describe("the pane", () => {
       await settle();
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", choice: "delete" } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", choice: "delete" } },
       ]);
       expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
         "Answered Delete it (Recommended)",
@@ -1619,7 +1619,7 @@ describe("the pane", () => {
       await settle();
       expect(posted).toEqual([
         {
-          tool: "answer_run",
+          tool: "answer_executor",
           args: { turn_id: "turn-7", launch_id: "q1", answer: "Move it under testdata instead." },
         },
       ]);
@@ -1650,7 +1650,7 @@ describe("the pane", () => {
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", answer: "Three." } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", answer: "Three." } },
       ]);
     });
 
@@ -1769,7 +1769,7 @@ describe("the pane", () => {
         },
       });
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
@@ -1800,9 +1800,12 @@ describe("the pane", () => {
         question_context: "The **golden files** move with them.",
       });
       actAnswers = {
-        answer_run: { refused: 409, body: { error: "stale_version", tool: "answer_run" } },
+        answer_executor: {
+          refused: 409,
+          body: { error: "stale_version", tool: "answer_executor" },
+        },
       };
-      const sent = () => posted.some((p) => p.tool === "answer_run");
+      const sent = () => posted.some((p) => p.tool === "answer_executor");
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -1818,7 +1821,7 @@ describe("the pane", () => {
       await settle();
       await settle();
       expect(posted).toEqual([
-        { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q1", answer: "Yes." } },
+        { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q1", answer: "Yes." } },
       ]);
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
       expect(strip).toBe(ACT_ERRORS.stale_version);
@@ -1831,7 +1834,7 @@ describe("the pane", () => {
 
   // AN ANSWER TO A PARKED RUN IS SENT, NOT ANSWERED, UNTIL THE RUN SAYS SO.
   //
-  // `answer_run` answers `pending`: the answer is on its way to the node that
+  // `answer_executor` answers `pending`: the answer is on its way to the node that
   // holds the run's seat. The pane drew that as "Answered" and dropped the
   // question, and a person whose answer never reached the run was told it had
   // while the question kept coming back. The pane now says what the run's own
@@ -1865,7 +1868,7 @@ describe("the pane", () => {
         receipt: { launch_id: "q1", answer_id: "a1" },
       },
     ) => {
-      actAnswers = { answer_run: press };
+      actAnswers = { answer_executor: press };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -1874,7 +1877,7 @@ describe("the pane", () => {
           executors: () =>
             Promise.resolve({
               runs: [
-                ...(!posted.some((p) => p.tool === "answer_run")
+                ...(!posted.some((p) => p.tool === "answer_executor")
                   ? [parked]
                   : after.gone
                     ? []
@@ -1961,7 +1964,7 @@ describe("the pane", () => {
         [],
         {
           refused: 409,
-          body: { error: "already_answered", tool: "answer_run", detail: said },
+          body: { error: "already_answered", tool: "answer_executor", detail: said },
         },
       );
       await settle();
@@ -1996,7 +1999,7 @@ describe("the pane", () => {
           answered_at: "2026-09-30T11:35:00Z",
         },
         [],
-        { refused: 409, body: { error: "already_answered", tool: "answer_run" } },
+        { refused: 409, body: { error: "already_answered", tool: "answer_executor" } },
       );
       await settle();
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
@@ -2452,7 +2455,7 @@ describe("what was answered", () => {
         "You chose Target main (Recommended)",
       );
       expect(screen.getByRole("link", { name: "Open the run" }).getAttribute("href")).toBe(
-        "#/live/runs/turn-7",
+        "#/live/executors/turn-7",
       );
       // NO CONVERSATION AND NO REPLY BOX: a run's question has no thread.
       expect(screen.queryByText("Replies to this question")).toBeNull();
@@ -2601,9 +2604,9 @@ describe("what was answered", () => {
         },
       };
       actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+        answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
-      const sent = () => posted.some((p) => p.tool === "answer_run");
+      const sent = () => posted.some((p) => p.tool === "answer_executor");
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {

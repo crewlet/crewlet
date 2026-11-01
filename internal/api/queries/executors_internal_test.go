@@ -93,7 +93,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 // WHAT BECAME OF AN ANSWER IS ON THE RUN'S ROW: the answer recorded on it (by
 // its deliveries, who gave it and when) and the answers its question let go
 // of. A person who answered reads their own answer's fate there, by the id
-// answer_run gave them, and the first recorded answer is shown as the one
+// answer_executor gave them, and the first recorded answer is shown as the one
 // that won. Ids and names only, never what anybody wrote.
 //
 // WHO GAVE IT, AS ITS SEAL SAYS: the answerer is sealed with the answer and

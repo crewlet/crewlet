@@ -182,7 +182,7 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
-  answer_run: {
+  answer_executor: {
     // A PARKED CODING RUN ANSWERED BY ITS TURN. It lands on the seat's
     // inbox rather than in a log a question reads, so it raises no floor;
     // the run's record moves when the node holding the seat resumes it.

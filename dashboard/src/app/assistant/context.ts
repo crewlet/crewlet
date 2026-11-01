@@ -145,7 +145,7 @@ const SUBJECT_OF_SCREEN: Readonly<Record<string, { kind: ResourceKind; param: st
   page: { kind: "page", param: "id" },
   artifact: { kind: "artifact", param: "id" },
   turn: { kind: "turn", param: "id" },
-  runs: { kind: "run", param: "id" },
+  executors: { kind: "run", param: "id" },
   chatlet: { kind: "room", param: "id" },
 };
 

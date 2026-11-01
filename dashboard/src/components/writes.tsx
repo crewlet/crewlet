@@ -943,7 +943,7 @@ export function AnswerRunButton({
   /** Whose run it is, by name, for the dialog's title. */
   seat: string;
 }) {
-  const write = useAct("answer_run");
+  const write = useAct("answer_executor");
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -1004,7 +1004,7 @@ function AnswerRunDialog({
 }: {
   run: AnsweredRun;
   seat: string;
-  write: ReturnType<typeof useAct<"answer_run">>;
+  write: ReturnType<typeof useAct<"answer_executor">>;
   onClose: () => void;
 }) {
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });

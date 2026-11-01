@@ -235,7 +235,7 @@ func screenNow(b provenance.Boundary, page *wire.PageContext) string {
 
 // answerTrust is how far a resumed turn may rely on what a write's request
 // answered: what the write's catalogue tool declares its answer carries
-// ([catalog.Tool.Trust]: a coding run's question beside answer_coding_run's
+// ([catalog.Tool.Trust]: a coding run's question beside answer_executor's
 // receipt, read by the one rule for a coding run's words), and otherwise the
 // engine's own records, a colleague's by the one rule for a surface the engine
 // hosts.

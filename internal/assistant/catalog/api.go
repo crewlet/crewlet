@@ -740,7 +740,7 @@ const decisionRows, runAskField = "items", "run.question"
 
 // trustOf is a generic read's trust, by the route it was sent to and by what
 // its answer holds: a coding run's question is read by the one rule for a
-// coding run's words (provenance.CodingRun) whichever route carries it, as the
+// coding run's words (provenance.Executor) whichever route carries it, as the
 // curated reads of the same decisions read it.
 func (g generic) trustOf(args Args, answer any) provenance.Trust {
 	route, _ := g.table.Lookup(args.String("route"))
@@ -750,7 +750,7 @@ func (g generic) trustOf(args Args, answer any) provenance.Trust {
 		}
 	}
 	if carriesRunAsk(answer, decisionRows, runAskField) {
-		return provenance.CodingRun("").Trust
+		return provenance.Executor("").Trust
 	}
 	return knowledgeTrust(answer)
 }

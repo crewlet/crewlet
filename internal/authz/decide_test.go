@@ -640,10 +640,10 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		// THE REQUESTER ANSWERS A RUN THROUGH THE SELF ARM: the tool asks
 		// about the requester's own seat when that is who is calling.
 		{"the requester answers the run they asked for", personLeading("sam"),
-			authz.ActionRunAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sam"},
+			authz.ActionExecutorAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sam"},
 			true, authz.ReasonSelf},
 		{"the run's seat's lead answers it", personLeading("cto"),
-			authz.ActionRunAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			authz.ActionExecutorAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
 
 		// --- one seat's trail ---------------------------------------------- //

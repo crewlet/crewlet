@@ -329,9 +329,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "circle-question-mark",
       title: `${run.role || run.agent_handle} is waiting on an answer`,
       detail: waitingDetail(run, now),
-      // THE RUN'S OWN PATH. It was `#/live/runs?run=`, which the runs
-      // screen stopped reading when a run became an object with an address.
-      path: ["live", "runs", run.turn_id],
+      // THE RUN'S OWN PATH. It was a `?run=` query on the board's list,
+      // which the board stopped reading when a run became an object with an
+      // address.
+      path: ["live", "executors", run.turn_id],
       // WHEN IT PARKED, not when it started: what this row is about is how
       // long somebody has been waited on, and a run that worked for an hour
       // before asking has been waiting for none of it.

@@ -437,7 +437,7 @@ describe("the navigation grammar", () => {
       ["company", "integrations"],
       ["company", "budgets"],
       ["live"],
-      ["live", "runs"],
+      ["live", "executors"],
       ["settings", "spend"],
       // EACH MODEL'S CONDITION is every member's: it is why a seat waits. Its
       // actions and its credentials stay an Admin's, on the page itself.

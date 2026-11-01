@@ -602,7 +602,7 @@ function RunLink({ turnId, hold = "" }: { turnId: string; hold?: string }) {
   return (
     <Text as="p" variant="caption">
       {hold ? `${hold}. ` : ""}
-      <Link href={href(["live", "runs", turnId])} size="inherit">
+      <Link href={href(["live", "executors", turnId])} size="inherit">
         Open the run
       </Link>
     </Text>
@@ -697,7 +697,7 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
       return (
         <ButtonLink
           {...look}
-          href={href(["live", "runs", evidence.ref])}
+          href={href(["live", "executors", evidence.ref])}
           leadingIcon={<SquareTerminalGlyph size="sm" />}
         >
           {evidence.label || "Coding run"}
@@ -829,10 +829,10 @@ function Conversation({
  * A coding run parked on a question, read as an ask is: its question as the
  * title (`RunQuestion`), its context as Markdown, the run's recommendation
  * with the evidence it cites, then the answer. A run that asked to choose is
- * answered with one press of an option (`answer_run{turn_id, launch_id,
+ * answered with one press of an option (`answer_executor{turn_id, launch_id,
  * choice}`), the recommended one first and filled, through the same buttons
  * an ask's options are (`AnswerChoices`); "Something else", and an open
- * question from the start, answers in words (`answer_run{turn_id, launch_id,
+ * question from the start, answers in words (`answer_executor{turn_id, launch_id,
  * answer}`). Every answer names the question this pane drew by its launch.
  */
 function RunPane({
@@ -852,7 +852,7 @@ function RunPane({
   answered: AskAnswer | undefined;
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
-  const write = useAct("answer_run");
+  const write = useAct("answer_executor");
   const [text, setText] = useState("");
   // "SOMETHING ELSE" OPENED THE FIELD in the options' place.
   const [open, setOpen] = useState(false);

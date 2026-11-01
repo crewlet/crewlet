@@ -6231,7 +6231,7 @@ Plus **twenty-four no seat is given**: `list_work_views`, `save_work_view`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
-[`answer_run`](#answering-a-parked-coding-run),
+[`answer_executor`](#answering-a-parked-coding-run),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
 [`steer_turn`](#steering-a-running-turn),
 [`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
@@ -6338,7 +6338,7 @@ retry itself.
 A [coding run](../concepts/code-sandbox.md#answering-a-parked-run) that stops
 to ask a person something parks until it is answered. A reply on the
 conversation it was asked in answers it — but a run started by a schedule, a
-task assignment or a colleague's ask has **no conversation**, so `answer_run`
+task assignment or a colleague's ask has **no conversation**, so `answer_executor`
 answers any parked run by naming it:
 
 | Argument | |
@@ -6352,7 +6352,7 @@ It answers `{"turn_id", "agent_handle", "question", "launch_id", "answer_id",
 "choice", "outcome": "pending"}` (`choice` only where one was given).
 A model reading it (a seat's, or an assistant's over `/operator/mcp`) is handed
 the question [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote) as
-`coding_run` under the seat whose run asked it, at `external`, and the
+`executor` under the seat whose run asked it, at `external`, and the
 `provenance` envelope beside it (the coding agent wrote it in the seat's name,
 and the caller is often an assistant reading for the person answering; a run's
 ask is a coding CLI's own words, read at `external` wherever a model reads it);
@@ -6616,7 +6616,7 @@ Each tool appears only where the company runs its half (Worklet, Doclet or Chatl
 a company on
 `tracker.backend: jira` gets the page tools and not the work tools, one off
 Chatlet gets no chat tool, and one native in none of the three gets only
-the verbs about the fleet's own records — `answer_run`, `pause_seat`,
+the verbs about the fleet's own records — `answer_executor`, `pause_seat`,
 `resume_seat` and `steer_turn` — which every node serves whatever the company
 runs, so the catalogue is never empty. It is read per request, so
 a node that has not been handed a company yet answers `503 no_active_revision`
@@ -6629,7 +6629,7 @@ useful to an assistant there.
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase) and `a2a_ask` (a
 colleague's answer comes back by waking a seat, and there is nobody here for
-it to reach). Answering a run a seat started is `answer_run`.
+it to reach). Answering a run a seat started is `answer_executor`.
 
 ### Seeding a knowledge base with it
 
@@ -9577,11 +9577,11 @@ its context in Markdown, empty when it gave none; and `decision` is the choice
 it asks for, in the shape a [work item's decision](../guides/worklet.md#asking-for-a-decision)
 has (never with `inform`), or `null` for an open question answered in words.
 All three are the run's body, sent to the people its question is put to as the
-question always was, and answered with [`answer_run`](#answering-a-parked-coding-run)
+question always was, and answered with [`answer_executor`](#answering-a-parked-coding-run)
 (`choice` names one of `decision.options`).
 
 `declined_answers` names the answers the run's question let go of, by the id
-of the delivery each arrived in, which `answer_run` answers as `answer_id`. An
+of the delivery each arrived in, which `answer_executor` answers as `answer_id`. An
 answer named there was not used: the run could not be resumed with it and
 waits on its question again, so the person who gave it is asked to answer
 again rather than left looking at a question that never moves.
@@ -9614,7 +9614,7 @@ the one the run was parked with, and those runs stored **no conversation
 at all**: their trigger names neither key, so neither is stamped and
 neither reaches the row. Telling somebody to "reply in the thread" would
 send them to a thread that does not exist. Such a run is still answerable:
-[`answer_run`](#answering-a-parked-coding-run) names it by its `turn_id` instead.
+[`answer_executor`](#answering-a-parked-coding-run) names it by its `turn_id` instead.
 
 `audience` is the coding agent's own label for who should answer —
 `requester`, `manager`, `team`, or a name it typed. `audience_handles` is

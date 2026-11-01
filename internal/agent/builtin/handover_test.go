@@ -50,7 +50,7 @@ import (
 // nobody had.
 var handsOverWords = map[string]string{
 	builtin.AnswerKnowledgeTool:   "TestEveryUntrustedReadIsFenced/answer_knowledge",
-	builtin.AnswerRunTool:         "TestEveryUntrustedReadIsFenced/answer_run",
+	builtin.AnswerExecutorTool:    "TestEveryUntrustedReadIsFenced/answer_executor",
 	builtin.CommentOnPageTool:     "TestEveryUntrustedReadIsFenced/comment_on_page",
 	worklet.DescribeProjectTool:   "TestEveryUntrustedReadIsFenced/describe_project",
 	builtin.GetArtifactTool:       "TestEveryArtifactToolResultIsFenced/get_artifact",
@@ -100,9 +100,10 @@ var handsOverWords = map[string]string{
 // a tool nobody looked at.
 //
 // Mutation: answer list_work_items through jsonAnswer and its call is refused
-// for carrying words it does not label; drop the foreignRead in answer_run and
-// its question reaches the operator's model with a forged opener bare; delete
-// a handsOverWords entry, or add one, and the table no longer matches.
+// for carrying words it does not label; drop the foreignRead in
+// answer_executor and its question reaches the operator's model with a forged
+// opener bare; delete a handsOverWords entry, or add one, and the table no
+// longer matches.
 func TestEveryToolThatHandsOverSomebodysWordsIsFenced(t *testing.T) {
 	t.Parallel()
 	calls := sweepCalls(t)
@@ -444,7 +445,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.A2AAskTool:               {"target": "agent-ceo", "brief": "a plain brief"},
 		builtin.AnswerKnowledgeTool:      {"q": "how do we deploy"},
-		builtin.AnswerRunTool:            {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
+		builtin.AnswerExecutorTool:       {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
 		builtin.ArtifactFormatTool:       {"kind": "doc"},
 		builtin.CreateArtifactTool:       {"kind": "html", "title": "Plain title", "content": "<p>plain</p>"},
 		builtin.CreateArtifactFolderTool: {"parent": "Marketing", "name": "Plain folder"},

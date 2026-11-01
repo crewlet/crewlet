@@ -838,7 +838,7 @@ in `nav.ts`, over three kinds of section (ADR-0033). The reader's own, their
 Account, needs nothing. The OVERVIEW needs nothing beyond being signed in:
 Home, Company › Principles and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
-Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
+Executors, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work, Worklet and Settings ›
 Expensive tasks need Worklet, and Doclet needs Doclet, and every
@@ -1250,7 +1250,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `message=` (the message a link landed on, flashed, then left) · `pane=thread:{room}:{root}` · `pane=details:{room}:about\|members\|shared\|notifications` · `pane=profile:{handle}` · `pane=catchup:{room}` · `pane=summarize:{room}` (ONE pane at a time, beside the conversation or over it; any place may carry one) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
-| `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
+| `#/live/executors` · `#/live/executors/{turn_id}` | **Executors** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
@@ -2857,7 +2857,7 @@ company did.** That is Home until its reader arranges it (see
   ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
   anyway" or "Answered “the reply”", until the card is drawn afresh; there is
   no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
-  by its turn (`answer_run`), with how long its box is still held: its row shows
+  by its turn (`answer_executor`), with how long its box is still held: its row shows
   the question's one sentence, never the context under it, and its **Answer**
   dialog draws the run's ask as the Inbox does, its options as buttons. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
@@ -3065,7 +3065,7 @@ references placed, its context follows as Markdown, its recommendation sits with
 the reasoning and the evidence it cites, and its options are buttons, the
 recommended one first and filled, with "Something else" to answer in words. An
 open question is answered in its field. It says how long the box is still held
-and answers by its turn (`answer_run`). A question from an older build, one
+and answers by its turn (`answer_executor`). A question from an older build, one
 free-text block, draws its first sentence as the heading and the rest as
 Markdown; nothing is ever quoted verbatim. A stopped
 seat's names the window that is spent and offers the two ways out: raise the
@@ -4781,7 +4781,7 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, launch_id, choice}` / `answer_run{turn_id, launch_id, answer}` |
+| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_executor{turn_id, launch_id, choice}` / `answer_executor{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
@@ -5585,7 +5585,7 @@ replaced the info rail the card was meant to carry.
 ## Live › Now running and the turn list
 
 **What a seat is doing is everybody's; what it SAID is its trail.** Now
-running, Coding runs, the org chart's state lines and a seat's page are the
+running, Executors, the org chart's state lines and a seat's page are the
 overview, open to every signed-in reader, and the engine splits what it sends
 them into a status half and a body half ([the API's
 rule](api-endpoints.md#a-status-reader-never-receives-a-transcript)): a call's
@@ -5624,8 +5624,8 @@ be read at a glance:
 - **Waiting on a person** — every coding run parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, launch_id, choice}` for an option or
-  `answer_run{turn_id, launch_id, answer}` for words, as the person reading,
+  which sends `answer_executor{turn_id, launch_id, choice}` for an option or
+  `answer_executor{turn_id, launch_id, answer}` for words, as the person reading,
   naming the question it drew.
 - **In a box** — the rest of the detached runs in flight, eight before it
   says how many more. Empty, it says *Finished runs are on their turn’s
@@ -7159,7 +7159,7 @@ one. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
 `executor_tail` poll the Timeline's run span opens, read off the waterfall's
 own open run span), the coding agent, and **Open the run** to the run's page
-(`#/live/runs/{turn_id}`); the executor's card it parked in is drawn open
+(`#/live/executors/{turn_id}`); the executor's card it parked in is drawn open
 beneath it. A turn that parks while a reader watches therefore keeps
 something live on the page, which sending a parked turn's watch link
 elsewhere could not have done.
@@ -7341,14 +7341,14 @@ that can.
   so the asks at those two moments read them.
 
 
-## Coding runs, agent-to-agent, traces and the event log
+## Executors, agent-to-agent, traces and the event log
 
 The four Live screens beside Now running and the turns are each a list and a
-page, and each page draws ITS OBJECT ALONE: `#/live/runs/{turn_id}` and
+page, and each page draws ITS OBJECT ALONE: `#/live/executors/{turn_id}` and
 `#/live/a2a/{id}` used to draw the whole list with the object tacked on under
 it, so a link to one run landed on a board with the run below the fold.
 
-- **Coding runs** reads the durable run record (`executors`) merged with
+- **Executors** reads the durable run record (`executors`) merged with
   the live projection, on ONE poll, `RUNS_POLL_MS` (20 s) in `lib/runs.ts` —
   the board, a run's page and rail, and the attention queue Home and the Inbox
   draw all name it, so the board and the Inbox cannot disagree about whether
@@ -7356,7 +7356,7 @@ it, so a link to one run landed on a board with the run below the fold.
   - A parked run's banner says what it asked, **who it is put to** (the
     audience the engine resolved when the run parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer**: `answer_run{turn_id, launch_id, choice}` for
+    held, and carries **Answer**: `answer_executor{turn_id, launch_id, choice}` for
     an option, or `{turn_id, launch_id, answer}` for words, which reaches
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
