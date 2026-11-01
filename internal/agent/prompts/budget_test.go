@@ -41,8 +41,8 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 //
 // The budget covers the identity scaffold, the turn contract (act with tool
 // calls, finish the arc and discover what is missing, stay reachable) and
-// EVERY section a tool on the surface turns on: the escalation guidance, the
-// workers list and the tools to discover. Measured with
+// EVERY section a tool on the surface turns on: the escalation guidance and
+// the workers list. Measured with
 // all of them rendered, because that is the seat the budget is for: a lead on
 // the default work tracker holds `comment_on_work_item` and so carries the
 // escalation section on every turn, and a budget measured on a seat without
@@ -51,9 +51,9 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 //
 // It used to be measured against a synthetic catalogue of a hundred one-line
 // tools, which measured nothing production sends: the executor holds every
-// first-party tool from its first round, whose definitions reach the model
-// with the request, so what its system prompt lists is its MCP servers and
-// nothing else.
+// tool its seat holds from its first round, whose definitions reach the model
+// through its harness, each under the server it comes from, so its system
+// prompt lists no tool and no server.
 //
 // 2200 -> 870 when the prompt stopped saying what the model gets elsewhere:
 // the first-party tool catalogue (every description a second time), the rules
@@ -63,7 +63,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // own run now, and a section about handing code work to a box is a section
 // about a box the run is already in.
 //
-// Measured at ~734, so this leaves ~8%: enough that a sentence can be added,
+// Measured at ~733, so this leaves ~8%: enough that a sentence can be added,
 // tight enough that a section cannot. The plain contract alone — no tracker,
 // no workers — measures ~486 of it.
 //
@@ -204,11 +204,11 @@ func referenceWorkers() string {
 // 4000 -> 2430 when the prompts stopped saying what the model gets elsewhere.
 // 2430 -> 2385 when the executor's sandbox section and the review's gated
 // sandbox rule went, and the review's unconditional rule on a run's local
-// work came in: the turn's own prose measures ~1,202 with every gated section
+// work came in: the turn's own prose measures ~1,200 with every gated section
 // of both prompts rendered (referenceExecutor, and the review's `a2a_ask`),
 // the roster allowance is 1000 (see rosterAllowanceTokens) and spends ~998 of
 // it here, and a mixed company pays another ~93 for the `## Human colleagues`
-// note this fixture triggers. Measured at ~2,293, so ~4% headroom —
+// note this fixture triggers. Measured at ~2,291, so ~4% headroom —
 // deliberately tighter than the ~8% the prose budgets carry, because the next
 // thing that wants room here should take it out of the allowance rather than
 // out of the budget.
