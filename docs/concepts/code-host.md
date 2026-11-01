@@ -4193,7 +4193,8 @@ branch and which push landed it (`landed_in`,
 [Which push landed a commit](#which-push-landed-a-commit)), and what a change's
 revisions are: a revision's facts against its target, where lines anchored in
 one revision are in another, and what the change changed between two
-([A revision's facts](#a-revisions-facts)).
+([A revision's facts](#a-revisions-facts)), and which lines of a commit a
+code search matches ([A search of one repository](#a-search-of-one-repository)).
 It answers each with real git over its own
 [cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
@@ -4269,6 +4270,7 @@ from such an answer:
 | `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
 | `node_failed` | the node failed the read for a reason of its own — its sync of the repository failed with nothing the code log, the object store or the rows said (its disk refusing a write, its cache stopping), or one of the short checks of what the read names ran its whole bound, which no healthy node takes over a few object ids |
 | `not_held` | the node holds no copy of the repository and the read did not name it the one node of its walk that may fill one ([The home git node](#the-home-git-node)), so it started nothing |
+| `index_building` | a search of a `search: indexed` repository's default branch on the first of the two git nodes keeping its index, asked first, whose index does not answer for the branch's tip yet: the second answers — through its own index where it has it, and with git grep where not ([A search of one repository](#a-search-of-one-repository)) |
 
 A person's read reads no chart, so neither `no_chart` nor `behind_config`
 applies to one. Which of them a node gives decides more than the sentence: it
@@ -4395,6 +4397,46 @@ beside their size (`subject_bytes`, `author_bytes`, `author_email_bytes`,
 `text_bytes`), in a history and a blame alike, and so are a merge's parents
 past 64 (`parent_count`): so the widest commit, and the widest line with its
 commit, always fit a page, and no page carries half a field read as the whole.
+
+### A search of one repository
+
+A code search of one repository asks its git nodes in their order, as every
+read does, for the lines of one commit that an expression matches — its
+default branch's tip unless the search names a branch, a ref or a commit —
+judged on the answering node's chart as any read is. It answers RE2's
+matches, a line at a time, whichever way the node reads them, in the order of
+the files' paths and then of their lines: at most 500 of them, each line cut
+to its first 256 bytes, with the file's path, the line's number and the id of
+the file's object.
+
+- **Through the index**, where the node keeps the repository's code index
+  (`codeindex`, [The cache on a git node](#the-cache-on-a-git-node)) and it
+  answers for the commit searched: the files of the commit the index's
+  trigrams admit, at a path the search's `path:` filters admit, read through
+  one `cat-file` in path order and confirmed line by line with Go's regexp.
+- **With git grep** otherwise — a `search: grep` repository, any commit but
+  the indexed tip, a node keeping no index: one `git grep` for the
+  expression's most selective strings, as one pattern that is only those
+  strings, each matched as it is written — those git's ASCII-only case folding
+  reads exactly and, where the search ignores case, each letter outside ASCII
+  that folds onto an ASCII one, such as the long s — each line it answers
+  confirmed with the same regexp, so both ways answer the same lines.
+
+Both pass over binaries and every file past 1 MiB, and count the files they
+passed over by size (and, through the index, as binaries) in
+`skipped_files`, with every file one line of which was too long to run the
+expression on. A search spends at most five seconds, its git included, and
+one that runs them out answers the lines it found by then, `truncated`, as one
+that reaches its limit of lines does. The first of the two nodes keeping a
+repository's index, asked first, whose index does not yet answer for the
+default branch's new tip, answers `index_building`, so the second answers
+rather than the first reading the slow way a moment before its index is
+ready; every node after the first answers, so a search is never left waiting
+on both indexes, and a fleet of one git node greps until its index is
+ready. An answer the search read to its end — every matching line, or as
+many as its limit — is kept in the [memo](#the-memo), keyed by the commit,
+the ref that named it and every part of the search; one the five seconds cut
+is kept nowhere.
 
 ### The memo
 

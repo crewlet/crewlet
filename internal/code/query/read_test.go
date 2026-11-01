@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -120,6 +121,17 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 	mustRead(t, s, logQ(repo, code.LogQuery{Rev: head, Grep: "head", Limit: 1}))
+	// A SEARCH: its text is the argument of -e, where git reads a pattern
+	// whatever it spells — an option's name, `-O` (--open-files-in-pager)
+	// folded — its paths filtered here, over git's answer, and a clause git
+	// cannot read exactly, every line (`-e ^`).
+	for _, sq := range []code.SearchQuery{
+		{Text: "--open-files-in-pager=x", Mode: codeindex.ModeLiteral, Paths: []string{"--output=x/f", "-r"}},
+		{Text: "-Ofile", Mode: codeindex.ModeRegex, IgnoreCase: true, Ref: "main"},
+		{Text: "(?i)école", Mode: codeindex.ModeRegex, Ref: head},
+	} {
+		mustRead(t, s, code.GitQuery{Kind: code.GitSearch, RepoID: repo, Asker: person, Home: true, Search: &sq})
+	}
 	if q := logQ(repo, code.LogQuery{Rev: head, Limit: 1}); mustRead(t, s, q).Next != "" {
 		q.Cursor = mustRead(t, s, q).Next
 		mustRead(t, s, q)
@@ -193,6 +205,13 @@ var templates = [][]string{
 	{"diff-tree", "-r", "-p", "--full-index", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "-U3",
 		"<oid>", "<oid>"},
 	{"patch-id", "--verbatim"},
+	{"rev-parse", "--verify", "--quiet", "--end-of-options", "<commitish>"},
+	{"ls-tree", "-r", "-l", "-z", "--end-of-options", "<oid>"},
+	{"cat-file", "--batch"},
+	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-E", "-e", "<pattern>", "--end-of-options", "<oid>"},
+	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-E", "-i", "-e", "<pattern>", "--end-of-options",
+		"<oid>"},
+	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-e", "^", "--end-of-options", "<oid>"},
 }
 
 // logLiteralTemplate is the magic a history's path follows `--` with.
@@ -282,6 +301,15 @@ func fits(args, tmpl []string) bool {
 			}
 		case "<path>":
 			// A blame's path, after `--`: whatever it spells, a path.
+		case "<pattern>":
+			// A search's pattern, the argument of -e: whatever it spells,
+			// a pattern.
+		case "<commitish>":
+			// A search's commit: a whole id or a whole ref, peeled.
+			at, ok := strings.CutSuffix(args[i], "^{commit}")
+			if !ok || !gitref.ValidOID(at) && !gitref.ValidRef(at) {
+				return false
+			}
 		default:
 			if args[i] != want {
 				return false

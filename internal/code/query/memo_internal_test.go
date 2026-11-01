@@ -27,7 +27,7 @@ var (
 	partOf  = map[code.GitReadKind]string{code.GitTree: "Tree", code.GitBlob: "Blob", code.GitDiff: "Diff",
 		code.GitCompare: "Compare", code.GitLandedIn: "LandedIn", code.GitRevisionFacts: "RevisionFacts",
 		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff", code.GitLog: "Log", code.GitBlame: "Blame",
-		code.GitChecksFile: "ChecksFile"}
+		code.GitChecksFile: "ChecksFile", code.GitSearch: "Search"}
 	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor", "ChecksFile"}
 )
 
@@ -229,7 +229,7 @@ func shapeOf() string {
 // memoShapes is the shape of the answers each memoFormat this build reads was
 // written over: a format names one shape, for ever.
 var memoShapes = map[string]string{
-	"page/3": "58a34d6416bdda9c",
+	"page/4": "4a3450124092111d",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
@@ -261,8 +261,10 @@ func (fakeCache) WantHistory(string)                                {}
 func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
-func (fakeCache) Memo(cache.Synced) *cache.MemoBatch { return nil }
-func (fakeCache) Spool() (*os.File, error)           { return nil, os.ErrInvalid }
+func (fakeCache) Memo(cache.Synced) *cache.MemoBatch                  { return nil }
+func (fakeCache) Spool() (*os.File, error)                            { return nil, os.ErrInvalid }
+func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool)      { return cache.IndexedTip{}, false }
+func (fakeCache) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still

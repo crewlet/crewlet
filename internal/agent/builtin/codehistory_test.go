@@ -70,10 +70,12 @@ func (historyCopy) ServeConfig() []gitproc.KV { return nil }
 func (historyCopy) Provenance(cache.Synced) (cache.Provenance, error) {
 	return cache.Provenance{}, errors.New("the stand-in keeps no index of pushes")
 }
-func (historyCopy) WantHistory(string)                                 {}
-func (historyCopy) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
-func (historyCopy) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
-func (historyCopy) Spool() (*os.File, error)                           { return nil, os.ErrInvalid }
+func (historyCopy) WantHistory(string)                                  {}
+func (historyCopy) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool)  { return nil, false }
+func (historyCopy) Memo(cache.Synced) *cache.MemoBatch                  { return nil }
+func (historyCopy) Spool() (*os.File, error)                            { return nil, os.ErrInvalid }
+func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool)      { return cache.IndexedTip{}, false }
+func (historyCopy) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
 
 // commitID is the stand-in's i-th commit's id.
 func commitID(i int) string { return fmt.Sprintf("%040x", i+1) }

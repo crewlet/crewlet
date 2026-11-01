@@ -265,12 +265,27 @@ const (
 	// healthy node takes over a few ids. Another git node's fill may serve
 	// the read.
 	UnreadyNodeFailed UnreadyReason = "node_failed"
+	// UnreadyIndexBuilding: the read is a search of a `search: indexed`
+	// repository's default branch ([GitSearch]) asked of its walk's home, the
+	// first of the repository's [IndexHolders], whose index does not yet
+	// answer for the tip — its indexer is building it — so the walk asks the
+	// next node: the second holder, which answers through its index where it
+	// has it and reads the tip with git grep where not. Never answered by the
+	// second holder, a node past the home or one that keeps no index, which
+	// all grep at once, so a walk always ends at an answer.
+	UnreadyIndexBuilding UnreadyReason = "index_building"
 )
 
 // UnreadyReasons is the closed set.
+//
+// A REASON IS AN ESTATE REQUEST'S, NEVER A RECORD'S: an older asker reads
+// one it does not know as unready all the same, and passes no fill for it
+// ([UnreadyReason.PassesFill]). As a STATED CONDITION (M3-O84 §2 item 5),
+// index_building is answered by no build that predates it, and none of the
+// code domain is on main.
 func UnreadyReasons() []UnreadyReason {
 	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig, UnreadyNotHeld,
-		UnreadyNodeFailed}
+		UnreadyNodeFailed, UnreadyIndexBuilding}
 }
 
 // Valid reports a reason this build knows.

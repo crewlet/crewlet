@@ -53,6 +53,12 @@ type Cache interface {
 	// closed: where a revision's facts write the change's patch for `git
 	// patch-id` to read back (facts.go). The caller closes it.
 	Spool() (*os.File, error)
+	// IndexTip is the commit the pinned copy's code index answers for, and
+	// whether this node is one of the repository's index holders (search.go).
+	IndexTip(s cache.Synced) (cache.IndexedTip, bool)
+	// CodeIndex is the pinned copy's code index, mapped and opened, valid
+	// while s is held — or false, which a search answers with git grep.
+	CodeIndex(s cache.Synced) (*cache.CodeIndexView, bool)
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
@@ -126,9 +132,11 @@ type Server struct {
 	// touched list (code.MaxTouchedPaths, code.MaxTouchedBytes),
 	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes), and
 	// classedBlob and classedBytes the Go its classification lexes, a
-	// version and in all (code.MaxClassedBlobBytes, code.MaxClassedBytes) —
+	// version and in all (code.MaxClassedBlobBytes, code.MaxClassedBytes),
+	// and searchBudget what one search may spend (code.SearchBudget) —
 	// fields so this package's tests can scale them (export_test.go).
 	syncWait     time.Duration
+	searchBudget time.Duration
 	gitBudget    time.Duration
 	pageBytes    int
 	probes       int
@@ -211,7 +219,7 @@ func New(o Options) (*Server, error) {
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: code.MaxTouchedPaths,
 		touchedBytes: code.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes, classedBlob: code.MaxClassedBlobBytes,
-		classedBytes: code.MaxClassedBytes}, nil
+		classedBytes: code.MaxClassedBytes, searchBudget: code.SearchBudget}, nil
 }
 
 // Read answers q: a page of the tree, file, diff, comparison or interdiff it
@@ -435,8 +443,16 @@ func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, er
 			r.landing()
 		}
 	}()
-	a, ok, err := r.recallWhole(ctx, at)
-	if err != nil {
+	var a code.GitAnswer
+	var ok bool
+	if q.Kind == code.GitSearch {
+		// A SEARCH NAMES A REF, not an id: it resolves its commit before
+		// the memo can be asked, and reads by its own paths (search.go).
+		if a, err = r.searchRead(ctx); err != nil {
+			return code.GitAnswer{}, err
+		}
+		ok = true
+	} else if a, ok, err = r.recallWhole(ctx, at); err != nil {
 		return code.GitAnswer{}, err
 	}
 	if !ok {

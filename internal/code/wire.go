@@ -2558,6 +2558,11 @@ const (
 	// string would replace an invalid byte of, which the parse must see as
 	// git holds it.
 	GitChecksFile GitReadKind = "checks_file"
+	// GitSearch is the lines of a commit a code search matches — the
+	// default branch's tip through the repository's code index where its git
+	// node keeps one, and otherwise git grep — at most MaxSearchHits of
+	// them, in one answer with no next page (search.go).
+	GitSearch GitReadKind = "search"
 )
 
 // GitReadKinds is the closed set.
@@ -2568,7 +2573,7 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile}
+		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitSearch}
 }
 
 // Valid reports a kind this build answers.
@@ -2708,6 +2713,7 @@ type GitQuery struct {
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
+	Search        *SearchQuery        `json:"search,omitempty"`
 }
 
 // ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
@@ -3102,7 +3108,7 @@ func (q GitQuery) Validate() error {
 		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
-		{GitChecksFile, q.ChecksFile != nil}} {
+		{GitChecksFile, q.ChecksFile != nil}, {GitSearch, q.Search != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3139,6 +3145,8 @@ func (q GitQuery) Validate() error {
 		return q.Blame.validate()
 	case GitChecksFile:
 		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
+	case GitSearch:
+		return q.Search.validate()
 	}
 	return q.Compare.validate()
 }
@@ -3521,6 +3529,7 @@ type GitAnswer struct {
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
+	Search        *SearchAnswer        `json:"search,omitempty"`
 }
 
 // ChecksFileAnswer is what a commit holds at [ChecksFilePath]: nothing (no

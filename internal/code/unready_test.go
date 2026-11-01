@@ -27,6 +27,9 @@ func TestAReasonPassesTheFillOnlyWhereNoCopyIsComing(t *testing.T) {
 		code.UnreadyBehindConfig: true,
 		code.UnreadyNotHeld:      true,
 		code.UnreadyNodeFailed:   true,
+		// A holder building its index holds its copy: the second holder,
+		// which holds one too, answers — never a fill beside them.
+		code.UnreadyIndexBuilding: false,
 	}
 	for _, r := range code.UnreadyReasons() {
 		passes, classified := want[r]

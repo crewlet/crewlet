@@ -615,6 +615,13 @@ var cacheWriters = []writerRow{
 			"reads as a path whatever it spells (`-- :(literal)--output=x` is the history of that path, measured " +
 			"on 2.56.0); query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
+	{"internal/code/query/search.go", kindGit + " grep",
+		"a code search read with git grep: the only arguments not spelled as literals are `-E`, `-i` and " +
+			"`-e` themselves, the pattern — the plan's alternation of escaped strings, or `^` — as the " +
+			"argument of `-e`, which git reads as a pattern whatever it spells (`-e --open-files-in-pager=x` " +
+			"looks for that text), and after `--end-of-options` the whole commit id the search resolved; its " +
+			"paths are filtered after git answers, never handed to it, and query.TestAPathReachesGitOnlyAsData " +
+			"holds every argument list to its template, so no --open-files-in-pager can be added unseen", nil},
 	{"internal/code/query/blame.go", kindGit + " blame",
 		"a file's blame: the only arguments not spelled as literals are the -L range the server formats, the " +
 			"whole commit id a read resolved and, after `--`, the path, which git reads as a path whatever it " +
@@ -658,7 +665,9 @@ type gitReader struct{ writes, why string }
 // gitReaders is the CLOSED set of git subcommands judged to read; every
 // other is a writer until argued here.
 var gitReaders = map[string]gitReader{
-	"cat-file":    {why: "reads objects by id"},
+	"cat-file": {why: "reads objects by id"},
+	"grep": {writes: "--open-files-in-pager", why: "searches a tree's files by id for a pattern, reading " +
+		"only the object database; --open-files-in-pager (-O) runs a program on the files it found"},
 	"fsck":        {writes: "--lost-found", why: "checks objects and connectivity; --lost-found writes lost-found/"},
 	"version":     {why: "prints the binary's version and opens no repository"},
 	"upload-pack": {why: uploadPackReads},
