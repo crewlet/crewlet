@@ -3063,8 +3063,10 @@ the inbox page in one snapshot (`code.NoticeChange`), the readiness judged for
 the reader at that read, so a page of fifty cards is one read and no card
 contradicts the row beside it. **Its gate** is read for the ONE card open,
 and only for a live change: `code_change` (its readiness, judged for the
-reader, and its revisions' facts) and `code_checks` of the change — the
-questions its own page asks, so the card needs nothing of the engine besides.
+reader, and its revisions' facts) and `code_checks` of the change at each
+check's latest attempt (`latest`, every page of it, drawn only once whole) —
+so the card needs nothing of the engine besides, and never rebuilds what a
+check stands at from a page of its history.
 It says what the head revision's REQUIRED checks measured, each one's state
 and duration — never tokens — and only where the readiness judges a `check`
 precondition; the head revision's change classes (how many touched paths
@@ -7288,7 +7290,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   repository's live entries and no trains; what a train tests and what a
   queue put out are a NAMED repository's (`repo=`), so the train base, the
   meter of the required checks of the candidate an entry is tested in (one
-  `code_checks` of each candidate's tip, shared by every entry it tests) and
+  `code_checks` of each candidate's tip for its band's branch, at each
+  check's latest attempt and every page of it, shared by every entry it
+  tests) and
   the ejections appear once a repository is chosen. An ejection is the danger
   tone with the reason in words and the checks or paths the engine found,
   never a guess at blame. The engine answers fifty entries a page and one

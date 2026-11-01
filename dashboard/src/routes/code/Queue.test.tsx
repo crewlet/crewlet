@@ -172,10 +172,63 @@ test("a named repository's queue shows its train base, its required checks and i
   expect(asked.find((u) => u.pathname === "/query/code_queue")?.searchParams.get("repo")).toBe(
     "web",
   );
-  // ONE READ for the candidate both entries are tested in.
+  // ONE READ for the candidate both entries are tested in: its tip, for the
+  // band's branch, at each check's latest attempt.
   await afterMicrotasks();
   const checks = asked.filter((u) => u.pathname === "/query/code_checks");
   expect(checks.map((u) => u.searchParams.get("oid"))).toEqual([TIP]);
+  expect(checks[0]!.searchParams.get("target")).toBe("refs/heads/main");
+  expect(checks[0]!.searchParams.get("latest")).toBe("true");
+});
+
+// A TIP'S CHECKS PAST ONE PAGE are read to their end before the meter is
+// drawn: a required check the engine sends on the second page is in the
+// meter, and its timeout in the figure the time queued is read against.
+// Mutation: draw the first page alone (no `next` followed) → "of 1" and no
+// thirty minutes, red.
+test("a tip's checks past one page are all in its meter", async () => {
+  const train = {
+    repo_id: "id-web",
+    candidate_id: "cand-1",
+    target_ref: "refs/heads/main",
+    train: "t1",
+    ordinal: 1,
+    base_oid: BASE,
+    tip_oid: TIP,
+    entries: [{ entry_id: "web-1", commit: TIP }],
+    state: "testing",
+    position: CODE_POSITION,
+  };
+  const row = (name: string, state: string, timeout: number) => ({
+    repo_id: "id-web",
+    repo: "web",
+    oid: TIP,
+    target: "refs/heads/main",
+    name,
+    attempt: 2,
+    state,
+    required: true,
+    timeout_seconds: timeout,
+  });
+  const asked = stubCodeEngine({
+    "/query/code_repos": LISTING,
+    "/query/code_queue": () =>
+      jsonAnswer({
+        queue: [entry("web", 1, { state: "testing", candidate_id: "cand-1", train: "t1" })],
+        trains: [train],
+        ...page,
+      }),
+    "/query/code_checks": (url) =>
+      url.searchParams.get("cursor") === "lint/2"
+        ? jsonAnswer({ checks: [row("unit", "passed", 1800)], ...page })
+        : jsonAnswer({ checks: [row("lint", "failed", 60)], next: "lint/2", ...page }),
+  });
+  mountCode("#/code/queue?repo=web", <Queue />);
+  const web = await screen.findByRole("table", { name: "Queued into web · main" });
+  expect(await within(web).findByRole("img", { name: / of 2$/ })).toBeTruthy();
+  expect(within(web).getByText(/of 30m/)).toBeTruthy();
+  const checks = asked.filter((u) => u.pathname === "/query/code_checks");
+  expect(checks.map((u) => u.searchParams.get("cursor"))).toEqual([null, "lint/2"]);
 });
 
 // NOTHING QUEUED is an empty state that says how a change joins a queue.

@@ -476,8 +476,8 @@ export function changeCard(notice: CodeInboxNotice): ChangeCard {
  *   on them — or "" where none does.
  *
  * Every field is read from the change's own answers (`code_change`'s
- * readiness and revisions, `code_checks` of the change), so the card needs
- * nothing of the engine the change's page does not already read.
+ * readiness and revisions, `code_checks` of the change at each check's latest
+ * attempt, every page of it), so the card needs nothing of the engine besides.
  */
 export interface ChangeGate {
   measured: Measured[] | null;

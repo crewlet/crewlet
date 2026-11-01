@@ -448,7 +448,8 @@ While the change is live and its branch has a merge gate, the card also says
 card):
 
 - **What its checks measured**: each check the branch requires, on the
-  change's head, with its state and how long it ran (`unit failed in 1m 4s`,
+  change's head at its latest attempt — a rerun stands in for the attempt it
+  reran — with its state and how long it ran (`unit failed in 1m 4s`,
   `e2e running`) — durations, never tokens. A branch that requires no check
   draws no list, rather than "none measured".
 - **Its change classes**: how many of the paths the head revision touches
@@ -834,13 +835,14 @@ a band per repository and branch, its entries in the order the queue lands
 them — the place, the change, who enqueued it and where it stands (`waiting`
 for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
 each entry also shows the **train base** it is tested on, a meter of the
-**required checks** of what it is tested in — passed, failed and running, the
-rest not yet a verdict — and how long it has been queued against the slowest
-of those checks' declared `timeout_seconds`, since the queue waits for its
-slowest required check. Under each of its bands, in the danger tone, is what
-the queue **put out in the last day**: the change, why (`a required check
-failed`, `its merge conflicted`, `it no longer met the branch's gate`, `its
-head moved`, `the branch moved under the queue`) and the required checks that
+**required checks** of what it is tested in, each at its latest attempt —
+passed, failed and running, the rest not yet a verdict — and how long it has
+been queued against the slowest of those checks' declared `timeout_seconds`,
+since the queue waits for its slowest required check. Under each of its
+bands, in the danger tone, is what the queue **put out in the last day**: the
+change, why (`a required check failed`, `its merge conflicted`, `it no longer
+met the branch's gate`, `its head moved`, `the branch moved under the queue`)
+and the required checks that
 failed on what it was tested in or the paths its merge conflicted on. A branch
 with nothing queued and nothing put out lately draws no band, and a company
 with nothing queued says so. The queues are read fifty entries at a time;

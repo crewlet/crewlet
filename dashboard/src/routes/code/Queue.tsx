@@ -19,7 +19,11 @@
  * asks `code_checks` ONCE per candidate's tip and hands the rows to each of
  * its entries' meter and timer. Asked per entry and per cell, a queue at its
  * deepest — 8 candidates of 8 changes — would be 128 reads every half minute
- * for every reader watching it, sixteen times the 8 that answer it.
+ * for every reader watching it, sixteen times the 8 that answer it. Each is
+ * asked of the tip FOR THE BAND'S BRANCH at each check's LATEST attempt
+ * (`lib/useLatestChecks.ts`): what each check stands at is the engine's to
+ * answer, one row a check, never a screen's to rebuild from a page of the
+ * attempts' history, which cut a rerun from its earlier attempt.
  *
  * # Every repository's live entries, one repository's detail
  *
@@ -75,6 +79,7 @@ import {
 import { fmtElapsed, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeCheckRow,
@@ -250,16 +255,13 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
       return kept.length === held.size ? held : new Map(kept);
     });
   }, [tips]);
-  // A candidate's required checks as its entries read them: the rows checked
-  // for this band's branch alone, undefined until its tip answers.
-  const checksFor = (p: QueuePlace) => {
-    const rows = p.candidate ? checksOf.get(p.candidate.tip_oid) : undefined;
-    return rows?.filter((r) => r.target === p.row.target_ref);
-  };
+  // A candidate's required checks as its entries read them — its tip's,
+  // checked for this band's branch — undefined until its tip answers.
+  const checksFor = (p: QueuePlace) => (p.candidate ? checksOf.get(p.candidate.tip_oid) : undefined);
   return (
     <section aria-label={`The queue of ${title}`}>
       {tips.map((tip) => (
-        <TipChecks key={tip} repo={band.repo} oid={tip} onRows={hold} />
+        <TipChecks key={tip} repo={band.repo} oid={tip} target={band.target} onRows={hold} />
       ))}
       <Card>
         <Card.Header>
@@ -366,22 +368,25 @@ function Party({ party, name }: { party: CodeParty; name: string }) {
 }
 
 /**
- * The checks of one candidate's tip, asked once for every entry it tests:
- * nothing drawn, its rows handed to the band ([Band]) as each answer lands.
+ * The checks of one candidate's tip for the band's branch, each at its latest
+ * attempt, asked once for every entry it tests: nothing drawn, its rows
+ * handed to the band ([Band]) once every page of them has answered.
  */
 function TipChecks({
   repo,
   oid,
+  target,
   onRows,
 }: {
   repo: string;
   oid: string;
+  target: string;
   onRows: (tip: string, rows: readonly CodeCheckRow[]) => void;
 }) {
-  const read = useCodeQuery("code_checks", { repo, oid }, { pollMs: QUEUE_POLL_MS });
+  const { rows } = useLatestChecks({ repo, oid, target }, QUEUE_POLL_MS);
   useEffect(() => {
-    if (read.data) onRows(oid, read.data.checks ?? []);
-  }, [read.data, oid, onRows]);
+    if (rows) onRows(oid, rows);
+  }, [rows, oid, onRows]);
   return null;
 }
 
