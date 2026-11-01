@@ -6193,9 +6193,16 @@ stops after its record committed loses no wake.
   findings and requests for changes, `code_comment_on_change` for a mention or
   a thread, `code_get_check_failures` for a failed check — and
   `code_rerun_checks` for an attempt its infrastructure ended — and, for a
-  branch a landing broke, a revert of the landing's commit made with the
-  tools that write a branch (`code_create_branch`, `code_revert`,
-  `code_open_change`), or a fix forward. It always reads the change itself
+  branch a landing broke, the change's revert with `code_revert_change`
+  ([A change reverted](#a-change-reverted)) — one write that opens
+  `Revert <repo>!<n>` into the same target and, asked to, merges it — or a
+  fix forward, either said on the change with `code_comment_on_change` so
+  the others the record woke do not do it twice. A change ready to merge is
+  offered its merge, `code_merge_change`, since that wake reaches whoever may
+  make it, and `code_comment_on_change` to say who should where the gate or
+  its reader says it is somebody else's; a change put out of its queue is
+  offered the same merge, to queue it again once what no longer held is
+  fixed. It always reads the change itself
   first, with `code_get_change`: the wake says what happened, not what the
   change is. `mention`, `review_requested`, `changes_requested`,
   `checks_failed`, `target_broken`, `conflicted`, `dequeued`,
