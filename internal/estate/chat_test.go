@@ -253,7 +253,7 @@ func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, _ string
 }
 
 func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
-	_ []chatlet.Member) (chatlet.Written, error) {
+	_ []chatlet.Member, _ *[]chatlet.Member) (chatlet.Written, error) {
 	return d.wrote("set_members", actor, "")
 }
 
@@ -474,7 +474,7 @@ func TestAKeyedChatWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			return err
 		}},
 		{"set members", "set_members", func(ctx context.Context, c Chat, a chatlet.Actor) error {
-			_, err := c.SetMembers(ctx, a, "room-1", []chatlet.Member{{Handle: "sam"}})
+			_, err := c.SetMembers(ctx, a, "room-1", []chatlet.Member{{Handle: "sam"}}, nil)
 			return err
 		}},
 		{"join", "join", func(ctx context.Context, c Chat, a chatlet.Actor) error {

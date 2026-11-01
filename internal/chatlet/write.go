@@ -313,6 +313,14 @@ var (
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("chatlet: the room kept changing under this write")
 
+	// ErrMembersChanged reports a membership stated against a read the room
+	// has since moved past ([Store.SetMembers]' expected members): a STALE
+	// READ, which a reader cures by reading the members again, and not a race
+	// this write lost, which [ErrConflict] reports. Told apart so a surface
+	// says which read to make again rather than "it kept changing", which is
+	// not what happened.
+	ErrMembersChanged = errors.New("chatlet: the room's members changed after they were read")
+
 	// ErrArchived reports a room that takes no new messages: a post or a
 	// reply. An edit, a delete and a reaction are still taken there — see
 	// the head of this file for why an archive closes nothing else.
@@ -1115,8 +1123,29 @@ func (a ChannelAuthority) archives(room Channel) error {
 // that matters most: it is what a private room's readability IS, so a node
 // that replayed a room's adds and missed one of its removals would serve a
 // conversation to somebody who was taken out of it.
+//
+// # Stated against the membership the caller read
+//
+// A whole set is built from a read, and the room may have moved since: a
+// screen that changes one member's following restates everybody else as it
+// last saw them, so a member taken out a moment before would be written back
+// in, and for a private room that is read access granted again by somebody
+// who never meant to grant it. expected is that read: the membership (each
+// handle and its following) the caller built the set from. When it is not
+// nil and the room, AS THIS SNAPSHOT HOLDS IT, holds anything else, the write
+// is refused with [ErrMembersChanged], and the caller reads the room again.
+//
+// The room's revision cannot stand in for it: [ChannelRevision] moves with
+// every message said in the room, so a busy room would refuse every change
+// stated against it. A set the room already holds is the no-op every
+// membership write answers, expected or not: a retry of a change that landed
+// finds its own set there, and is told so rather than refused.
+//
+// nil states no expectation, which is the caller that names the whole
+// membership from its own knowledge rather than from a read (a seeding
+// script, a test); a pointer to the empty list expects an empty room.
 func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
-	members []Member) (Written, error) {
+	members []Member, expected *[]Member) (Written, error) {
 
 	if err := actor.seatedOrSystem(); err != nil {
 		return Written{}, err
@@ -1125,7 +1154,7 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 	if opErr != nil {
 		return Written{}, opErr
 	}
-	return s.members(ctx, actor, channelID, opID, func(room Channel, _ []Member) ([]Member, error) {
+	return s.members(ctx, actor, channelID, opID, func(room Channel, held []Member) ([]Member, error) {
 		// A UNIT'S ROOM IS THE CHART'S, and this is the gesture that
 		// could overwrite it wholesale. It is refused here rather than
 		// filtered, because a caller who names a set is stating the
@@ -1141,6 +1170,11 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 				"the next time the company's configuration is applied. Change "+
 				"the unit in the company document instead",
 				ErrForbidden, room.called())
+		}
+		if expected != nil && !slices.Equal(sortedMembers(members), held) &&
+			!slices.Equal(sortedMembers(*expected), held) {
+			return nil, fmt.Errorf("%w: the members of %s changed after they "+
+				"were read", ErrMembersChanged, room.called())
 		}
 		return members, nil
 	})

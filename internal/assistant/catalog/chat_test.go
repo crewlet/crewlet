@@ -64,7 +64,8 @@ func sentArgs(t *testing.T, p proposal.Preview) map[string]any {
 // a seat the chart no longer lists, and one who joins may not. A change that
 // moves nobody, a unit's own room and a direct conversation are refused before
 // any card. Mutation: drop removalsNamed or the summary, send removes to the
-// tool, let a bare handle reset how a member follows, or add a handle no seat
+// tool, drop the membership the card read from the request's expectation,
+// let a bare handle reset how a member follows, or add a handle no seat
 // holds, and a case here fails.
 func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
@@ -100,6 +101,14 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 		map[string]any{"handle": "engineer", "follow_all": false}}
 	if !reflect.DeepEqual(sent["members"], want) {
 		t.Errorf("the request states the membership %v, want %v", sent["members"], want)
+	}
+	// THE ROOM AS THE CARD READ IT is the write's expectation, every member's
+	// following said, so a change made after the read is refused by the tool.
+	asRead := []any{map[string]any{"handle": "pm", "follow_all": true},
+		map[string]any{"handle": "ada", "follow_all": false}}
+	if !reflect.DeepEqual(sent["expected_members"], asRead) {
+		t.Errorf("the request expects the membership %v, want the room as the card read it %v",
+			sent["expected_members"], asRead)
 	}
 	if _, given := sent[catalog.RemovesArgument]; given {
 		t.Errorf("the request sends removes to the tool: %v", sent)

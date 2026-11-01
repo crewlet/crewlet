@@ -634,8 +634,9 @@ func invalid(field, why string, args ...any) error {
 // emoji it may ([ErrReactionsFull]), each a state the sentence says how to
 // change, a room this node cannot serve until it is upgraded
 // ([ErrUnknownKind]), a room, a message or a thread that is not there
-// ([ErrNotFound]), a name another room holds ([ErrNameTaken]) and a room that
-// changed under a decision ([ErrConflict]). Each names a room as a person
+// ([ErrNotFound]), a name another room holds ([ErrNameTaken]), a room that
+// changed under a decision ([ErrConflict]) and a membership stated against
+// members that changed since they were read ([ErrMembersChanged]). Each names a room as a person
 // knows it ([Channel.called]) and never by its id. THE FRAMEWORK'S OWN THREE —
 // a lost race (the conflict beneath [ErrConflict]), a create of what is there
 // and a write a deletion keeps deleted — are told in the state log's words for
@@ -651,7 +652,7 @@ func Sentence(err error) string {
 		return "`" + refusal.Field + "`: " + refusal.Why
 	}
 	for _, mark := range []error{ErrForbidden, ErrArchived, ErrReactionsFull, ErrUnknownKind,
-		ErrNotFound, ErrNameTaken, ErrConflict} {
+		ErrNotFound, ErrNameTaken, ErrConflict, ErrMembersChanged} {
 		if !errors.Is(err, mark) {
 			continue
 		}

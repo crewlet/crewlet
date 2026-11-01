@@ -272,7 +272,7 @@ type ChatWriter interface {
 	PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string, patch chatlet.ChannelPatch,
 		authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-		members []chatlet.Member) (chatlet.Written, error)
+		members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error)
 	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		handles []string) (chatlet.Written, []string, error)
 	Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
@@ -2036,6 +2036,11 @@ type chatSetMembersArgs struct {
 	Actor     chatlet.Actor
 	ChannelID string
 	Members   []chatlet.Member
+	// Expected is the membership the caller read, nil for none
+	// ([chatlet.Store.SetMembers]). A pointer, so the empty room a caller
+	// expects crosses the wire as the empty list rather than as no
+	// expectation at all.
+	Expected *[]chatlet.Member `json:",omitempty"`
 }
 
 var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false,
@@ -2043,7 +2048,7 @@ var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false
 		if b.ChatWriter == nil {
 			return chatlet.Written{}, errNoHalf
 		}
-		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members)
+		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members, a.Expected)
 	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) })
 
 type chatAddMembersArgs struct {

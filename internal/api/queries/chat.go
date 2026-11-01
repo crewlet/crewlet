@@ -313,6 +313,11 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	}
 	listing, err := s.Chat.Channels(ctx, who, chatlet.ChannelsQuery{
 		Cursors: state.Cursors,
+		// THE ROOMS THE PERSON STARRED are kept in the list they work out
+		// of whether or not they are in them, as long as they may read
+		// them: a star on a team's room is how somebody outside the team
+		// keeps it to hand.
+		Starred: state.Starred,
 		// THE ROOMS IN COMMON with another seat, which a profile lists:
 		// the viewer's own rooms that seat is in too.
 		With: p.String("with"),

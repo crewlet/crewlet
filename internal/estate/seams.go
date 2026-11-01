@@ -664,11 +664,13 @@ func (c Chat) PatchChannel(ctx context.Context, actor chatlet.Actor, channelID s
 	return out, err
 }
 
-// SetMembers replaces a room's members.
+// SetMembers replaces a room's members, against the membership the caller
+// read where it names one.
 func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-	members []chatlet.Member) (chatlet.Written, error) {
-	out, err := call(ctx, c.r, opChatSetMembers, nil,
-		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members})
+	members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetMembers, nil, chatSetMembersArgs{
+		Actor: actor, ChannelID: channelID, Members: members, Expected: expected,
+	})
 	c.settled(out)
 	return out, err
 }

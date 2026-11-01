@@ -187,7 +187,7 @@ func TestEveryKeyedGestureMadeAgainIsOneRecordAnsweredFromTheRows(t *testing.T) 
 		}, nil},
 		{"set the members", true, func() (chatlet.Written, error) {
 			return r.store.SetMembers(t.Context(), keyed(person("jane"),
-				requested("req-6")), room, members("jane", "bob", "eng"))
+				requested("req-6")), room, members("jane", "bob", "eng"), nil)
 		}, nil},
 		{"post", true, func() (chatlet.Written, error) {
 			return r.store.Post(t.Context(), keyed(person("jane"), requested("req-7")),
