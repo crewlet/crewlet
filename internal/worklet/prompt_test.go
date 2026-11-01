@@ -259,7 +259,7 @@ func TestTheSpineDeliversTheUnblockedCopyToItsActor(t *testing.T) {
 func TestAChangeWakeNamesWhatMoved(t *testing.T) {
 	t.Parallel()
 	record := parseRecord(&worklet.Notify{
-		Kind: worklet.ChangeStatus,
+		Kind: worklet.ChangeAssignee,
 		Fields: map[string]worklet.Delta{
 			"status":   {From: "todo", To: "in_progress"},
 			"assignee": {From: "", To: "cy"},
