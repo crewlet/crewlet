@@ -17,9 +17,9 @@ import (
 
 var log = logging.Get("agent.toolloop")
 
-// The dispatcher is a phase's tools as a CLI calls them, and every gate those
+// The dispatcher is a phase's tools as a harness calls them, and every gate those
 // calls pass — the half of the loop that used to be `runCalls`, moved to where
-// the calls now arrive: a CLI's own loop, over MCP, at a time of its choosing,
+// the calls now arrive: a harness's own loop, over MCP, at a time of its choosing,
 // sometimes two at once.
 //
 // What did not move is any rule. The fence before every call, the budget
@@ -28,34 +28,34 @@ var log = logging.Get("agent.toolloop")
 // budget, arguments that did not parse answered rather than run, a detached
 // call left unanswered as it parks the phase: each is the same rule it
 // was, enforced at the one place every call now passes. What is new is only
-// what a CLI's loop forces:
+// what a harness's loop forces:
 //
 //   - THE RUN IS ENDED, NOT ASKED TO END. A state the phase reaches mid-run —
 //     finished, parked, out of rounds, a note waiting, a stop — closes
-//     [dispatcher.Done], and the backend stops its CLI. Every answer the CLI
+//     [dispatcher.Done], and the backend stops its harness. Every answer the harness
 //     would act on from then is WITHHELD (held until it is stopped), so it
 //     makes no further request it would be billed for; the loop folds the
 //     real results into the conversation itself.
 //   - A RESPONSE'S CALLS ARE RUN AS ONE, AS A ROUND'S WERE. A run that must
 //     end over one of a response's calls ends once the response's other calls
-//     have reached the engine, not at the first: a CLI that waits on each
+//     have reached the engine, not at the first: a harness that waits on each
 //     answer before its next call would otherwise never make the rest, and
 //     the model asked for them in the same breath — a delivery written beside
 //     its submission, a call made while a note arrived. Until then the
 //     deciding answer goes back, so the next call comes; the last answer is
-//     the one withheld, since a CLI asks its model again only once every call
+//     the one withheld, since a harness asks its model again only once every call
 //     of the response is answered.
-//   - CALLS ARRIVE TOGETHER. A CLI may issue a response's calls at once, in
+//   - CALLS ARRIVE TOGETHER. A harness may issue a response's calls at once, in
 //     any order. Ordinary calls run side by side; a call that ENDS the phase
 //     or PARKS it — a terminator, a detached call — runs alone, after every
 //     other call its response declared has run, so a delivery the model made
 //     beside its submission is recorded before the submission is judged.
 //   - A CALL IS THE MODEL'S, AS IT ASKED FOR IT. The engine runs a call only
-//     under a name it offers now, and only the name the model asked for: a CLI
+//     under a name it offers now, and only the name the model asked for: a harness
 //     that rewrites a name its list does not hold to one it does would
 //     otherwise run a tool nobody chose.
 //   - A CALL IS THE PHASE'S, NOT THE CONNECTION'S. It runs under the phase's
-//     context, so a CLI that gives up on it, or dies, cancels nothing a tool
+//     context, so a harness that gives up on it, or dies, cancels nothing a tool
 //     is half-way through writing; its result is recorded either way.
 //   - A CALL IS ITS RUN'S. Each run's session hands its calls to that run
 //     alone ([runCalls]), and a run that is over takes none: a call that
@@ -70,9 +70,9 @@ const (
 	// statePausing is a run ended for a person's note, which the next run
 	// reads as a user message.
 	statePausing
-	// stateRelist is a run ended over an activation its CLI would never see.
+	// stateRelist is a run ended over an activation its harness would never see.
 	stateRelist
-	// stateLocalPark is a run ended over a call too long to hold the CLI
+	// stateLocalPark is a run ended over a call too long to hold the harness
 	// for: the call goes on, and the next run is handed its result.
 	stateLocalPark
 	// stateExhausted is a phase whose round budget is spent with the model
@@ -81,7 +81,7 @@ const (
 	// stateRefused is a run its token budget refuses to let go on: an end
 	// only ever DECIDED ([dispatcher.pend]), and taken as [stateCut] with
 	// [dispatcher.pendErr]. Ranked under a finish and a park because what it
-	// refuses is the CLI's next request, and a phase a call finished or
+	// refuses is the harness's next request, and a phase a call finished or
 	// parked makes none.
 	stateRefused
 	// stateFinished is a phase a terminator ended.
@@ -99,37 +99,37 @@ func (s dstate) ended() bool {
 	return s == stateFinished || s == stateParked || s == stateCut
 }
 
-// joinWait is how long a call waits for the CLI's own record of the response
+// joinWait is how long a call waits for the harness's own record of the response
 // that issued it, and a call that ends or parks the phase for the response's
 // other calls to arrive.
 //
-// The call and the record race: the record is read off the CLI's stream or a
+// The call and the record race: the record is read off the harness's stream or a
 // file it writes, and the call arrives over a socket, and either can be first
 // by milliseconds. Two seconds is three orders of magnitude over that race and
 // still short against the model's own latency; a call whose response the
 // record never shows within it is placed on the request after the last one the
 // record did show (see [dispatcher.placeLocked]) rather than held for nothing.
-// Calls a CLI issues at once arrive within the same milliseconds, so the same
-// bound serves the barrier: a sibling that has not come by then is one the CLI
+// Calls a harness issues at once arrive within the same milliseconds, so the same
+// bound serves the barrier: a sibling that has not come by then is one the harness
 // will make only once this call is answered.
 const joinWait = 2 * time.Second
 
-// parkMargin is how far ahead of a CLI's own tool timeout a running call is
-// answered "still running" — the time the answer takes to reach the CLI and the
-// CLI to act on it before its own clock would fire. A tenth of the timeout,
+// parkMargin is how far ahead of a harness's own tool timeout a running call is
+// answered "still running" — the time the answer takes to reach the harness and the
+// harness to act on it before its own clock would fire. A tenth of the timeout,
 // at least five seconds: the measured timeouts run from sixty seconds (kimi,
 // pi) to hours, and a fixed margin would be most of a short one.
 func parkMargin(timeout time.Duration) time.Duration {
 	return max(5*time.Second, timeout/10)
 }
 
-// stillRunning is what a CLI is told when a call it made will end the run
+// stillRunning is what a harness is told when a call it made will end the run
 // before it returns: the run is about to be stopped, and the next one is handed
 // the call's real result.
 const stillRunning = "This call is still running. End your turn now: you will be " +
 	"resumed with its result."
 
-// pausingNote is what a CLI is handed for an answer withheld from a run that
+// pausingNote is what a harness is handed for an answer withheld from a run that
 // has been stopped — which it never reads. It names no note: a note is read as
 // a USER message, never inside a tool's result, where any tool's output could
 // imitate one.
@@ -146,7 +146,7 @@ func notOffered(name string) string {
 	return name + " was NOT run: it is not one of the tools offered here."
 }
 
-// rewritten is the record of a call the CLI made under another name than the
+// rewritten is the record of a call the harness made under another name than the
 // one the model asked for.
 func rewritten(asked, sent string) string {
 	return fmt.Sprintf("%s was NOT run: it is not one of the tools offered here, and the call "+
@@ -164,7 +164,7 @@ type callRec struct {
 
 	// asked is the name the model asked for, where the record showed the
 	// call — what the conversation records it as; different from name only
-	// on a call the CLI rewrote.
+	// on a call the harness rewrote.
 	asked string
 
 	// provisional marks a call whose response the record had not shown when
@@ -192,15 +192,15 @@ type callRec struct {
 	refused bool
 	// admitted marks a call the dispatcher let run.
 	admitted bool
-	// waiting marks an admitted call its CLI run is still waiting on — not
+	// waiting marks an admitted call its harness run is still waiting on — not
 	// yet settled, and not answered "still running" ([dispatcher.awaitedLocked]).
 	waiting bool
-	// answered marks a call the CLI was answered "still running" while it
+	// answered marks a call the harness was answered "still running" while it
 	// goes on: done, as far as its response is concerned.
 	answered bool
 
 	// turn and slot are the observed response this call is, and which of
-	// its calls — nil where the CLI's record never showed it.
+	// its calls — nil where the harness's record never showed it.
 	turn *observedTurn
 	slot int
 }
@@ -213,7 +213,7 @@ func (c *callRec) recorded() string {
 	return c.name
 }
 
-// observedTurn is one model request as the CLI's record showed it.
+// observedTurn is one model request as the harness's record showed it.
 type observedTurn struct {
 	id    string
 	round int
@@ -221,8 +221,8 @@ type observedTurn struct {
 	calls []llm.TurnCall
 	// joined marks a call that reached the host as this slot.
 	joined []bool
-	// expect marks a call the CLI will make to the host: one of the host's
-	// tools, offered when the response was read. A CLI refuses any other name
+	// expect marks a call the harness will make to the host: one of the host's
+	// tools, offered when the response was read. A harness refuses any other name
 	// itself — or rewrites it — so nothing waits for it.
 	expect []bool
 	model  string
@@ -232,7 +232,7 @@ type observedTurn struct {
 	start  time.Time
 }
 
-// awaiting reports a call of the response the CLI has yet to make.
+// awaiting reports a call of the response the harness has yet to make.
 func (t *observedTurn) awaiting(except int, skip func(name string) bool) bool {
 	for i, tc := range t.calls {
 		if i == except || !t.expect[i] || t.joined[i] {
@@ -246,16 +246,16 @@ func (t *observedTurn) awaiting(except int, skip func(name string) bool) bool {
 	return false
 }
 
-// run is one CLI run on the dispatcher: one [llm.ToolHost.Serve].
+// run is one harness run on the dispatcher: one [llm.ToolHost.Serve].
 type run struct {
 	opts  llm.ServeOptions
 	start time.Time
-	// released is closed when the backend releases the run: its CLI is gone,
+	// released is closed when the backend releases the run: its harness is gone,
 	// and the run takes no call ([runCalls]).
 	released chan struct{}
 	// synthetic is the round an unobserved run's calls are placed on.
 	synthetic int
-	// waiting is how many of the run's calls its CLI is waiting on.
+	// waiting is how many of the run's calls its harness is waiting on.
 	waiting int
 	// ctx is the context the run was served under, whose VALUES every call
 	// of the run carries — see [callContext].
@@ -272,7 +272,7 @@ func (r *run) over() bool {
 	}
 }
 
-// runCalls is one CLI run's side of the dispatcher: what the run's session
+// runCalls is one harness run's side of the dispatcher: what the run's session
 // hands each call to.
 //
 // ONE PER RUN, so a call is the run's that delivered it. Handed the phase's
@@ -291,21 +291,21 @@ var _ toolsession.Dispatcher = (*runCalls)(nil)
 func (v *runCalls) Offered() []toolsession.Tool { return v.d.Offered() }
 func (v *runCalls) Revision() uint64            { return v.d.Revision() }
 
-// Call decides and runs one call the run's CLI made — see [dispatcher.call].
+// Call decides and runs one call the run's harness made — see [dispatcher.call].
 func (v *runCalls) Call(in toolsession.Call) toolsession.Result { return v.d.call(v.r, in) }
 
 // callContext is the context one call of a run runs under: the VALUES of the
 // context the backend served the run under, and the PHASE's cancellation.
 //
 // The values, because the backend puts there what a call of ITS run needs and
-// only a call of its run may have: the CLI backend lends the run's process slot
+// only a call of its run may have: the harness backend lends the run's process slot
 // to a model call made inside one of its calls (a condensing pass, a judge, on
 // the seat's own entry), which without it waits for a slot only the run can
 // free — at max_concurrent 1, a deadlock. The served context descends from the
 // phase's, so the phase's own values (the turn, the seat, its span) come with
 // it, and are read from the phase where a backend served from elsewhere.
 //
-// The phase's cancellation and never the run's: a run that ends — its CLI
+// The phase's cancellation and never the run's: a run that ends — its harness
 // stopped, a fallback taking over — ends nothing a tool is half-way through.
 type callContext struct {
 	served context.Context // values only: context.WithoutCancel
@@ -369,10 +369,10 @@ type dispatcher struct {
 	// [dispatcher.finish] — and began when it was started.
 	active bool
 	began  time.Time
-	// invCalls, invRuns and invTurns are where the current run's calls, CLI
+	// invCalls, invRuns and invTurns are where the current run's calls, harness
 	// runs and responses start in calls, runs and turns.
 	invCalls, invRuns, invTurns int
-	// invRounds is the last round before the current CLI run's first.
+	// invRounds is the last round before the current harness run's first.
 	invRounds int
 
 	// offeredRev and offeredNames are the surface's names at a revision, so
@@ -409,7 +409,7 @@ var _ llm.ToolHost = (*dispatcher)(nil)
 
 // --- llm.ToolHost ----------------------------------------------------------
 
-// Serve opens a session for one CLI run.
+// Serve opens a session for one harness run.
 func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Served, error) {
 	if d.cfg.Host == nil {
 		return llm.Served{}, fmt.Errorf("toolloop: %s offers tools but has no session host",
@@ -433,7 +433,7 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 		return llm.Served{}, err
 	}
 	if opts.Relists {
-		// The answer to an activation waits for the CLI's re-list, so its
+		// The answer to an activation waits for the harness's re-list, so its
 		// next request offers the tool — see [toolsession.Server.HoldAnswersForRelist].
 		session.Server().HoldAnswersForRelist()
 	}
@@ -492,7 +492,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 		d.expectLocked(turn)
 		d.turns = append(d.turns, turn)
 		if d.pend != stateOpen && turn.round > d.pendRound {
-			// THE CLI ASKED ITS MODEL AGAIN: the response that decided the
+			// THE HARNESS ASKED ITS MODEL AGAIN: the response that decided the
 			// run's end is over, whatever of it never came.
 			d.endLocked()
 		}
@@ -505,7 +505,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 	d.frame()
 }
 
-// expectLocked marks which of a response's calls the CLI will make to the host.
+// expectLocked marks which of a response's calls the harness will make to the host.
 func (d *dispatcher) expectLocked(t *observedTurn) {
 	t.joined = make([]bool, len(t.calls))
 	t.expect = make([]bool, len(t.calls))
@@ -543,7 +543,7 @@ func (d *dispatcher) reviewLocked(t *observedTurn) {
 		return
 	case t.round == d.cfg.MaxRounds && len(t.calls) > 0:
 		// THE LAST ROUND THE BUDGET ALLOWS asked for tools: once its calls
-		// have all come, the run ends before the CLI can make another
+		// have all come, the run ends before the harness can make another
 		// request — at once, where none of them is the host's.
 		d.decideLocked(stateExhausted, t.round)
 	}
@@ -556,7 +556,7 @@ func (d *dispatcher) reviewLocked(t *observedTurn) {
 
 // modelStartLocked is when the model began the response observed at now: the
 // latest of the current run's start, the previous response and the last call
-// that returned — the moment the CLI had everything it needed to ask.
+// that returned — the moment the harness had everything it needed to ask.
 func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
 	start := d.began
 	if r := d.currentRunLocked(); r != nil && r.start.After(start) {
@@ -576,9 +576,9 @@ func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
 	return start
 }
 
-// turnByID is the current run's request of the CLI's id. THIS RUN'S ONLY: an
-// id is the CLI's, unique within its process at most — a backend that numbers
-// a CLI's requests itself numbers each run's from one — so a later run's
+// turnByID is the current run's request of the harness's id. THIS RUN'S ONLY: an
+// id is the harness's, unique within its process at most — a backend that numbers
+// a harness's requests itself numbers each run's from one — so a later run's
 // request read as an earlier run's was merged into it.
 func (d *dispatcher) turnByID(id string) *observedTurn {
 	if id == "" {
@@ -592,7 +592,7 @@ func (d *dispatcher) turnByID(id string) *observedTurn {
 	return nil
 }
 
-// roundOfRequest is the round of the current run's request of the CLI's id,
+// roundOfRequest is the round of the current run's request of the harness's id,
 // where the host has been told of it.
 func (d *dispatcher) roundOfRequest(id string) (int, bool) {
 	d.mu.Lock()
@@ -645,7 +645,7 @@ func (d *dispatcher) Pending() []llm.Message {
 
 // --- what each run's session serves ([runCalls]) ---------------------------
 
-// Offered is what the CLI is offered now.
+// Offered is what the harness is offered now.
 func (d *dispatcher) Offered() []toolsession.Tool {
 	defs := d.cfg.Surface.ToolDefs()
 	out := make([]toolsession.Tool, 0, len(defs))
@@ -674,10 +674,10 @@ func (d *dispatcher) offeredLocked(name string) bool {
 	return ok
 }
 
-// call decides and runs one call r's CLI made.
+// call decides and runs one call r's harness made.
 //
 // The MCP request's context is not this call's, and the session does not hand
-// it over ([toolsession.Dispatcher.Call]): a CLI that gives up on the call, or
+// it over ([toolsession.Dispatcher.Call]): a harness that gives up on the call, or
 // dies, abandons only the delivery of its answer. The call runs under the
 // phase's context to its end and is recorded ([callContext]), and the
 // session's release waits for it.
@@ -746,7 +746,7 @@ func (d *dispatcher) unlockGate(exclusive bool) {
 	}
 }
 
-// admit records a call r's CLI made and decides whether it may run at all — or
+// admit records a call r's harness made and decides whether it may run at all — or
 // answers no record at all for a call r is over for, which no run of the phase
 // made.
 func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
@@ -766,7 +766,7 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 		// ITS PLACE IN THE RUN'S CALL LOG, fixed here, in the order the calls
 		// arrived — see [Surface.Admit]. AT ARRIVAL, before the wait that
 		// joins the call to its response: two calls of one response that
-		// both wait for the CLI's record wake together and take this lock
+		// both wait for the harness's record wake together and take this lock
 		// again in whichever order the scheduler picks, which is the racing
 		// order this exists to remove. So a call refused below is in the log
 		// too; that can only raise a later count, and a raised count is a
@@ -776,8 +776,8 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	c.id = callIDFromMeta(in.Meta, c.run)
 	d.placeLocked(c)
 	if c.argsErr == "" && c.turn != nil {
-		// THE ARGUMENTS THE MODEL WROTE, as the CLI's record shows them. A
-		// CLI may hand its server something else for arguments that are not
+		// THE ARGUMENTS THE MODEL WROTE, as the harness's record shows them. A
+		// harness may hand its server something else for arguments that are not
 		// an object — Claude Code turns an array into an object of its
 		// elements — and the call is answered as one whose arguments did
 		// not parse, below, rather than run on an object nobody wrote.
@@ -804,10 +804,10 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	// reach outside the engine.
 	//
 	// NOT THE BUDGET. A call spends no model tokens, and its request was
-	// charged when the CLI's record showed it — a charge the meter refused
+	// charged when the harness's record showed it — a charge the meter refused
 	// cut the run then, and none of its calls runs. A refusal that became
 	// certain since — a sibling's spend on a shared slice, or this
-	// request's own exact fill — refuses the request the CLI would make
+	// request's own exact fill — refuses the request the harness would make
 	// NEXT, which is asked where that request is decided, as a call's
 	// answer goes back ([dispatcher.conclude]). Asked here, it cut a
 	// request's calls the meter had already paid for, and recorded a
@@ -818,7 +818,7 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 			return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 		}
 	}
-	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
+	// PAST THE ROUND BUDGET: the harness made a request the budget did not
 	// allow — its record reached the engine after the request's calls did,
 	// or it records none. Nothing of it runs.
 	if c.round > d.cfg.MaxRounds {
@@ -828,7 +828,7 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	if d.pend != stateOpen {
 		if c.round != d.pendRound {
 			// A call of a later request than the one that decided the
-			// run's end: the CLI moved on.
+			// run's end: the harness moved on.
 			d.endLocked()
 			return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 		}
@@ -840,7 +840,7 @@ func (d *dispatcher) admit(r *run, in toolsession.Call) (*callRec, string) {
 	}
 	// ONLY WHAT IS OFFERED, UNDER THE NAME THE MODEL ASKED FOR. A session
 	// that listed a tool before the surface stopped offering it still
-	// routes the name here, and a CLI that rewrote a name the model wrote
+	// routes the name here, and a harness that rewrote a name the model wrote
 	// made a call nobody chose.
 	if c.asked != "" && c.asked != c.name {
 		return refuse(mcp.RefusalNotFound, rewritten(c.asked, c.name))
@@ -872,8 +872,8 @@ func (d *dispatcher) recheck(c *callRec) string {
 	return why
 }
 
-// callIDFromMeta is the CLI's id for a call, where it sent one with it — under
-// the key its run declared ([llm.ServeOptions.CallIDMeta]) and no other. A CLI
+// callIDFromMeta is the harness's id for a call, where it sent one with it — under
+// the key its run declared ([llm.ServeOptions.CallIDMeta]) and no other. A harness
 // that sends none has its calls joined to their responses by name and
 // arguments.
 func callIDFromMeta(meta map[string]any, r *run) string {
@@ -885,12 +885,12 @@ func callIDFromMeta(meta map[string]any, r *run) string {
 }
 
 // placeLocked joins a call to the response that asked for it and sets its
-// round, waiting a moment for the CLI's record where it has not shown the
+// round, waiting a moment for the harness's record where it has not shown the
 // response yet.
 func (d *dispatcher) placeLocked(c *callRec) {
 	r := c.run
 	if r != nil && !r.opts.ObservesRequests {
-		// A CLI WHOSE RECORD SHOWS NO REQUESTS: the whole run is one round.
+		// A HARNESS WHOSE RECORD SHOWS NO REQUESTS: the whole run is one round.
 		if r.synthetic == 0 {
 			d.rounds++
 			r.synthetic = d.rounds
@@ -898,7 +898,7 @@ func (d *dispatcher) placeLocked(c *callRec) {
 		c.round = r.synthetic
 		return
 	}
-	// A CLI WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN is never waited
+	// A HARNESS WHOSE RECORD SHOWS CALLS ONLY AFTER THEY RAN is never waited
 	// for: the response that asked for this call is recorded once it is
 	// answered, so a wait would hold every call for the whole of [joinWait]
 	// and gain nothing — the call is placed now, and joined when the record
@@ -927,8 +927,8 @@ func (d *dispatcher) placeLocked(c *callRec) {
 	c.round, c.provisional = d.rounds+1, true
 }
 
-// findLocked is the response's call this call is, in the CLI's record: by the
-// CLI's own id where it sent one; else by name and arguments; else — a CLI
+// findLocked is the response's call this call is, in the harness's record: by the
+// harness's own id where it sent one; else by name and arguments; else — a harness
 // that rewrote a name its list does not hold to one it does — the one call of
 // a name no tool here answers to, with the very same arguments.
 func (d *dispatcher) findLocked(c *callRec) (*observedTurn, int, bool) {
@@ -1002,7 +1002,7 @@ func (d *dispatcher) waitLocked(within time.Duration) {
 	t.Stop()
 }
 
-// currentRunLocked is the CLI run of the loop's current run, or nil before
+// currentRunLocked is the harness run of the loop's current run, or nil before
 // one was served.
 func (d *dispatcher) currentRunLocked() *run {
 	if n := len(d.runs); n > d.invRuns {
@@ -1022,10 +1022,10 @@ func (d *dispatcher) exclusive(name string) bool {
 
 // awaitSiblings holds an exclusive call until every other ordinary call of its
 // response has RUN — every one that arrived settled, and every one the record
-// shows the CLI making arrived — so a delivery is recorded before the
+// shows the harness making arrived — so a delivery is recorded before the
 // submission beside it is judged. Settled, not merely arrived: a sibling that
 // has arrived and not yet taken its share of the gate would otherwise queue
-// behind this call. The wait for arrivals is bounded — a CLI that runs a
+// behind this call. The wait for arrivals is bounded — a harness that runs a
 // response's calls one after another sends the next only once this one is
 // answered — and the wait for running calls is not, since they hold the gate
 // this call needs anyway.
@@ -1055,12 +1055,12 @@ func (d *dispatcher) awaitSiblings(c *callRec) {
 	}
 }
 
-// mayArriveBeside reports whether the CLI could make a call of name while the
+// mayArriveBeside reports whether the harness could make a call of name while the
 // exclusive call c is still unanswered — the only calls the barrier waits to
 // arrive. Another call that ends or parks the phase never is: it waits its own
-// turn at the gate. On a CLI that makes calls one at a time none is, and on one
+// turn at the gate. On a harness that makes calls one at a time none is, and on one
 // that runs only read-only tools side by side, only a read-only call beside a
-// read-only c is; any other sibling the CLI makes once c is answered, so
+// read-only c is; any other sibling the harness makes once c is answered, so
 // waiting for it would hold c for [joinWait] and gain nothing.
 func (d *dispatcher) mayArriveBeside(c *callRec, name string) bool {
 	if d.exclusive(name) {
@@ -1179,14 +1179,14 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 	continues := d.state == stateOpen && d.pend == stateOpen
 	d.mu.Unlock()
 
-	// THE BUDGET, ONLY WHERE THE CLI GOES ON: the answers to its response
+	// THE BUDGET, ONLY WHERE THE HARNESS GOES ON: the answers to its response
 	// are what let it ask its model again, so a refusal already certain
 	// refuses that request — and is asked only then, since [Refusal]
 	// records the refusal of the call its caller was about to make. A call
 	// that finished, parked or ended the run is followed by no request, and
 	// the phase it decided stands.
 	//
-	// DECIDED, NOT TAKEN: the CLI asks again only once every call of the
+	// DECIDED, NOT TAKEN: the harness asks again only once every call of the
 	// response is answered, so the response's other calls — paid for with
 	// it — still run, and a submission among them still finishes the phase.
 	var refused error
@@ -1202,7 +1202,7 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 }
 
 // withheld is answer, unless the run is ending: then the answer waits until
-// the CLI is stopped, so it does not read it and ask its model again — a
+// the harness is stopped, so it does not read it and ask its model again — a
 // request it would be billed for, made after the run's end was decided. The
 // loop folds the real result into the conversation itself.
 func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Result {
@@ -1220,7 +1220,7 @@ func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Res
 }
 
 // afterCallLocked decides what an ordinary call's completion means for the
-// run: a note waiting, an activation the CLI will not see.
+// run: a note waiting, an activation the harness will not see.
 func (d *dispatcher) afterCallLocked(c *callRec, before uint64) {
 	if d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
 		d.decideLocked(statePausing, c.round)
@@ -1245,8 +1245,8 @@ func (d *dispatcher) decideLocked(st dstate, round int) {
 }
 
 // endIfCompleteLocked takes the decided end once nothing more of the response
-// that decided it is to come: every call the record shows the CLI making to the
-// host has reached it. A CLI asks its model again only once every call of the
+// that decided it is to come: every call the record shows the harness making to the
+// host has reached it. A harness asks its model again only once every call of the
 // response is answered, so the call that completes the response is the one
 // whose answer is withheld.
 func (d *dispatcher) endIfCompleteLocked() {
@@ -1307,12 +1307,12 @@ func (d *dispatcher) parkLocally(c *callRec) {
 
 // busyLocked tells the run's backend the engine's tools started or stopped
 // running.
-// awaitedLocked counts an admitted call in or out of what its CLI run is
+// awaitedLocked counts an admitted call in or out of what its harness run is
 // waiting on, and tells the run's backend when the first call starts and the
 // last one ends ([llm.ServeOptions.OnCall]).
 //
-// PER RUN, and only while the CLI waits: a call answered "still running" goes
-// on, but its CLI has its answer and is working — or has been stopped — and a
+// PER RUN, and only while the harness waits: a call answered "still running" goes
+// on, but its harness has its answer and is working — or has been stopped — and a
 // call an earlier run made is no call of this one. Counted for the phase
 // instead, a call parked by one run held the next run's clock stopped and its
 // login unchecked for as long as the call ran, and the next run's first call
@@ -1371,7 +1371,7 @@ func (d *dispatcher) frame() {
 // EXPORTED FOR THE BRIDGE, which answers an executor run's calls with it: the
 // rule — such a call is answered, never run on an empty object — is this
 // loop's, and a second copy of its wording is the one a model would learn to
-// fix differently depending on where its CLI ran.
+// fix differently depending on where its harness ran.
 func UnparsedArguments(name, why string) string {
 	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
 		"Call it again with its arguments as one complete JSON object.", name, why)

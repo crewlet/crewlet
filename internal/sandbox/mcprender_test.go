@@ -15,7 +15,7 @@ func servers() []MCPServer {
 	}
 }
 
-// Only the servers the seat named — never its whole surface. A coding agent
+// Only the servers the seat named — never its whole surface. A harness
 // inside a box reaches whatever it is given with no per-tool control left, so
 // what it is given IS the decision.
 func TestOnlyTheScopedServersReachTheBox(t *testing.T) {

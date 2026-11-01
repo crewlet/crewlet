@@ -117,7 +117,7 @@ attaches the paths its `attachments` names, `confluence_upload_attachment` and
 it inherits that from the engine: the directory the engine was started in,
 which is where the default `store.path` puts `crewlet.db`, and in the published
 image the engine user's home, where CLI agents keep their sign-ins
-(`~/.crewlet/llm-cli`). Start the engine in a directory that holds none of its
+(`~/.crewlet/llm-harness`). Start the engine in a directory that holds none of its
 own files, with `store.path` outside it, or every seat that runs this server
 can attach the engine's database to an issue.
 

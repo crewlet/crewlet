@@ -1232,7 +1232,7 @@ export function kindWithAuthors(
 // ---------------------------------------------------------------------------
 //
 // THE ENGINE COMPUTES ONE WORD PER SEAT (`activity`: working, needs, stopped,
-// idle) from its turn, its coding runs' durable record, its pause, its
+// idle) from its turn, its executors' durable record, its pause, its
 // placement across the fleet and its budget windows, and serves it on every
 // `agents` row with the reason beside it (`stopped_reason`, `paused`,
 // `last_turn`). This client used to compute three words of its own from a
@@ -1263,7 +1263,7 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
  * likely looking for, and two lists of one set in two orders read as two sets.
  *
  * A SEAT WITH NO READABLE START SORTS LAST. The engine calls a seat working
- * while a coding run of its is out even when its projection holds no turn
+ * while its executor runs in its box even when its projection holds no turn
  * record for it — a parked turn it never saw start — and when that turn
  * resumes, the record it creates is stamped with the RESUME instant, the
  * newest start there is. So last is where the row will land anyway, and a
@@ -1315,7 +1315,7 @@ export function turnItemKey(row: AgentRow | null | undefined): string {
 }
 
 /**
- * Whether a detached coding run is waiting on a person.
+ * Whether an executor is waiting on a person.
  *
  * THE ENGINE'S OWN TWO WORDS: `awaiting_clarification`, and `reseed` — the box
  * was reaped past its pause TTL, so the work is gone and only the question
@@ -1560,8 +1560,8 @@ export function failureWords(kind: string | null | undefined): FailureWords {
 }
 
 /**
- * The LONG form of a seat's state, as its label: "Working", "Needs you · run
- * parked", "Paused by Jane · 12m", "Stopped: its model provider is
+ * The LONG form of a seat's state, as its label: "Working", "Needs you ·
+ * executor parked", "Paused by Jane · 12m", "Stopped: its model provider is
  * unreachable", "Idle".
  *
  * IT OPENS WITH THE SHORT FORM ([seatWord]) for every state the engine
@@ -1579,7 +1579,7 @@ export function labelOf(
   const word = stateWord(state);
   switch (state) {
     case "needs":
-      return row?.turn?.stage === "parked" ? `${word} · run parked` : word;
+      return row?.turn?.stage === "parked" ? `${word} · executor parked` : word;
     case "offline":
       return "No state from the engine yet";
     case "paused": {
@@ -1609,17 +1609,17 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
 
 /**
  * What a seat is doing, in one line under its name: "Executing ENG-412",
- * "Coding run on ENG-9", "Idle · last turn 24m ago".
+ * "Reviewing ENG-9", "Idle · last turn 24m ago".
  *
  * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
  * engine charges the turn to — and never a `work_key` a prompt happened to
  * mention. A human seat is not run by the engine and says so.
  *
  * NO WORKER COUNT, and none can be read off the row: `delegate` is the
- * executor's alone, and the executor is its coding CLI's run, which calls it
- * over the bridge while its turn is parked. The engine streams no call of that
- * run's, so the line says its coding run, and each worker is on the turn's
- * record once it finishes.
+ * executor's alone, and the executor is its coding CLI, running in its box,
+ * which calls it over the bridge while its turn is parked. The engine streams
+ * no call the executor makes, so the line says it is executing, and each
+ * worker is on the turn's record once it finishes.
  */
 export function stateLine(
   row: AgentRow | null | undefined,
@@ -1633,10 +1633,12 @@ export function stateLine(
   const item = turnItemKey(row);
   switch (state) {
     case "working": {
-      // A DETACHED CODING RUN parks the turn while the box works: the seat is
-      // working and no model call is in flight, so the phase says nothing.
+      // A PARKED TURN IS ITS EXECUTOR, running in its box: the seat is
+      // working and no model call is in flight, so the phase the call would
+      // name says nothing, and the line is Execute's own.
       if (row?.turn?.stage === "parked") {
-        return item ? `Coding run on ${item}` : "Coding run in progress";
+        const execute = PHASE_DOING.execute!;
+        return item ? `${execute.on} ${item}` : execute.alone;
       }
       const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
         alone: "Working",
@@ -1658,7 +1660,7 @@ export function stateLine(
 
 /**
  * What a task's card says about the turn running on it: "SWE · reviewing ·
- * round 2 of 4", "SWE · coding run".
+ * round 2 of 4", "SWE · executing".
  *
  * JOINED ON THE ITEM THE ENGINE CHARGES THE TURN TO — `live_call.work_item`,
  * then the turn's own — and never on a `work_key`, which is the unit of work a
@@ -1702,13 +1704,15 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
 
 /**
  * The words a working seat's strip carries after its name: "reviewing · round
- * 2 of 4", "coding run". A task card's strip and the task page's live row both
+ * 2 of 4", "executing". A task card's strip and the task page's live row both
  * read it here — the page kept a private copy that read the zero-based
  * `round_num` raw and called every phase but review "executing", so the two
- * named different rounds, and different phases, of one turn.
+ * named different rounds, and different phases, of one turn. A parked turn is
+ * its executor, running in its box, so it says Execute's word with no round:
+ * no call of the engine's own is in flight.
  */
 export function doingWords(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return "coding run";
+  if (row.turn?.stage === "parked") return PHASE_DOING.execute!.alone.toLowerCase();
   const phase = row.live_call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
   const round = roundOf(row.live_call);
@@ -1773,11 +1777,11 @@ export function staleness(
   now: number,
   stage?: string | null,
 ): "" | "stale" | "stalled" {
-  // A PARKED TURN IS SILENT ON PURPOSE. A detached coding run suspends the
-  // loop and the round stops moving by design — for as long as the run takes,
-  // and for as long as a question waits on a person — so "no update for ten
-  // minutes" is its normal state, and an alarm keyed on it fired on every
-  // legitimately silent run.
+  // A PARKED TURN IS SILENT ON PURPOSE. Its executor, running in its box,
+  // suspends the loop and the round stops moving by design — for as long as
+  // the executor takes, and for as long as a question waits on a person — so
+  // "no update for ten minutes" is its normal state, and an alarm keyed on it
+  // fired on every legitimately silent turn.
   if (stage === "parked") return "";
   if (!updatedAt) return "";
   const age = now - new Date(updatedAt.endsWith("Z") ? updatedAt : `${updatedAt}Z`).getTime();

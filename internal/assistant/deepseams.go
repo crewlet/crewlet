@@ -14,11 +14,11 @@ import (
 )
 
 // THE DEEP-WORK SEAMS (ADR-0054), declared here by their consumer and satisfied
-// by the engine: the coding CLI's run in a box (internal/engine's deep work over
+// by the engine: the harness's run in a box (internal/engine's deep work over
 // internal/sandbox and the MCP bridge, which this package may not import), and
 // the store a conversation's files are kept in.
 
-// DeepWork runs a deep-work run: the assistant's coding CLI with its own tools
+// DeepWork runs a deep-work run: the assistant's harness with its own tools
 // (shell, files, web search and fetch, image reading) in a box, whose only way
 // into Crewlet is [DeepRun.Surface], served to it over the engine's bridge.
 type DeepWork interface {
@@ -52,7 +52,7 @@ type DeepRun struct {
 	// System is the run's standing instructions and Brief its ask: the goal
 	// and plan, or for a continuation the person's decision.
 	System, Brief string
-	// Continue is the box and CLI session a parked run left, nil for a new
+	// Continue is the box and harness session a parked run left, nil for a new
 	// run.
 	Continue *DeepBox
 	// Inputs are files written into the box's inputs directory before the
@@ -62,7 +62,7 @@ type DeepRun struct {
 	// assistant tools, every call the person's request (ADR-0050).
 	Surface DeepSurface
 	// Timeout, Steps and Tokens are the run's caps: its wall clock, its
-	// CLI's agentic rounds, and the tokens it may spend before it is
+	// harness's agentic rounds, and the tokens it may spend before it is
 	// stopped.
 	Timeout time.Duration
 	Steps   int
@@ -96,7 +96,7 @@ type DeepEnd string
 const (
 	// DeepEndFinished is a run that ended on its own with its report.
 	DeepEndFinished DeepEnd = "finished"
-	// DeepEndFailed is a run whose CLI failed, or whose box would not start.
+	// DeepEndFailed is a run whose harness failed, or whose box would not start.
 	DeepEndFailed DeepEnd = "failed"
 	// DeepEndTimeout is a run stopped at its wall clock.
 	DeepEndTimeout DeepEnd = "timeout"
@@ -114,7 +114,7 @@ type DeepOutcome struct {
 	// why a run that did not finish ended, in the engine's words.
 	Report string
 	Reason string
-	// Box is where the run's files and CLI session are, for a continuation.
+	// Box is where the run's files and harness session are, for a continuation.
 	Box DeepBox
 	// Files are what the run left in its outbox, at most
 	// [wire.DeliveredFilesPerRun], each at most [wire.FileMaxBytes].
@@ -124,7 +124,7 @@ type DeepOutcome struct {
 	InputTokens, OutputTokens int
 }
 
-// DeepBox is a run's box and its CLI session: everything a continuation
+// DeepBox is a run's box and its harness session: everything a continuation
 // needs, persisted on the parked turn.
 type DeepBox struct {
 	Placement string `json:"placement"`

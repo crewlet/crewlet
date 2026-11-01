@@ -93,10 +93,20 @@ type native struct {
 	pages  *doclet.Store
 	chat   *chatlet.Store
 
-	// trackerReader, pageReader and chatReader are the read paths.
+	// trackerReader, pageReader and chatReader are the read paths, each nil
+	// where the company keeps that surface somewhere else.
 	trackerReader *worklet.Reader
 	pageReader    *doclet.Reader
 	chatReader    *chatlet.Reader
+
+	// trackerFiles reads the tracker's rows that name objects, on every
+	// company, whatever its tracker: the tracker's log is the core's and is
+	// applied on every data node whatever `tracker.backend` says, so a
+	// company that moved off Worklet still holds the file rows it wrote
+	// there, and the object store's passes must still read them
+	// ([native.objectEstates]). It is trackerReader where the company runs
+	// Worklet, never a second reader beside it.
+	trackerFiles *worklet.Reader
 
 	// chatIndex is the chat corpus's own keyword index, separate from
 	// [native.indexer] for the reason ADR-0071 gives: chat is in neither
@@ -196,8 +206,20 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}()
 
 	var err error
+	// THE TRACKER'S FILE ROWS ARE READ ON EVERY COMPANY, through the domain's
+	// own read authority, because its log runs whatever this company's tracker
+	// is (above): a company on Jira that once ran Worklet still holds the rows
+	// naming its project files, and the object store's collector, its audit and
+	// `crewlet objects migrate` must read them, or they would read those
+	// objects as nobody's.
+	running := sl.Domain(worklet.Domain{}.Name())
+	if running != nil {
+		if n.trackerFiles, err = worklet.NewReader(
+			sl.estate().Reader(), running.reader); err != nil {
+			return fmt.Errorf("engine: the tracker's file rows: %w", err)
+		}
+	}
 	if runTracker {
-		running := sl.Domain(worklet.Domain{}.Name())
 		if running == nil {
 			return fmt.Errorf("engine: this node runs no tracker domain, so " +
 				"Worklet has nowhere to write; the domain is in the register " +
@@ -244,11 +266,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// a level served: the refusal ladder, the coverage probe and the
 		// barrier a linearizable read waits through. Built beside the
 		// runner rather than here, because the health it refuses on is
-		// the same one seat admission reads.
-		if n.trackerReader, err = worklet.NewReader(
-			sl.estate().Reader(), running.reader); err != nil {
-			return fmt.Errorf("engine: Worklet reader: %w", err)
-		}
+		// the same one seat admission reads. The one reader the file rows
+		// are read through too.
+		n.trackerReader = n.trackerFiles
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
@@ -447,15 +467,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 // consumer declaring a table in a new domain fails the build here rather
 // than leaving the passes unstarted in production.
 //
-// THE TRACKER'S ALONE, because it is the only domain whose rows name an object
-// — a project's file row. Chat's do not: a message LINKS a file rather than
-// holding one, so no row of chat's ever pins an object, and the knowledge
-// base's pages carry their bodies whole.
+// THE TRACKER'S ALONE, because it is the only domain of this runtime whose rows
+// name an object — a project's file row. Chat's do not: a message LINKS a file
+// rather than holding one, so no row of chat's ever pins an object, and the
+// knowledge base's pages carry their bodies whole.
+//
+// WHATEVER THE COMPANY'S TRACKER ([native.trackerFiles]). It used to be offered
+// only where the company ran Worklet, and the collector starts only with every
+// declared table's estate, so on a company whose tracker was Jira or none no
+// collection or audit ever ran — not over the artifacts' objects nor Ask
+// Crewlet's files either, whose logs every data node runs — and `crewlet
+// objects migrate` refused, saying the node held no copy of the records.
 func (n *native) objectEstates() []collect.Estate {
-	if n.trackerReader == nil {
+	if n.trackerFiles == nil {
 		return nil
 	}
-	return []collect.Estate{worklet.ObjectEstate{Reader: n.trackerReader}}
+	return []collect.Estate{worklet.ObjectEstate{Reader: n.trackerFiles}}
 }
 
 // startNativeFor brings the native halves up for the first company an APPLY
@@ -520,9 +547,10 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 
 // startNativeCollector starts the object store's collector duty on this data
 // node: it deletes objects no row names and audits what the store has lost,
-// both against the files the tracker's rows name — without a tracker there are
-// no files, and nothing to collect against. ONE CALL FOR BOTH CALLERS, [New]
-// and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
+// both against every declared table that names one — the tracker's files, the
+// artifacts' versions and assets and Ask Crewlet's files — on every company,
+// whatever its tracker ([native.objectEstates]). ONE CALL FOR BOTH CALLERS,
+// [New] and [Engine.startNativeFor], for [Engine.startNativeDuties]'s reason.
 //
 // # Only where the mode publishes
 //

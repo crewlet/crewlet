@@ -230,7 +230,7 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 // the instant they are swapped in, so swapped here — as they were — every
 // pass ran on the revision's models before the revision's configured
 // credential bundles were restored ([Company.restoreBundles]), so a pass on a
-// cli-agent entry the revision signs in from its bundle ran signed out — and a
+// harness entry the revision signs in from its bundle ran signed out — and a
 // revision a later stage refused left its workers behind the epoch that stayed
 // current. The apply swaps them once nothing can refuse the revision and its
 // bundles are in place.

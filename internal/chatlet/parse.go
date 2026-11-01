@@ -154,7 +154,7 @@ func (p *Parser) Source() string { return Source }
 // the roster the company has now, so a seat that has since been removed is
 // dropped and the lead the record named is offered again. And a record from a
 // NEWER BUILD may name more seats than this build's caps allow — a wake set is
-// SPENT rather than kept like a row, and starting a coding run in a box for
+// SPENT rather than kept like a row, and launching an executor in a box for
 // each of two hundred seats a record named is not something an older build
 // has to agree to.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) (

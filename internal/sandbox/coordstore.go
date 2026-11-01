@@ -129,10 +129,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
 	// And the job's own record starts here: the instant the launch exists
-	// is the instant its phase began, and a previous job's record — its
-	// start, its iteration, whether its phase was published — is not this
-	// one's. Only the model, the entry it runs on, the sign-in it was handed
-	// and why it follows the job before it are the caller's.
+	// is the instant it began, and a previous job's record — its start, its
+	// iteration, whether its record was published — is not this one's. Only
+	// the model, the entry it runs on, the sign-in it was handed and why it
+	// follows the job before it are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey, SignInID: run.Launch.SignInID,
 		FollowUp: run.Launch.FollowUp}
@@ -176,7 +176,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // neither.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so does the box reference — its id, its cell, its CLI and its
+// row's, and so does the box reference — its id, its cell, its harness and its
 // host ([PendingRun.LaunchNode]), as one — until the launch attaches a box of
 // its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
 // launch as [PendingRun.Prior], which decides whether the new job continues in
@@ -294,9 +294,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// THE TURN'S NOTES ARE THE TURN'S, not the job's: every note, read
 		// or waiting, and their numbering stay, and so does the seat anchor
 		// — written here only where the record has none. What is the job's
-		// is whether its CLI asked for them ([RunSteer.Pulled]), which a new
+		// is whether its harness asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
-		// write that names it, so its CLI can never take them again — and
+		// write that names it, so its harness can never take them again — and
 		// the box's, if the launch hands any, filed after them.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {

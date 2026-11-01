@@ -468,7 +468,7 @@ func TestAPreviewReadsTheSeatWithoutItsCalls(t *testing.T) {
 	}
 }
 
-// AN ANSWER TO A CODING RUN IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
+// AN ANSWER TO AN EXECUTOR IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
 // run that moved on to another question since the proposal was drafted is
 // refused before anybody approves an answer to a question it no longer asks,
 // and so is a choice its question does not offer; an offered choice is shown
@@ -480,7 +480,7 @@ func TestARunsAnswerIsPreviewedAgainstItsQuestion(t *testing.T) {
 	read := reader(assistanttest.World())
 	var tool catalog.Tool
 	for _, one := range catalog.Tools() {
-		if one.Name == "answer_coding_run" {
+		if one.Name == "answer_executor" {
 			tool = one
 		}
 	}

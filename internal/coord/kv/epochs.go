@@ -22,14 +22,14 @@ import (
 // and a single node has nobody to fence against, so its leases are an
 // in-process table (internal/coord/memory) that re-claims everything at boot.
 // The COUNTER answers "is this writer older than the one that wrote this row",
-// and the rows that question is asked of are the fleet store's (a sandbox
-// run's owner_epoch above all), which outlive the process on one node exactly
-// as they do on four. A counter kept beside the in-process leases restarted at
-// 1 on every boot while those rows still carried the token minted before it,
-// so after an ordinary graceful restart the seat's new holder was refused as
-// OLDER than its own previous self on every run it had parked: an answer to a
-// parked run was never recorded, and a run's resume, completion and reap were
-// refused the same way.
+// and the rows that question is asked of are the fleet store's (the owner_epoch
+// on an executor's row above all), which outlive the process on one node
+// exactly as they do on four. A counter kept beside the in-process leases
+// restarted at 1 on every boot while those rows still carried the token minted
+// before it, so after an ordinary graceful restart the seat's new holder was
+// refused as OLDER than its own previous self on every run it had parked: an
+// answer to a parked run was never recorded, and a run's resume, completion
+// and reap were refused the same way.
 //
 // So the counter is one thing with one home, opened by the KV lease [Store]
 // for its own claims and handed to the in-process leases by the engine on a
@@ -140,11 +140,12 @@ func (e *Epochs) Next(ctx context.Context, resource string) (int64, error) {
 // FOR A TOKEN THE COUNTER DID NOT MINT, or minted and lost: a record that
 // carries an epoch from before the counter knew of it. Two things produce one.
 // A deployment whose counter lived in its process (local coordination before
-// it minted from this bucket) left its sandbox runs stamped with tokens this
-// bucket never held. And the remedy every retention mismatch names, deleting a
-// bucket while the fleet is down so the next boot re-creates it, empties this
-// one under rows that keep their tokens. Either way the seat's next holder
-// would be older than its own rows, and refused on every one of them.
+// it minted from this bucket) left its executors' rows stamped with tokens
+// this bucket never held. And the remedy every retention mismatch names,
+// deleting a bucket while the fleet is down so the next boot re-creates it,
+// empties this one under rows that keep their tokens. Either way the seat's
+// next holder would be older than its own rows, and refused on every one of
+// them.
 func (e *Epochs) Floor(ctx context.Context, resource string, floor int64) (bool, error) {
 	key := encodeResource(resource)
 

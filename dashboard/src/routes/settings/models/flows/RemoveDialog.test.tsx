@@ -65,7 +65,7 @@ function open(assistantWebDenied: boolean) {
     entries: [
       apiKeyEntry({ key: "sonnet" }),
       apiKeyEntry({ key: "big" }),
-      apiKeyEntry({ key: "default", agent: "codex" }),
+      apiKeyEntry({ key: "default", harness: "codex" }),
     ],
     doc: modelsDoc(assistantWebDenied ? { big: { overrides: { web_tools: "denied" } } } : {}),
     seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],

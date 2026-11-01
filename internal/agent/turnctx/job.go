@@ -2,12 +2,12 @@ package turnctx
 
 import "context"
 
-// jobKey carries the coding run's job a bridged call is made from.
+// jobKey carries the launch a bridged call is made from.
 type jobKey struct{}
 
-// WithJob is ctx naming the JOB a call is made from: the launch id of the
-// coding run whose bridge session serves the call (internal/api/mcpbridge sets
-// it on every bridged call of a session, from the session's own job).
+// WithJob is ctx naming the JOB a call is made from: the id of the launch
+// whose bridge session serves the call (internal/api/mcpbridge sets it on
+// every bridged call of a session, from the session's own job).
 //
 // A JOB AND NOT ONLY A RUN, because a run is launched again (a reviewer's send
 // back, an answer's fresh run) under the same run id, and a write a call makes
@@ -17,7 +17,7 @@ func WithJob(ctx context.Context, launch string) context.Context {
 	return context.WithValue(ctx, jobKey{}, launch)
 }
 
-// JobOf is the job a call is made from, empty for a call no coding run made.
+// JobOf is the job a call is made from, empty for a call no executor made.
 func JobOf(ctx context.Context) string {
 	launch, _ := ctx.Value(jobKey{}).(string)
 	return launch

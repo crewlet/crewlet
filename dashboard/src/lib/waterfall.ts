@@ -12,8 +12,8 @@
  * EVERY INSTANT IS ONE THE ENGINE MEASURED, never a subtraction of two
  * publishers' arrival stamps. The tool loop times each round's model call
  * (`rounds[]`) and each tool call (`tool_executions[].started_at`,
- * `duration_ms`) where the call is made; a phase and a coding run carry their
- * own `started_at` and `duration_ms`; the prefetch its own. What this model
+ * `duration_ms`) where the call is made; a phase and an executor's launch
+ * carry their own `started_at` and `duration_ms`; the prefetch its own. What this model
  * adds is arrangement:
  *
  *  - the TURN from its opening record to its last span (or now, while it runs);
@@ -32,26 +32,26 @@
  *  - a delegate's WORKERS and the round-cap JUDGE under the round whose call
  *    spawned them (`host_round`), or under their phase where the record does
  *    not say which round;
- *  - each detached CODING RUN as its own span, keyed by its `launch_id` — two
- *    launches in one turn are two spans — from its announcement to its
- *    published record, or to now while it is still out;
+ *  - each LAUNCH of the executor in its box as its own span, keyed by its
+ *    `launch_id` — two launches in one turn are two spans — from its
+ *    announcement to its published record, or to now while it is still out;
  *  - the REFLECTION pass after the last phase, with what each of its workers
  *    spent — one span per `auxiliary_spend` record of the `reflection` stage,
  *    from its first call to its last;
  *  - "review pending" between an executor that finished and a reviewer that
  *    has not started, while the turn runs.
  *
- * A TURN THAT PARKED ON A CODING RUN IS ONE TURN: its executor publishes one
- * record when the run is collected, carrying the run as its one round — from
- * the launch to the collection, with the run's calls at their own instants
- * inside it — so the phase spans the run it waited on and the run sits beside
- * it.
+ * A TURN THAT PARKED ON ITS EXECUTOR IS ONE TURN: its executor publishes one
+ * record when its launch is collected, carrying the launch as its one round —
+ * from the launch to the collection, with the calls the executor made at their
+ * own instants inside it — so the phase spans the launch it waited on and the
+ * launch sits beside it.
  *
  * # What cannot be placed is still shown
  *
  * A call whose arguments did not parse was answered rather than run, so it
- * carries no instants — unlike an executor run's calls, which ran inside its
- * CLI's own loop and are timed at the bridge they were made over. Such a call
+ * carries no instants — unlike the calls an executor makes in its box, which
+ * ran inside its CLI's own loop and are timed at the bridge they were made over. Such a call
  * is an UNTIMED row — listed under the waterfall as "not placed on this
  * clock" — rather than a bar drawn at an invented position, or dropped. The
  * list says PLACED rather than timed because a call can be measured and
@@ -106,7 +106,7 @@ export interface Span {
   /** The CLI run's ordinal, for an invocation span — and for a model span, the
    *  run that made the round, where the record names one; 0 otherwise. */
   invocation: number;
-  /** The coding run's job, for a run span; "" otherwise. */
+  /** The launch, for a launch's span; "" otherwise. */
   launchId: string;
   /** A tool call placed from its duration rather than stamped by the engine. */
   placed: boolean;
@@ -135,13 +135,13 @@ export interface Waterfall {
 export interface WaterfallInput {
   /** The turn's own events, in any order. */
   events: readonly EventRecord[];
-  /** Every phase record in hand, workers and coding runs included. */
+  /** Every phase record in hand, workers and launches included. */
   phases: readonly PhaseRecord[];
   /** The instant open spans end at. */
   now: number;
-  /** The turn is still running — a phase in flight, or parked on a run. */
+  /** The turn is still running — a phase in flight, or parked on its executor. */
   running: boolean;
-  /** The turn is parked on a detached coding run. */
+  /** The turn is parked while its executor runs in its box. */
   parked: boolean;
 }
 
@@ -517,7 +517,7 @@ function flattenUntimed(n: Node, out: Untimed[]) {
   for (const c of n.children) flattenUntimed(c, out);
 }
 
-/** The coding runs this turn launched, one span per job. */
+/** The executor's launches this turn made, one span per launch. */
 function runNodes(
   events: readonly EventRecord[],
   records: readonly PhaseRecord[],
@@ -527,8 +527,8 @@ function runNodes(
 ): Node[] {
   const out: Node[] = [];
   const seen = new Set<string>();
-  // HOW A RUN WITH NO RECORD ENDED: lost, or stopped by a person — which ends
-  // its span as surely and is never drawn as a failure.
+  // HOW A LAUNCH WITH NO RECORD ENDED: lost, or stopped by a person — which
+  // ends its span as surely and is never drawn as a failure.
   const endings = events
     .filter((e) => e.type === "executor_failed" || e.type === "executor_stopped")
     .map((e) => ({ at: at(e.timestamp), failed: e.type === "executor_failed" }))
@@ -542,7 +542,7 @@ function runNodes(
     const launch = str(p.launch_id);
     const record = launch ? records.find((r) => r.launchId === launch) : undefined;
     const id = `run:${launch || ev.id}`;
-    const label = "Coding run";
+    const label = "Launch";
     const sub = str(p.coding_agent);
     if (record) {
       seen.add(record.key);
@@ -552,7 +552,7 @@ function runNodes(
       return;
     }
     const start = at(str(p.started_at)) || at(ev.timestamp);
-    // A RUN WITH NO RECORD YET is still out, or it ended without one: its
+    // A LAUNCH WITH NO RECORD YET is still out, or it ended without one: its
     // ending is the first `executor_failed` or `executor_stopped` after
     // its start and before the next one.
     const next = starts[i + 1] ? at(starts[i + 1]!.timestamp) : Infinity;
@@ -590,14 +590,13 @@ function runNodes(
     }
   });
   // A RECORD WITH NO ANNOUNCEMENT in hand — its start fell out of a capped
-  // read — is still a run, drawn from its own clock.
+  // read — is still a launch, drawn from its own clock.
   for (const r of records) {
     if (seen.has(r.key)) continue;
     const id = `run:${r.launchId || r.key}`;
     const node = recordRun(r, id);
     if (node) out.push(node);
-    else
-      untimed.push({ id, kind: "run", label: "Coding run", sub: r.codingAgent, phaseKey: r.key });
+    else untimed.push({ id, kind: "run", label: "Launch", sub: r.codingAgent, phaseKey: r.key });
   }
   return out;
 }
@@ -609,7 +608,7 @@ function recordRun(r: PhaseRecord, id: string): Node | null {
     span: span({
       id,
       kind: "run",
-      label: "Coding run",
+      label: "Launch",
       sub: r.codingAgent,
       start,
       end: start + r.durationMs,
@@ -636,8 +635,10 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
   const top: Node[] = [];
 
   const workers = phases.filter((p) => p.hostPhase);
-  const runs = phases.filter((p) => p.phase === "sandbox" && !p.hostPhase);
-  const own = phases.filter((p) => !p.hostPhase && p.phase !== "sandbox");
+  // THE LAUNCHES ARE RECORDS OF THEIR OWN: each launch of the executor in its
+  // box is collected off it as one, and the phases are everything else.
+  const runs = phases.filter((p) => p.launch);
+  const own = phases.filter((p) => !p.hostPhase && !p.launch);
   // THE REFLECTION WORKERS ARE THEIR SPEND RECORDS. No phase record ever
   // carried a reflection worker — the `auxiliary` phase this lane was drawn
   // from had no producer, so the lane only ever held its sentinel — and what
@@ -733,7 +734,7 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
   }
 
   // REVIEW PENDING: the executor has finished, nothing is in flight, and no
-  // reviewer has started — while the turn runs and is not waiting on a run.
+  // reviewer has started — while the turn runs and is not parked on its executor.
   if (running && !parked && !own.some((p) => p.live)) {
     const last = [...own].sort((a, b) => phaseBegan(b) - phaseBegan(a))[0];
     if (last && last.phase === "execute" && last.durationMs > 0) {

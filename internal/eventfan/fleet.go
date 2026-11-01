@@ -145,7 +145,7 @@ type TurnDetail struct {
 
 	// Nodes is every node that PUBLISHED any of this turn's events, sorted —
 	// where the turn RAN. More than one for a turn resumed on another node
-	// after a restart, or one whose seat moved while a coding run was out.
+	// after a restart, or one whose seat moved while its executor was out.
 	//
 	// READ OFF THE ROWS ([store.EventRecord.Node]), never off which node
 	// answered: a node without the `data` role keeps no event log, and the
@@ -588,8 +588,10 @@ func turnNodes(g gathered[turnPart]) []string {
 	return slices.Compact(nodes)
 }
 
-// Phases answers the company's phase records, newest first, payload included —
-// or one seat's, named by the id every node derives for its handle.
+// Phases answers the company's phase records — every phase's own, and every
+// collected launch of an executor's run ([store.EventLog.Phases]) — newest
+// first, payload included, or one seat's, named by the id every node derives
+// for its handle.
 func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)

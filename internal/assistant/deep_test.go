@@ -85,7 +85,7 @@ func offered(t *testing.T, f *assistanttest.Rig) []string {
 }
 
 // toolAnswer is the model's last reading of a call, by its id: the answer its
-// CLI was given over the tool session, or, for a call a turn parked on, the
+// harness was given over the tool session, or, for a call a turn parked on, the
 // answer the resumed run's conversation carries for it.
 func toolAnswer(f *assistanttest.Rig, id string) (llm.Message, bool) {
 	var out llm.Message
@@ -253,7 +253,7 @@ func TestADeliveredFileTheStoreDidNotKeepIsToldByItsCause(t *testing.T) {
 }
 
 // A PROPOSAL PARKS THE RUN AND THE APPROVAL CONTINUES IT, in the same box and
-// CLI session: the team redefinition. The run proposes a change and is told it
+// harness session: the team redefinition. The run proposes a change and is told it
 // waits; a further call is refused; the turn parks on the run's step with the
 // box kept; the person's approval resumes the turn, which continues the run
 // with the decision as its next message, and only the run's end answers the
@@ -709,7 +709,7 @@ func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
 }
 
 // NO HOST PATH OR RAW TOOL LINE REACHES A PERSON from deep work: a run whose
-// transcript names its box's paths, its CLI's tools and Crewlet's MCP tools,
+// transcript names its box's paths, its harness's tools and Crewlet's MCP tools,
 // and whose report says where it wrote a file, shows the person plain lines
 // (no "[tool]", no absolute path, no Crewlet call, which its nested steps
 // already list), and hands the model a report with every path cut to the file's

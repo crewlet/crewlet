@@ -27,7 +27,7 @@ import (
 // This backend talks to a service no test here can reach, so what is pinned
 // is THE WIRE: every request shape, every header, and the framing of the one
 // streaming call. A field spelled differently from what E2B expects fails
-// only against the real API, minutes into a coding run, with a message from
+// only against the real API, minutes into a launch, with a message from
 // the vendor rather than from us — so the assertions are written as "the
 // request carries X", not as "the method returns Y".
 
@@ -493,7 +493,7 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 }
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather
-// than every coding run: the API authenticates every call, including against
+// than every launch: the API authenticates every call, including against
 // a self-hosted cluster.
 func TestE2BRefusesToBuildWithoutAKey(t *testing.T) {
 	t.Parallel()
@@ -531,8 +531,8 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	}
 
 	body := stub.body("/sandboxes")
-	// THE TEMPLATE IS THE CODING AGENT'S. A bare box has no coding-agent
-	// CLI in it, so the run would fail at its first command with "command
+	// THE TEMPLATE IS THE HARNESS'S. A bare box has no harness
+	// harness in it, so the run would fail at its first command with "command
 	// not found" — a template problem that reads as a broken runner.
 	if body["templateID"] != "claude" {
 		t.Errorf("templateID = %v, want the claude-code template", body["templateID"])
@@ -615,7 +615,7 @@ func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
 	}
 }
 
-// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the coding agent's
+// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the harness's
 // own.
 //
 // There is no per-run template, and that is the point of the pair: sizing is a
@@ -742,7 +742,7 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 // A COMMAND IS FRAMED AS CONNECT AND RUN THROUGH A SHELL.
 //
 // Every caller hands over a shell line — pipes, redirects, `&&` — because
-// that is what a setup step and a coding-agent invocation are. envd's API
+// that is what a setup step and a harness invocation are. envd's API
 // takes an argv, so the shell has to be named.
 func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 	t.Parallel()
@@ -809,7 +809,7 @@ func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 //
 // This is the whole of "start and walk away": the process keeps running
 // because envd owns it, not because anything here is still listening. Reading
-// on would block the turn for the length of the coding run.
+// on would block the turn for the length of the job.
 func TestE2BStartBackgroundReturnsAtTheFirstFrame(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()

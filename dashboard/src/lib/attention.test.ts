@@ -4,8 +4,8 @@
  * The attention queue: what needs a person, in one list.
  *
  * Every condition here was already known to the previous dashboard and each
- * lived in a different screen — a paused coding run was a badge on the board
- * (and a run whose box had been reclaimed appeared NOWHERE), a stopped seat was
+ * lived in a different screen — a paused executor was a badge on the board
+ * (and one whose box had been reclaimed appeared NOWHERE), a stopped seat was
  * a card among the healthy ones, a refusing budget was a bar on one seat's
  * page, and an engine with no active configuration was a line in a popover.
  */
@@ -120,9 +120,9 @@ describe("what it surfaces", () => {
   test("a run paused on a question carries the question", () => {
     const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    // THE RUN'S OWN ADDRESS. It was `#/live/runs?run=`, a query key the
-    // runs screen stopped reading when a run became an object.
-    expect(items[0]?.path).toEqual(["live", "runs", "t1"]);
+    // THE RUN'S OWN ADDRESS. It was a `?run=` query on the board's list, a
+    // query key the board stopped reading when a run became an object.
+    expect(items[0]?.path).toEqual(["live", "executors", "t1"]);
   });
 
   // WHEN IT PARKED, never when it started: this row is about how long

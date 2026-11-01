@@ -41,8 +41,8 @@ const staleTextBudget = 40 << 10
 
 func filesParam(patch bool) map[string]any {
 	desc := "Files by published path, each `{content}` (with `encoding`: `text`, the " +
-		"default, or `base64`), `{from_sandbox: \"dist/app.js\"}` (a file your coding run " +
-		"wrote in this turn, relative to its workspace), `{from_project_file: {project, " +
+		"default, or `base64`), `{from_sandbox: \"dist/app.js\"}` (a file written in this " +
+		"turn's box, relative to its workspace), `{from_project_file: {project, " +
 		"path}}` or `{from_brand: \"logo.primary\"}` (a logo or typeface of your company's " +
 		"adopted brand, copied in; " + CompanyBrandTool + " gives each ready to paste). Inline " +
 		"content is at most 1 MiB in all."
@@ -58,8 +58,8 @@ func sourceParam() map[string]any {
 		"properties": map[string]any{
 			"sandbox": map[string]any{
 				"type": "string",
-				"description": "A directory your coding run built into in this turn, " +
-					"relative to its workspace (e.g. `dist`): its files become the whole " +
+				"description": "A directory built into in this turn's box, relative to " +
+					"its workspace (e.g. `dist`): its files become the whole " +
 					"file set, each at its path below the directory.",
 			},
 		},
@@ -711,7 +711,7 @@ func (t *publishArtifact) Description() string {
 		"somebody else made since is refused and hands you that version to merge onto. " +
 		"Prefer `edits` (exact old_str and new_str pairs) for a change to an existing " +
 		"page; `content` replaces the entry page whole; `files` adds, replaces or " +
-		"removes files; `source` publishes a build's whole output from your coding run; " +
+		"removes files; `source` publishes a build's whole output from this turn's box; " +
 		"`restore_version` rolls back. When your company has a brand, read " +
 		CompanyBrandTool + " before writing slides, logos or typefaces. Publishing reaches " +
 		"nobody by itself: send the `url` to whoever is waiting."

@@ -328,7 +328,7 @@ opened again.
 
 This is the axis where an agent company differs most from a human one, and it
 is worth stating plainly: **a person in a busy room reads passively, and an
-agent has no passive read**. Every delivery is the seat's own coding run in a
+agent has no passive read**. Every delivery is the seat's own executor in a
 [box](code-sandbox.md), which pays the CLI's whole harness even to decide the
 message was not for it, so "everyone sees everything" — which is free in a
 human chat product — is a company that does nothing but read chat.
@@ -346,8 +346,8 @@ So a message wakes:
 
 `@channel` wakes at most 32 agents, as many as one message may name, and the
 channel says so when it truncated, rather than quietly waking fewer than the
-gesture implied. That cap and the seats it reaches, each running one coding
-run at a time, are what bound a broadcast's boxes: `node.max_concurrent`
+gesture implied. That cap and the seats it reaches, each running its executor
+on one turn at a time, are what bound a broadcast's boxes: `node.max_concurrent`
 holds a wake only while it launches and while its run is collected and
 reviewed ([Scaling](scaling.md#where-the-constants-come-from)).
 

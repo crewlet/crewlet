@@ -1,12 +1,12 @@
 /**
- * Where a model's coding runs happen, as three cards in the CLI step's shape:
+ * Where a model's executors run, as three cards in the CLI step's shape:
  * each place's glyph and name, one line saying what it is, and two facts,
  * whether the fleet can start one there and how isolated it is. The company
  * default is tagged; a place no node can use is unavailable, its Ready fact
  * saying why and what fixes it (N5).
  *
- * THE FLEET ANSWERS, NOT THIS NODE (`llm_runners`): a seat's run starts on
- * whichever node holds the seat, so a place ready on some nodes and not on
+ * THE FLEET ANSWERS, NOT THIS NODE (`llm_runners`): a seat's executor launches
+ * from whichever node holds the seat, so a place ready on some nodes and not on
  * others is offered, and says which.
  */
 
@@ -144,7 +144,7 @@ export function WhereItRuns({
   return (
     <div className="models-stack">
       <ChoiceCards
-        label="Where coding runs happen"
+        label="Where executors run"
         minCardWidth="sm"
         density="compact"
         options={options}

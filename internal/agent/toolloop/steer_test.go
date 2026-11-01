@@ -216,7 +216,7 @@ func TestASteerNeverSplitsAResponseFromItsCalls(t *testing.T) {
 		t.Errorf("the surface ran %v, want both calls of the response", got)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after the note ended its run", late)
+		t.Errorf("the harness asked its model %d time(s) after the note ended its run", late)
 	}
 	seen := prov.Seen()
 	if len(seen) != 2 {
@@ -231,7 +231,7 @@ func TestASteerNeverSplitsAResponseFromItsCalls(t *testing.T) {
 	answered(t, res.Messages, "the note")
 }
 
-// A NOTE WAITS FOR EVERY CALL IN FLIGHT. A CLI that runs a response's calls at
+// A NOTE WAITS FOR EVERY CALL IN FLIGHT. A harness that runs a response's calls at
 // once has them all out when a note arrives during one: the run ends once the
 // last of them is answered — not at the first — and the next run reads every
 // result, then the note.
@@ -264,7 +264,7 @@ func TestANoteDuringParallelCallsWaitsForEveryCallInFlight(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after the note ended its run", late)
+		t.Errorf("the harness asked its model %d time(s) after the note ended its run", late)
 	}
 	seen := prov.Seen()
 	if len(seen) != 2 {

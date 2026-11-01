@@ -9,16 +9,16 @@
  *  - RUNNING TURNS: one `LiveTurnRow` per seat the engine says is working —
  *    the row Home draws, with where the turn is, how long it has run, the call
  *    it is making and whether it has stopped moving;
- *  - WAITING ON A PERSON: every coding run parked on a question, with who it
+ *  - WAITING ON A PERSON: every executor parked on a question, with who it
  *    asks, how long it has waited and how long its box is still held, and an
- *    Answer that sends the reply by the run's turn;
- *  - IN A BOX: the rest of the detached coding runs in flight;
+ *    Answer that sends the reply by the executor's turn;
+ *  - IN A BOX: the rest of the executors in flight;
  *  - ACTIVITY: the engine's own count of events over the window, and the
  *    latest few;
  *  - RECENT PHASES: the settled model calls, paged (`RecentPhases.tsx`).
  *
  * THE FIRST THREE ARE THE OVERVIEW and every signed-in reader is sent them —
- * a running turn's STATUS, and a coding run's, its body drawn as not shown
+ * a running turn's STATUS, and an executor's, its body drawn as not shown
  * where the engine withheld it. THE LAST TWO ARE THE COMPANY-WIDE TRAIL,
  * Admin's: for anybody else they are drawn locked and asked nothing, because
  * a feed the engine never pushes them reads as a quiet company.
@@ -30,9 +30,9 @@
  * # The two conditions whose home is here
  *
  * `lib/attention.ts` gives Live two subjects — a ROUND that has stopped moving
- * and a coding RUN parked on a question. Neither is a card of its own any
- * more: a quiet round is marked on its own running row, and a parked run is a
- * row of Waiting on a person, each beside what it is about rather than in a
+ * and an EXECUTOR parked on a question. Neither is a card of its own any
+ * more: a quiet round is marked on its own running row, and a parked executor
+ * is a row of Waiting on a person, each beside what it is about rather than in a
  * list of alarms that restated the rows around it.
  *
  * # One set of filters for the whole screen
@@ -73,7 +73,7 @@ import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
+import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -118,7 +118,7 @@ const STRIP_CELLS = 60;
 export const LATEST_EVENTS = 7;
 
 /**
- * How many coding runs In a box draws before it says how many more.
+ * How many executors In a box draws before it says how many more.
  *
  * EIGHT: a row is `--size-row-md` tall, so eight is a screenful rather than a
  * scroll. The set is not bounded by the seat count the way the running turns
@@ -127,7 +127,7 @@ export const LATEST_EVENTS = 7;
  */
 const IN_BOX_ROWS = 8;
 
-/** How often the durable coding-run rows are read again. */
+/** How often the executors' durable rows are read again. */
 const RUNS_POLL_MS = 30_000;
 
 /** How often a seat's own latest events are read again, when one is chosen. */
@@ -138,13 +138,19 @@ const SEAT_EVENTS_POLL_MS = 15_000;
  *
  * NOT `auxiliary`: no phase record carries it. The auxiliary model's spend is
  * an `auxiliary_spend` record, which is no phase and runs nothing live, so a
- * filter offering it matched no row and read as a quiet model.
+ * filter offering it matched no row and read as a quiet model. Nor is a launch
+ * of the executor a phase of its own: it is its round's work, filed and
+ * filtered as `execute`.
  */
-const PHASES = ["execute", "review", "onboarding", "sandbox", "subagent", "judge"] as const;
+const PHASES = ["execute", "review", "onboarding", "subagent", "judge"] as const;
 
-/** The phase a running turn is in, in the vocabulary the phase filter uses. */
+/**
+ * The phase a running turn is in, in the vocabulary the phase filter uses. A
+ * PARKED turn is in its executor's round — the executor, out in its box, is
+ * that round's work — so the filter that keeps `execute` keeps it.
+ */
 function runningPhase(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return "sandbox";
+  if (row.turn?.stage === "parked") return "execute";
   return row.live_call?.phase ?? row.current_phase ?? "context";
 }
 
@@ -217,8 +223,8 @@ export function LiveNow() {
     [agents],
   );
 
-  // --- coding runs -------------------------------------------------------
-  // THE DURABLE ROWS AND THE PUSH, folded by the Runs screen's own function:
+  // --- executors ---------------------------------------------------------
+  // THE DURABLE ROWS AND THE PUSH, folded by the Executors screen's own function:
   // the push is a reconcile behind a box that came up two seconds ago, the
   // store a poll behind it, and neither alone is "right now".
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
@@ -301,7 +307,7 @@ export function LiveNow() {
             placeholder="Every seat"
             active={seat !== ""}
           />
-          {/* A PICKER, like the seat beside it: seven phase chips wrapped to
+          {/* A PICKER, like the seat beside it: six phase chips wrapped to
               three rows on a phone, and this toolbar is sticky. */}
           <Select
             width="auto"
@@ -397,8 +403,8 @@ export function LiveNow() {
               <EmptyState
                 size="compact"
                 icon={<CircleQuestionMarkGlyph size={32} />}
-                title="No run is waiting on anybody"
-                description="Runs that need an answer appear here."
+                title="No executor is waiting on anybody"
+                description="Executors that need an answer appear here."
               />
             )}
           </Card>
@@ -410,8 +416,8 @@ export function LiveNow() {
               icon={<SquareTerminalGlyph size="sm" />}
               count={boxed.length}
               actions={
-                <a className="t-link" href={href(["live", "runs"])}>
-                  All runs
+                <a className="t-link" href={href(["live", "executors"])}>
+                  All executors
                 </a>
               }
             >
@@ -431,11 +437,11 @@ export function LiveNow() {
                   />
                 ))}
                 {/* WHAT IS NOT SHOWN, said: a list cut at eight with no note
-                    reads as a company with eight runs. */}
+                    reads as a company with eight executors in flight. */}
                 {boxed.length > IN_BOX_ROWS && (
-                  <a className="list-row clickable" href={href(["live", "runs"])}>
+                  <a className="list-row clickable" href={href(["live", "executors"])}>
                     <span className="t-caption">
-                      {plural(boxed.length - IN_BOX_ROWS, "more run")} · all runs
+                      {plural(boxed.length - IN_BOX_ROWS, "more executor")} · all executors
                     </span>
                   </a>
                 )}
@@ -445,7 +451,7 @@ export function LiveNow() {
                 size="compact"
                 icon={<SquareTerminalGlyph size={32} />}
                 title="Nothing is running in a box"
-                description="Finished runs are on their turn’s trace."
+                description="What a finished one did is on its turn’s trace."
               />
             )}
           </Card>
@@ -580,7 +586,7 @@ export function stripOf(
   return [...buckets.entries()].map(([t, v]) => ({ t, v }));
 }
 
-/** One coding run in flight, as a row that opens it beside the list. */
+/** One executor in flight, as a row that opens it beside the list. */
 function InBoxRow({
   run,
   who,
@@ -593,7 +599,7 @@ function InBoxRow({
   onOpen: () => void;
 }) {
   return (
-    // A REAL LINK to the run's page, peeking on a plain click — the rule
+    // A REAL LINK to the executor's page, peeking on a plain click — the rule
     // every row in the product follows, written once in `peekClickHandler`.
     <a
       className="list-row clickable"

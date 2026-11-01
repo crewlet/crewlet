@@ -217,10 +217,11 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 func TestADrainKeepsTheEdgesOfTheRunsItCannotWaitFor(t *testing.T) {
 	t.Parallel()
 	// The sandbox bridge and the telemetry edge carry the tool calls and
-	// the spans of coding runs that started before the drain. A detached
-	// run outlives the turn that started it, so the drain never waits on
-	// one: refusing these shortens no drain and only breaks a run against
-	// the node still holding its bridge session and its receiver.
+	// the spans of executors launched before the drain. A detached
+	// executor outlives the turn that launched it, so the drain never
+	// waits on one: refusing these shortens no drain and only breaks a
+	// run against the node still holding its bridge session and its
+	// receiver.
 	a := drainingApp(t, true)
 	for _, req := range []struct{ method, path string }{
 		{http.MethodPost, "/mcp/run-token"},

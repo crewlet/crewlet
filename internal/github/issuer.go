@@ -84,7 +84,7 @@ const (
 	// carries one past its expiry.
 	ToolTokenLife = RenewBefore
 
-	// RunTokenLife is what a coding run's environment is given at launch.
+	// RunTokenLife is what an executor's environment is given at launch.
 	//
 	// FIFTY MINUTES, the most an hour-long token can promise while still
 	// letting the issuer hand one token to the launches of the next ten
@@ -118,7 +118,7 @@ var ErrSeatOff = errors.New("github: this agent is turned off on GitHub")
 //
 // ONE PER PROCESS, shared by everything that reads a seat's token: the
 // participant lookup on the inbound path ([SeatLookup]), a seat's tool
-// servers, a coding run's environment and the completion poll that keeps a
+// servers, an executor's environment and the completion poll that keeps a
 // long run's token current. Shared so that one installation costs one mint
 // an hour however many of those ask, and so a token minted for one is the
 // token the others are handed while it is good.

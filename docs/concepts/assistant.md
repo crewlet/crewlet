@@ -126,7 +126,7 @@ is a table ("Agents"), and one record is its values and the lists it holds
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
 | Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
-| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), coding runs, token spend and budgets, the company feed, artifacts shared with you |
+| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 
 **Answer in words.** Every part of a question is answered with the facts it
@@ -154,8 +154,8 @@ proposes its first step. It says what each proposal does before its card.
 
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
-pausing and resuming an agent, steering a running turn, answering a coding
-run's question, writing and editing knowledge pages, sharing or unsharing an
+pausing and resuming an agent, steering a running turn, answering an
+executor's question, writing and editing knowledge pages, sharing or unsharing an
 artifact, and in chat: posting in a room, replying in a thread, sending a
 direct message, editing your message or deleting a message, changing a room's
 topic, purpose, archive or members, and leaving a room. Each chat card names

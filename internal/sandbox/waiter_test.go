@@ -191,8 +191,8 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 		// row that carries one — and a write that dropped it would show.
 		// The unit of work likewise.
 		WorkItem: &rigItem, WorkKey: rigWorkKey,
-		// The model the launch pointed its agent at, which the run's own
-		// phase record is filed under.
+		// The model the launch pointed its agent at, which the launch's
+		// own record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
 	shape(&run)
@@ -560,7 +560,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 	}
 }
 
-// The engine imposes NO run-time limit on a coding job — the box is bounded
+// The engine imposes NO run-time limit on a launched job — the box is bounded
 // only by how long the engine can go without a heartbeat.
 func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	t.Parallel()

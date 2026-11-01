@@ -437,7 +437,7 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 // YOUR OWN ASKS NEED NO TRACKER (ADR-0033): a person kept off the tracker is
 // still asked things, may read the item an open ask names them on and post the
 // answer without it — so the list of what waits on them is theirs to read
-// whatever they hold. A parked coding run's question put to them is shown, and
+// whatever they hold. A parked executor's question put to them is shown, and
 // the task behind it, its seat's trail, is not, nor the entry its job was
 // launched on, which is an admin's.
 //

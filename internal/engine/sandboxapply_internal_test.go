@@ -406,7 +406,7 @@ name: Nimbus
 providers:
   llm:
     cc:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       run_in: e2b
       state_dir: %q
@@ -447,7 +447,7 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running coding job on the swe seat, as e itself
+// seedRunningRun records a running executor on the swe seat, as e itself
 // launched it — before a restart, say — in the direct cell: no command id, so
 // the job never reports itself done and every tick of the poll is a keepalive.
 //

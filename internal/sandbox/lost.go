@@ -166,9 +166,9 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		// job's does ([Coordinator.completeAdmitted]).
 		run.Collected = true
 		run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
-		run.Launch = c.publishPhase(ctx, run, result)
+		run.Launch = c.publishCollected(ctx, run, result)
 		if run.asked() {
-			// IT ASKED BEFORE IT WENT: the question was written and its CLI
+			// IT ASKED BEFORE IT WENT: the question was written and its harness
 			// was on its way out, so the run is parked on it as a job that
 			// finished asking is, and the answer carries it on.
 			return nil, c.park(ctx, run, result)
@@ -235,7 +235,8 @@ func (c *Coordinator) collectGivenUp(run PendingRun, cause error, now time.Time)
 	return run.Launch.CollectFailures+1 >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp
 }
 
-// lostNote is the job record's account of a lost job — see [runPhase].
+// lostNote is the launch record's account of a lost job — see
+// [collectedRecord].
 func lostNote(loss JobLoss) string {
 	return fmt.Sprintf("cut off before it finished, when %s", loss.Cause.Why())
 }

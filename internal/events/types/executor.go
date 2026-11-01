@@ -1,13 +1,14 @@
 package types
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// The executor in its box. Every agent seat's executor is its coding CLI's own
+// The executor in its box. Every agent seat's executor is its harness's own
 // run in a box (ADR-0066): the turn parks as soon as the executor is launched
 // and the seat stays busy until the completion signal arrives, so these events
 // are the only trace of work that outlives the turn that launched it — the
@@ -16,6 +17,7 @@ import (
 func init() {
 	events.Register[ExecutorLaunched]()
 	events.Register[ExecutorFinished]()
+	events.Register[ExecutorCollected]()
 	events.Register[ExecutorAsked]()
 	events.Register[ExecutorFailed]()
 	events.Register[ExecutorStopped]()
@@ -52,16 +54,15 @@ type ExecutorLaunched struct {
 	// panel can say which item a box is working on without joining back to
 	// a turn that may have parked days ago.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// Task is a short human-readable summary for the running-sandboxes panel;
+	// Task is a short human-readable summary for the Executors board;
 	// the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
 	// LaunchID names THIS JOB — the sandbox.PendingRun row's launch id,
 	// minted by the store — and StartedAt is when the store recorded the
 	// launch. A turn can launch more than one job, and these are what pair
-	// a start with the job's own `agent_phase_completed{phase: sandbox}`
-	// record (which carries the same id) and what a live-output request
-	// (`executor_tail`) names. Absent on an announcement whose row could not
-	// be read back.
+	// a start with the job's own [ExecutorCollected] record (which carries
+	// the same id) and what a live-output request (`executor_tail`) names.
+	// Absent on an announcement whose row could not be read back.
 	LaunchID  string    `json:"launch_id,omitempty"`
 	StartedAt time.Time `json:"started_at,omitzero"`
 }
@@ -76,7 +77,7 @@ func (e ExecutorLaunched) Role() string { return e.RoleName }
 // AgentID is the instance that launched the run.
 func (e ExecutorLaunched) AgentID() string { return e.Agent }
 
-// SummaryFor names the coding agent, which is the one thing distinguishing two
+// SummaryFor names the harness, which is the one thing distinguishing two
 // otherwise identical launches on the same seat.
 func (e ExecutorLaunched) SummaryFor(actor string) string {
 	return lead(actor, "launched its executor ("+e.CodingAgent+")")
@@ -128,6 +129,168 @@ func (e ExecutorFinished) SummaryFor(actor string) string {
 		return "Executor finished"
 	}
 	return actor + "'s executor finished"
+}
+
+// ExecutorCollected is ONE LAUNCH of an executor's run, as its collection read
+// it off the box: what the launch's harness spent and reported, what it delivered,
+// its account of what it did and, where it did not finish, why. Published by
+// the sandbox coordinator once per launch it collects — one that finished, one
+// that stopped to ask a person, one a person stopped, and one lost with its
+// host whose box could still be read — because every one of them spent what it
+// spent.
+//
+// # Not a phase
+//
+// The executor's PHASE is the turn's own `execute` record
+// ([AgentPhaseCompleted]), which the segment that resumes the turn publishes:
+// the launch and the answer as the one round the engine saw, the calls the run
+// made over the seat's bridge, the submission's decision — and no tokens,
+// because the engine made no model call for it. A launch is part of that
+// round's work, and a round can have several: an answer carries a parked run
+// on in a second launch, and a launch lost with its host is relaunched. This
+// record was once an `agent_phase_completed` with a phase word of its own, and
+// every reader had to stitch the two back together — the spend rollup folded
+// the word into the executor's band, the live projection kept it from moving
+// the turn, the dashboard drew it as a sibling of the executor that launched
+// it. Its own type says what it is, as [AuxiliarySpend]'s does, and nothing
+// that reads a phase has to know to step around it.
+//
+// # The executor's spend
+//
+// It is where the executor's tokens are: every reader of spend — the event
+// store's writer, the live projection's window — files it under the `execute`
+// phase, with the harness's own turns as its calls (tokens.LaunchCalls), so the
+// executor's band holds what its run cost however many launches the round
+// took.
+//
+// # Once
+//
+// For the reason the launch is charged once: its publish sits inside the part
+// of the collection that is retried, every reader counts it as spend, and a
+// second copy would be a second charge on every surface that shows one. The
+// launch's own record holds whether it went out
+// (internal/sandbox's LaunchRecord.Published).
+//
+// # A failure of its turn
+//
+// `failed` is the key a phase's record carries and means what it means there:
+// the store promotes it into the tag that marks the turn failed in the turn
+// list, and the live projection makes it the seat's `last_error`. A launch
+// that stopped to ask, was stopped by a person or was cut off by its host did
+// not fail — what happened is its Notes.
+type ExecutorCollected struct {
+	Agent    string `json:"agent_id"`
+	RoleName string `json:"role"`
+	TurnID   string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+	// Iteration is the executor round that launched it — the iteration of
+	// the `execute` record whose work this launch is — and LaunchID the
+	// job ([ExecutorLaunched.LaunchID]). A round can launch more than once,
+	// so a launch is (turn_id, iteration, launch_id).
+	Iteration int    `json:"iteration"`
+	LaunchID  string `json:"launch_id"`
+	// Model and ProviderKey are the member of the seat's executor chain the
+	// launch picked, as the launch recorded them: which a fallback makes
+	// other than the chain's head, and which entry's plan the run spent.
+	Model       string `json:"model"`
+	ProviderKey string `json:"provider_key"`
+	// CodingAgent is the harness the run ran as, and SandboxID the box.
+	CodingAgent string `json:"coding_agent"`
+	SandboxID   string `json:"sandbox_id"`
+	// Response is the report the launch wrote back: the words its harness ended
+	// on, secret-redacted.
+	Response string `json:"response"`
+	// ActivityTranscript is the launch's own account of what it did — what
+	// it said, its tool calls and what they ran, or its stderr where the harness
+	// streams nothing better. Secret-redacted, and held to the record's
+	// bound: a long one keeps its first 64 KiB and its last 192 KiB in whole
+	// lines, with a note line where its middle was. It is the whole
+	// observability surface of an agent that emits no telemetry of its own.
+	ActivityTranscript string `json:"activity_transcript,omitempty"`
+	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count
+	// what that bound left out of the transcript's middle — whole lines, and
+	// every byte not kept — so a screen can say the record is not the whole
+	// log without parsing the note. Zero on a transcript kept whole.
+	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
+	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
+	// The launch's tokens, as its harness reported them. TotalTokens is input
+	// plus output, and CacheReadTokens and CacheWriteTokens are a BREAKDOWN
+	// of InputTokens, never an addition to it — see
+	// [AgentPhaseCompleted.CacheReadTokens].
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	// CLITurns is how many model turns the launch's harness says its own loop
+	// took: the launch's provider calls, which the engine neither made nor
+	// timed. Absent where the harness reported none (OpenCode reports none) —
+	// the launch then counts as one call, the one the engine asked for. What
+	// every spend figure counts a launch's calls by is tokens.LaunchCalls.
+	CLITurns int `json:"cli_turns,omitempty"`
+	// CostUSD is what the launch's own harness said it billed: a subscription
+	// harness's spend never passes through the engine's token meter, so this is
+	// the one number that sees it.
+	CostUSD float64 `json:"cost_usd"`
+	// DeliveredRefs are the branches and pull requests the launch reported,
+	// read from its whole report — its `Delivered:` lines, or its
+	// pull-request URLs where it named none — deduplicated and listed up to
+	// a bound, and DeliveredRefsElided how many more it reported than that.
+	// Zero on a record that lists them all.
+	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
+	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
+	// StartedAt is when the store recorded the launch, and DurationMS how
+	// long it ran until this node collected it: the waiter's poll interval
+	// is inside it, and the coding itself is the rest. Absent where the
+	// launch's row held no instant.
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	DurationMS int       `json:"duration_ms"`
+	// WorkItem is the item the launching turn is charged to, absent when it
+	// is on nothing — see [AgentTurnStarted.WorkItem].
+	WorkItem        *WorkItem `json:"work_item,omitempty"`
+	ConversationKey string    `json:"conversation_key"`
+	// Notes is how a launch that did not fail ended without finishing: the
+	// question it stopped to ask, who stopped it, or what cut it off.
+	Notes string `json:"notes"`
+	// Failed, Error and ErrorKind are a launch that did not succeed, with its
+	// reason, redacted; the kind is `launch_failed`.
+	Failed    bool   `json:"failed"`
+	Error     string `json:"error"`
+	ErrorKind string `json:"error_kind"`
+}
+
+// EventType is the "executor_collected" wire type.
+func (ExecutorCollected) EventType() string { return "executor_collected" }
+
+// Role is the seat whose executor the launch was; its tokens are that seat's.
+func (e ExecutorCollected) Role() string { return e.RoleName }
+
+// AgentID is the instance whose executor the launch was.
+func (e ExecutorCollected) AgentID() string { return e.Agent }
+
+// SummaryFor names the harness and what the launch spent, or the kind of its
+// failure — the two things a feed row about a collected launch is read for.
+// Possessive, as [ExecutorFinished]'s is: the engine collected the launch, and
+// the seat did not do the collecting.
+func (e ExecutorCollected) SummaryFor(actor string) string {
+	who := "Executor"
+	if actor != "" {
+		who = actor + "'s executor"
+	}
+	agent := e.CodingAgent
+	if agent == "" {
+		agent = "?"
+	}
+	if e.Failed {
+		kind := e.ErrorKind
+		if kind == "" {
+			kind = "error"
+		}
+		return fmt.Sprintf("%s launch failed (%s, %s)", who, agent, kind)
+	}
+	return fmt.Sprintf("%s launch was collected (%s, %d tokens)", who, agent, e.TotalTokens)
 }
 
 // ExecutorAsked records an executor asking a person a question.
@@ -297,12 +460,12 @@ func (e ExecutorFailed) SummaryFor(actor string) string {
 	if reason == "" {
 		reason = "an unrecorded reason"
 	}
-	return lead(actor, "lost its executor's run to "+reason)
+	return lead(actor, "lost its executor's launch to "+reason)
 }
 
 // ExecutorStopped records an executor's run a PERSON ended: its seat was
 // paused with `stop_running` while the run was launching or running, and the
-// run was ended there rather than left to finish — its CLI killed with its box,
+// run was ended there rather than left to finish — its harness killed with its box,
 // its tool-bridge session closed, and what it had spent by then collected and
 // charged.
 //
@@ -368,8 +531,8 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 }
 
 // ExecutorAnswerGiven is the command an answer BY TURN puts on the seat's
-// control topic: a person answering a parked coding run's question by naming
-// the run, rather than by replying on the conversation it was asked in.
+// control topic: a person answering a parked executor's question by naming
+// its turn, rather than by replying on the conversation it was asked in.
 //
 // # Why a second way in
 //
@@ -389,7 +552,7 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 //
 // The control topic and not the inbox, because the answer is addressed to a
 // run, like the completion that topic was made for. The inbox is the seat's
-// mail: held for as long as any of the seat's coding runs holds the seat, and
+// mail: held for as long as any of the seat's executors holds the seat, and
 // worked oldest first after that. An answer that rode it waited behind every
 // job the seat took on and every message it had not got to, and on a busy
 // seat it never arrived. On the control topic it is recorded on arrival, and
@@ -460,7 +623,7 @@ type ExecutorAnswerGiven struct {
 	// REQUIRED. An answer naming no question cannot be told from one given
 	// against a question the run has since moved past, so the node holding
 	// the seat spends it without resuming the run (internal/sandbox's
-	// Coordinator.AnswerByTurn); `answer_run` stamps it off the row it
+	// Coordinator.AnswerByTurn); `answer_executor` stamps it off the row it
 	// checked, and the answer desk will not deliver one without it.
 	LaunchID string `json:"launch_id"`
 }
@@ -478,10 +641,10 @@ func (e ExecutorAnswerGiven) SummaryFor(actor string) string {
 	if who == "" {
 		who = actor
 	}
-	return lead(who, "answered a parked coding run")
+	return lead(who, "answered a parked executor")
 }
 
-// AnswerVia is the route an answer reached a parked coding run by.
+// AnswerVia is the route an answer reached a parked executor by.
 type AnswerVia string
 
 const (
@@ -497,7 +660,7 @@ const (
 // Valid reports whether v is one of the two routes.
 func (v AnswerVia) Valid() bool { return v == AnswerViaChat || v == AnswerViaOperator }
 
-// AnswerOutcome is what an answer that reached a parked coding run became.
+// AnswerOutcome is what an answer that reached a parked executor became.
 type AnswerOutcome string
 
 const (
@@ -521,7 +684,7 @@ const (
 
 	// AnswerUnoffered is an answer by turn whose choice is not an option of
 	// the question it names (ADR-0068): spent without being recorded, the
-	// question still waiting. `answer_run` checks the choice against the
+	// question still waiting. `answer_executor` checks the choice against the
 	// question before it delivers, so one arriving here names a question
 	// that is not the one the answer was checked against.
 	AnswerUnoffered AnswerOutcome = "unoffered"
@@ -536,7 +699,7 @@ func (o AnswerOutcome) Valid() bool {
 	return false
 }
 
-// ExecutorAnswered records what an answer to a parked coding run's question
+// ExecutorAnswered records what an answer to a parked executor's question
 // became, on either route.
 //
 // THE CHAT ROUTE LEFT NO RECORD. A person's reply that resumed a run was an
@@ -608,15 +771,15 @@ func (e ExecutorAnswered) AgentID() string { return e.Agent }
 func (e ExecutorAnswered) SummaryFor(actor string) string {
 	switch e.Outcome {
 	case AnswerResumed:
-		return lead(actor, "resumed a sandbox run with an answer")
+		return lead(actor, "resumed its executor with an answer")
 	case AnswerNotAwaiting:
-		return lead(actor, "was answered, but its sandbox run was not waiting")
+		return lead(actor, "was answered, but its executor was not waiting")
 	case AnswerGone:
-		return lead(actor, "was answered after its sandbox run had ended")
+		return lead(actor, "was answered after its executor had ended")
 	case AnswerDeclined:
-		return lead(actor, "was answered, but its sandbox run could not be resumed with the answer")
+		return lead(actor, "was answered, but its executor could not carry on with the answer")
 	case AnswerUnoffered:
-		return lead(actor, "was answered with a choice its sandbox run's question does not offer")
+		return lead(actor, "was answered with a choice its executor's question does not offer")
 	}
 	return lead(actor, "was answered")
 }

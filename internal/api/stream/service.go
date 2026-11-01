@@ -510,7 +510,7 @@ func (s *Service) RefreshPlacement() {
 // It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
 // that audience may receive (see [needs]), each SHAPED for it exactly as its
 // push is ([Shaped]): the seats' live calls masked to their status where the
-// audience may not read their trail, the coding runs likewise, and the org
+// audience may not read their trail, the executors likewise, and the org
 // tree in the variant the audience reads.
 //
 // The one read it makes is the seat leases ([Service.RefreshPlacement]),

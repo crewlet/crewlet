@@ -26,7 +26,7 @@ import (
 // for the operator catalogue, over the artifacts estate through the router (a
 // node without `data` acts through a data node), the node's one publish
 // pipeline, the running chart, the identity directory for whoever a turn is
-// acting for, and the coding run's box a publish reads.
+// acting for, and the executor's box a publish reads.
 
 // ArtifactToolDeps are the artifacts tools' dependencies on this node, or the
 // zero value (which serves none of them) where the node takes no artifact
@@ -159,14 +159,14 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 	return p, nil
 }
 
-// ---- the coding run's box ------------------------------------------------ //
+// ---- the executor's box -------------------------------------------------- //
 
-// artifactBoxes attaches the box of the coding run working in a turn, for a
+// artifactBoxes attaches the box of the executor working in a turn, for a
 // publish reading its build.
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
-// CLI's own run in that box, and every call that names a box source reaches
-// here from its CLI over the tool bridge — a worker it delegates to holds no
+// harness's own run in that box, and every call that names a box source reaches
+// here from its harness over the tool bridge — a worker it delegates to holds no
 // artifact write — while the run's record reads running: a collected run's
 // resumed segment calls no artifact tool (its reviewer holds one submission
 // tool, and the delivery check none). So a running record is the one a box is
@@ -191,7 +191,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 		return nil, builtin.ErrNoBox
 	case row.Status != sandbox.StatusRunning:
 		// NOT THE RUN WORKING IN IT: see [artifactBoxes].
-		return nil, fmt.Errorf("%w: the coding run is %s", builtin.ErrNoBox, row.Status)
+		return nil, fmt.Errorf("%w: the executor is %s", builtin.ErrNoBox, row.Status)
 	}
 	manager := rt.coordinator.Manager()
 	if manager == nil {
@@ -201,7 +201,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 		// ANOTHER NODE'S HOST: the seat moved since the run launched, and
 		// its box is a process tree or a container there, which only that
 		// node touches (internal/sandbox, boxhost.go).
-		return nil, fmt.Errorf("%w: the coding run's box is on node %s's host, and this turn "+
+		return nil, fmt.Errorf("%w: the executor's box is on node %s's host, and this turn "+
 			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
 	}
 	// ATTACHED, NEVER RECONNECTED: the job is working in the box, and a
@@ -352,7 +352,7 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 			// fault of this node. The check's own exit and nothing else: a
 			// check the box timed out, killed or couldn't run is the box's,
 			// never a path the caller named wrong.
-			return nil, fmt.Errorf("engine: %s is missing from the coding run's workspace, "+
+			return nil, fmt.Errorf("engine: %s is missing from the box's workspace, "+
 				"or %w", p, sandbox.ErrNotRegularFile)
 		default:
 			return nil, boxExited("check "+p, res)

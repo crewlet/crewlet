@@ -369,7 +369,7 @@ func readTools() []catalog.Tool {
 
 // paritySources are one company's sources every parity App shares: a live
 // projection, an event store and a usage estate, a company, a coordination
-// store, a tracker, a knowledge base, a work index, the coding runs, the
+// store, a tracker, a knowledge base, a work index, the executors, the
 // artifacts, the company's own chat and the configuration history, so EVERY
 // catalogue read's question is registered and its answer is the authority's
 // to give.
@@ -462,7 +462,7 @@ func (noWorkHits) Search(context.Context, worklet.SearchQuery) (worklet.SearchAn
 	return worklet.SearchAnswer{Hits: []worklet.Ranked{}}, nil
 }
 
-// noCodingRuns is a node running no coding run.
+// noCodingRuns is a node running no executor.
 type noCodingRuns struct{}
 
 func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {

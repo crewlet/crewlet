@@ -40,12 +40,12 @@ const draft = (patch: Partial<Draft> = {}): Draft => ({
 function view(patch: Partial<ModelView> & { raw: Record<string, unknown> }): ModelView {
   return {
     key: "sonnet",
-    agent: "claude-code",
+    harness: "claude-code",
     model: "sonnet",
     executor: true,
     entry: {
       key: "sonnet",
-      agent: "claude-code",
+      harness: "claude-code",
       model: "sonnet",
       health: "ready",
       sign_in: { route: "api-key", resolves: true },
@@ -73,7 +73,7 @@ describe("the entry", () => {
 
   test("an edit keeps the fields the wizard does not hold, and its other overrides", () => {
     const raw = {
-      agent: "claude-code",
+      harness: "claude-code",
       model: "sonnet",
       state_dir: "/var/crewlet/sonnet",
       overrides: { web_tools: "denied", api_key_env: "MY_KEY" },
@@ -113,7 +113,12 @@ describe("the entry", () => {
 
   test("OpenCode reads its provider's key from env and names its provider in the model", () => {
     const entity = entityOf(
-      draft({ agent: "opencode", provider: "openrouter", model: "qwen-coder", variable: "OR_KEY" }),
+      draft({
+        harness: "opencode",
+        provider: "openrouter",
+        model: "qwen-coder",
+        variable: "OR_KEY",
+      }),
     );
     expect(entity.model).toBe("openrouter/qwen-coder");
     expect(entity.auth).toBeUndefined();
@@ -123,10 +128,10 @@ describe("the entry", () => {
   test("an edit reads the method and the provider back from what is written", () => {
     const model = view({
       key: "open",
-      agent: "opencode",
+      harness: "opencode",
       model: "openrouter/qwen-coder",
       raw: {
-        agent: "opencode",
+        harness: "opencode",
         model: "openrouter/qwen-coder",
         env: { OPENROUTER_API_KEY: "${OR_KEY}" },
       },
@@ -156,7 +161,7 @@ describe("the secret's name", () => {
 
 describe("the next document", () => {
   const doc = {
-    providers: { llm: { default: { agent: "claude-code" }, zeta: { agent: "codex" } } },
+    providers: { llm: { default: { harness: "claude-code" }, zeta: { harness: "codex" } } },
     roles: [
       { handle: "qa", name: "QA", llm_review: ["default", "zeta"] },
       { handle: "pm", name: "PM" },
@@ -186,7 +191,7 @@ describe("problems", () => {
   test("each step's own problems, with the credential missing unless it is kept", () => {
     const d = draft({ key: "Backup Key", credential: "", model: "", timeout: "0" });
     const steps = draftProblems(d, []).map((p) => stepOf(p, d.key));
-    expect(steps).toEqual(["cli", "signin", "model", "limits"]);
+    expect(steps).toEqual(["harness", "signin", "model", "limits"]);
     const kept = draftProblems(draft({ credential: "" }), [], { credential: true, cloud: {} });
     expect(kept).toEqual([]);
   });

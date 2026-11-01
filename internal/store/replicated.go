@@ -372,3 +372,16 @@ func (r ReplicatedReader) Read(ctx context.Context, fn func(*sql.Tx) error) erro
 // value while none is open. A reader sizes its own statements by it, which is
 // why a read handle carries it.
 func (r ReplicatedReader) Caps() Capabilities { return r.h.Caps() }
+
+// ForeignMigrations is [DB.ForeignMigrations] on the replicated estate as it is
+// open now: the versions a newer build migrated this copy to before the node
+// was rolled back, whose tables this binary cannot read. It reads the ledger
+// and writes nothing, so a holder that only reads may ask it — the object
+// store's collector, before it calls an object nobody's.
+func (r ReplicatedReader) ForeignMigrations(ctx context.Context) ([]string, error) {
+	db, err := r.h.DB()
+	if err != nil {
+		return nil, err
+	}
+	return db.ForeignMigrations(ctx)
+}

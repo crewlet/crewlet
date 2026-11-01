@@ -317,7 +317,7 @@ func TestASetupFailureIsClassedByWhoseItIs(t *testing.T) {
 	}
 }
 
-// A CELL OR A CODING AGENT THE CATALOGUE DOES NOT HAVE is configuration: a
+// A CELL OR A HARNESS THE CATALOGUE DOES NOT HAVE is configuration: a
 // person's providers.sandbox, which no wait changes.
 func TestACatalogueGapIsConfiguration(t *testing.T) {
 	t.Parallel()

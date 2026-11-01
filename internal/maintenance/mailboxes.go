@@ -78,7 +78,7 @@ import (
 //     under its own owner before the mark and gives it back after the record
 //     is gone. A seat whose lease somebody else holds is not retired at all.
 //
-//   - A RETIREMENT ENDS THE SEAT'S CODING RUNS FIRST. A detached run belongs to
+//   - A RETIREMENT ENDS THE SEAT'S EXECUTORS FIRST. A detached run belongs to
 //     its seat, and a departed seat's runs are kept through the grace for the
 //     same reason its mail is: a seat made an agent's again within it comes
 //     back to its parked questions and running jobs. Once the grace has passed nothing can
@@ -120,7 +120,7 @@ const MailboxRetirementGrace = 24 * time.Hour
 // Thirty seconds: the work is a seat lease claim, two subscription deletes and
 // two conditional store writes, each a millisecond on a healthy broker and each
 // individually bounded by the client's five-second API timeout, so this covers
-// every one of them timing out with room to spare. A seat that left coding runs
+// every one of them timing out with room to spare. A seat that left executors
 // behind adds a box kill and a record delete per run; a retirement whose runs
 // do not all end inside the budget is undone and resumes on the next tick,
 // where the runs it already ended are gone. It is load-bearing for the
@@ -198,7 +198,7 @@ type SeatLeases interface {
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 }
 
-// SeatRunRetirer ends every detached coding run of a seat whose mailbox is
+// SeatRunRetirer ends every detached executor of a seat whose mailbox is
 // being retired, while the retirement holds the seat's lease under owner and
 // epoch.
 //
@@ -261,7 +261,7 @@ type MailboxOptions struct {
 	// Roster reads the active revision's agent seats. Required.
 	Roster SeatRoster
 
-	// Runs ends a retired seat's coding runs before its subscriptions are
+	// Runs ends a retired seat's executors before its subscriptions are
 	// deleted. Required, because there is no value that could mean "this
 	// node has nothing to end": whether a removed seat left runs behind is
 	// a fact about the fleet's run records, not about this node.
@@ -659,7 +659,7 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, clock sw
 
 // retire deletes a removed seat's subscriptions and then its record.
 //
-// Everything it acts on — the lease, the coding runs, the subscriptions, the
+// Everything it acts on — the lease, the executors, the subscriptions, the
 // record — is found by the seat's ID; the handle names the seat in what it says
 // and nowhere else, since a discovered record has none.
 func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock sweepClock) (bool, error) {
@@ -729,7 +729,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// completion, answer or resume can ever reach again.
 	if runsErr := m.runs(work, rec.Seat, rec.Handle, lease.Owner, lease.Epoch); runsErr != nil {
 		m.unmark(ctx, marked)
-		return false, fmt.Errorf("end the coding runs of retired seat %q: %w", handle, runsErr)
+		return false, fmt.Errorf("end the executor of retired seat %q: %w", handle, runsErr)
 	}
 	if deleteErr := m.deleteSubscriptions(work, rec.Seat, handle); deleteErr != nil {
 		m.unmark(ctx, marked)

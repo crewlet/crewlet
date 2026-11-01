@@ -101,7 +101,7 @@ func TraceOf(ctx context.Context) events.TraceContext {
 }
 
 // WithRemote restores a trace that arrived from somewhere else — an event off
-// the queue, a resumed sandbox run, an inbound `traceparent` — so the spans
+// the queue, an executor's record, an inbound `traceparent` — so the spans
 // opened beneath it become children of the span that caused them rather than
 // new roots.
 //

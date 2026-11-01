@@ -57,7 +57,7 @@ const (
 	// the hold — not the deferral's quiesce, which the seat host lifts on its
 	// next renew — is what keeps it there until the condition clears.
 	//
-	// NOT A PARK, which is what this used to be for a seat a sandbox run
+	// NOT A PARK, which is what this used to be for a seat an executor
 	// holds: a park REPUBLISHES onto the inbox the delivery came from, and
 	// with nothing stopping the consumer the copy was the next thing it
 	// fetched — a loop at broker speed for the length of the run.
@@ -86,7 +86,7 @@ const (
 	// when they resume it.
 	HoldSeatPaused Hold = "seat_paused"
 
-	// HoldSandbox is taken while one of the seat's detached coding runs
+	// HoldSandbox is taken while one of the seat's detached executors
 	// holds it, or a reply recorded as a parked run's answer is still owed
 	// the resume it drives — and lifted when neither is true. The sandbox
 	// coordinator takes and lifts it, at its own transitions (see
@@ -128,9 +128,9 @@ type Conditions struct {
 	// turn can run until a revision adds one.
 	TurnEngineReady bool
 
-	// SeatHeldBySandbox is whether a detached coding run HOLDS the seat, so
-	// it starts no new turn. Such a job can run for hours, far past any ack
-	// window.
+	// SeatHeldBySandbox is whether a detached executor HOLDS the seat, so
+	// it starts no new turn. An executor can work for hours, far past any
+	// ack window.
 	SeatHeldBySandbox bool
 
 	// SandboxAwaitsAnswer is whether one of the seat's detached runs stopped
@@ -272,7 +272,7 @@ func (s Screening) Result() queue.Result {
 //     requeuing without the pause loops them at whatever rate the broker will
 //     serve. The pause is the caller's to release, when a model arrives.
 //
-//  5. SEAT HELD BY A SANDBOX RUN. Hold and defer. The coordinator holds the
+//  5. SEAT HELD BY AN EXECUTOR. Hold and defer. The coordinator holds the
 //     seat's inbox for as long as a run holds the seat, so what reaches here
 //     raced that hold or found it refused: the hold is asked for again and
 //     the delivery waits at the head of the inbox, held, until the run stops
@@ -332,13 +332,13 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
 	case c.SeatHeldBySandbox:
-		// NOT OFFERED as an answer, even when another of the seat's runs
-		// waits for a person: the held seat receives nothing, and that
+		// NOT OFFERED as an answer, even when the seat's executor on another
+		// turn waits for a person: the held seat receives nothing, and that
 		// answer waits on the inbox with the rest of its mail — offered
-		// first when the run stops holding the seat. See sandbox.SeatHold.
+		// first when the executor stops holding the seat. See sandbox.SeatHold.
 		return Screening{
 			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
-			Reason: "a detached sandbox run holds the seat",
+			Reason: "the seat's executor holds it from its box",
 		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}

@@ -99,7 +99,7 @@ full before making a call: a seat's delivery parked until the window turns
 over, a person's `answer_knowledge` question refused, a reflection pass or a
 conversation entry's rewrites declined. Each is the gate's refusal, recorded as
 the window's `refused_at` on the scope a charge would have been refused by —
-the company's before the seat's — so a window that a coding run, a background
+the company's before the seat's — so a window that an executor's launch, a background
 pass or a person's answers filled says when it last turned work away rather
 than reading as one that has refused nothing.
 
@@ -180,7 +180,7 @@ screen folds a phase differently from the next:
 
 | Band | What spent it |
 |---|---|
-| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box, recorded from the box as the run's `sandbox` phase |
+| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box. What the run spent is recorded from the box once per launch (`executor_collected`), which names no phase and is filed here: the executor's own record carries no tokens |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
 | **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
@@ -212,14 +212,14 @@ Each call states its **stage** — whose cost it is — and its **purpose**:
 
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
-| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — an executor run's bridged tools and the condensing of a collected run's report or failure (`condense_report`, `condense_tool_error`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
+| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what its executor cost between two parts of the turn — the executor's bridged tools and the condensing of a collected launch's report or failure (`condense_report`, `condense_tool_error`) | the seat and the company | **yes** — what its executor cost between two parts of the turn is paid by the part that resumes from it |
 | `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`), and the probe of a model entry at its usage limit when it is tried again, one for every seat parked on it, charged to the parked seat it runs as (`provider_probe`) | the seat and the company (the company alone for a unit a person leads) | no, there is no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
 
 A compaction's purpose names what it rewrote — `condense_thread`,
 `condense_produced`, `condense_report` — so a rewrite of a chat thread and one
-of a coding run's report are told apart on every breakdown.
+of an executor's report are told apart on every breakdown.
 
 **A person is their own row.** What the auxiliary model spends for a person —
 their questions, or a pass resolved on the chain of a unit they lead — names no
@@ -238,10 +238,10 @@ learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
-phase's model rounds, a coding run's own turns as its CLI reported them (one
-per run where the CLI reports none, as OpenCode does), an auxiliary record's
-coalesced calls — never records. The executor's own record counts none, since
-its run's calls are the run's.
+phase's model rounds, an executor launch's own turns as its CLI reported them
+(one per launch where the CLI reports none, as OpenCode does), an auxiliary
+record's coalesced calls — never records. The executor's own record counts
+none, since its run's calls are its launches'.
 
 **What is not counted: embeddings.** The calls that turn text into vectors are
 metered by neither the counter nor the rollup: they run on the embeddings
@@ -303,7 +303,7 @@ usage at all is charged an estimate, four characters a token, which
 
 ## Tokens, never money
 
-The dashboard measures spend in tokens only. A price is reported only by a
-coding run — a seat's executor run, in its CLI's own figure — and by no
+The dashboard measures spend in tokens only. A price is reported only by an
+executor's launch — in its CLI's own figure — and by no
 call on this host, so a currency figure would leave out every reviewer,
 worker and auxiliary call while reading as the company's spend.

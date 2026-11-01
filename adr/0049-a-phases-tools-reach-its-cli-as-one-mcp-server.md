@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/toolloop`
-- **Enforced-by:** `internal/providers/llm/cliagent.TestNoRequestRendersAToolCatalogue`, `internal/agent/toolloop.TestAClosedFenceStopsTheNextCall`, `internal/agent/toolloop.TestARefusedSpendRunsNoFurtherCall`, `internal/agent/toolloop.TestTheRoundBudgetEndsTheRunAfterItsLastRoundsCalls`, `internal/agent/toolloop.TestThePhaseEndsAtItsTerminatorWithNoFurtherRequest`, `internal/agent/toolloop.TestANoteEndsTheRunAndOpensTheNextAsAUserMessage`
+- **Enforced-by:** `internal/providers/llm/harness.TestNoRequestRendersAToolCatalogue`, `internal/agent/toolloop.TestAClosedFenceStopsTheNextCall`, `internal/agent/toolloop.TestARefusedSpendRunsNoFurtherCall`, `internal/agent/toolloop.TestTheRoundBudgetEndsTheRunAfterItsLastRoundsCalls`, `internal/agent/toolloop.TestThePhaseEndsAtItsTerminatorWithNoFurtherRequest`, `internal/agent/toolloop.TestANoteEndsTheRunAndOpensTheNextAsAUserMessage`
 - **Measured:** every one of the twelve CLIs the engine has a profile for is an MCP client in its headless mode; five re-read a changed tool list mid-run (Claude Code, Gemini CLI, OpenCode served, Copilot, pi) and six do not (Codex, Qwen Code, Grok, Muse Code, Kimi Code, Hermes); three give up on a tool call after 60 seconds (Kimi Code, pi, Cursor); three hand the server their own id for a call (Claude Code, Codex, Muse Code); one rewrites a tool name its list does not hold to one it does and runs that instead (Hermes)
 - **Cost-when-tried:** the tools rode the prompt as a catalogue and a JSON reply contract, one CLI process per model request with the whole transcript re-sent each time: a model told to prefer its own editor and shell answered in prose instead of the reply, a reply that was itself JSON was read as the contract, the doctor needed a smoke test of its own to say whether a model could follow the contract at all, and every round paid for a cold process and a prompt the vendor's cache had no session to reuse
 - **Tag-status:** unreleased
@@ -67,7 +67,7 @@ has nothing to do with them.
 ## What this does not decide
 
 It does not decide **which CLIs are supported or how each is configured** —
-that is each profile in `internal/providers/llm/cliagent/cliprofile`, measured
+that is each profile in `internal/providers/llm/harness/harnessprofile`, measured
 per CLI. It does not decide **where a CLI runs** — a seat's executor is its
 CLI's own run in a box, placed by the launching entry's `run_in`
 (`internal/sandbox`), and every other phase runs on this host. And it does not change **what a round is**: one

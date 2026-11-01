@@ -249,7 +249,8 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 // the instant and for the span the bridge measured, naming who answered. A
 // record that said "one round" and timed none was a timeline with a hole in
 // it, and a call with no start is one no timeline can place. The round
-// carries no tokens: the run's spend is on its own `sandbox` record.
+// carries no tokens: the run's spend is on each launch's own
+// `executor_collected` record.
 //
 // Mutations: leave the round untimed, state no cap, or drop the calls'
 // measurement on the way to the record, and this goes red.
@@ -413,7 +414,7 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 
 // workerProvider plays a delegated worker that submits at once — the one
 // model a run's delegate call reaches through the engine, since the run's own
-// rounds are its CLI's. Anything else asking it is a fixture wired wrong, and
+// rounds are its harness's. Anything else asking it is a fixture wired wrong, and
 // is refused rather than handed a worker's answer.
 type workerProvider struct{}
 

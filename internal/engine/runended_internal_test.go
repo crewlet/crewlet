@@ -12,13 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A RUN THAT ENDED ON ITS VENDOR'S SPENT PLAN MOVES THE TURN'S NEXT LAUNCH ON.
-// The run is its CLI's own, so nothing a text call reads saw the limit; the
+// The run is its harness's own, so nothing a text call reads saw the limit; the
 // segment that collects it reads the run's own ending, sits the entry out on
 // this node, and the turn's next launch — a reviewer's send-back — takes the
 // chain's next member, announced as the hand-off it is. A run that ended any
@@ -107,13 +107,13 @@ func TestARecollectedEndingBenchesItsEntryNoMore(t *testing.T) {
 // entry walks back into the spent plan.
 func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	t.Parallel()
-	plans := cliagent.NewPlans([]byte("a fleet key"))
+	plans := harness.NewPlans([]byte("a fleet key"))
 	dir := t.TempDir()
-	build := func(timeout float64, key string) *cliagent.Provider {
+	build := func(timeout float64, key string) *harness.Provider {
 		t.Helper()
 		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"plan": {Agent: "claude-code", Model: "opus", StateDir: dir, TimeoutSeconds: timeout,
-				Auth:      config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
+			"plan": {Harness: "claude-code", Model: "opus", StateDir: dir, TimeoutSeconds: timeout,
+				Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
 				Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
 		}}}
 		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": key}), plans)
@@ -121,10 +121,10 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 			t.Fatalf("buildProviders: %v", err)
 		}
 		p, _ := models.Provider("plan")
-		return p.(*cliagent.Provider)
+		return p.(*harness.Provider)
 	}
 	before := build(600, "sk-ant-api03-spent")
-	if !before.RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+	if !before.RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
 		t.Fatal("the premise: the old entry sits out")
 	}
 	if build(900, "sk-ant-api03-spent").SittingOut() == nil {
@@ -135,14 +135,14 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	}
 }
 
-// planOf is c's "plan" entry, as the coding CLI it is.
-func planOf(t *testing.T, c *Company) *cliagent.Provider {
+// planOf is c's "plan" entry, as the harness it is.
+func planOf(t *testing.T, c *Company) *harness.Provider {
 	t.Helper()
 	p, ok := c.Models.Provider("plan")
 	if !ok {
 		t.Fatal("no plan entry")
 	}
-	return p.(*cliagent.Provider)
+	return p.(*harness.Provider)
 }
 
 // A RESUME WAITS ON THE CHAIN ITS FIRST CALL TAKES. A completion's first model
@@ -212,7 +212,7 @@ func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
 //
 // NOT PARALLEL: the key is read from the process environment.
 //
-// Mutation: pass nil (or cliagent.NewPlans(nil)) to buildRevision in Apply, and
+// Mutation: pass nil (or harness.NewPlans(nil)) to buildRevision in Apply, and
 // the edited entry answers through the spent plan.
 func TestARunningNodesApplyKeepsTheSignInsSitOut(t *testing.T) {
 	dir := t.TempDir()
@@ -223,7 +223,7 @@ providers:
   sandbox: {fake: true}
   llm:
     k:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       state_dir: %q
       timeout_seconds: %d
@@ -234,13 +234,13 @@ roles:
     llm: k
 `, dir, timeout))
 	}
-	entry := func(e *Engine) *cliagent.Provider {
+	entry := func(e *Engine) *harness.Provider {
 		t.Helper()
 		p, ok := e.Company().Models.Provider("k")
 		if !ok {
 			t.Fatal("the running epoch has no entry k")
 		}
-		return p.(*cliagent.Provider)
+		return p.(*harness.Provider)
 	}
 	apply := func(e *Engine, c *config.Company) {
 		t.Helper()
@@ -250,7 +250,7 @@ roles:
 	}
 	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-spent")
 	e := bundleNode(t, revision(600))
-	if !entry(e).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+	if !entry(e).RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
 		t.Fatal("the premise: the running entry sits out")
 	}
 	apply(e, revision(900))

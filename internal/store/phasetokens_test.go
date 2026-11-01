@@ -8,26 +8,42 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// seedPhase writes one completed phase with a price and the promoted counts.
-func seedPhase(t *testing.T, log *store.EventLog, id string, at time.Time,
+// seedPhase writes one completed phase with the promoted counts.
+func seedPhase(t *testing.T, log *store.EventLog, id string, at time.Time, role string, tokens int) {
+	t.Helper()
+	seedSpend(t, log, "agent_phase_completed", id, at, role, map[string]any{
+		"role": role, "phase": "execute", "model": "sonnet",
+		"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens,
+	})
+}
+
+// seedLaunch writes one collected launch of an executor's run — no phase of
+// its own, filed under the executor's — with the price its harness reported.
+func seedLaunch(t *testing.T, log *store.EventLog, id string, at time.Time,
 	role string, tokens int, usd float64) {
 
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{
-		"role": role, "phase": "execute", "model": "sonnet",
+	seedSpend(t, log, "executor_collected", id, at, role, map[string]any{
+		"role": role, "model": "sonnet", "launch_id": id,
 		"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens,
 		"cost_usd": usd,
 	})
+}
+
+// seedSpend writes one spend record of eventType, its spend derived by the
+// writer from its payload.
+func seedSpend(t *testing.T, log *store.EventLog, eventType, id string, at time.Time,
+	role string, body map[string]any) {
+
+	t.Helper()
+	payload, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := log.Append(t.Context(), store.EventRecord{
-		ID: id, Type: "agent_phase_completed", Time: at,
+		ID: id, Type: eventType, Time: at,
 		Category: "lifecycle", Actor: role,
-		Tags: map[string]string{
-			"agent_role": role, "phase": "execute", "model": "sonnet",
-			"input_tokens": "0", "output_tokens": "0",
-		},
+		Tags:    map[string]string{"agent_role": role, "model": "sonnet"},
 		Payload: payload,
 	}); err != nil {
 		t.Fatalf("append %s: %v", id, err)
@@ -37,17 +53,18 @@ func seedPhase(t *testing.T, log *store.EventLog, id string, at time.Time,
 // THE PRICE IS A COLUMN NOWHERE, and it is the one value here still read out
 // of the payload.
 //
-// Only a subscription coding CLI reports one, so promoting it would be a
-// migration and a column that is NULL on almost every row of the table. What
-// matters is that the read carries it at all: without it the rollup's currency
-// total is zero for every window, which renders as a company that has never
-// spent a cent rather than as one whose backend does not quote.
-func TestAPhasesPriceReachesTheRollup(t *testing.T) {
+// Only a subscription harness reports one — on a launch of an executor's
+// run, which is the one record that carries a price — so promoting it would
+// be a migration and a column that is NULL on almost every row of the table.
+// What matters is that the read carries it at all: without it the rollup's
+// currency total is zero for every window, which renders as a company that has
+// never spent a cent rather than as one whose backend does not quote.
+func TestALaunchsPriceReachesTheRollup(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
-	seedPhase(t, log, "p1", base, "PM", 100, 0.25)
-	seedPhase(t, log, "p2", base.Add(time.Minute), "PM", 50, 0)
+	seedLaunch(t, log, "l1", base, "PM", 100, 0.25)
+	seedPhase(t, log, "p2", base.Add(time.Minute), "PM", 50)
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
 	if err != nil {
@@ -75,10 +92,10 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Truncate(time.Hour).Add(-4 * time.Hour)
-	seedPhase(t, log, "before", base.Add(-time.Minute), "PM", 1, 0)
-	seedPhase(t, log, "edge", base, "PM", 2, 0)
-	seedPhase(t, log, "inside", base.Add(30*time.Minute), "PM", 4, 0)
-	seedPhase(t, log, "after", base.Add(time.Hour), "PM", 8, 0)
+	seedPhase(t, log, "before", base.Add(-time.Minute), "PM", 1)
+	seedPhase(t, log, "edge", base, "PM", 2)
+	seedPhase(t, log, "inside", base.Add(30*time.Minute), "PM", 4)
+	seedPhase(t, log, "after", base.Add(time.Hour), "PM", 8)
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
 		Since: base, Until: base.Add(time.Hour),
@@ -112,8 +129,8 @@ func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
 	log := open(t).Events()
 	wall := time.Now().UTC()
 	at := wall.Add(-48 * time.Hour)
-	seedPhase(t, log, "then", at.Add(-time.Hour), "PM", 1, 0)
-	seedPhase(t, log, "now", wall.Add(-time.Hour), "PM", 2, 0)
+	seedPhase(t, log, "then", at.Add(-time.Hour), "PM", 1)
+	seedPhase(t, log, "now", wall.Add(-time.Hour), "PM", 2)
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1, At: at})
 	if err != nil {
@@ -141,9 +158,9 @@ func TestAPinnedSpendWindowIsCutAtItsOwnInstant(t *testing.T) {
 	log := open(t).Events()
 	at := time.Now().UTC().Add(-time.Hour)
 	floor := at.Add(-time.Duration(store.MaxPhaseTokenDays) * 24 * time.Hour)
-	seedPhase(t, log, "above-the-floor", floor.Add(time.Minute), "PM", 7, 0)
-	seedPhase(t, log, "under-the-floor", floor.Add(-time.Minute), "PM", 100, 0)
-	seedPhase(t, log, "after-the-instant", at.Add(time.Minute), "PM", 1000, 0)
+	seedPhase(t, log, "above-the-floor", floor.Add(time.Minute), "PM", 7)
+	seedPhase(t, log, "under-the-floor", floor.Add(-time.Minute), "PM", 100)
+	seedPhase(t, log, "after-the-instant", at.Add(time.Minute), "PM", 1000)
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
 		SinceDays: store.MaxPhaseTokenDays, At: at,

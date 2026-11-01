@@ -172,9 +172,9 @@ describe("weight", () => {
 
   test("a failed row is what went wrong whatever its type says", () => {
     // The failure taxonomy is the engine's — the type, the payload's own
-    // flag, or the store's tag — and a coding run that came back failed is
-    // something that went wrong on this turn even though a completed run is
-    // ordinary work.
+    // flag, or the store's tag — and a launch that came back failed is
+    // something that went wrong on this turn even though a collected launch
+    // is ordinary work.
     expect(bandOf(event("executor_finished"))).toBe("did");
     expect(bandOf(event("executor_finished", { failed: true }))).toBe("went_wrong");
   });

@@ -1,6 +1,7 @@
 /**
  * Live › Now running › Recent phases — every model call the company finished,
- * newest first, one fixed-height row each.
+ * newest first, one fixed-height row each: every phase's own record, and every
+ * launch of an executor's run its collection read off the box.
  *
  * THE ONLY READER OF `phases`. It was a screen of its own, reached as a lens
  * on the turn list, where it drew a second "running now" table of the same
@@ -13,6 +14,16 @@
  *
  * A row is a phase, and a phase is one leg of a TURN — so a plain click opens
  * that turn in the rail beside the list, and ⌘-click its page.
+ *
+ * # A launch is the executor's row
+ *
+ * A launch of an executor's run is no phase: it is the work of the `execute`
+ * round that launched it, which the turn's own page draws inside that round's
+ * card. Here it is a row of its own, drawn as the executor's — the round's
+ * phase word with the CLI that ran it, its CLI's own turns where a phase has
+ * rounds, what it spent, and the report it wrote back as what its outcome
+ * says — so the list says what each run cost and the turn says whose round it
+ * was. A phase filter of `execute` keeps both.
  *
  * # One seat, by its id
  *
@@ -44,7 +55,7 @@ import {
   type DataGridActivationEvent,
   peekClickHandler,
 } from "@crewlethq/ui";
-import { BrainGlyph } from "@crewlethq/icons/glyphs";
+import { BrainGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -55,7 +66,7 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { eventHistoryLabel, plural, fmtCount } from "~/lib/format.ts";
+import { eventHistoryLabel, firstLine, plural, fmtCount } from "~/lib/format.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -214,7 +225,20 @@ export function RecentPhases({
         key: "phase",
         header: "Phase",
         shrink: true,
-        cell: (r) => <PhaseTag phase={r.phase} />,
+        // THE ROUND'S WORD, AND ON A LAUNCH THE CLI THAT RAN IT: the badge a
+        // phase card wears for a run in a box, so a launch row reads as the
+        // executor's run rather than as a second executor.
+        cell: (r) =>
+          r.launch ? (
+            <span className="row gap-1">
+              <PhaseTag phase={r.phase} />
+              <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
+                {r.codingAgent || "sandbox"}
+              </Tag>
+            </span>
+          ) : (
+            <PhaseTag phase={r.phase} />
+          ),
         sortValue: (r) => r.phase,
       },
       {
@@ -223,6 +247,16 @@ export function RecentPhases({
         cell: (r) =>
           r.failed ? (
             <Tag variant="danger">{failureWords(r.errorKind).tag}</Tag>
+          ) : r.launch ? (
+            // A LAUNCH DECIDES NOTHING — its round's record does — so its
+            // outcome is that it was collected, and the sentence on it is how
+            // it ended where it did not finish, or the report it wrote back.
+            <Tag
+              variant="neutral"
+              title={r.notes || firstLine(r.response) || "It reported nothing"}
+            >
+              collected
+            </Tag>
           ) : r.decision ? (
             // THE WORD, WITH THE SENTENCE ON IT: a pill has a fixed line box,
             // and the gloss inside one would set this column's width for
@@ -254,12 +288,21 @@ export function RecentPhases({
       {
         key: "rounds",
         // TOOL ROUNDS, the phase's own `rounds_used` — one field, the same
-        // quantity from the push and from the record.
+        // quantity from the push and from the record. A launch's are its
+        // CLI's own turns, which the engine neither made nor timed, and
+        // where its CLI reported none the cell says so rather than 0.
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => <TableNumberCell value={r.roundsUsed} format={fmtCount} />,
-        sortValue: (r) => r.roundsUsed,
+        cell: (r) =>
+          !r.launch ? (
+            <TableNumberCell value={r.roundsUsed} format={fmtCount} />
+          ) : r.harnessTurns > 0 ? (
+            <TableNumberCell value={r.harnessTurns} format={fmtCount} />
+          ) : (
+            <EmptyValue label="Its CLI reported no turns" />
+          ),
+        sortValue: (r) => (r.launch ? r.harnessTurns : r.roundsUsed),
       },
       {
         key: "tokens",

@@ -49,7 +49,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
+  acts: ["comment_on_work_item", "answer_executor", "update_work_item", "create_work_item"],
 };
 
 const seat = (name: string, handle: string, kind: string, managers: string[] = []) => ({
@@ -865,7 +865,7 @@ describe("the decisions", () => {
     });
     await settle();
     expect(posted).toEqual([
-      { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
+      { tool: "answer_executor", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
     ]);
   });
 

@@ -26,15 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // The knob has three states and the manager's input carries a pointer for
 // exactly that reason. Getting this wrong is not visible as a config error: a
-// seat silently loses its checkout the moment a coding agent asks a question,
+// seat silently loses its checkout the moment a harness asks a question,
 // which is the case a paused box exists for.
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 	t.Parallel()
@@ -91,7 +91,7 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 	return nil
 }
 
-// runOn is the coding run seat's executor launches with on the head of its
+// runOn is what seat's executor launches with on the head of its
 // chain, over the given seat environment.
 func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) codingRun {
 	t.Helper()
@@ -99,13 +99,13 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*cliagent.Provider), seatEnv)
+	return newCodingRun(member.Provider.(*harness.Provider), seatEnv)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
 //
-// Under auth.mode api-key an entry signs its CLI in with one metered key, and
-// a coding run on that entry has to carry it: Claude Code in a box reads only
+// Under auth.mode api-key an entry signs its harness in with one metered key, and
+// a launch on that entry has to carry it: Claude Code in a box reads only
 // its environment, so a run that left the key behind started signed in to
 // nothing. Model and key are the epoch's resolution, the one its seats' own
 // calls are made with, so a `${LLM_MODEL}` reaches the box as its value rather
@@ -113,7 +113,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 // token the engine's own environment happens to hold stays out of an api-key
 // entry's box, or the run would be signed in two ways at once.
 func TestAnAPIKeyEntrysBoxCarriesItsResolvedKey(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("LLM_MODEL", "claude-sonnet-5")
 	t.Setenv("ENTRY_KEY", "sk-ant-entry")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-not-this-entrys")
@@ -150,7 +150,7 @@ roles:
 // credentials carries a company key into a box that never reads it. When the
 // seat's environment signs Claude Code in, the entry adds nothing.
 func TestASeatsOwnClaudeCodeSignInKeepsTheEntrysOut(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company")
 	c := companyFor(t, `
 name: Acme
@@ -193,16 +193,16 @@ roles:
 	}
 }
 
-// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
+// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN HARNESS.
 //
 // The run used to be handed a FAMILY instead — the profile's vendor — from
 // which OpenCode rebuilt `anthropic/<model>`. So an OpenCode executor ran its
 // box on a model its text calls never named, and no value of `model`
-// worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
+// worked for both. The model is resolved (a `${VAR}` reaches the harness as its
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("OC_MODEL", "openrouter/anthropic/claude-sonnet-5")
 	c := companyFor(t, `
 name: Acme
@@ -210,7 +210,7 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: ${OC_MODEL}
 roles:
   - name: Engineer
@@ -223,7 +223,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := member.Provider.(*cliagent.Provider).ModelArgument()
+	text := member.Provider.(*harness.Provider).ModelArgument()
 	if text != "openrouter/anthropic/claude-sonnet-5" {
 		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
 	}
@@ -232,7 +232,7 @@ roles:
 	}
 	// The run is a script quoted for `sh -c`; its quoting undone, the model
 	// is an argument of its own.
-	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, codingagent.Paths{}, "")
+	cmd := executor.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, executor.Paths{}, "")
 	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}
@@ -245,14 +245,14 @@ roles:
 // then. A map of what was there when the run was resolved named a login the
 // shared directory may have moved past by the time the box was seeded.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: anthropic/claude-sonnet-5
 roles:
   - name: Engineer
@@ -264,8 +264,8 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
-	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
+	doc := filepath.Join(shared, harnessprofile.CredentialStoreDocument)
 	for _, signedIn := range []bool{false, true} {
 		if signedIn {
 			if err := os.MkdirAll(shared, 0o700); err != nil {
@@ -276,9 +276,9 @@ roles:
 			}
 		}
 		run := runOn(t, c, seat, nil)
-		if got := run.files[codingagent.CredentialDocument]; got != doc || len(run.files) != 1 {
+		if got := run.files[executor.CredentialDocument]; got != doc || len(run.files) != 1 {
 			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
-				"and nothing else (files %v)", signedIn, got, codingagent.CredentialDocument, doc, run.files)
+				"and nothing else (files %v)", signedIn, got, executor.CredentialDocument, doc, run.files)
 		}
 	}
 }
@@ -288,7 +288,7 @@ roles:
 // because they carry a refresh token whose rotation is shared fleet state.
 func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-travelling")
 
 	credentials := filepath.Join(state, "subscription", "claude-code", "credentials")
@@ -306,7 +306,7 @@ providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer
@@ -329,20 +329,20 @@ roles:
 
 // A BOX IS OFFERED EVERY FILE OF THE LOGIN, signed in or not: the map names
 // where the login is kept, and the box is seeded with whatever the login holds
-// when it is seeded — nothing at all for an entry nobody signed in, so the CLI
+// when it is seeded — nothing at all for an entry nobody signed in, so the harness
 // inside says its own plain "not authenticated" rather than failing on a file
 // that is not there. A map of only the files present when the run was
 // resolved named a login the shared directory may have moved past by the
 // time the box was seeded, and a box given half of a newer sign-in.
 func TestEveryLoginFileIsOfferedWhetherOrNotItIsHeld(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer
@@ -355,7 +355,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
 	if want := filepath.Join(shared, ".credentials.json"); files[".claude/.credentials.json"] != want || len(files) != 1 {
 		t.Errorf("an entry nobody signed in offered %v, want its one login file at %s", files, want)
 	}
@@ -363,7 +363,7 @@ roles:
 
 // The direction of the merge is a decision, not a detail: an operator who
 // named a variable in role.sandbox.env meant that value — including the
-// deliberate choice to point one seat's coding runs at a different account.
+// deliberate choice to point one seat's executor at a different account.
 func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 	t.Parallel()
 	got := underlay(
@@ -387,7 +387,7 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // `buildSandboxProvider` is what turns one into a running backend. Nothing
 // connects them, and when they last disagreed the config's DEFAULT was the
 // offender: `providers.sandbox: {}` validated, reported a configured sandbox
-// on every operator surface, and failed at the first coding run with an error
+// on every operator surface, and failed at the first launch with an error
 // naming a backend nobody had written.
 //
 // It fails in the direction that is hardest to see — the config says yes and
@@ -654,7 +654,7 @@ func (m *movedSeat) Resume(context.Context, sandbox.ResumeRequest) error {
 	return nil
 }
 
-// newChargeRig seeds one running coding run whose job has finished having
+// newChargeRig seeds one running launch whose job has finished having
 // spent `tokens`, charged against the given caps.
 func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resumer) *chargeRig {
 	t.Helper()
@@ -731,7 +731,7 @@ func dayCap(n int) coord.Caps {
 	return coord.Caps{period.Day: n}
 }
 
-// A CODING RUN IS CHARGED TO THE FLEET ONCE, however often its completion
+// A LAUNCH IS CHARGED TO THE FLEET ONCE, however often its completion
 // comes back. A node that lost the seat answers ErrResumeUnavailable, the
 // claim reverts and the completion is delivered again, and each of those
 // passes collected the same finished job and charged it to both counters: the
@@ -841,7 +841,7 @@ func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
 	// Refused over the READABLE run, and over it alone: a listing that failed
 	// on the unreadable record would refuse too, for the wrong reason.
 	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil ||
-		!strings.Contains(err.Error(), "still has 1 coding runs") {
+		!strings.Contains(err.Error(), "still has 1 executor records") {
 		t.Fatalf("the retirement of a seat with one readable run = %v, want it refused over "+
 			"that run", err)
 	}

@@ -1,7 +1,7 @@
 /**
  * "Daily tokens by phase": one column per company day, stacked into the
  * engine's bands — by default its FOUR phase bands (`tokens.PhaseBand`:
- * execute and a coding run are Execute, review is Review, delegated workers
+ * execute and the executor's launches are Execute, review is Review, delegated workers
  * are Workers, and Auxiliary is everything that is not the turn's own work:
  * every call to the seat's auxiliary model — the turn-start context, every
  * compaction rewrite, the reflection workers, the background learning passes,

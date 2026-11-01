@@ -147,7 +147,7 @@ func onlyTurn(t *testing.T, log *store.EventLog) store.Turn {
 
 // A PARKED TURN IS NOT COMPLETE.
 //
-// The segment that launches a detached coding run publishes turn_completed
+// The segment that launches a detached executor publishes turn_completed
 // with `suspended`, and the turn completes again when the run is collected.
 // Read as an end, this list called the turn finished the moment it parked.
 func TestAParkedTurnIsNotComplete(t *testing.T) {
@@ -168,7 +168,7 @@ func TestAParkedTurnIsNotComplete(t *testing.T) {
 
 // A LOST RUN ENDS THE TURN PARKED ON IT.
 //
-// Nothing resumes a turn whose coding run was lost: the run is settled like any
+// Nothing resumes a turn whose executor was lost: the run is settled like any
 // other lost turn and announced with executor_failed. Read by the
 // completions alone, the turn was parked for good — and a restarted node seeded
 // it back onto its seat as still waiting.
@@ -204,7 +204,7 @@ func TestALostRunEndsItsParkedTurn(t *testing.T) {
 //
 // The duration was the first completion's alone, so a turn that parked after
 // three seconds and worked another second on resume listed as three seconds
-// long. The wait between the segments is the coding run's, not the turn's.
+// long. The wait between the segments is the executor's, not the turn's.
 func TestASegmentedTurnSumsItsDurations(t *testing.T) {
 	t.Parallel()
 	yes := true

@@ -28,7 +28,7 @@
  * measurement rather than the span of its events — the span covers the
  * reflection pass that publishes afterwards. Rendering a running turn's zero
  * as a duration would make the busiest turns look like the cheapest. A turn
- * waiting on a coding run it launched is `parked`, which is neither: it has
+ * waiting on its executor in its box is `parked`, which is neither: it has
  * completed a segment and will complete again, so it is marked as such rather
  * than as running or as finished.
  *
@@ -44,7 +44,7 @@
  * drew a seven-day axis out of the newest two hundred turns and called a busy
  * company quiet before lunch on its first day. It is `event_series` now, over
  * the turns that ENDED — `agent_turn_completed` with `suspended=false`, one
- * record per turn, since a turn that parked on a coding run writes a
+ * record per turn, since a turn that parked on its executor writes a
  * completion for the segment that parked it — counted by the engine over the
  * whole window on every data node, with the failed share of each bar drawn at
  * its foot. The list is paged; the axis is not.
@@ -592,7 +592,7 @@ function TurnState({
         </Tag>
       )}
       {t.parked && (
-        <Tag appearance="outline" title="Waiting on its coding run">
+        <Tag appearance="outline" title="Waiting on its executor, running in its box">
           parked
         </Tag>
       )}

@@ -252,7 +252,7 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 
 // A FAILING BACKEND IS NOT THE BOX'S PROBLEM. An exporter that gets a 5xx
 // retries, and retries against a backend that is down turn one outage into
-// two: the coding run's own traffic multiplies while nothing it carries is
+// two: the box's own traffic multiplies while nothing it carries is
 // recoverable anyway.
 func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	t.Parallel()
@@ -568,7 +568,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 // THE OPERATOR'S OWN ENVIRONMENT WINS.
 //
 // role.sandbox.env is where an operator declares what a box gets, and a
-// deployment that points its coding agents at its own collector directly has
+// deployment that points its harnesses at its own collector directly has
 // said so deliberately. Overriding that silently would be the engine choosing
 // where somebody else's telemetry goes — and the failure is invisible: the
 // spans arrive somewhere, just not where the config said.

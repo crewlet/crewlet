@@ -2,7 +2,7 @@
  * The Timeline tab as a screen: what it asks the engine, and what it says.
  *
  * The placement rules are `lib/waterfall.test.ts`'s. What these hold is the
- * part a pure model cannot: that a running coding run's live output is asked
+ * part a pure model cannot: that an executor's live output from its box is asked
  * for ONLY while a reader has its span open (and stops the moment they close
  * it), that a silent owner is named rather than drawn as an empty tail, and
  * that a person's note is drawn as what became of it.
@@ -62,7 +62,7 @@ function event(type: string, ms: number, payload: Record<string, unknown>): Even
   };
 }
 
-/** A turn parked on one coding run that is still out. */
+/** A turn parked on one launch of its executor that is still out. */
 const PARKED = [
   event("agent_turn_started", 0, { started_at: iso(0) }),
   event("executor_launched", 1_000, {
@@ -157,16 +157,16 @@ const RUNNING: ExecutorTailAnswer = {
   },
 };
 
-describe("a running coding run's live output", () => {
+describe("an executor's live output from its box", () => {
   test("is asked for only while its span is open, and no longer once it is closed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     const { asked } = mount(PARKED, RUNNING);
     await flush();
-    // NOBODY IS LOOKING: the run is drawn, and nothing is asked.
-    expect(screen.getByRole("button", { name: /Coding run/ })).toBeTruthy();
+    // NOBODY IS LOOKING: the launch is drawn, and nothing is asked.
+    expect(screen.getByRole("button", { name: /^Launch/ })).toBeTruthy();
     expect(asked).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Launch/ }));
     await flush();
     // HOLDING NOTHING YET, it names no cursor: the owner answers what there is.
     expect(asked).toEqual([{ turn_id: "turn-1", launch_id: "L1" }]);
@@ -197,9 +197,10 @@ describe("a running coding run's live output", () => {
     expect(screen.queryByText("No output yet.")).toBeNull();
   });
 
-  // A GONE BOX IS SAID TO BE, and the view keeps asking until the run's record
-  // moves on: the job is recorded lost and its round carried on in a fresh one,
-  // so the notice says what comes next is the record's, not that the run ended.
+  // A GONE BOX IS SAID TO BE, and the view keeps asking until the executor's
+  // record moves on: the launch is recorded lost and its round carried on in a
+  // fresh one, so the notice says what comes next is the record's, not that
+  // the executor ended.
   // Drawn as a failed read, a person watching was told the engine had failed.
   test("a gone box is said to be, never drawn as a failed read", async () => {
     mount(
@@ -209,19 +210,19 @@ describe("a running coding run's live output", () => {
     );
     expect(
       await screen.findByText(
-        "The run’s box is gone, so no more output will come from this job. Its record will say what happens next.",
+        "The executor’s box is gone, so no more output will come from this launch. Its record will say what happens next.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("No output yet.")).toBeNull();
     expect(liveState({ outcome: "box_gone", turn_id: "t", launch_id: "L" }, false)).toBe(
-      "The run's box is gone.",
+      "The executor's box is gone.",
     );
   });
 
   // A FAILED READ IS TOLD IN THE ENGINE'S WORDS, never its code: the
   // sentence the engine sends for the condition where it sends one, and the
   // screen's own sentence for the code where it does not. It printed the code
-  // ("The run's output could not be read: unavailable."), which no person can
+  // ("The executor's output could not be read: unavailable."), which no person can
   // act on.
   //
   // Mutation: print the code again, and every row goes red.
@@ -323,7 +324,7 @@ describe("a running coding run's live output", () => {
 
   // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
   // written since; the block keeps the newest line in view — the one that
-  // says what the run is doing now — until the reader scrolls up, after which
+  // says what the executor is doing now — until the reader scrolls up, after which
   // the text they are reading stays where it is.
   //
   // Mutation: drop the follow, and the block stays at its top; follow
@@ -385,8 +386,8 @@ describe("a running coding run's live output", () => {
     expect(pre.scrollTop).toBe(200);
   });
 
-  // A JOB STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
-  test("a job being set up keeps the poll going", async () => {
+  // A LAUNCH STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
+  test("a launch being set up keeps the poll going", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     const { asked } = mount(
       PARKED,
@@ -422,18 +423,18 @@ describe("a running coding run's live output", () => {
   });
 });
 
-// A COLLECTED RUN'S SPAN SAYS WHAT ITS RECORD DOES NOT LIST. The record holds
-// the delivered refs to a byte bound and counts the rest, so the span's
-// "Delivered" names how many more the run's report holds rather than showing
-// the listed part as all of it.
+// A COLLECTED LAUNCH'S SPAN SAYS WHAT ITS RECORD DOES NOT LIST. The record
+// holds the delivered refs to a byte bound and counts the rest, so the span's
+// "Delivered" names how many more the executor's report holds rather than
+// showing the listed part as all of it.
 //
 // Mutation: join `deliveredRefs` alone, as the span did, and the count is
 // gone.
-describe("a collected coding run's span", () => {
+describe("a collected launch's span", () => {
   test("names the refs its record does not list", async () => {
     const run = phaseRecord({
-      key: "turn-1|sandbox|1|L1",
-      phase: "sandbox",
+      key: "turn-1|execute|1|L1",
+      launch: true,
       codingAgent: "claude-code",
       launchId: "L1",
       at: iso(31_000),
@@ -443,7 +444,7 @@ describe("a collected coding run's span", () => {
     });
     mount(PARKED, RUNNING, { phases: [run] });
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Launch/ }));
     await flush();
     expect(
       screen.getByText("https://github.com/acme/api/pull/1 (+3 more its report names)"),
@@ -487,10 +488,10 @@ describe("a person's note", () => {
     expect(screen.getByText("expired")).toBeTruthy();
   });
 
-  // A READ INSIDE A CODING RUN IS THE RUN'S: the engine's loop was parked
-  // while the run worked, so the note is drawn on the run's bar — the span
-  // the trace gives its job — and said as the kind of step that read it.
-  test("a read inside a coding run is drawn on the run's bar, in the words of its step", async () => {
+  // A READ INSIDE A LAUNCH IS THE EXECUTOR'S: the engine's loop was parked
+  // while the executor worked, so the note is drawn on the launch's bar — the
+  // span the trace gives it — and said as the kind of step that read it.
+  test("a read inside a launch is drawn on the launch's bar, in the words of its step", async () => {
     const read = (note_id: string, ms: number, boundary: string) =>
       event("agent_turn_steered", ms, {
         note_id,
@@ -508,7 +509,7 @@ describe("a person's note", () => {
       read("t", 2_000, "tool_batch"),
       read("f", 3_000, "finish"),
       read("s", 4_000, "step"),
-      // A ROUND OF THE ENGINE'S OWN LOOP, the review's, names no job.
+      // A ROUND OF THE ENGINE'S OWN LOOP, the review's, names no launch.
       event("agent_turn_steered", 5_000, {
         note_id: "rev",
         outcome: "delivered",
@@ -529,21 +530,21 @@ describe("a person's note", () => {
     mount(events, RUNNING);
     await flush();
     for (const words of [
-      "read by the coding run of Execute in its brief",
-      "read by the coding run of Execute after a tool batch",
-      "read by the coding run of Execute as it was finishing",
-      "read by the coding run of Execute at its next step",
+      "read by the executor in Execute, in its brief",
+      "read by the executor in Execute, after a tool batch",
+      "read by the executor in Execute, as it was finishing",
+      "read by the executor in Execute, at its next step",
       "read at round 2 of Review",
     ]) {
       expect(screen.getByText(new RegExp(words))).toBeTruthy();
     }
-    // AND THE RUN'S ROW CARRIES THE MARK.
-    const run = screen.getByRole("button", { name: /Coding run/ });
+    // AND THE LAUNCH'S ROW CARRIES THE MARK.
+    const run = screen.getByRole("button", { name: /^Launch/ });
     expect(within(run).getByText("note")).toBeTruthy();
   });
 
   // A STEP THIS BUILD CANNOT NAME — one a newer build names, or none, which no
-  // build writes — is the turn's read, placed on the run its record names and
+  // build writes — is the turn's read, placed on the launch its record names and
   // never on a round of the engine's loop.
   test("a boundary this build does not know is never drawn or said as a round", async () => {
     const read = (note_id: string, ms: number, fields: Record<string, unknown>) =>
@@ -625,7 +626,7 @@ describe("the waterfall from a keyboard", () => {
   test("Escape closes the open span and puts focus back on its row", async () => {
     const view = mount(SETTLED, RUNNING);
     await flush();
-    const run = screen.getByRole("button", { name: /Coding run/ });
+    const run = screen.getByRole("button", { name: /^Launch/ });
     fireEvent.click(run);
     await flush();
     expect(view.selected()).toBe("run:L1");
@@ -679,9 +680,9 @@ describe("a span a reader opens", () => {
     const scrolled = lay(true);
     mount(SETTLED, RUNNING);
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: /Coding run/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Launch/ }));
     await flush();
-    const detail = screen.getByRole("region", { name: /Coding run/ });
+    const detail = screen.getByRole("region", { name: /^Launch/ });
     expect(scrolled).toEqual([detail]);
     expect(document.activeElement).toBe(detail);
   });
@@ -690,7 +691,7 @@ describe("a span a reader opens", () => {
     const scrolled = lay(false);
     mount(SETTLED, RUNNING);
     await flush();
-    const run = screen.getByRole("button", { name: /Coding run/ });
+    const run = screen.getByRole("button", { name: /^Launch/ });
     run.focus();
     fireEvent.click(run);
     await flush();
@@ -704,7 +705,7 @@ describe("a span a reader opens", () => {
     const scrolled = lay(true);
     mount(SETTLED, RUNNING, { selected: "run:L1" });
     await flush();
-    expect(screen.getByRole("region", { name: /Coding run/ })).toBeTruthy();
+    expect(screen.getByRole("region", { name: /^Launch/ })).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
 
@@ -734,19 +735,19 @@ describe("a live tail's announcements", () => {
     await flush();
     const live = document.querySelectorAll("[aria-live], [role='status']");
     expect(live).toHaveLength(1);
-    expect(live[0]!.textContent).toBe("Showing the run's live output.");
+    expect(live[0]!.textContent).toBe("Showing the executor's live output.");
     expect(live[0]!.contains(screen.getByText("running go test ./..."))).toBe(false);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(document.querySelector("[role='status']")!.textContent).toBe(
-      "Showing the run's live output.",
+      "Showing the executor's live output.",
     );
   });
 
   test("names each state in one sentence", () => {
     expect(liveState(undefined, false)).toBe("Asking the node that runs it.");
-    expect(liveState(undefined, true)).toBe("The run's output could not be read.");
+    expect(liveState(undefined, true)).toBe("The executor's output could not be read.");
     expect(
       liveState({ outcome: "owner_silent", turn_id: "t", launch_id: "L", node: "n" }, false),
     ).toBe("The node that runs it did not answer.");
@@ -755,6 +756,6 @@ describe("a live tail's announcements", () => {
         { outcome: "not_running", turn_id: "t", launch_id: "L", status: "replaced" },
         false,
       ),
-    ).toBe("The run is no longer running.");
+    ).toBe("The executor is no longer running.");
   });
 });

@@ -522,7 +522,7 @@ func TestASandboxEventDoesNotCreateASeatTheCompanyLacks(t *testing.T) {
 	// A run moves its seat's state, so a run starting pushes that seat — but
 	// only a seat the company HAS. Minting an entry for any seat a run names
 	// would put a row on screen for a seat the roster may not contain, the
-	// moment a coding run of a removed seat started.
+	// moment an executor of a removed seat started.
 	s := sandboxState(t)
 	change := s.Apply(env("executor_launched", sandboxPayload("tn-1")))
 

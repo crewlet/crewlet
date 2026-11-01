@@ -29,7 +29,7 @@ reads a chain in which it does not exist.
 
 **What holds a token is renewed before the token runs short.** A seat's tool
 servers are passed again at `github.RenewAt` and restarted with a fresh token.
-A coding run's environment is issued a token good for `github.RunTokenLife`,
+An executor's environment is issued a token good for `github.RunTokenLife`,
 and the completion poll rewrites every setup file whose whole body names the
 token whenever the token behind it is renewed. So does the launch of a job
 that continues in its turn's kept box, before the job starts: that box runs no

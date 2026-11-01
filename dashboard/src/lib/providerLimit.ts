@@ -19,7 +19,7 @@
  */
 
 import type { AgentRow } from "~/protocol/index.ts";
-import { CLI_PRODUCTS } from "~/contract/models.ts";
+import { HARNESS_PRODUCTS } from "~/contract/models.ts";
 import { fmtClock, plural, tsKey } from "./format.ts";
 
 /** One kind of limit and the seats it holds up or hands to a fallback. */
@@ -81,7 +81,7 @@ export function entryLimits(agents: readonly AgentRow[]): EntryLimit[] {
 /** What a limit is OF where a person reads it: its CLI's product name, or
  *  "Model" where the CLI is one of the company's own or was not said. */
 export function entryName(limit: Pick<EntryLimit, "cli">): string {
-  return CLI_PRODUCTS[limit.cli] ?? "Model";
+  return HARNESS_PRODUCTS[limit.cli] ?? "Model";
 }
 
 /** "Claude Code subscription limit reached": the entry's name, and the

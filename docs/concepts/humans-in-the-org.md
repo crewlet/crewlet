@@ -557,7 +557,7 @@ screen (Home), is the queue of the principal the request resolved to — a perso
 signed in with a session, or a token the identity directory binds — read under
 that principal's own record name (`iam.RecordOwner`): the seat they hold, or a
 credential's own login when the directory binds it to none. First comes
-**Needs you** — the questions agents put to them, the coding runs parked on a
+**Needs you** — the questions agents put to them, the executors parked on a
 question to them, a seat stopped on its budget, the conditions a person
 decides — then **Updates**, what reached them and is not read yet, and the
 item they open is read in full beside the list with the answer to it right

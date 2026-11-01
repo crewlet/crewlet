@@ -400,7 +400,7 @@ jobs:
           path: ${{ runner.temp }}/test-weights.tsv
           key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
           restore-keys: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-
-      # NODE, because this half runs internal/sandbox/codingagent's probe of
+      # NODE, because this half runs internal/sandbox/executor's probe of
       # the OpenCode notes plugin the engine embeds, which drives the plugin
       # under plain `node` against a stand-in of the bridge's notes route — and
       # `make test` refuses to start without it (require-node). The probe

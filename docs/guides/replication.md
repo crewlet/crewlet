@@ -269,7 +269,7 @@ saying what the operation is (`01a0…-7…-….update-<task>`). A retry reuses 
 id, so it reuses the instant — including a turn re-run on another node, whose
 writes derive their ids from the unit of work and the instant it began rather
 than from the run. The exception is a unit of work older than the ledger — a
-trigger dispatched, or a turn resumed from a coding run, more than twenty-nine
+trigger dispatched, or a turn resumed from its executor, more than twenty-nine
 days after the work began: an id minted at that start would be one no node's
 ledger can vouch for any more, so that attempt mints at its own instant and
 records it in the coordination store, and a later attempt at the same work
@@ -696,6 +696,15 @@ met a retained one is applied after it, which is what makes the objects' rows
 a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
+
+**The object store's collection waits too.** A collection deletes nothing
+while a data node it counts runs a state log its own build does not register,
+or while its own copy of the estate carries a newer build's migrations after
+a rollback: that log's rows, or those tables, may name files its build's
+declarations do not ([What a build cannot
+see](../concepts/object-store.md#what-a-build-cannot-see)). A rollout that
+finishes within the day's grace costs nothing, and a node rolled back past a
+log keeps every file until a build that knows the log runs on it again.
 
 ### Which records an upgrade holds back
 

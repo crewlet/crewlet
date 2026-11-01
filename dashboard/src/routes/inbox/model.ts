@@ -10,7 +10,7 @@
  *
  * # Two groups, and two links under them
  *
- * NEEDS YOU is what waits on this person: an ask put to them, a coding run
+ * NEEDS YOU is what waits on this person: an ask put to them, an executor
  * parked on a question to them, a seat the engine stopped on a spent token
  * budget, and the engine's own conditions a person decides
  * (`conditionsToDecide`). UPDATES is what reached them and is not read yet.
@@ -71,11 +71,11 @@ export type InboxRow =
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
   /**
-   * An ask put to the reader and closed in the last week, or a coding run's
+   * An ask put to the reader and closed in the last week, or an executor's
    * question they answered in it, from `answered_decisions`. An ask is keyed
    * as its open row was ([subjectKey]), so the open row in the address names
-   * the same ask before and after its answer; a run's question by its turn
-   * and the launch that asked ([answeredRows]), since one turn's run can ask
+   * the same ask before and after its answer; an executor's question by its
+   * turn and the launch that asked ([answeredRows]), since one turn's executor can ask
    * again.
    */
   | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
@@ -98,7 +98,7 @@ function taskId(ref: ItemRef): string | undefined {
 
 /**
  * The row the reader opened, for the assistant's page context, or null for
- * none: an ask (open or answered) and a parked coding run's question are
+ * none: an ask (open or answered) and a parked executor's question are
  * decisions, an update is the task it is about, a stopped seat is that
  * agent. So "Brief me on this decision" briefs that row and not the Inbox.
  *
@@ -133,7 +133,7 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
 
 /**
  * The records Needs you is about, for the assistant's page context: the task
- * each question was asked on, each coding run waiting on an answer, and each
+ * each question was asked on, each executor waiting on an answer, and each
  * seat stopped, paused or out of budget, each once, in the list's order.
  *
  * THE INBOX THE PERSON SEES IS THIS LIST, built here from the roster, the runs
@@ -518,7 +518,7 @@ export function askTexts(ask: WorkAskRow): string[] {
 
 /**
  * What an answered question asked, as its row and its pane head it: an ask's
- * question, or a coding run's, whole (`RunQuestion`).
+ * question, or an executor's, whole (`RunQuestion`).
  */
 export function answeredQuestion(answered: AnsweredDecision): string {
   return "run" in answered ? answered.run.question.trim() : askQuestion(answered.ask);
@@ -759,9 +759,9 @@ export function answeredRows(answer: AnsweredDecisionsAnswer | null | undefined)
 }
 
 /**
- * One coding run's question: its turn and the launch that asked it. A turn's
- * run that asks again does so under a new launch, so the turn alone (the open
- * row's key, [subjectKey]) names whichever question it is parked on now.
+ * One executor's question: its turn and the launch that asked it. A turn's
+ * executor that asks again does so under a new launch, so the turn alone (the
+ * open row's key, [subjectKey]) names whichever question it is parked on now.
  */
 function runQuestionKey(turn: string, launch: string | undefined): string {
   return `run:${turn}:${launch ?? ""}`;

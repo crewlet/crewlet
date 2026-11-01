@@ -18,14 +18,14 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A DRAINING NODE STARTS NO TURN THROUGH A CODING RUN'S COMPLETION.
+// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION.
 //
 // What a running engine did: the drain closed the node's turn gate and quiesced
 // every seat's inbox, the box's waiter went on running through it (its
@@ -40,11 +40,11 @@ import (
 // that drives the rig's box firing completions to the seat's control topic as
 // it does in production. The box is `direct`, so that waiter is this node's
 // own (ADR-0065), and the run's record names this node as the one that
-// launched it. The box and its coding agent are the in-process doubles, so the
+// launched it. The box and its harness are the in-process doubles, so the
 // only thing standing in for production is what runs inside the box.
 
 // drainRig is one engine over a store and a stream that outlive it, holding the
-// swe seat with a coding run in its box.
+// swe seat with its executor in its box.
 type drainRig struct {
 	b        config.Bootstrap
 	provider *sandbox.FakeProvider
@@ -171,11 +171,11 @@ func withModels(t *testing.T, e *Engine, entry llm.Provider) {
 }
 
 // withLaunchModels is [withModels] for a case whose resumes relaunch their run:
-// e's current company served with a registry of the one coding-CLI entry
+// e's current company served with a registry of the one harness entry
 // given, and the catalogue this node's coordinator launches on as the epoch's
 // own, as an apply that configured both would. The entry is what an answer's
 // relaunch picks from ([firstCallMembers]).
-func withLaunchModels(t *testing.T, e *Engine, entry *cliagent.Provider) {
+func withLaunchModels(t *testing.T, e *Engine, entry *harness.Provider) {
 	t.Helper()
 	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
 	if err != nil {
@@ -190,7 +190,7 @@ func withLaunchModels(t *testing.T, e *Engine, entry *cliagent.Provider) {
 	e.epoch.current.Store(&c)
 }
 
-// seedRun records a coding run on the swe seat whose job is running in the
+// seedRun records a launch on the swe seat whose job is running in the
 // rig's box, the turn that launched it parked on it, as the node that launched
 // it leaves it for the waiter: the executor's round, its parked turn state of
 // a version this build resumes. The job finishes when the case calls
@@ -544,7 +544,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 // A RESUMED TURN TAKES A SLOT UNDER node.max_concurrent.
 //
 // The ceiling is what the node is sized by, and a resumed turn is a full turn:
-// model calls, tool loops, a coding CLI. With the node at its ceiling, a
+// model calls, tool loops, a harness. With the node at its ceiling, a
 // completion waits for a slot before it claims the run, and runs the moment
 // one frees.
 //

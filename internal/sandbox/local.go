@@ -29,7 +29,7 @@ import (
 var localLog = logging.Get("sandbox.local")
 
 // WorkspaceSubdir is where a box's checkout lives, relative to its home: the
-// coding agent's working directory. Kept under the home so container mode
+// harness's working directory. Kept under the home so container mode
 // needs exactly one bind mount.
 const WorkspaceSubdir = "workspace"
 
@@ -39,9 +39,9 @@ const ContainerPrefix = "crewlet-sbx-"
 
 // ControlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
 // liveness probe, and a container box's start — its `docker run`, with the
-// pull of an image the host does not hold yet inside it. Never the coding job
-// itself, which is detached and deliberately uncapped. Sized for a container
-// runtime under load, not for work.
+// pull of an image the host does not hold yet inside it. Never the launched
+// job itself, which is detached and deliberately uncapped. Sized for a
+// container runtime under load, not for work.
 //
 // EXPORTED for the one reader outside this package: a scheduled turn's
 // default cap (internal/org's DefaultScheduleTimeout) has to outlast what its
@@ -124,7 +124,7 @@ func DefaultBoxRoot() string {
 // boxLayout is where one box's files live on the engine host: one directory,
 // root, holding TWO SIDES that must never be one.
 //
-// HOME is the box's side — the coding agent's HOME, its checkout and its run
+// HOME is the box's side — the harness's HOME, its checkout and its run
 // files, and in container mode the only directory bind-mounted into the
 // container, so everything under it is written by whatever runs in the box.
 // RECORDS is the engine's side: what the engine itself must know about the box
@@ -226,7 +226,7 @@ func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), aliveR
 // credentialsFile records the logins this box was seeded with
 // ([seededCredential]), so a reconnect knows which files to write back and
 // against what. Without it a reconnected box closes with an empty map and the
-// login the coding agent refreshed mid-run is discarded — and every production
+// login the harness refreshed mid-run is discarded — and every production
 // teardown goes through Connect or Kill, never the object Create returned, so
 // that would be every run.
 func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), credentialsRecord) }
@@ -316,7 +316,7 @@ func loginsOf(files map[string]string) []boxLogin {
 	return out
 }
 
-// seedCredentials copies the CLI login into the box before the coding agent
+// seedCredentials copies the harness login into the box before the harness
 // runs, and reports what it seeded the box with: every file of the login, by
 // its path relative to the box's home, with the digest of what the box was
 // given — and "" for a file the shared directory does not hold, which is not
@@ -327,7 +327,7 @@ func loginsOf(files map[string]string) []boxLogin {
 // — a box seeded with one sign-in's token beside another's config.toml — and a
 // write that stopped part way is finished first rather than read as the half
 // it left. And it is seeded WHOLE OR NOT AT ALL: a login the box cannot be
-// given every file of is given none, and said, because a CLI handed half a
+// given every file of is given none, and said, because a harness handed half a
 // login fails inside the run in a way nothing outside it explains.
 //
 // The keys are relative paths from an operator-overridable profile, so they go
@@ -513,7 +513,7 @@ const (
 // a refresh of its own, which rotated the refresh token the box's copy
 // descends from, or a new login an operator made — and the box's copy is the
 // older of the two. Judged a file at a time, a refresh of one file was written
-// beside another writer's newer other file, a login no CLI wrote. So the
+// beside another writer's newer other file, a login no harness wrote. So the
 // comparison and the write are one step, under the shared directory's lock
 // ([hostbox.LockCredentials]), which every writer of it takes, and the write
 // is ONE WRITE of the whole login ([hostbox.WriteCredentials]), so a teardown
@@ -708,7 +708,7 @@ func readCredentialMap(l boxLayout) map[string]seededCredential {
 }
 
 // maxRecordBytes bounds one read of a box's record. The largest the engine
-// writes is the credential map — a CLI profile's few credential files, each a
+// writes is the credential map — a harness profile's few credential files, each a
 // relative path, a host path and a 64-character digest — which is a few
 // hundred bytes; a mebibyte is over a hundred and twenty entries at the
 // longest paths a filesystem takes, so a record past it is not one this
@@ -884,8 +884,8 @@ type LocalOptions struct {
 	StateDir string
 
 	// Image is the container image. REQUIRED for Container, and it must have
-	// the coding-agent CLI installed: there is no sensible default, and a box
-	// without the CLI fails only once an agent tries to use it.
+	// the harness installed: there is no sensible default, and a box
+	// without the harness fails only once an agent tries to use it.
 	Image string
 
 	// Runtime is "auto" (default; docker then podman), "docker" or "podman".
@@ -898,7 +898,7 @@ type LocalOptions struct {
 	RunArgs []string
 
 	// RuntimeEnv is what the operator DECLARED for the container runtime's
-	// own CLI, its references already resolved — laid over the fixed rule
+	// own harness, its references already resolved — laid over the fixed rule
 	// every runtime call carries ([hostbox.ContainerRuntime]), for what that
 	// rule cannot know a runtime's helpers read: the cloud role, profile or
 	// key file a registry credential helper pulls the image with.
@@ -917,7 +917,7 @@ type LocalOptions struct {
 // Local mints sandboxes on the engine host, directly or in a container.
 //
 // The flagship backend: it exists so a role can do real code work with the
-// coding CLI the operator already logged in to — no account, no API key, no
+// harness the operator already logged in to — no account, no API key, no
 // token minting. The run reads the same credential directory `crewlet llm
 // login` wrote.
 type Local struct {
@@ -962,8 +962,8 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 	if opts.Placement == Container {
 		if strings.TrimSpace(opts.Image) == "" {
 			return nil, localErrorf("run_in %q requires providers.sandbox.local.image, an image "+
-				"that has the coding-agent CLI installed — there is no sensible default, and a "+
-				"box without the CLI fails only once an agent tries to use it", Container)
+				"that has the harness installed — there is no sensible default, and a "+
+				"box without the harness fails only once an agent tries to use it", Container)
 		}
 		var path string
 		if path, err = ResolveContainerRuntime(opts.Runtime); err != nil {
@@ -1149,7 +1149,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 		"-v", layout.home() + ":" + DefaultHome,
 		"-w", DefaultHome + "/" + WorkspaceSubdir,
 		"-e", "HOME=" + DefaultHome,
-		// A reaping PID 1. The detached coding job is backgrounded inside an
+		// A reaping PID 1. A launch's detached job is backgrounded inside an
 		// `exec`, so without an init that reaps it, a finished job lingers as
 		// a zombie — which `kill -0` reports as ALIVE, hanging the runner's
 		// completion check on a job that already died.
@@ -1166,9 +1166,9 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	// every process in the box and not only its first: both runtimes start an
 	// `exec` from the container's own process specification, the value
 	// included (Docker's daemon/exec.go, Podman's
-	// libpod/oci_conmon_exec_common.go), so the coding job and every setup
+	// libpod/oci_conmon_exec_common.go), so the launched job and every setup
 	// command take it too. Neither raises it unasked: Docker runs a container
-	// at 0, and Podman at its own CLI's value, which is the engine's. A
+	// at 0, and Podman at its own harness's value, which is the engine's. A
 	// container on the engine's own kernel competes with the engine for the
 	// host's memory; one in a VM of its own (Docker Desktop) is merely ordered
 	// within it. Before run_args, so an operator's own --oom-score-adj wins.
@@ -1181,7 +1181,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	// a config knob whose only job is to undo the line above.
 	argv = append(argv, l.opts.RunArgs...)
 	// PID 1 exists only to hold the namespace open; every command is an
-	// `exec` into it, which is what makes a detached coding job survive the
+	// `exec` into it, which is what makes a launch's detached job survive the
 	// turn that started it.
 	return append(argv, l.opts.Image, "sleep", "infinity")
 }
@@ -1291,7 +1291,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		//
 		// And WAIT for it to actually go. SIGKILL is delivered, not
 		// applied: the kernel takes the process down some moments later,
-		// and until it does the coding agent's wrapper is still writing
+		// and until it does the harness's wrapper is still writing
 		// its exit code and marker into the box. Removing the tree under
 		// those writes fails with the directory non-empty — a failure the
 		// removal below would report and nothing could act on, leaving a
@@ -1302,11 +1302,11 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	// the run refreshed before it was reclaimed — collecting it needs no
 	// resume, which is the one thing this method must not do. What is on disk
 	// is all there is: nothing in the box runs again after a SIGKILL or a
-	// `docker rm -f`. A CLI that keeps its login in a file has rewritten that
+	// `docker rm -f`. A harness that keeps its login in a file has rewritten that
 	// file itself; one that keeps it in a database of its own has it on disk
 	// only as far as its runner exported it, which is why such a runner
 	// exports while the run works rather than only at its end (see
-	// codingagent's OpenCode).
+	// executor's OpenCode).
 	collectCredentials(ctx, layout, readCredentialMap(layout))
 	removeBox(layout)
 	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
@@ -1465,7 +1465,7 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 // does not even mean age. A directory's mtime moves only when an entry is
 // added or removed directly in it, and a box's root entries are all made at
 // Create — so the root mtime is the box's birth time, frozen, however busy the
-// coding agent inside workspace/ is. Reaping on it deleted the checkout, the
+// harness inside workspace/ is. Reaping on it deleted the checkout, the
 // seeded credentials and the job record of every run that lasted longer than
 // the TTL, while its process tree kept going: without the pid file nothing
 // could ever kill it, so the job became an unkillable orphan writing into a
@@ -1595,7 +1595,7 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 //
 // Every caller is on a teardown or a pause path, where there is nothing to
 // return the failure to and nothing useful to do about it — but a kill that
-// silently did not land leaves a coding agent running on the engine host,
+// silently did not land leaves a harness running on the engine host,
 // which is the one outcome an operator has to be able to find. An empty group
 // is not a failure and never reaches here: procgroup answers ESRCH as success.
 func logSignal(what string, pid int, err error) {

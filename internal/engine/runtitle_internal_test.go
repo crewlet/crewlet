@@ -16,12 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CODING RUN IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS.
+// AN EXECUTOR IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS.
 //
 // A wake reaches swe, and the turn launches its executor's run. The run's
 // brief carries the turn's task, whatever somebody else wrote in it fenced
 // under the turn's token for the model that reads it; the run's description
-// and label, which Live › Coding runs, Now running and Home draw as its title
+// and label, which Live › Executors, Now running and Home draw as its title
 // and executor_launched announces, carry what the turn was asked, as it was
 // written, with no fence line, token or escape: a fence is a model's
 // (ADR-0040). So for every surface a seat is woken from ([wakeSurfaces]) and

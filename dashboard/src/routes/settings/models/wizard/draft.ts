@@ -15,10 +15,10 @@
 
 import type { ConfigProblem, CompanyDocument } from "~/protocol/types.ts";
 import {
-  DEFAULT_CLI_AGENT,
-  DEFAULT_CLI_AUTH_MODE,
-  EXECUTOR_CLI_AGENTS,
-  type CLIAuthMode,
+  DEFAULT_HARNESS,
+  DEFAULT_HARNESS_AUTH_MODE,
+  EXECUTOR_HARNESSES,
+  type HarnessAuthMode,
   type RunnerCellName,
 } from "~/contract/models.ts";
 import {
@@ -33,7 +33,7 @@ import {
 import { WIZARD_STEPS, type WizardStep } from "../parts.tsx";
 import type { ModelView } from "../data.ts";
 
-export type Agent = "claude-code" | "codex" | "opencode";
+export type Harness = "claude-code" | "codex" | "opencode";
 /**
  * How a model signs in, as the wizard offers it. `unchanged` is a model on a
  * sign-in the wizard does not write (another CLI, or the engine's own
@@ -45,7 +45,7 @@ export type RunIn = "" | RunnerCellName;
 
 export interface Draft {
   key: string;
-  agent: string;
+  harness: string;
   method: Method;
   /** The pasted key or token: held in the form, tested, stored on save, never shown again. */
   credential: string;
@@ -68,24 +68,25 @@ export interface Draft {
 }
 
 /** The CLIs a model can be added on, in the order offered. */
-export const AGENTS: readonly Agent[] = ["claude-code", "codex", "opencode"];
+export const HARNESSES: readonly Harness[] = ["claude-code", "codex", "opencode"];
 
-const isAgent = (agent: string): agent is Agent => (AGENTS as readonly string[]).includes(agent);
+const isHarness = (harness: string): harness is Harness =>
+  (HARNESSES as readonly string[]).includes(harness);
 
-/** Whether the draft's CLI can run a seat's coding (`EXECUTOR_CLI_AGENTS`, held to the engine). */
-export const canExecute = (d: Pick<Draft, "agent">) =>
-  (EXECUTOR_CLI_AGENTS as readonly string[]).includes(d.agent);
+/** Whether the draft's CLI can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
+export const canExecute = (d: Pick<Draft, "harness">) =>
+  (EXECUTOR_HARNESSES as readonly string[]).includes(d.harness);
 
 /** The sign-in methods each CLI offers, the one allowed on any engine first. */
-export const METHODS: Readonly<Record<Agent, readonly Method[]>> = {
+export const METHODS: Readonly<Record<Harness, readonly Method[]>> = {
   "claude-code": ["api-key", "host-login", "token", "cloud"],
   codex: ["api-key", "device"],
   opencode: ["api-key"],
 };
 
 /** The methods the draft's CLI offers; a CLI the wizard does not add keeps its sign-in. */
-export function methodsFor(d: Pick<Draft, "agent" | "method">): readonly Method[] {
-  return isAgent(d.agent) && d.method !== "unchanged" ? METHODS[d.agent] : ["unchanged"];
+export function methodsFor(d: Pick<Draft, "harness" | "method">): readonly Method[] {
+  return isHarness(d.harness) && d.method !== "unchanged" ? METHODS[d.harness] : ["unchanged"];
 }
 
 /** The providers OpenCode is offered with, and the variable each one's key is read from. */
@@ -170,7 +171,7 @@ const MANAGED_ENV = new Set<string>([
 
 /** The fields of an entry the wizard writes; every other field an edit keeps as written. */
 const MANAGED_FIELDS = new Set([
-  "agent",
+  "harness",
   "model",
   "run_in",
   "timeout_seconds",
@@ -192,12 +193,12 @@ const KEY_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const VARIABLE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 /** The steps a draft walks; Where it runs only for a CLI that runs coding. */
-export function stepsFor(d: Pick<Draft, "agent">): WizardStep[] {
+export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
   return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
-  cli: "Name and CLI",
+  harness: "Name and CLI",
   signin: "Method",
   model: "Model",
   runs: "Where it runs",
@@ -222,7 +223,7 @@ const ref = (variable: string) => `\${${variable}}`;
 export function emptyDraft(): Draft {
   return {
     key: "",
-    agent: DEFAULT_CLI_AGENT,
+    harness: DEFAULT_HARNESS,
     method: "api-key",
     credential: "",
     variable: "",
@@ -248,10 +249,10 @@ export const credentialWord = (d: Pick<Draft, "method">) =>
   d.method === "token" ? "token" : "key";
 
 /** The convention a credential's secret starts from: the variable the CLI itself reads. */
-function baseVariable(d: Pick<Draft, "agent" | "method" | "provider">): string {
+function baseVariable(d: Pick<Draft, "harness" | "method" | "provider">): string {
   if (d.method === "token") return "CLAUDE_CODE_OAUTH_TOKEN";
-  if (d.agent === "codex") return "CODEX_API_KEY";
-  if (d.agent === "opencode")
+  if (d.harness === "codex") return "CODEX_API_KEY";
+  if (d.harness === "opencode")
     return OPENCODE_PROVIDERS.find((p) => p.value === d.provider)?.variable ?? "API_KEY";
   return "ANTHROPIC_API_KEY";
 }
@@ -270,7 +271,7 @@ const suffixOf = (key: string) =>
  * (ANTHROPIC_API_KEY_OPUS for anthropic-opus, design QA M15).
  */
 export function suggestedVariable(
-  d: Pick<Draft, "agent" | "method" | "provider" | "key">,
+  d: Pick<Draft, "harness" | "method" | "provider" | "key">,
   taken: readonly string[],
 ): string {
   const base = baseVariable(d);
@@ -317,9 +318,11 @@ export function credentialValues(d: Draft): Record<string, string> {
 }
 
 /** The model's id as its CLI takes it: OpenCode's names its provider first. */
-export function modelId(d: Pick<Draft, "agent" | "provider" | "model">): string {
+export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
-  return d.agent === "opencode" && model && !model.includes("/") ? `${d.provider}/${model}` : model;
+  return d.harness === "opencode" && model && !model.includes("/")
+    ? `${d.provider}/${model}`
+    : model;
 }
 
 /** A whole number field as the entry writes it: a number, or the text the engine will refuse. */
@@ -332,11 +335,14 @@ function wholeOrText(value: string): number | string {
 function signInOf(
   d: Draft,
   stored: Readonly<Record<string, string>>,
-): { auth: ({ mode: CLIAuthMode } & Record<string, unknown>) | null; env: Record<string, string> } {
+): {
+  auth: ({ mode: HarnessAuthMode } & Record<string, unknown>) | null;
+  env: Record<string, string>;
+} {
   const env: Record<string, string> = {};
   switch (d.method) {
     case "api-key":
-      if (d.agent === "opencode") {
+      if (d.harness === "opencode") {
         // OPENCODE READS ITS PROVIDER'S OWN VARIABLE from env: its profile has no key slot.
         const variable = baseVariable({ ...d, method: "api-key" });
         if (d.variable) env[variable] = ref(d.variable);
@@ -384,9 +390,9 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
   const entity: Record<string, unknown> = Object.fromEntries(
     Object.entries(raw).filter(([k]) => !MANAGED_FIELDS.has(k)),
   );
-  entity.agent = d.agent;
+  entity.harness = d.harness;
   entity.model = modelId(d);
-  // WHERE CODING RUNS is a choice only a CLI with a runner has; any other leaves it unset.
+  // WHERE AN EXECUTOR RUNS is a choice only a CLI with a runner has; any other leaves it unset.
   if (d.runIn && canExecute(d)) entity.run_in = d.runIn;
   if (d.timeout.trim()) entity.timeout_seconds = wholeOrText(d.timeout);
   if (d.concurrent.trim()) entity.max_concurrent = wholeOrText(d.concurrent);
@@ -444,13 +450,13 @@ export function methodOf(model: ModelView): Method {
   const raw = model.raw ?? {};
   const auth = isRecord(raw.auth) ? raw.auth : {};
   // AN ENTRY THAT NAMES NO MODE RUNS AS THE ENGINE'S DEFAULT, held to the engine by a Go gate.
-  const mode: string = typeof auth.mode === "string" ? auth.mode : DEFAULT_CLI_AUTH_MODE;
-  if (!isAgent(model.agent)) return "unchanged";
-  if (mode === "api-key") return model.agent === "opencode" ? "unchanged" : "api-key";
-  if (mode === "env") return model.agent === "claude-code" ? "cloud" : "unchanged";
+  const mode: string = typeof auth.mode === "string" ? auth.mode : DEFAULT_HARNESS_AUTH_MODE;
+  if (!isHarness(model.harness)) return "unchanged";
+  if (mode === "api-key") return model.harness === "opencode" ? "unchanged" : "api-key";
+  if (mode === "env") return model.harness === "claude-code" ? "cloud" : "unchanged";
   if (mode !== "subscription") return "unchanged";
-  if (model.agent === "opencode") return "api-key";
-  if (model.agent === "codex") return "device";
+  if (model.harness === "opencode") return "api-key";
+  if (model.harness === "codex") return "device";
   return auth.token || model.entry.sign_in.route === "token" ? "token" : "host-login";
 }
 
@@ -462,7 +468,7 @@ function variableOf(model: ModelView, method: Method): string {
   const written =
     method === "token"
       ? referenced(auth.token)
-      : model.agent === "opencode"
+      : model.harness === "opencode"
         ? (OPENCODE_PROVIDERS.map((p) => referenced(env[p.variable])).find(Boolean) ?? null)
         : referenced(auth.api_key);
   return written ?? model.admin?.sign_in.variable ?? "";
@@ -480,13 +486,13 @@ export function draftOf(model: ModelView): Draft {
   const method = methodOf(model);
   const cloud = method === "cloud" ? cloudOf(env) : d.cloud;
   const [provider, rest] =
-    model.agent === "opencode" && model.model.includes("/")
+    model.harness === "opencode" && model.model.includes("/")
       ? (model.model.split(/\/(.*)/s, 2) as [string, string])
       : [d.provider, model.model];
   return {
     ...d,
     key: model.key,
-    agent: model.agent,
+    harness: model.harness,
     method,
     variable: pastesCredential({ method }) ? variableOf(model, method) : "",
     cloud,
@@ -574,7 +580,7 @@ function problem(segments: (string | number)[], message: string, kind = "invalid
  */
 export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardStep {
   const s = p.segments ?? [];
-  if (s[0] === "key") return "cli";
+  if (s[0] === "key") return "harness";
   if (s[0] === "test") return "test";
   if (s[0] === "values" || s[0] === "variable") return "signin";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
@@ -592,7 +598,7 @@ export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardS
       case "overrides":
         return "assign";
       default:
-        return "cli";
+        return "harness";
     }
   }
   return "assign";
@@ -606,7 +612,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
   if (s[0] === "variable") return "Stored as";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     const words: Record<string, string> = {
-      agent: "Coding CLI",
+      harness: "Coding CLI",
       model: "Model",
       run_in: "Where it runs",
       timeout_seconds: "Timeout",

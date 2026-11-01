@@ -237,6 +237,20 @@ describe("completed phases", () => {
     expect(store.state.phases).toHaveLength(0);
   });
 
+  // A COLLECTED LAUNCH IS KEPT BESIDE THEM. It is the executor round's work —
+  // the report its run wrote and what it spent — and it lands while the turn
+  // is still parked, so a tab watching the turn would otherwise have the
+  // round's card with nothing in it until a reload.
+  test("a collected launch is kept with its payload", () => {
+    const store = new Store();
+    store.applyEvent({
+      ...feedRow("l1", { type: "executor_collected", category: "system" }),
+      payload: { turn_id: "t1", iteration: 1, launch_id: "job-1", response: "fixed it" },
+    } as EventEnvelope);
+    expect(store.state.phases).toHaveLength(1);
+    expect(store.state.phases[0]?.payload?.response).toBe("fixed it");
+  });
+
   test("a redelivered phase does not double", () => {
     const store = new Store();
     store.applyEvent(phaseEvent("p1"));

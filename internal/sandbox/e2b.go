@@ -19,12 +19,12 @@ import (
 // claimed to come from the local backend.
 var e2bLog = logging.Get("sandbox.e2b")
 
-// The remote backend: a real VM per coding run, on E2B cloud or a
+// The remote backend: every box a real VM, on E2B cloud or a
 // self-hosted cluster.
 //
 // # What this backend is FOR, next to the local one
 //
-// The local backend runs the coding agent on the engine host, which is right
+// The local backend runs the harness on the engine host, which is right
 // for a company running on somebody's own machine against their own
 // checkouts, and wrong for anything shared. This one gives every run a fresh
 // machine that is not the engine's: an agent that deletes the wrong directory
@@ -32,17 +32,17 @@ var e2bLog = logging.Get("sandbox.e2b")
 //
 // # Credential files never leave the engine host
 //
-// A [Spec] can carry a subscription CLI's login files, and this backend
+// A [Spec] can carry a subscription harness's login files, and this backend
 // IGNORES them — the one place the two backends deliberately diverge on the
 // same field. Those files hold a refresh token whose rotation is shared fleet
 // state, so pushing them onto a VM somebody else operates is a materially
 // larger trust step than the scoped headless token the run environment
-// already exports. A subscription still works here through that token; a CLI
+// already exports. A subscription still works here through that token; a harness
 // that mints no headless token needs the local backend.
 //
-// # One template per coding agent, by default
+// # One template per harness, by default
 //
-// E2B publishes prebuilt templates with each coding-agent CLI installed, so a
+// E2B publishes prebuilt templates with each harness installed, so a
 // company that names none still gets a box the agent can run in. Naming one
 // is how a box is SIZED — vCPU and RAM are properties of a template, fixed
 // when it is built, and the create API takes no resource arguments at all.
@@ -50,10 +50,10 @@ var e2bLog = logging.Get("sandbox.e2b")
 // E2BKind is the backend's name on the operator surface.
 const E2BKind = "e2b"
 
-// e2bAgentTemplates are E2B's prebuilt images, by coding agent.
+// e2bAgentTemplates are E2B's prebuilt images, by harness.
 //
 // A company that names no template gets the one matching its agent rather
-// than a bare box, because a bare box has no coding-agent CLI in it and the
+// than a bare box, because a bare box has no harness in it and the
 // run fails at the first command with "command not found" — a template
 // problem that reads as a broken runner.
 var e2bAgentTemplates = map[string]string{
@@ -61,9 +61,9 @@ var e2bAgentTemplates = map[string]string{
 	"opencode":    "opencode",
 }
 
-// e2bFallbackTemplate is what an unrecognised coding agent gets.
+// e2bFallbackTemplate is what an unrecognised harness gets.
 //
-// "base" is E2B's own minimum-viable image. It carries no coding-agent CLI,
+// "base" is E2B's own minimum-viable image. It carries no harness,
 // so a run on it fails — which is correct and is the honest outcome: a
 // company naming an agent this build does not know has a config problem, and
 // inventing a template for it would hide that behind a runtime error further
@@ -88,7 +88,7 @@ type E2BOptions struct {
 	Domain string
 
 	// Template is the company-wide default box image, or empty to pick one
-	// per coding agent.
+	// per harness.
 	Template string
 
 	// HTTP is the client both planes use. Nil takes one bounded by
@@ -100,7 +100,7 @@ type E2BOptions struct {
 func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 	if strings.TrimSpace(opts.APIKey) == "" {
 		// REFUSED AT CONSTRUCTION, so an apply fails rather than every
-		// coding run: a provider built without a key would report a
+		// launch: a provider built without a key would report a
 		// configured sandbox and 401 at the first create, minutes into a
 		// turn that has already spent its own rounds.
 		return nil, errors.New(

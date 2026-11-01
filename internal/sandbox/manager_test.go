@@ -23,7 +23,7 @@ func specManager(t *testing.T, opts ManagerOptions) *Manager {
 
 func ptr[T any](v T) *T { return &v }
 
-// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT, so the three states
+// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY HARNESS, so the three states
 // have to survive the overlay: a job is deliberately never stopped on a clock,
 // and the box's TTL is refreshed on every waiter tick precisely so the clock
 // cannot stop it either.
@@ -46,7 +46,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 		{"a seat can cap where the company did not", 0, ptr(25), 25},
 		// Refused by config validation, so this is the belt to that
 		// braces: a negative that reached here would render as
-		// `--max-turns -3`, which the CLI reads as its own flag.
+		// `--max-turns -3`, which the harness reads as its own flag.
 		{"a negative is clamped, never passed on", 40, ptr(-3), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,7 +60,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 }
 
 // The cap has to reach the runner, which is the only place it does anything.
-// It was carried on LaunchRequest and set by nobody, so every coding run went
+// It was carried on LaunchRequest and set by nobody, so every launch went
 // out uncapped while the field looked wired.
 func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 	t.Parallel()
@@ -80,7 +80,7 @@ func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 		t.Fatalf("started %d runs, want 1", len(started))
 	}
 	if started[0].Limits.MaxTurns != 40 {
-		t.Fatalf("the coding agent was given MaxTurns = %d, want the resolved 40",
+		t.Fatalf("the harness was given MaxTurns = %d, want the resolved 40",
 			started[0].Limits.MaxTurns)
 	}
 }

@@ -115,7 +115,7 @@ const NEEDS: { readonly [T in ActionTool]: { readonly apps: readonly App[] } } =
  * The apps ANY ONE of which a change needs — its app for an app's change,
  * every app for one that draws on whichever the caller holds
  * (`answer_knowledge`), none for a change that is no app's (pausing a seat,
- * answering a coding run).
+ * answering an executor).
  *
  * THE ROW'S OWN `apps` (`contract/actions.ts`), which an engine gate holds to
  * the authority table's row for the tool. It used to be read off the row's

@@ -607,7 +607,7 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 
 // refuseRemovalApply answers a removal the document refused: 422 with the
 // problems for a company the removal leaves invalid (an executor job moved to
-// a CLI that cannot run one, an assistant target that allows web tools), the
+// a harness that cannot run one, an assistant target that allows web tools), the
 // entity's own refusals, and every other as any write's.
 func (s *Service) refuseRemovalApply(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var invalid *ValidationError

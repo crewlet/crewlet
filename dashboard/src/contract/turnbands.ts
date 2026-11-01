@@ -57,6 +57,9 @@ export const ABSORBED: Readonly<Record<string, string>> = {
   agent_phase_started: "the phase card it opens",
   // The phase cards themselves.
   agent_phase_completed: "its own phase card",
+  // A launch of the executor's run: inside the card of the round that
+  // launched it, its report, its spend and its activity.
+  executor_collected: "its executor round's phase card",
   // Stream-only; never persisted, so it cannot be in a query answer anyway.
   agent_turn_progress: "the live phase card",
   // The stat strip, the header and the turn record.
@@ -106,7 +109,7 @@ export const WENT_WRONG: ReadonlySet<string> = new Set([
  * the rows that describe the same stop `agent_turn_completed.failed` already
  * reports, so a reader counting problems must not count both. Everything else
  * in WENT_WRONG — a recovered provider fallback, a refused tool skill, a
- * failed sandbox run — is an INDEPENDENT problem that happens to share a turn
+ * failed launch — is an INDEPENDENT problem that happens to share a turn
  * with the stop. `executor_failed` is deliberately not here although it is
  * a failure: `internal/engine/telemetry.go` does not publish it, so it never
  * describes the turn's own stop.
@@ -124,7 +127,7 @@ export const TURN_STOP: ReadonlySet<string> = new Set([
  * brief and the trail read and the Timeline starts its clock from — what its
  * prompt was assembled from before the first phase ran, and a person's note it
  * was handed mid-turn — `agent_turn_steered`, which says whether the turn read
- * the note or ended first, drawn at the round or on the coding run that read
+ * the note or ended first, drawn at the round or on the launch that read
  * it.
  */
 export const GIVEN: ReadonlySet<string> = new Set([
@@ -162,7 +165,7 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Work the turn did that is not a phase: a coding run, a delegation, a tool,
+ * Work the turn did that is not a phase: an executor's launch, a delegation, a tool,
  * and asking a colleague.
  *
  * THE COLLEAGUE ROWS ARE BACK, and what changed is the wire rather than this
@@ -181,11 +184,11 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * precisely the statement that no turn finished.
  *
  * `executor_answered` is here beside the question it answers: a parked
- * run's answer is work that happened to this turn between its two segments,
+ * executor's answer is work that happened to this turn between its two segments,
  * whichever route it came by.
  *
  * `executor_stopped` is here beside the completion it stands in for, and
- * NOT in WENT_WRONG: a run a person stopped by pausing its seat ended because
+ * NOT in WENT_WRONG: an executor a person stopped by pausing its seat ended because
  * somebody meant it to, and the turn's own `agent_turn_stopped` already says
  * who in that band — a second row there would count one stop twice.
  *

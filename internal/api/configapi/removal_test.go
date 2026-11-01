@@ -28,7 +28,7 @@ providers:
     sonnet:
       model: sonnet
     codex-review:
-      agent: codex
+      harness: codex
       model: gpt-6.1-sol
     aux:
       model: haiku
@@ -156,7 +156,7 @@ func TestARemovalRepointsEveryDependantInOneRevision(t *testing.T) {
 	if code != http.StatusOK || checked["valid"] != true {
 		t.Fatalf("dry run = %d %v", code, checked)
 	}
-	if before := activeCompany(t, s); before.Providers.LLM["codex-review"].Agent == "" {
+	if before := activeCompany(t, s); before.Providers.LLM["codex-review"].Harness == "" {
 		t.Fatal("a dry run removed the entry")
 	}
 

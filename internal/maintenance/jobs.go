@@ -60,7 +60,7 @@ const (
 	// the sweep closes it, where nothing still owes its answer.
 	//
 	// A channel is closed by the turn that answers it, or by the ending of
-	// a coding run lost under that turn. A turn that crashes, or a node that
+	// an executor lost under that turn. A turn that crashes, or a node that
 	// dies between the wake and the answer, leaves one open forever — and an
 	// open channel is not free: it is a row, and it is a promise to the
 	// requester that a reply may still arrive.
@@ -69,7 +69,7 @@ const (
 	//
 	// Every wait with no end a clock could be sized to is SPARED rather than
 	// timed (internal/a2a's Owed, which the engine answers): an ask on the
-	// record of the coding run its turn launched — a run has no clock bound
+	// record of the executor its turn launched — which has no clock bound
 	// and can wait days on a person's question — and one waiting in its
 	// seat's inbox while a run, a person's pause or a spent budget window
 	// holds it. What this timeout still covers is an ask in flight where

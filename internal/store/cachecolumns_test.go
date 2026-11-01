@@ -100,8 +100,17 @@ func appendPhase(t *testing.T, log *store.EventLog, id string, at time.Time,
 	payload []byte, spend *store.Spend) {
 
 	t.Helper()
+	appendSpend(t, log, "agent_phase_completed", id, at, payload, spend)
+}
+
+// appendSpend writes one spend record of eventType, with the spend its
+// producer derived for it.
+func appendSpend(t *testing.T, log *store.EventLog, eventType, id string, at time.Time,
+	payload []byte, spend *store.Spend) {
+
+	t.Helper()
 	if err := log.Append(t.Context(), store.EventRecord{
-		ID: id, Type: "agent_phase_completed", Source: "engine",
+		ID: id, Type: eventType, Source: "engine",
 		Category: "agent", Time: at,
 		Tags:    store.ExtractTags(payload),
 		Spend:   spend,
@@ -195,59 +204,64 @@ func TestTheLiveAndStoredProducersAgreeOnAPhase(t *testing.T) {
 	}
 }
 
-// A COLLECTED CODING RUN IS COUNTED WHERE EVERY OTHER PHASE IS.
+// A COLLECTED LAUNCH IS COUNTED AS THE EXECUTOR'S SPEND.
 //
-// The run's own record is the only place its tokens reach a reader: the
-// executor's resumed record states the executor's rounds, and nothing else
-// carries the run's. So the record has to fold through the stored rollup and
-// the live one alike, under its own phase and its own model — a record either
-// producer dropped would be a coding run's whole spend missing from the screen
-// that exists to show spend.
-func TestASandboxPhaseIsCountedInTheRollup(t *testing.T) {
+// A launch's own record is the only place its tokens reach a reader: the
+// executor's resumed record states the executor's round with no tokens, and
+// nothing else carries the run's. So the record has to fold through the
+// stored rollup and the live one alike — under the executor's phase, since it
+// names none of its own and what it spent is the executor's, and under its own
+// model and price. A record either producer dropped would be a run's whole
+// spend missing from the screen that exists to show spend; one either filed
+// under a phase of its own would be drawn as spend nobody's executor made.
+//
+// Mutation: leave a launch out of the store's spend types, or out of the live
+// projection's, and that producer's rollup has no execute row; file it under
+// no phase, and the row is the unknown one.
+func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 	t.Parallel()
-	payload, err := json.Marshal(types.AgentPhaseCompleted{
+	payload, err := json.Marshal(types.ExecutorCollected{
 		Agent: "a-1", RoleName: "Lead", TurnID: "run-1", WorkKey: "wk-1",
-		Phase: types.PhaseSandbox, Iteration: 2, LaunchID: "job-1",
-		CodingAgent: "claude-code", Model: "claude-sonnet-5",
+		Iteration: 2, LaunchID: "job-1",
+		CodingAgent: "claude-code", Model: "claude-sonnet-5", ProviderKey: "plan",
 		InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700,
-		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42,
+		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42, CLITurns: 31,
 		ActivityTranscript: "[tool] bash: go test ./...",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	const launchType = "executor_collected"
 	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	log := open(t).Events()
-	appendPhase(t, log, "p1", at, payload, store.SpendFor("agent_phase_completed", payload))
+	appendSpend(t, log, launchType, "l1", at, payload, store.SpendFor(launchType, payload))
 
 	var body map[string]any
 	if err := json.Unmarshal(payload, &body); err != nil {
 		t.Fatal(err)
 	}
 	live := livestate.New()
-	live.Apply(&livestate.Envelope{ID: "p1", Type: "agent_phase_completed",
-		Timestamp: at.Format(time.RFC3339Nano), Category: "agent", Payload: body})
+	live.Apply(&livestate.Envelope{ID: "l1", Type: launchType,
+		Timestamp: at.Format(time.RFC3339Nano), Category: "system", Payload: body})
 
-	for name, records := range map[string][]tokens.Record{
-		"stored": phaseTokens(t, log), "live": live.SpendRecords(),
-	} {
+	stored, held := phaseTokens(t, log), live.SpendRecords()
+	if len(stored) != 1 || len(held) != 1 || stored[0] != held[0] {
+		t.Errorf("the producers disagree about one launch:\n stored %+v\n   live %+v", stored, held)
+	}
+	for name, records := range map[string][]tokens.Record{"stored": stored, "live": held} {
 		roll := tokens.Aggregate(records, tokens.Options{})
-		var sandbox *tokens.PhaseRow
-		for i := range roll.ByPhase {
-			if roll.ByPhase[i].Phase == string(types.PhaseSandbox) {
-				sandbox = &roll.ByPhase[i]
-			}
-		}
-		if sandbox == nil {
-			t.Errorf("%s: the rollup has no sandbox phase: %+v", name, roll.ByPhase)
+		if len(roll.ByPhase) != 1 || roll.ByPhase[0].Phase != string(types.PhaseExecute) {
+			t.Errorf("%s: the rollup's phases are %+v, want the launch under the executor's", name, roll.ByPhase)
 			continue
 		}
-		if sandbox.TotalTokens != 9700 || sandbox.CacheReadTokens != 6000 || sandbox.CostUSD != 0.42 {
-			t.Errorf("%s: the sandbox phase holds %+v, want the run's 9700 tokens, 6000 cached, $0.42",
-				name, sandbox.Bucket)
+		execute := roll.ByPhase[0]
+		if execute.TotalTokens != 9700 || execute.CacheReadTokens != 6000 ||
+			execute.CostUSD != 0.42 || execute.Calls != 31 {
+			t.Errorf("%s: the executor's row holds %+v, want the launch's 9700 tokens, 6000 cached, "+
+				"$0.42 over its harness's 31 turns", name, execute.Bucket)
 		}
 		if len(roll.ByModel) != 1 || roll.ByModel[0].Model != "claude-sonnet-5" {
-			t.Errorf("%s: models = %+v, want the run's own", name, roll.ByModel)
+			t.Errorf("%s: models = %+v, want the launch's own", name, roll.ByModel)
 		}
 	}
 }

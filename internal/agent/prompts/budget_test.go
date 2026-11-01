@@ -62,7 +62,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // the first-party tool catalogue (every description a second time), the rules
 // the submission and `decision` schemas state beside their fields, and the
 // meta sentences about what the prompt already holds. 870 -> 795 when the
-// sandbox section went with the tool it taught: every executor is its CLI's
+// sandbox section went with the tool it taught: every executor is its harness's
 // own run now, and a section about handing code work to a box is a section
 // about a box the run is already in.
 //
@@ -104,8 +104,8 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 // gated rule rendered (`a2a_ask`), which is the largest a review prompt gets.
 //
 // The original budget was 300 (identity + a six-line enum), and it grew to
-// 800 as each rule arrived for a turn-ending failure — the rule on reading a
-// coding run's report, the cross-round duplicate rule keyed on target and
+// 800 as each rule arrived for a turn-ending failure — the rule on reading an
+// executor's report, the cross-round duplicate rule keyed on target and
 // content, the settled delivery and incomplete notes, and the blocked rule's
 // three-way split on whether the person has been told.
 //
@@ -113,7 +113,7 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 // `notes` and `completed_work` carry is the submission schema's, beside the
 // fields, and the gated rules rendered only for a seat holding their tool.
 // 590 -> 620 when the rule on a run's local work became UNCONDITIONAL: every
-// executor is a coding CLI whose shell, edits and tests are in no log, so
+// executor is a harness whose shell, edits and tests are in no log, so
 // every review carries it where it used to render for the few seats offered
 // a box. Measured at ~572 with the gate on, so ~8% headroom: the next rule
 // should have to justify itself here, not slip in.

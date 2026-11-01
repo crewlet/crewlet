@@ -235,7 +235,7 @@ func TestAFailureMovesTheVersionsOfWhatItWrote(t *testing.T) {
 }
 
 // A RUN ENDING MOVES THE RUNS' VERSION AND NOTHING ELSE. The frame that
-// publishes a CLI run's end lists one more run, and every committed field
+// publishes a harness run's end lists one more run, and every committed field
 // beside it is what it was — so a push leaves them out and carries the runs.
 //
 // Mutation: compare the runs as always changed, or never, and this fails.

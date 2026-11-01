@@ -168,7 +168,7 @@ providers:
     #
     # See docs/concepts/llm-backends.md.
     default:
-      agent: claude-code            # the default, written out; or opencode,
+      harness: claude-code            # the default, written out; or opencode,
                                     #   the other CLI that runs a seat's
                                     #   executor, which reads `model` in its
                                     #   own grammar, <provider>/<model>
@@ -195,7 +195,7 @@ providers:
                                     #   cell reaches it directly and a remote
                                     #   one would need a headless token.
       # ONE LOGIN, NAMED.  state_dir defaults to a directory derived PER
-      # PROVIDER KEY (~/.crewlet/llm-cli/default here), so a second entry
+      # PROVIDER KEY (~/.crewlet/llm-harness/default here), so a second entry
       # on this same login — a per-phase model on the same plan, say —
       # names this same path to share it.  (The `metered` backstop below
       # is not one: it signs in with an API key, not this login, so it
@@ -214,7 +214,7 @@ providers:
       # the CLI out; `crewlet llm login default -from-host` puts it back
       # with no browser round-trip.  Point it at a persistent volume
       # when the engine runs in an ephemeral container.
-      state_dir: "./nimbus-data/llm-cli/claude"
+      state_dir: "./nimbus-data/llm-harness/claude"
       max_concurrent: 4             # CLI processes on this host at once (the
                                     #   reviewer, workers, side passes),
                                     #   ACROSS the whole company; executor
@@ -287,7 +287,7 @@ providers:
     # the subscription's login:
     #
     # metered:
-    #   agent: claude-code
+    #   harness: claude-code
     #   model: haiku
     #   auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
 

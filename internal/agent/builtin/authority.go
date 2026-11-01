@@ -316,11 +316,11 @@ var subjectOf = map[string]subject{
 	// asks that node first (a probe that offers nothing). And a run's
 	// answer is decided on the run's own row: its requester through the
 	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
-	// answerrun.go.
-	PauseSeatTool:  {kind: authz.KindPerson, inTool: true},
-	ResumeSeatTool: {kind: authz.KindPerson, inTool: true},
-	SteerTurnTool:  {kind: authz.KindPerson, inTool: true},
-	AnswerRunTool:  {kind: authz.KindPerson, inTool: true},
+	// answerexecutor.go.
+	PauseSeatTool:      {kind: authz.KindPerson, inTool: true},
+	ResumeSeatTool:     {kind: authz.KindPerson, inTool: true},
+	SteerTurnTool:      {kind: authz.KindPerson, inTool: true},
+	AnswerExecutorTool: {kind: authz.KindPerson, inTool: true},
 
 	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
 	// whether an agent owns it), which no argument states, and inside a

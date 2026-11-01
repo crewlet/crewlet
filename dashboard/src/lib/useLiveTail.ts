@@ -1,6 +1,6 @@
 /**
- * A running coding run's live output, as a hook: what the view holds, grown by
- * what the run's owner says it lacks.
+ * An executor's live output from its box, as a hook: what the view holds,
+ * grown by what the launch's owner says it lacks.
  *
  * # Why not `useQuery`
  *

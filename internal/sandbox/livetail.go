@@ -14,17 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// What a running coding run has said so far, pulled from the node that owns it.
+// What a running executor has said so far, pulled from the node that owns it.
 //
 // # Why a pull, and why from the owner
 //
 // A detached run writes its own account of itself into its box — the streamed
 // transcript a runner parses, or its stderr — and nothing leaves the box until
 // the run is collected, when the transcript, held to the record's bound (its
-// start and its end, [MaxRunTextBytes]), rides the run's
-// `agent_phase_completed{phase: sandbox}` record. Between the launch and the
-// collection a person watching the run had nothing: the run could be minutes
-// or hours in, and the turn trace showed a bar and no words.
+// start and its end, [MaxRunTextBytes]), rides the launch's own
+// `executor_collected` record. Between the launch and the collection a person
+// watching the run had nothing: the run could be minutes or hours in, and the
+// turn trace showed a bar and no words.
 //
 // A PUBLISHED stream of it was the alternative, and it is the wrong one: an
 // event per poll per run would fill the event store with the same text over and

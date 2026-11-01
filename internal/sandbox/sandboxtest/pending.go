@@ -396,7 +396,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 // A RELAUNCH'S BOX MOVES THE ROW TO ITS CELL. The next job can land in
 // another cell than the last — a fallback onto a member with a run_in of its
 // own — and every reader reaches the box through the row's cell, so the box,
-// its cell and its CLI move as one write: a row that took the new box and kept
+// its cell and its harness move as one write: a row that took the new box and kept
 // the old cell sent every poll, collection and reclaim of it to a backend that
 // never made it.
 func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore) {
@@ -1309,7 +1309,7 @@ func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStor
 
 // A JOB KEEPS THE INSTANT IT WAS FIRST COLLECTED. A later collection of the
 // same job — its resume held by the seat's budget for hours, say — reads the
-// same ending, and a reset its CLI named as a time of day is read against the
+// same ending, and a reset its harness named as a time of day is read against the
 // first collection's instant: read against the later one, a 4:30pm already past
 // was the next day's, and the entry sat out for nothing. So a release that read
 // the box records the instant once, a later one leaves it, a release that did
@@ -2687,7 +2687,7 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 
 // A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. An engine phase's calls sit
 // on a surface in memory and the turn writes them when it ends; a run's are
-// made by its coding CLI, outside the engine, and can outlive the node. A
+// made by its harness, outside the engine, and can outlive the node. A
 // reviewer of a resumed run with no log judges a turn that reads as having
 // acted on nothing.
 func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
@@ -2749,7 +2749,7 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. A coding run's tool
+// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. An executor's tool
 // calls reach its row from as many as twenty subagents at once — Claude Code's
 // default — and the seat's own lease and status writes race them. Each append
 // is a decision the store takes again on a lost race, so none of them is
@@ -2919,7 +2919,7 @@ func testABridgedRunsSpendIsTheNewestTotal(t *testing.T, s sandbox.PendingStore)
 //
 // BOTH SHAPES, and the second is the one a session that learned its job from
 // the row got wrong: a session whose earlier call landed, and a session whose
-// FIRST call is the late one — a delegated worker the CLI opened with, still
+// FIRST call is the late one — a delegated worker the harness opened with, still
 // running when the reviewer relaunched. Neither may land.
 func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.PendingStore) {
 	for _, tc := range []struct {

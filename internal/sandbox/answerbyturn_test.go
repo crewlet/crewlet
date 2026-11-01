@@ -71,7 +71,7 @@ func givenFor(turnID string) (types.ExecutorAnswerGiven, *events.Event) {
 }
 
 // givenAgainst is an operator's answer to the question the run is waiting on
-// now, as answer_run gives it: the run and its question, off the row.
+// now, as answer_executor gives it: the run and its question, off the row.
 func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.ExecutorAnswerGiven, *events.Event) {
 	t.Helper()
 	run := rig.get(turnID)
@@ -119,7 +119,7 @@ func (r *coordRig) answeredRecords() []types.ExecutorAnswered {
 }
 
 // THE PARK PUTS THE QUESTION TO WHOM THE CHART SAYS, and writes it with the
-// question. The label the coding agent chose is resolved for the run that
+// question. The label the harness chose is resolved for the run that
 // asked — its requester is on the row — and a row read back carries the seats
 // and whether they are a fallback.
 func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
@@ -264,11 +264,11 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 }
 
 // AN ANSWER BY TURN CHOOSING WHAT THE QUESTION DOES NOT OFFER IS SPENT, NOT
-// RECORDED. `answer_run` checks the choice against the same question before it
-// delivers, so one arriving here was checked against another; handed to the
-// run, it would be told it chose something nobody offered. Nothing is resumed,
-// the question stays open for an answer it can take, and the person is told
-// on the record that theirs did not land.
+// RECORDED. `answer_executor` checks the choice against the same question
+// before it delivers, so one arriving here was checked against another;
+// handed to the run, it would be told it chose something nobody offered.
+// Nothing is resumed, the question stays open for an answer it can take, and
+// the person is told on the record that theirs did not land.
 //
 // Mutation: record the answer whatever its choice, and the run resumes on an
 // option it never offered.

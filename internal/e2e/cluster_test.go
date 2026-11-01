@@ -438,10 +438,10 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	var stops teardown
 	fail := func(err error) (*node, teardown, error) { return nil, stops, err }
 
-	// ITS CLI KEEPS ITS STATE ON THE MEMBER'S OWN DISK, beside its store, as
+	// ITS HARNESS KEEPS ITS STATE ON THE MEMBER'S OWN DISK, beside its store, as
 	// each machine of a fleet keeps its own: a directory [memberBootstrap]
 	// made on the test's goroutine, since this one may not fail the test.
-	model := newScriptedModelIn(t, filepath.Join(filepath.Dir(boot.Store.Path), "llm-cli"))
+	model := newScriptedModelIn(t, filepath.Join(filepath.Dir(boot.Store.Path), "llm-harness"))
 	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
 	// constructor registers a t.Cleanup as well, which is right for the
 	// single-node cases — but a cluster case that retries three times would

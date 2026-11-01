@@ -43,7 +43,7 @@ import (
 //
 // # A completion is not always an end
 //
-// A turn whose executor launches a detached coding run PARKS: the segment
+// A turn that launches its detached executor PARKS: the segment
 // that launched it publishes `turn_completed` with `suspended: true`, and the
 // same turn id completes again — possibly on another node, possibly after a
 // restart — when the run is collected and the loop resumes. So one turn can
@@ -228,7 +228,7 @@ type Turn struct {
 	// end says which is more likely, and the event list says for certain.
 	Complete bool `json:"complete"`
 
-	// Parked is whether the turn is waiting on a detached coding run: its
+	// Parked is whether the turn is waiting on its detached executor: its
 	// newest completion record is a suspension, so it will complete again
 	// when the run is collected. Never true beside Complete — the newest
 	// completion is one or the other.
@@ -236,7 +236,9 @@ type Turn struct {
 
 	// Phases counts the phase completions, and Iterations is the highest
 	// iteration any of them reached: SELF-ITERATE rounds, the executor →
-	// reviewer → executor loop.
+	// reviewer → executor loop. A launch of the executor's run is no phase
+	// and is not counted: it is the work of the executor round that
+	// launched it, which is.
 	//
 	// NOT the tool rounds a phase used — that is `rounds_used`, on each
 	// phase's own record, and it is a per-phase figure this aggregate has
@@ -271,7 +273,7 @@ type Turn struct {
 	ErrorKind string `json:"error_kind,omitempty"`
 
 	// Stopped is whether a PERSON ended the turn — a pause with
-	// `stop_running` reached it at a round, or ended the coding run it was
+	// `stop_running` reached it at a round, or ended the executor it was
 	// parked on — read off its completion's `stopped` flag. Not a failure,
 	// and never counted as one: a stopped turn's completion carries no
 	// `failed`, so Failed says only what else went wrong in it.
@@ -409,7 +411,7 @@ func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
 		since = now.Add(-time.Duration(days) * 24 * time.Hour)
 	}
 	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
-	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
+	// reason [phaseListSQL]'s own comment gives: a read without it answers
 	// below the retention horizon on a node whose sweep is behind, and a
 	// turns list showing turns the spend rollup excludes is the exact
 	// comparison an operator makes to decide whether a seat went quiet.
@@ -495,14 +497,14 @@ func (c TurnCursor) Before(start time.Time, id string) bool {
 }
 
 // inTurnCost is true of a row that is part of its turn's COST: every row but an
-// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES
-// AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn states it for the live
-// window, and the Turn screen adds the same parts): the reflection after a
-// turn files its spend under the turn's id so the turn's page can draw it, and
-// it is the seat's learning rather than what the work cost — counted here, a
-// turn would grow dearer the more its seat had to remember, and the list's
-// `sort=-tokens` would rank turns by it. Rows that carry no spend have an empty
-// stage and zero tokens, so they change no sum.
+// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES,
+// ITS EXECUTOR'S LAUNCHES AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn
+// states it for the live window, and the Turn screen adds the same parts): the
+// reflection after a turn files its spend under the turn's id so the turn's
+// page can draw it, and it is the seat's learning rather than what the work
+// cost — counted here, a turn would grow dearer the more its seat had to
+// remember, and the list's `sort=-tokens` would rank turns by it. Rows that
+// carry no spend have an empty stage and zero tokens, so they change no sum.
 const inTurnCost = "spend_stage IN ('', 'turn')"
 
 // turnCost sums one spend column over the rows of a turn's cost.
@@ -553,7 +555,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 //
 // A turn's events are written to the event log of the node that PUBLISHED
 // them, and a turn is not always published by one node: a turn parked on a
-// detached coding run resumes wherever its seat is held when the run is
+// detached executor resumes wherever its seat is held when the run is
 // collected, which after a restart or a placement move is another node. So
 // the fleet's row for that turn is spread across two logs, and folding each
 // half into a finished [Turn] loses exactly what the whole needs — whether a
@@ -1042,14 +1044,15 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 	args = append(args, probe)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a phase record carries one. Every turn's group also holds
+	// and only a spend record carries one. Every turn's group also holds
 	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
 	// not empty strings — joined one model as ",claude-opus-5" and handed
 	// every consumer splitting on the comma a nameless band in its legend
 	// and a nameless row in its breakdown.
 	//
 	// THE SPEND AND THE MODELS ARE THE TURN'S COST ([inTurnCost]): its
-	// phases and its in-turn auxiliary calls, never the reflection after it.
+	// phases, its executor's launches and its in-turn auxiliary calls, never
+	// the reflection after it.
 	query := `
 		SELECT turn_id,
 		       MAX(work_key),

@@ -23,7 +23,7 @@
 //
 // # A credential is tested before it is stored
 //
-// The value a person typed is handed to the entry's own CLI in an isolated
+// The value a person typed is handed to the entry's own harness in an isolated
 // home for one one-turn call (decision D2), and sealed only if the vendor
 // signed it in; a 429 proves it authenticated. A refused value is never
 // stored, so the credential the model signs in with keeps signing it in.
@@ -59,13 +59,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 var log = logging.Get("api.llm")
 
-// Engine is the engine's half of the model routes: the calls that run a CLI
+// Engine is the engine's half of the model routes: the calls that run a harness
 // or move runtime state on this node and, through the coordination store, on
 // every node.
 type Engine interface {
@@ -83,12 +83,12 @@ type Engine interface {
 	RetryModel(ctx context.Context, key string, mode coord.ModelRetryMode,
 		by iam.Actor) (Retried, error)
 
-	// CheckHostLogin runs an entry's CLI status command on this node now:
+	// CheckHostLogin runs an entry's harness status command on this node now:
 	// [ErrNoSuchModel], [ErrNoHostLogin].
 	CheckHostLogin(ctx context.Context, key string) (coord.HostLogin, error)
 
 	// StartDeviceSignIn starts a device-code sign-in for an entry and
-	// answers once the CLI printed its code: [ErrNoSuchModel],
+	// answers once the harness printed its code: [ErrNoSuchModel],
 	// [*SignInInProgressError], [ErrNoDeviceSignIn], [*SignInModeError],
 	// [*DeviceSignInUnavailableError].
 	StartDeviceSignIn(ctx context.Context, key string, by iam.Actor) (coord.DeviceSignIn, error)
@@ -109,10 +109,10 @@ type Check struct {
 	// Failure is the first failing check's kind: an llm failure kind (auth,
 	// rate_limit, timeout, server, fatal) or "config"; "" when OK.
 	Failure string
-	// Said is the vendor's or the CLI's own sentence behind Failure.
+	// Said is the vendor's or the harness's own sentence behind Failure.
 	Said string
 	// Lines are the checks, in the doctor's order.
-	Lines []cliagent.Check
+	Lines []harness.Check
 	// Elapsed is how long the call took, for the answer's sentence.
 	Elapsed time.Duration
 	// Limited is the vendor's limit a candidate met, nil when none: a 429
@@ -141,10 +141,10 @@ var (
 	// ErrNotSittingOut is a probe of a model no live node sits out.
 	ErrNotSittingOut = errors.New("llmapi: the model is not sitting out")
 	// ErrNoHostLogin is a host login check of a model that signs in with no
-	// CLI login.
-	ErrNoHostLogin = errors.New("llmapi: the model signs in with no CLI login")
-	// ErrNoDeviceSignIn is a device sign-in on a CLI with none.
-	ErrNoDeviceSignIn = errors.New("llmapi: the CLI has no device sign-in")
+	// harness login.
+	ErrNoHostLogin = errors.New("llmapi: the model signs in with no harness login")
+	// ErrNoDeviceSignIn is a device sign-in on a harness with none.
+	ErrNoDeviceSignIn = errors.New("llmapi: the harness has no device sign-in")
 	// ErrNoSuchSignIn is a device sign-in id no record holds, or one whose
 	// record lapsed.
 	ErrNoSuchSignIn = errors.New("llmapi: no such device sign-in")
@@ -160,18 +160,18 @@ func (e *SignInInProgressError) Error() string {
 
 // SignInModeError is a device sign-in for an entry whose auth mode reads no
 // login (api-key, env).
-type SignInModeError struct{ Mode config.CLIAgentAuthMode }
+type SignInModeError struct{ Mode config.HarnessAuthMode }
 
 func (e *SignInModeError) Error() string {
 	return "llmapi: the model signs in with auth.mode " + string(e.Mode) + ", which reads no login"
 }
 
-// DeviceSignInUnavailableError is a device sign-in whose CLI printed no code
+// DeviceSignInUnavailableError is a device sign-in whose harness printed no code
 // in time, with its first line.
 type DeviceSignInUnavailableError struct{ Line string }
 
 func (e *DeviceSignInUnavailableError) Error() string {
-	return "llmapi: the CLI printed no device code: " + e.Line
+	return "llmapi: the harness printed no device code: " + e.Line
 }
 
 // Config is the config surface as the model routes need it: the active
@@ -291,7 +291,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		}
 	}
 	// A CREDENTIAL'S TEST IS NOT A CHECK in ADR-0055's sense, though it
-	// reads `dry_run`: it runs the entry's CLI with the candidate and sends
+	// reads `dry_run`: it runs the entry's harness with the candidate and sends
 	// it to the vendor, which changes something and spends tokens. So it is
 	// EACH POST SAYS WHAT IT DOES (authz.Effect): a check, a retry and a
 	// host-login check act on the entry their path names and keep it, each
@@ -376,7 +376,7 @@ func (s *Service) activeEntry(w http.ResponseWriter, r *http.Request, key string
 // mayRunDraft decides a request that runs a DRAFT entry, answering the
 // refusal itself; it reports whether the request may go on.
 //
-// A DRAFT IS AS POWERFUL AS THE WRITES IT STANDS FOR. Its CLI, binary,
+// A DRAFT IS AS POWERFUL AS THE WRITES IT STANDS FOR. Its harness, binary,
 // overrides and env are the caller's to choose, and its ${VAR}s resolve
 // through the fleet's secret store as an apply's would, so running one is
 // running whatever a config write could make the company run, with any

@@ -68,7 +68,8 @@ const (
 
 // The finding this commit closes: a turn that ended on the resume path wrote
 // no conversation entry at all, so the thread's history stopped at the moment
-// the coding run detached and the seat's next turn planned the work again.
+// the turn detached its executor and the seat's next turn planned the work
+// again.
 func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 	t.Parallel()
 	e, conversations := resumingEngine(t)
@@ -334,7 +335,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 //
 // The engine's current company here has no seats at all, standing in for the
 // epoch an apply swapped in after the admission. A resume hands the run's
-// result to the seat's reviewer, whose model is a CLI that is not installed,
+// result to the seat's reviewer, whose model is a harness that is not installed,
 // so the turn stops at the reviewer's first round: reaching that round at all
 // is the proof, since it needs a runner built for the seat, and a runner built
 // from the engine's current company is refused before it exists.

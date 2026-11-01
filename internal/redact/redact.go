@@ -2,9 +2,9 @@
 // engine.
 //
 // Anything the engine ships to a place a person or a model reads — a tool
-// result, a coding-agent transcript, a setup-step failure, an event-store
+// result, a harness transcript, a setup-step failure, an event-store
 // payload — can carry a credential it never meant to. A cloned repo URL with
-// the token in it, a CLI that echoes its key on failure, a provisioning
+// the token in it, a harness that echoes its key on failure, a provisioning
 // command whose ${VAR} was resolved before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
@@ -337,7 +337,7 @@ func armourAt(text string, i int) bool {
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
-// coding-agent transcripts, the largest free text the engine moves. Every rule
+// harness transcripts, the largest free text the engine moves. Every rule
 // opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
 // with instead.
 //
@@ -364,8 +364,8 @@ var rules = []rule{
 // artifact view ticket each carry, `crewlet_rt1.<tag>.<subject>.<expiry>.<sig>`.
 //
 // BY ITS SHAPE, as a vendor's key is, because there is no value to redact it
-// by: no node that collects a coding run holds the tokens its launch minted —
-// the run's row carries none — and a coding agent that prints its environment
+// by: no node that collects an executor holds the tokens its launch minted —
+// the run's row carries none — and a harness that prints its environment
 // or its MCP configuration prints its run's. `crewlet_rt1` is the literal
 // runtoken opens every token with for this rule to key on, and runtoken's
 // TestAMintedTokenIsRedacted holds the two spellings to one.
@@ -1529,7 +1529,7 @@ func (w written) at(i int) int {
 // `sk-`, `AKIA`, `xox` — which Go's regexp finds with a byte scan at gigabytes
 // a second, starting its machine only where one is. A case-insensitive
 // alternation has no literal, so the machine stepped through every byte of
-// every text this package was handed: over two mebibytes of a coding run's
+// every text this package was handed: over two mebibytes of an executor's
 // transcript, 42 ms of a 45 ms pass (measured, [BenchmarkSecrets]), and 0.7 s
 // of it under the race detector — at every one of the places a run's
 // transcript and failure are redacted, and on every read of a live view
@@ -2675,7 +2675,7 @@ func (r *keyReader) header(line string) bool {
 // ([Settled]): an END not written yet can read back over every line that could
 // be its body, so each such line waits to be shown until enough lines that
 // cannot be follow it — and a hash in hex, a path or a package name in lower
-// case, the commonest long base64-alphabet runs a coding run prints, are shown
+// case, the commonest long base64-alphabet runs an executor prints, are shown
 // at once.
 //
 // A DIGIT IS NOT ASKED FOR. A line of random bytes' base64 lacks one about once
@@ -2692,7 +2692,7 @@ func (r *keyReader) header(line string) bool {
 // base64 is rarer than one in a trillion.
 //
 // WHAT NOT ASKING COSTS is the runs of letters in both cases, as wide as a
-// key's line, that a coding run does print: a Go test's name — most of this
+// key's line, that an executor does print: a Go test's name — most of this
 // repository's are forty characters or more, in both cases with no digit — a
 // CamelCase identifier, a path in mixed case. Each reads like a key's line
 // now. A live view holds it as it holds one ([backHold]), so a verbose test

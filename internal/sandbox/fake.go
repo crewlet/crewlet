@@ -403,7 +403,7 @@ func (p *FakeProvider) KilledIDs() []string {
 	return slices.Clone(p.Killed)
 }
 
-// FakeRunner is a coding agent whose job finishes when a test says so — or,
+// FakeRunner is a harness whose job finishes when a test says so — or,
 // with a [FakeRunner.Player], whose every job is played by that function.
 type FakeRunner struct {
 	mu sync.Mutex
@@ -436,9 +436,9 @@ type FakeRunner struct {
 	Player func(ctx context.Context, req RunRequest) Result
 	plays  map[string]*fakePlay
 
-	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the CLI
+	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the harness
 	// this fake stands in for takes a person's notes between its own steps,
-	// as a real runner's CLI taught to does. Set it before the first
+	// as a real runner's harness taught to does. Set it before the first
 	// collection.
 	TakesNotes bool
 
@@ -528,11 +528,11 @@ func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) 
 	return p.result, true
 }
 
-// Name is the coding agent's key in the runner registry.
+// Name is the harness's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
 
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
-// whose CLI takes a person's notes between its steps gives the coordinator.
+// whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
 // Install records that the agent was provisioned into the box.
@@ -773,7 +773,7 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 
 // Started is every run request handed to Start, in order — whole, the steer
 // wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
-// CLI's own side of the run against what the launch gave it.
+// harness's own side of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

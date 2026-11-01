@@ -16,13 +16,13 @@ import (
 //
 // THE HOTTEST KEY THE FLEET HAS. The company's counter is written by every
 // round of every seat the company runs, by every auxiliary call and by every
-// collected coding run, and a seat's by each of its own rounds, its workers'
-// and its coding runs. So the number of writers racing one record is the
-// number of rounds in flight across the company, which grows with the company
-// and which nothing in the engine bounds. Two rules follow, one for each kind
-// of contender: a node's own writers are combined, and a race lost to another
-// node is retried by the fleet store's rule for every race (race.go), held to
-// each write.
+// collected executor launch, and a seat's by each of its own rounds, its
+// workers' and its executor's launches. So the number of writers racing one
+// record is the number of rounds in flight across the company, which grows
+// with the company and which nothing in the engine bounds. Two rules follow,
+// one for each kind of contender: a node's own writers are combined, and a
+// race lost to another node is retried by the fleet store's rule for every
+// race (race.go), held to each write.
 //
 // # A node's own writers never race each other
 //

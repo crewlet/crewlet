@@ -90,7 +90,7 @@ var toolExposures = []Exposure{
 	proposed(authz.ActionInboxMark, markInboxTool),
 	proposed(authz.ActionPageCreate, "create_page"),
 	proposed(authz.ActionPageSave, "edit_page"),
-	proposed(authz.ActionRunAnswer, "answer_coding_run"),
+	proposed(authz.ActionExecutorAnswer, answerExecutorTool),
 	proposed(authz.ActionSeatPause, "pause_agent"),
 	proposed(authz.ActionSeatResume, "resume_agent"),
 	proposed(authz.ActionTurnSteer, steerTurnTool),

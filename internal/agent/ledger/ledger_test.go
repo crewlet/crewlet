@@ -184,10 +184,10 @@ func TestMetaToolsAreFilteredFromTheCallList(t *testing.T) {
 
 func TestAnIterationRoundTripsThroughJSON(t *testing.T) {
 	t.Parallel()
-	// A detached sandbox run ends the turn and its completion starts a NEW
-	// one. Without this round-trip the resumed turn forgets every earlier
-	// round and can re-fire its deliveries — the exact bug the ledger
-	// exists to prevent, reached by a different road.
+	// A detached executor ends the turn's segment and its completion starts
+	// a NEW one. Without this round-trip the resumed turn forgets every
+	// earlier round and can re-fire its deliveries — the exact bug the
+	// ledger exists to prevent, reached by a different road.
 	want := Iteration{
 		Iteration:     2,
 		Intent:        "retry the post",

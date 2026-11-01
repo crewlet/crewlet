@@ -473,7 +473,7 @@ const PEEK_RUNS = 3;
  * What it does NOT say is the one after — and the fires after the next are
  * what tell a reader whether an expression means what its author thought.
  *
- * Exported for its own suite, in this tree's idiom (`Runs.BridgeLog`,
+ * Exported for its own suite, in this tree's idiom (`Executors.BridgeLog`,
  * `Seat.CounterpartyRow`): the claim worth pinning is which ZONE the
  * expression is worked out in, and the screen around it needs an org, a
  * roster and three queries before this panel draws at all.

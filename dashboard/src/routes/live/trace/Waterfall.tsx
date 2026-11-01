@@ -32,18 +32,19 @@
  * {agent} called it" — the narration of the ROUND that asked for it, labelled
  * as that round's and saying how many calls the round asked for, because a
  * round that asked for four explains all four at once and a sentence quoted
- * under one of them would read as its alone — and a coding run's box facts.
+ * under one of them would read as its alone — and a launch's box facts.
  *
- * # A running coding run is watched, not replayed
+ * # An executor running in its box is watched, not replayed
  *
- * While a coding run's span is open AND a reader has it open, its live output
- * is asked of the node that reads its box every [EXECUTOR_TAIL_POLL_MS]
- * (`executor_tail`), and the view holds what it is sent — up to what the run's
- * record will hold — following the end unless the reader scrolled up. Nothing
- * else asks: closing the span, or the run stopping, stops the poll; a job still
- * being set up is not a stopped one. The answer is honest about the ways it can
- * be empty — a run that has not written anything yet, a job not started yet,
- * and a node that did not answer — and names that node in the last, because
+ * While a launch's span is open AND a reader has it open, its live output is
+ * asked of the node that reads its box every [EXECUTOR_TAIL_POLL_MS]
+ * (`executor_tail`), and the view holds what it is sent — up to what the
+ * launch's record will hold — following the end unless the reader scrolled up.
+ * Nothing else asks: closing the span, or the executor stopping, stops the
+ * poll; a launch still being set up is not a stopped one. The answer is honest
+ * about the ways it can be empty — an executor that has not written anything
+ * yet, a launch not started yet, and a node that did not answer — and names
+ * that node in the last, because
  * "nothing to show" and "the node that could show it is silent" send a reader
  * to opposite places.
  */
@@ -98,7 +99,7 @@ const KIND_LABEL: Record<SpanKind, string> = {
   tool: "Tool call",
   worker: "Worker",
   judge: "Judge",
-  run: "Coding run",
+  run: "Launch",
   reflection: "Reflection",
   pending: "Waiting",
 };
@@ -107,11 +108,11 @@ const KIND_LABEL: Record<SpanKind, string> = {
 type SteerBoundary = (typeof STEER_BOUNDARIES)[number];
 
 /**
- * How the trace says each kind of step that read a note. A read INSIDE A CODING
- * RUN is the run's — its brief, a batch of its tool calls, its finish, its next
- * step — and is drawn on the run's bar, said as the step of the phase's run
- * (*read by the coding run of Execute as it was finishing*); a round is the
- * engine's own loop's (*read at round 2 of Review*). The compiler holds every
+ * How the trace says each kind of step that read a note. A read INSIDE A LAUNCH
+ * is the executor's — its brief, a batch of its tool calls, its finish, its
+ * next step — and is drawn on the launch's bar, said as the step of the
+ * phase's executor (*read by the executor in Execute, as it was finishing*); a
+ * round is the engine's own loop's (*read at round 2 of Review*). The compiler holds every
  * boundary of the contract to its words.
  */
 const READ_AT: Record<SteerBoundary, { inRun: boolean; words: string }> = {
@@ -146,8 +147,8 @@ export interface SteerMark {
   /** Whether `by` is a seat's handle: the author kind the engine recorded
    *  beside it (`steered_by_kind`) is `human` or `agent`, never `operator`. */
   bySeat: boolean;
-  /** The span that read it — a round's model call, or the coding run's bar for
-   *  a read inside the run — or "" for an expired one. */
+  /** The span that read it — a round's model call, or the launch's bar for a
+   *  read inside the launch — or "" for an expired one. */
   spanId: string;
   round: number;
   phase: string;
@@ -155,7 +156,7 @@ export interface SteerMark {
   /** The kind of step that read it; "unknown" for a delivered record this
    *  build cannot name, and "" for an expired note, which nothing read. */
   boundary: SteerBoundary | "unknown" | "";
-  /** The coding run's job that read it, for a read inside a run. */
+  /** The launch that read it, for a read inside a launch. */
   launchId: string;
   at: string;
 }
@@ -178,12 +179,12 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
       const launchId = typeof p.launch_id === "string" ? p.launch_id : "";
       // A DELIVERED NOTE NAMES ITS STEP; an expired one names none.
       const boundary = outcome === "delivered" ? boundaryOf(p.boundary) : "";
-      // A READ INSIDE A CODING RUN is drawn on that run's bar (`run:<job>`,
-      // the span the trace gives a job), not on a round of the engine's loop,
-      // which was parked while the run worked. A step this build does not
-      // know is placed on the run its record names, and nowhere without one:
-      // drawn on a round, it would claim the engine's loop read a note it
-      // never saw.
+      // A READ INSIDE A LAUNCH is drawn on that launch's bar (`run:<launch>`,
+      // the span the trace gives a launch), not on a round of the engine's
+      // loop, which was parked while the executor worked. A step this build
+      // does not know is placed on the launch its record names, and nowhere
+      // without one: drawn on a round, it would claim the engine's loop read
+      // a note it never saw.
       const inRun =
         boundary === "unknown" ? launchId !== "" : boundary !== "" && READ_AT[boundary].inRun;
       return {
@@ -453,9 +454,9 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
 }
 
 /**
- * Where a delivered note was read, in words: the round of a phase, the step of a
- * phase's coding run, or — for a step this build cannot name — the turn in that
- * phase, never a round.
+ * Where a delivered note was read, in words: the round of a phase, the step of
+ * the executor in its phase, or — for a step this build cannot name — the turn
+ * in that phase, never a round.
  */
 function readAt(m: SteerMark): string {
   const phase = m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
@@ -463,7 +464,7 @@ function readAt(m: SteerMark): string {
     return `read by the turn${phase ? ` in ${phase}` : ""}`;
   const of = phase ? ` of ${phase}` : "";
   if (m.boundary === "round") return `read at round ${m.round}${of}`;
-  return `read by the coding run${of} ${READ_AT[m.boundary].words}`;
+  return `read by the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}`;
 }
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
@@ -777,7 +778,7 @@ function RunDetail({
         rows={[
           ["Coding agent", span.sub],
           ["Box", record?.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : ""],
-          ["Job", span.launchId ? <InlineCode>{span.launchId}</InlineCode> : ""],
+          ["Launch", span.launchId ? <InlineCode>{span.launchId}</InlineCode> : ""],
           ["Delivered", record ? deliveredLine(record) : ""],
           ["Tokens", record && record.totalTokens > 0 ? fmtCount(record.totalTokens) : ""],
         ]}
@@ -787,42 +788,49 @@ function RunDetail({
       ) : span.open ? (
         <NoJobCaption />
       ) : record?.transcript ? (
-        <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
+        <CodeBlock
+          plain
+          selectable
+          copyable
+          label="What the executor did"
+          code={record.transcript}
+        />
       ) : (
-        <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
+        <span className="t-caption">The launch&rsquo;s record carries no transcript.</span>
       )}
     </>
   );
 }
 
 /**
- * What stands where a running coding run's live output would, when its
- * announcement names no job to ask for: the Timeline's span detail and a
- * parked turn's Transcript say it in the same words.
+ * What stands where an executor's live output would, when its announcement
+ * names no launch to ask for: the Timeline's span detail and a parked turn's
+ * Transcript say it in the same words.
  */
 export function NoJobCaption() {
   return (
     <span className="t-caption">
-      No live output. It appears on the run&rsquo;s record when collected.
+      No live output. It appears on the launch&rsquo;s record when collected.
     </span>
   );
 }
 
 /**
- * A running coding run's live output, asked of the node that owns it every
+ * An executor's live output from its box, asked of the node that owns it every
  * [EXECUTOR_TAIL_POLL_MS] for as long as this is mounted — which is as long as
- * a reader has the span (or the run's page) open and the job has not stopped.
+ * a reader has the span (or the executor's page) open and the launch has not
+ * stopped.
  *
- * It HOLDS what it has been sent, up to what the run's record will hold, and is
- * sent only what it lacks (`lib/useLiveTail.ts`). It FOLLOWS THE END — the
+ * It HOLDS what it has been sent, up to what the launch's record will hold, and
+ * is sent only what it lacks (`lib/useLiveTail.ts`). It FOLLOWS THE END — the
  * newest line is the one that answers "what is it doing now" — unless the
  * reader has scrolled up, in which case the text they are reading stays where
  * it is. And it says what it does not hold, from the answer and from what it
  * dropped, rather than spelling a bound of its own.
  *
  * A `replaced` answer is reported through `onReplaced`, for a screen that names
- * the job by the run's current one: the run's page reads the board again and
- * follows the new job.
+ * the launch by the executor's current one: the executor's page reads the board
+ * again and follows the new launch.
  */
 export function LiveOutput({
   turnId,
@@ -875,18 +883,20 @@ export function LiveOutput({
   } else if (answer.outcome === "owner_silent") {
     notice = (
       <Callout variant="warning">
-        {answer.node ? `${answer.node} didn’t answer. Retrying.` : "Recovering this run."}
+        {answer.node ? `${answer.node} didn’t answer. Retrying.` : "Recovering this launch."}
       </Callout>
     );
   } else if (answer.outcome === "launching") {
     notice = <span className="t-caption">Setting up. Output appears when the agent starts.</span>;
   } else if (answer.outcome === "box_paused") {
-    notice = <span className="t-caption">Finished. Output appears on the run&rsquo;s record.</span>;
+    notice = (
+      <span className="t-caption">Finished. Output appears on the launch&rsquo;s record.</span>
+    );
   } else if (answer.outcome === "box_gone") {
     notice = (
       <span className="t-caption">
-        The run&rsquo;s box is gone, so no more output will come from this job. Its record will say
-        what happens next.
+        The executor&rsquo;s box is gone, so no more output will come from this launch. Its record
+        will say what happens next.
       </span>
     );
   } else if (answer.outcome === "not_running") {
@@ -895,7 +905,7 @@ export function LiveOutput({
         {answer.status === "awaiting_clarification" || answer.status === "reseed"
           ? "Waiting for an answer."
           : replaced
-            ? "A later job replaced this one on the same run."
+            ? "A later launch of the executor replaced this one."
             : "Stopped. Output appears on its record."}
       </span>
     );
@@ -908,7 +918,7 @@ export function LiveOutput({
   // each new line of output and the busy flag changed every three seconds, so
   // a screen reader read the clock and the transcript aloud for as long as
   // the span stayed open. Only a change of STATE — the owner went silent, the
-  // run stopped, it is showing output again — is news; the output itself is
+  // executor stopped, it is showing output again — is news; the output itself is
   // there to be read at the reader's own pace.
   const state = liveState(answer, !!tail.error);
   const holding = holdingLine(tail);
@@ -956,7 +966,7 @@ export function LiveOutput({
 const FOLLOW_SLACK_PX = 24;
 
 /**
- * What the view holds, said when it is not the whole of what the run wrote —
+ * What the view holds, said when it is not the whole of what the executor wrote —
  * from the answer's own bound and the view's own count, never a figure spelled
  * here.
  */
@@ -967,7 +977,7 @@ export function holdingLine(view: LiveView): string {
       `the last ${fmtBytes(utf8Bytes(view.text))} held; ${fmtBytes(view.dropped)} earlier not held here`,
     );
   }
-  if (view.front) parts.push("read from partway through the run");
+  if (view.front) parts.push("read from partway through the launch");
   return parts.join("; ");
 }
 
@@ -978,23 +988,23 @@ export function holdingLine(view: LiveView): string {
  */
 export function liveState(answer: ExecutorTailAnswer | null | undefined, failed: boolean): string {
   if (!answer)
-    return failed ? "The run's output could not be read." : "Asking the node that runs it.";
+    return failed ? "The executor's output could not be read." : "Asking the node that runs it.";
   switch (answer.outcome) {
     case "owner_silent":
       return "The node that runs it did not answer.";
     case "launching":
-      return "The job is being set up.";
+      return "The launch is being set up.";
     case "box_paused":
-      return "The run's box is paused; its job has finished.";
+      return "The executor's box is paused; its launch has finished.";
     case "box_gone":
-      return "The run's box is gone.";
+      return "The executor's box is gone.";
     case "not_running":
-      return "The run is no longer running.";
+      return "The executor is no longer running.";
     default:
       return !answer.output || answer.output.source === "none"
-        ? "The run has not written anything yet."
+        ? "The executor has not written anything yet."
         : answer.output.finished
-          ? "The run finished; its output is shown."
-          : "Showing the run's live output.";
+          ? "The launch finished; its output is shown."
+          : "Showing the executor's live output.";
   }
 }

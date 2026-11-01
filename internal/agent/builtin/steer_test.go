@@ -94,7 +94,7 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 }
 
 // runRecords is the turn's run records as the tool reads them: none by
-// default — a turn that has not launched its coding run — or one naming a seat
+// default — a turn that has not launched its executor — or one naming a seat
 // and filing every note with what the case says, recording what it was handed.
 type runRecords struct {
 	mu       sync.Mutex
@@ -635,7 +635,7 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	}
 }
 
-// recordedTurn is a turn whose coding run has launched: its record names the
+// recordedTurn is a turn that has launched its executor: its record names the
 // CTO seat, and files every note with filed.
 func recordedTurn(t *testing.T, filed builtin.RunFiled) *runRecords {
 	t.Helper()
@@ -644,7 +644,7 @@ func recordedTurn(t *testing.T, filed builtin.RunFiled) *runRecords {
 		filed: filed}
 }
 
-// A RUN RECORD DECIDES WITHOUT A SCATTER: a turn whose coding run has launched
+// A RUN RECORD DECIDES WITHOUT A SCATTER: a turn that has launched its executor
 // keeps its notes on the run's record, which every node reads — so the note is
 // filed there, by this node, and the fleet is asked nothing. A lead is decided on
 // the seat the record names; asking the fleet as well would be a second answer
@@ -675,7 +675,7 @@ func TestARunRecordDecidesWithoutAScatter(t *testing.T) {
 	}
 }
 
-// NO RUN RECORD PROBES, THEN OFFERS: a turn that has not launched its coding run
+// NO RUN RECORD PROBES, THEN OFFERS: a turn that has not launched its executor
 // keeps its notes in its first segment's box, which only the node running it
 // can reach — so the fleet is asked whose turn it is, and then offered the
 // note, and no record is written.
@@ -816,21 +816,21 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 			runs.fileErr = unanswered
 			return runs
 		}, tools.RefusalUnavailable, "Could not file the note on the record of turn run-1's " +
-			"coding run (the coordination store did not answer). Try again shortly."},
+			"executor (the coordination store did not answer). Try again shortly."},
 		{"a record the store did not read", func(*testing.T) *runRecords {
 			return &runRecords{seatErr: unanswered}
-		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's coding run " +
+		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's executor " +
 			"(the coordination store did not answer). Nothing was sent. Try again shortly."},
 		{"a filing this node could not make", func(t *testing.T) *runRecords {
 			runs := recordedTurn(t, builtin.RunFiled{})
 			runs.fileErr = undecodable
 			return runs
 		}, tools.RefusalInternalError, "Could not file the note on the record of turn run-1's " +
-			"coding run: a fault in this node itself"},
+			"executor: a fault in this node itself"},
 		{"a record this node cannot read", func(*testing.T) *runRecords {
 			return &runRecords{seatErr: undecodable}
-		}, tools.RefusalInternalError, "Could not read the record of turn run-1's coding " +
-			"run: a fault in this node itself"},
+		}, tools.RefusalInternalError, "Could not read the record of turn run-1's executor: " +
+			"a fault in this node itself"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -78,6 +78,30 @@ function phaseEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:0
   };
 }
 
+/** One collected launch of the executor's run, as `executor_collected` lands. */
+function launchEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:07Z"): EventRecord {
+  const base = phaseEvent({}, ts);
+  return {
+    ...base,
+    id: `launch-${String(over.launch_id ?? "job-1")}`,
+    type: "executor_collected",
+    category: "system",
+    payload: {
+      turn_id: "t1",
+      iteration: 1,
+      launch_id: "job-1",
+      coding_agent: "claude-code",
+      model: "claude-sonnet-5",
+      response: "Fixed the flake.",
+      cli_turns: 31,
+      input_tokens: 9_000,
+      output_tokens: 700,
+      total_tokens: 9_700,
+      ...over,
+    },
+  };
+}
+
 // THE STAGE A CARD DRAWS STALENESS FROM IS THE TURN'S, and only this call's
 // turn: a seat that has already started another turn says nothing about the
 // call a screen still holds from the last one.
@@ -681,47 +705,80 @@ describe("delegated workers", () => {
     expect(live.key).toBe(done.key);
   });
 
-  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A run that parked on a
-  // question and is relaunched on its answer is a second launch of the same
-  // iteration, and keyed on the three parts alone the map kept the last one to
-  // arrive — the first run, its report and its spend simply were not on the
-  // page. The executor that resumed from a run names it too, and keeps its
+  // TWO LAUNCHES OF ONE ROUND ARE TWO RECORDS. A run that parked on a
+  // question and is carried on by its answer is a second launch of the same
+  // round, and keyed on the round alone the map kept the last one to arrive —
+  // the first launch, its report and its spend simply were not on the page.
+  // The executor that resumed from a launch names it too, and keeps its
   // three-part key, or it would stop matching the live call it replaces.
-  test("a coding run is keyed on its launch, and the executor that collected it is not", () => {
-    const first = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-1" }))!;
-    const second = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-2" }))!;
-    expect(first.key).toBe("t1|sandbox|1|job-1");
+  test("a launch is keyed on its job under its round, and the executor that collected it is not", () => {
+    const first = fromPhaseEvent(launchEvent({ launch_id: "job-1" }))!;
+    const second = fromPhaseEvent(launchEvent({ launch_id: "job-2" }))!;
+    expect(first.key).toBe("t1|execute|1|job-1");
     expect(second.key).not.toBe(first.key);
     expect(first.launchId).toBe("job-1");
 
     const resumed = fromPhaseEvent(phaseEvent({ phase: "execute", launch_id: "job-2" }))!;
     const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
     expect(resumed.key).toBe(live.key);
+    expect(resumed.launch).toBe(false);
   });
 
-  // THE RUN'S OWN ACCOUNT reaches the record the card renders, and a turn
-  // reads the run after the executor that launched it.
-  test("a coding run carries its transcript and follows its executor", () => {
-    const run = fromPhaseEvent(
-      phaseEvent(
-        {
-          phase: "sandbox",
-          launch_id: "job-1",
-          activity_transcript: "[tool] bash: go test",
-        },
-        "2026-01-01T00:00:05Z",
-      ),
+  // A LAUNCH IS READ AS THE EXECUTOR'S WORK: the round's phase word, its
+  // report, its CLI's own turns and what it spent — and no price, which the
+  // dashboard never draws.
+  test("a launch is read as a record of its executor round", () => {
+    const launch = fromPhaseEvent(
+      launchEvent({ activity_transcript: "[tool] bash: go test", failed: true, error: "exit 1" }),
     )!;
-    expect(run.transcript).toBe("[tool] bash: go test");
-    // A WHOLE RECORD SAYS NOTHING WAS LEFT OUT: the engine omits a count of
-    // zero, so its absence is none.
-    expect([run.transcriptElidedLines, run.transcriptElidedBytes, run.deliveredRefsElided]).toEqual(
-      [0, 0, 0],
-    );
+    expect([launch.phase, launch.iteration, launch.launch]).toEqual(["execute", 1, true]);
+    expect(launch.response).toBe("Fixed the flake.");
+    expect(launch.transcript).toBe("[tool] bash: go test");
+    expect([launch.harnessTurns, launch.totalTokens, launch.codingAgent]).toEqual([
+      31,
+      9_700,
+      "claude-code",
+    ]);
+    expect([launch.failed, launch.error]).toEqual([true, "exit 1"]);
+    // NO ROUNDS AND NO DECISION: those were the CLI's, and the round's.
+    expect([launch.roundsUsed, launch.decision, launch.tools]).toEqual([0, "", []]);
+  });
+
+  // ONE CARD PER ROUND, ITS LAUNCHES INSIDE. A launch is filed under the
+  // `execute` record of the round that launched it, the launches oldest
+  // first — so the turn's own phases are the ones it ran, and the round's
+  // card holds its run.
+  //
+  // Mutation: leave a launch among the turn's own phases, and they read
+  // execute, execute, review.
+  test("a round's launches are filed under its executor, oldest first", () => {
     const executor = fromPhaseEvent(phaseEvent({ phase: "execute" }, "2026-01-01T00:00:09Z"))!;
     const review = fromPhaseEvent(phaseEvent({ phase: "review" }, "2026-01-01T00:00:12Z"))!;
-    const [turn] = groupTurns([review, run, executor]);
-    expect(turn?.phases.map((p) => p.phase)).toEqual(["execute", "sandbox", "review"]);
+    const first = fromPhaseEvent(launchEvent({ launch_id: "job-1" }, "2026-01-01T00:00:05Z"))!;
+    const second = fromPhaseEvent(launchEvent({ launch_id: "job-2" }, "2026-01-01T00:00:08Z"))!;
+    const [turn] = groupTurns([review, second, executor, first]);
+    expect(turn?.phases.map((p) => p.phase)).toEqual(["execute", "review"]);
+    const held = turn?.launches.get(phaseKey("t1", "execute", 1)) ?? [];
+    expect(held.map((l) => l.launchId)).toEqual(["job-1", "job-2"]);
+    // AND THE TURN'S TOTAL COUNTS THEM: the run's spend is the turn's.
+    expect(turn?.totalTokens).toBe(120 * 2 + 9_700 * 2);
+  });
+
+  // A LAUNCH WITH NO ROUND IN HAND DOES NOT VANISH. A run that parked on a
+  // question and ended before an answer resumed it left its launch and no
+  // executor record of its round; the launch stands among the turn's own, in
+  // its round's place.
+  test("a launch whose round has no record stands in its round's place", () => {
+    const review = fromPhaseEvent(
+      phaseEvent({ phase: "review", iteration: 1 }, "2026-01-01T00:00:12Z"),
+    )!;
+    const orphan = fromPhaseEvent(launchEvent({}, "2026-01-01T00:00:05Z"))!;
+    const [turn] = groupTurns([review, orphan]);
+    expect(turn?.phases.map((p) => [p.phase, p.launch])).toEqual([
+      ["execute", true],
+      ["review", false],
+    ]);
+    expect(turn?.launches.size).toBe(0);
   });
 });
 
@@ -732,12 +789,10 @@ describe("delegated workers", () => {
 //
 // Mutation: count the transcript's lines without the elided fields, or join
 // the refs without the count, and these go red.
-describe("what a coding run's record left out", () => {
+describe("what a launch's record left out", () => {
   test("is read off the record", () => {
     const run = fromPhaseEvent(
-      phaseEvent({
-        phase: "sandbox",
-        launch_id: "job-1",
+      launchEvent({
         activity_transcript: "plan\n(3998 line(s), 900 KiB, left out here)\nend",
         activity_transcript_elided_lines: 3998,
         activity_transcript_elided_bytes: 921_600,

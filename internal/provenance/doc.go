@@ -140,7 +140,7 @@
 // writes back where a seat reads it (a memory, a trait, a skill, a judge's
 // reason), which is defused under the turn's token. Which calls those are is
 // not a list anybody keeps: a walk of the tree finds every function that
-// builds a model's input, a provider request or the launch of a coding CLI's
+// builds a model's input, a provider request or the launch of a harness's
 // run (every seat's executor is one), and refuses one that does not say which
 // test holds its fences, or why it reads nobody's words.
 //

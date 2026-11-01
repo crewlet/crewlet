@@ -1545,7 +1545,7 @@ func (n *Notify) checkSnapshot() error {
 //
 // WHAT A TURN'S TOKENS ARE is the engine's to decide (see ADR-0022): its own
 // phases, the workers it delegated to and the extension judge, plus a
-// collected coding run's tokens on the segment that resumed from it. Workers
+// collected executor's tokens on the segment that resumed from it. Workers
 // and SentBack are COUNTS beside those tokens, not more tokens — how many
 // delegated tasks ran and how many reviews sent the work back — and both are
 // OMITTED AT ZERO, like every counter here, so a turn that delegated nothing

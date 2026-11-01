@@ -1,5 +1,5 @@
 /**
- * A running coding run's live view, as the engine bounds it
+ * An executor's live view from its box, as the engine bounds it
  * (`internal/sandbox`, livetail.go and livefeed.go).
  *
  * Each is a COPY of something the engine owns, because this is a separate
@@ -11,11 +11,11 @@
 /**
  * The outcomes an `executor_tail` answer names — `sandbox.TailOutcomes`.
  *
- * `launching`, `box_paused` and `box_gone` are NOT terminal — a job still being
- * set up, a box paused between its collection and its record moving on, a box
- * its backend says is gone before its record moves on (the job recorded lost,
- * its round carried on in a fresh one) — and a screen keeps asking through all
- * three; only `not_running` ends the asking.
+ * `launching`, `box_paused` and `box_gone` are NOT terminal — a launch still
+ * being set up, a box paused between its collection and its record moving on, a
+ * box its backend says is gone before its record moves on (the launch recorded
+ * lost, its round carried on in a fresh one) — and a screen keeps asking
+ * through all three; only `not_running` ends the asking.
  */
 export const EXECUTOR_TAIL_OUTCOMES = [
   "tail",
@@ -27,14 +27,14 @@ export const EXECUTOR_TAIL_OUTCOMES = [
 ] as const;
 
 /**
- * The most of a running job's output the live view holds, in UTF-8 bytes —
- * `sandbox.MaxRunTextBytes`, the most the run's own record will hold of it.
+ * The most of a running launch's output the live view holds, in UTF-8 bytes —
+ * `sandbox.MaxRunTextBytes`, the most the launch's own record will hold of it.
  * The view keeps the END of what it has been sent, trimmed on a line.
  */
 export const LIVE_OUTPUT_MAX_BYTES = 262_144;
 
 /**
- * How often an open coding run's live output is asked for, in ms.
+ * How often an open executor's live output is asked for, in ms.
  *
  * THREE SECONDS, chained after each answer, so an open view has one request in
  * flight. Above the owner's reuse window (`sandbox.LiveReuse`, two seconds) so

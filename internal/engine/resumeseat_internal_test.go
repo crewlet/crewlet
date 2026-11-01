@@ -34,7 +34,7 @@ func (r *seatRecorder) seen() []string {
 }
 
 // A RESUMED TURN'S MODEL CALLS RUN AS ITS SEAT, as a dispatched turn's do. A
-// coding CLI keeps a home per seat — its transcripts, its sign-in — and a call
+// harness keeps a home per seat — its transcripts, its sign-in — and a call
 // bound to no seat runs in the one home every unbound call shares, so a
 // resumed turn's reviewer ran beside other seats' transcripts and on whichever
 // login that home last held. The dispatch path binds the seat; the resume is

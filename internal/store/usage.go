@@ -65,7 +65,7 @@ import (
 // of a turn such a build parked, whose earlier segments nobody measured — is
 // read off its records by its id, as it always was ([DB.usageLegacyTurns]),
 // and those reach back to wherever the turn STARTED — days, since a park lasts
-// as long as its coding run, which nothing stops on a timer, or as long as a
+// as long as its executor, which nothing stops on a timer, or as long as a
 // person takes to answer: so for such a turn a row changes the day the turn
 // ended as well as its own. A kept settle that lands only that earlier row
 // marks the earlier day, and the publisher derives every day from a mark
@@ -159,7 +159,7 @@ type UsageTokens struct {
 //
 // A turn belongs to the day its final completion falls in — the one record
 // that is not a suspension — because that is when it stopped costing time and
-// started being a result. A turn still parked on a coding run has ended
+// started being a result. A turn still parked on its executor has ended
 // nowhere yet and counts nowhere. Every figure below is read off that one
 // record ([types.TurnTally]), never off the turn's other records, which a
 // custody group spreads over the data nodes a second at a time and a resume
@@ -236,21 +236,25 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the five records a day is derived from, taken from their
-// payload types for the reason [phaseCompleted] is: the phase completions and
-// the auxiliary records the spend is summed from, the completions a turn's
-// figures are read off, the turn's SUMMARY record (`agent_turn_completed`),
-// and the knowledge reads. The auxiliary record is one of them so the
-// fingerprint moves when it lands: a flush writes it up to one ledger interval
-// after its last call, stamped with that call's instant, and a day whose only
-// change was that row would otherwise never be re-derived. The summary record
-// is one for the same reason: a turn whose ending record states no tally is
-// read off its records ([DB.usageLegacyTurns]), whether it failed off the
+// usageEventTypes are the six records a day is derived from, taken from their
+// payload types for the reason [phaseCompleted] is: the phase completions, the
+// collected launches and the auxiliary records the spend is summed from, the
+// completions a turn's figures are read off, the turn's SUMMARY record
+// (`agent_turn_completed`), and the knowledge reads. The auxiliary record is
+// one of them so the fingerprint moves when it lands: a flush writes it up to
+// one ledger interval after its last call, stamped with that call's instant,
+// and a day whose only change was that row would otherwise never be
+// re-derived. A collected launch is one for the reason every spend record is:
+// it is the executor's spend, published when its box is read rather than when
+// any phase of its turn completes. The summary record is one for the same
+// reason as the auxiliary record: a turn whose ending record states no tally
+// is read off its records ([DB.usageLegacyTurns]), whether it failed off the
 // summary, and a summary row that lands in a later custody batch than its
 // turn's end must move the fingerprint — and the settle's mark — when it does.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
+		launchSpendType,
 		auxiliarySpendType,
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
@@ -658,11 +662,12 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 	return out, nil
 }
 
-// usageTokens folds the window's spend records — the phase completions and the
-// auxiliary records — into (phase, worker, model, provider key) cells per seat,
-// off the columns node/0015, node/0032 and node/0040 promoted, never the
-// payload. An auxiliary record's cell is phase `auxiliary` with its purpose as
-// the worker, so it takes no cell shape of its own.
+// usageTokens folds the window's spend records — the phase completions, the
+// collected launches and the auxiliary records — into (phase, worker, model,
+// provider key) cells per seat, off the columns node/0015, node/0032 and
+// node/0040 promoted, never the payload. A launch's cell is phase `execute`
+// and an auxiliary record's is phase `auxiliary` with its purpose as the
+// worker, so neither takes a cell shape of its own.
 //
 // CALLS ARE PROVIDER CALLS — the `calls` column's sum, not a count of rows —
 // since one coalesced auxiliary row stands for many (node/0040).
@@ -700,7 +705,7 @@ func (d *DB) usageTokens(ctx context.Context, w UsageWindow,
 // `event_type IN (…)` seeks only the type, and every older day the publisher
 // derives again would walk thirty days of spend rows for one day's.
 func usageTokensSQL(w UsageWindow) (string, []any) {
-	_, kinds := spendTypes()
+	kinds := spendTypes()
 	var branches []string
 	var args []any
 	for _, kind := range kinds {

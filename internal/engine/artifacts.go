@@ -87,18 +87,16 @@ func (e *Engine) ArtifactsWriter() *artifactsdomain.Writer {
 
 // objectEstatesFor is every estate the object store's passes read on a node
 // running n: the native half's, the artifacts log's over artifacts and the
-// assistant log's over assistant, both of which every data node runs. EMPTY
-// WHERE THE NATIVE HALF OFFERS NONE: the collector is started with the native
-// half ([Engine.startNativeCollector]), and every declared table must have its
-// estate ([collect.Sources]), the tracker's included, so a reader missing here
-// is a collector [collect.Sources] refuses to build rather than one that reads
-// that domain's objects as nobody's.
+// assistant log's over assistant, every one of which every data node runs,
+// whatever surfaces the company keeps elsewhere. The collector is started with
+// the native half ([Engine.startNativeCollector]), and every declared table
+// must have its estate ([collect.Sources]), so a reader missing here is a
+// collector [collect.Sources] refuses to build rather than one that reads that
+// domain's objects as nobody's — never a collector over the estates that
+// happen to be present.
 func objectEstatesFor(n *native, artifacts *artifactsdomain.Reader,
 	assistant *assistantdomain.Reader) []collect.Estate {
 	estates := n.objectEstates()
-	if len(estates) == 0 {
-		return estates
-	}
 	if artifacts != nil {
 		estates = append(estates, artifactsdomain.ObjectEstate{Reader: artifacts})
 	}

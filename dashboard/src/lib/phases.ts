@@ -1,5 +1,6 @@
 /**
- * One phase of one turn, however it reached the client.
+ * One phase of one turn, however it reached the client — and one LAUNCH of an
+ * executor's run, which is the work of the `execute` round that launched it.
  *
  * A phase arrives twice over its life and in two different shapes: live, as
  * the `live_call` on a seat's overlay (re-broadcast twice per tool-loop round),
@@ -171,7 +172,8 @@ export interface Round {
 }
 
 export interface PhaseRecord {
-  /** `turn|phase|iteration`. The SAME value live and finished. */
+  /** `turn|phase|iteration`. The SAME value live and finished. A launch's is
+   *  its round's with its job after it — see [launchKey]. */
   key: string;
   /** ONE RUN of a turn — unique per execution, which is what makes `key`
       unique per execution. See `adr/0017`. */
@@ -180,8 +182,20 @@ export interface PhaseRecord {
       attempts. Empty for a run with no ledgerable trigger (a scheduled fire,
       a sub-agent). */
   workKey: string;
+  /** The phase that ran; `execute` on a launch, the round whose work it was. */
   phase: string;
   iteration: number;
+  /**
+   * The record is ONE LAUNCH of the executor's run, as its collection read it
+   * off the box (`executor_collected`), rather than a phase's own record. It
+   * is no phase: it has no prompts, no rounds and no decision, its `response`
+   * is the report the run wrote back, and what it spent is the executor's.
+   * [groupTurns] files it under the `execute` record of the round that
+   * launched it, so the executor is ONE card per round with its launches
+   * inside — a round can have several: an answer carries a parked run on, a
+   * launch lost with its host is relaunched.
+   */
+  launch: boolean;
   role: string;
   /**
    * The seat's own id — the one every node derives for its handle — off the
@@ -215,7 +229,7 @@ export interface PhaseRecord {
   tools: ToolCall[];
   /** Per-round model turns: one entry per round that wrote text. Empty
       until a round comes back, on a phase whose rounds only
-      called tools, and on a coding run, whose rounds happened in its box. */
+      called tools, and on a launch, whose rounds happened in its box. */
   narration: Narration[];
   /** The round being written right now. Live phases only. */
   partial: PartialRound | null;
@@ -271,8 +285,8 @@ export interface PhaseRecord {
   /** The iteration of that host phase. */
   hostIteration: number;
   /** The CLI an executor ran as, on the record that collected its run and on
-   *  the run's own record; empty on every phase that ran on the engine host.
-   *  Where a phase ran is which phase it is, so nothing else says so. */
+   *  each launch's; empty on every phase that ran on the engine host. Where a
+   *  phase ran is which phase it is, so nothing else says so. */
   codingAgent: string;
   /** The box that ran this phase, when a coding agent did. Links a transcript
    *  to the detached run it suspended into. */
@@ -283,22 +297,28 @@ export interface PhaseRecord {
    * Delivered refs the run's report named that the record does NOT list:
    * the record holds them to a byte bound and counts the rest here, so a
    * screen showing `deliveredRefs` alone would present a part as the whole.
-   * Zero when every ref is listed. `sandbox` phases only.
+   * Zero when every ref is listed.
    */
   deliveredRefsElided: number;
   /**
-   * The detached coding run a record reports, on a `sandbox` phase (the run
-   * itself) and on the executor that resumed from it. A turn can launch more
-   * than one run in an iteration, so on a `sandbox` phase it is part of the
-   * record's identity — see [phaseKey].
+   * The job a record reports: on a launch, the launch itself, and on the
+   * executor that resumed from one, the launch it collected. A round can
+   * launch more than once, so on a launch it is part of the record's identity
+   * — see [launchKey].
    */
   launchId: string;
   /**
-   * A coding run's own account of what it did — what the agent said, one
-   * line per tool call, the calls that failed — on a `sandbox` phase only.
-   * Redacted by the engine, and held to the record's bound by keeping whole
-   * lines from its START and its END with one note line where its middle
-   * was; empty everywhere else.
+   * How many model turns a launch's CLI said its own loop took — its calls,
+   * which the engine neither made nor timed — and 0 where it reported none,
+   * and on every phase.
+   */
+  harnessTurns: number;
+  /**
+   * A launch's own account of what it did — what the agent said, one line per
+   * tool call, the calls that failed — on a launch only. Redacted by the
+   * engine, and held to the record's bound by keeping whole lines from its
+   * START and its END with one note line where its middle was; empty
+   * everywhere else.
    */
   transcript: string;
   /**
@@ -325,14 +345,14 @@ export interface PhaseRecord {
   } | null;
   /**
    * Each round's model call as the loop timed it, oldest first; empty on a
-   * phase that ran no loop in this process, and on a coding run.
+   * phase that ran no loop in this process, and on a launch.
    */
   timedRounds: TimedRound[];
   /**
    * The phase's CLI runs that have ENDED, oldest first — on a live phase the
    * run in flight is not among them, and its rounds are the ones past every
-   * run's `lastRound`. Empty on a phase that ran no CLI of its own (a coding
-   * run).
+   * run's `lastRound`. Empty on a phase that ran no CLI of its own, and on a
+   * launch, whose run is its box's.
    */
   invocations: Invocation[];
   /**
@@ -395,19 +415,19 @@ export interface PhaseRecord {
   /**
    * How long this phase took, in milliseconds, as the engine measured it.
    *
-   * Straight off `agent_phase_completed.duration_ms`. Zero on a live record,
-   * which has not finished. An executor's record states its two segments —
-   * the launch and the collection — and never the run between them, which
-   * is the run's own fact on its `sandbox` record. Read it through
-   * [phaseDuration], never directly: "no duration" and "took no time" must
-   * not render alike.
+   * Straight off the record's `duration_ms`. Zero on a live record, which
+   * has not finished. An executor's record states its two segments — the
+   * launch and the collection — and never the run between them, which is
+   * each launch's own fact, from its launch to its collection. Read it
+   * through [phaseDuration], never directly: "no duration" and "took no time"
+   * must not render alike.
    */
   durationMs: number;
   /** The event id, when this came from the store — for a deep link. */
   eventId: string;
   /**
    * Where the TURN this live call belongs to is, when the seat's own turn is
-   * that turn — `parked` while a detached coding run holds it — and "" on a
+   * that turn — `parked` while its executor holds it from its box — and "" on a
    * finished record or a call whose turn the seat has moved past.
    *
    * ON THE RECORD because the card that draws a live call's staleness has no
@@ -662,34 +682,37 @@ function promptRole(
 }
 
 /**
- * A phase's identity: `turn|phase|iteration`, plus the task id or the launch
- * id where there is one.
+ * A phase's identity: `turn|phase|iteration`, plus the task id where there is
+ * one.
  *
  * THE TASK ID IS NOT OPTIONAL for a delegated worker. A `delegate` call of
  * eight runs eight `subagent` phases in one executor round, and without it
  * they share one key — so the map keeps the last one to arrive and seven
  * workers, their prompts, their tools and their failures simply are not on
  * the page. A turn's own phases have no task id and keep the three-part key
- * they have always had.
- *
- * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a run
- * that parked on a question and is relaunched on its answer is a second
- * launch in the same iteration, and each is a `sandbox` phase of that
- * iteration. It keys the
- * `sandbox` phase ONLY — the resumed executor's record names the run it
- * collected too, and keyed on it that record would stop matching the live
- * call it replaces.
+ * they have always had — the resumed executor's record included, which names
+ * the launch it collected and must keep matching the live call it replaces.
  */
-export function phaseKey(
-  turnId: string,
-  phase: string,
-  iteration: number,
-  taskId = "",
-  launchId = "",
-): string {
+export function phaseKey(turnId: string, phase: string, iteration: number, taskId = ""): string {
   const base = `${turnId}|${phase}|${iteration}`;
-  const discriminator = taskId || (phase === "sandbox" ? launchId : "");
-  return discriminator ? `${base}|${discriminator}` : base;
+  return taskId ? `${base}|${taskId}` : base;
+}
+
+/**
+ * A launch's identity: the key of the `execute` round that launched it, with
+ * its job after it.
+ *
+ * THE JOB IS NOT OPTIONAL, for the worker's reason: a run that parked on a
+ * question and is carried on by its answer, or one lost with its host and
+ * relaunched, is a second launch of the same round, and keyed on the round
+ * alone the map would keep one of them. Every launch's record names its job;
+ * [fromLaunchEvent] hands the event's own id in for one that came with an
+ * empty one, which is just as unique and the same on every route a record
+ * reaches the client by, so such a record still keys apart rather than
+ * folding into its round's other launches.
+ */
+export function launchKey(turnId: string, iteration: number, launchId: string): string {
+  return `${phaseKey(turnId, "execute", iteration)}|${launchId}`;
 }
 
 /**
@@ -710,6 +733,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     workKey: call.work_key ?? "",
     phase: call.phase,
     iteration: call.iteration,
+    launch: false,
     role,
     agentId: "",
     model: call.model,
@@ -753,6 +777,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     deliveredRefs: [],
     deliveredRefsElided: 0,
     launchId: "",
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -786,17 +811,21 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
   };
 }
 
-/** A finished phase, from its durable `agent_phase_completed` event. */
+/**
+ * A finished phase, from its durable `agent_phase_completed` event — or a
+ * collected launch, from its `executor_collected` one ([fromLaunchEvent]).
+ */
 export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const p = ev.payload as Record<string, unknown> | undefined;
   if (!p) return null;
+  if (ev.type === "executor_collected") return fromLaunchEvent(ev, p);
   const phase = String(p.phase ?? "");
   const turnId = String(p.turn_id ?? "");
   const iteration = num(p.iteration);
   const taskId = String(p.task_id ?? "");
   const launchId = String(p.launch_id ?? "");
   return {
-    key: phaseKey(turnId, phase, iteration, taskId, launchId),
+    key: phaseKey(turnId, phase, iteration, taskId),
     turnId,
     // THE ROW'S OWN COLUMN FIRST, the payload only as what a live frame
     // carries: the column is the authority for a stored record, and a frame
@@ -804,6 +833,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
+    launch: false,
     role: String(p.role ?? ev.actor ?? ""),
     agentId: String(p.agent_id ?? ev.tags?.agent_id ?? ""),
     model: String(p.model ?? ""),
@@ -839,22 +869,20 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     hostPhase: String(p.host_phase ?? ""),
     hostIteration: num(p.host_iteration),
     codingAgent: String(p.coding_agent ?? ""),
-    // WHAT A SANDBOX RUN LEAVES ON `AgentPhaseCompleted`: which box ran it (so
-    // the badge naming the coding agent can reach the run) and the branches
-    // and pull requests the phase produced. The record also carries what the
-    // run's own CLI said it cost, and that is deliberately NOT read: the
-    // dashboard renders tokens and never money (rule 19 in
-    // docs/reference/dashboard-design.md), and a price parsed onto the record
-    // is one a component is a single line away from drawing.
+    // WHAT A COLLECTED RUN LEAVES ON THE EXECUTOR'S RECORD: which box ran it
+    // (so the badge naming the coding agent can reach the run) and the
+    // branches and pull requests the phase produced. What the run did and
+    // spent is each launch's own record ([fromLaunchEvent]).
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
-    transcript: String(p.activity_transcript ?? ""),
-    transcriptElidedLines: num(p.activity_transcript_elided_lines),
-    transcriptElidedBytes: num(p.activity_transcript_elided_bytes),
+    harnessTurns: 0,
+    transcript: "",
+    transcriptElidedLines: 0,
+    transcriptElidedBytes: 0,
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     timedRounds: timedRounds(p.rounds),
     invocations: invocations(p.invocations),
@@ -888,6 +916,98 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
 }
 
 /**
+ * One launch of an executor's run, from its durable `executor_collected`
+ * event: a record of the `execute` round that launched it ([PhaseRecord.launch]).
+ *
+ * WHAT A LAUNCH LEAVES: the report it wrote, what it spent, its CLI's own
+ * turns, its transcript, what it delivered, the box it ran in and, where it
+ * did not finish, why — the notes of a launch that stopped to ask, was
+ * stopped or was cut off, or the error of one that failed. The record also
+ * carries what the run's own CLI said it cost, and that is deliberately NOT
+ * read: the dashboard renders tokens and never money (rule 19 in
+ * docs/reference/dashboard-design.md), and a price parsed onto the record is
+ * one a component is a single line away from drawing.
+ */
+function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseRecord {
+  const turnId = String(p.turn_id ?? "");
+  const iteration = num(p.iteration);
+  const launchId = String(p.launch_id ?? "");
+  return {
+    key: launchKey(turnId, iteration, launchId || ev.id),
+    turnId,
+    // THE ROW'S OWN COLUMN FIRST, as for a phase's record.
+    workKey: String(ev.work_key ?? p.work_key ?? ""),
+    // THE ROUND'S PHASE: a launch names none, and is the executor's work.
+    phase: "execute",
+    iteration,
+    launch: true,
+    role: String(p.role ?? ev.actor ?? ""),
+    agentId: String(p.agent_id ?? ev.tags?.agent_id ?? ""),
+    model: String(p.model ?? ""),
+    providerKey: String(p.provider_key ?? ""),
+    live: false,
+    failed: p.failed === true,
+    error: String(p.error ?? ""),
+    errorKind: String(p.error_kind ?? ""),
+    // NO PROMPT, NO ROUNDS AND NO DECISION: the run's prompt and its rounds
+    // were its CLI's, in its box, and what the round decided is on the
+    // executor's own record.
+    systemPrompt: "",
+    userPrompt: "",
+    systemSections: null,
+    userSections: null,
+    response: String(p.response ?? ""),
+    tools: [],
+    narration: [],
+    partial: null,
+    inputTokens: num(p.input_tokens),
+    outputTokens: num(p.output_tokens),
+    totalTokens: num(p.total_tokens),
+    roundsUsed: 0,
+    exhaustedRounds: false,
+    emptyAnswerRounds: 0,
+    rescueFired: false,
+    decision: "",
+    notes: String(p.notes ?? ""),
+    conversationKey: String(p.conversation_key ?? ""),
+    toolsAvailable: [],
+    toolCatalogue: [],
+    worker: "",
+    taskId: "",
+    hostPhase: "",
+    hostIteration: 0,
+    codingAgent: String(p.coding_agent ?? ""),
+    sandboxId: String(p.sandbox_id ?? ""),
+    deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
+    deliveredRefsElided: num(p.delivered_refs_elided),
+    launchId,
+    harnessTurns: num(p.cli_turns),
+    transcript: String(p.activity_transcript ?? ""),
+    transcriptElidedLines: num(p.activity_transcript_elided_lines),
+    transcriptElidedBytes: num(p.activity_transcript_elided_bytes),
+    trigger: null,
+    timedRounds: [],
+    invocations: [],
+    hostRound: 0,
+    cacheReadTokens: num(p.cache_read_tokens),
+    maxRounds: 0,
+    roundStartedAt: "",
+    runStartedAt: "",
+    runningCalls: [],
+    bodyWithheld: false,
+    steers: [],
+    node: "",
+    clockStart: typeof p.started_at === "string" ? p.started_at : "",
+    at: ev.timestamp,
+    startedAt: ev.timestamp,
+    // FROM ITS LAUNCH TO ITS COLLECTION, measured where the clock is.
+    durationMs: num(p.duration_ms),
+    eventId: ev.id,
+    stage: "",
+  };
+}
+
+/**
  * The phases that completed on the wire while this tab was watching.
  *
  * Every screen that renders a phase reads two sources: a query, answered ONCE
@@ -899,8 +1019,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
  * run at all.
  *
  * The durable record is already on the wire: the engine broadcasts the whole
- * `agent_phase_completed` envelope, payload included, and the store keeps the
- * recent ones. This is the same `fromPhaseEvent` the stored half goes through,
+ * `agent_phase_completed` envelope, payload included — and each launch's
+ * `executor_collected` one — and the store keeps the recent ones. This is the
+ * same `fromPhaseEvent` the stored half goes through,
  * so a streamed record and the one the same query would return next time are
  * the same record with the same key — which is what lets it merge in place.
  *
@@ -921,7 +1042,7 @@ export function streamedPhases(
 }
 
 /**
- * How long a coding run's transcript is, as its Activity fold counts it.
+ * How long a launch's transcript is, as its Activity fold counts it.
  *
  * NEVER THE KEPT COUNT AS THE WHOLE. A long transcript reaches the record as
  * its start and its end with one note line between them, so the lines on the
@@ -957,6 +1078,20 @@ export function deliveredLine(
   if (r.deliveredRefsElided <= 0) return listed;
   const more = `${fmtExact(r.deliveredRefsElided)} more its report names`;
   return listed ? `${listed} (+${more})` : `+${more}`;
+}
+
+/**
+ * What a phase spent, as its card and the turn's strip state it: its own
+ * record's tokens and, for an executor round, every launch of its run's.
+ *
+ * THE ROUND'S, NOT THE RECORD'S, because the executor's record states the
+ * round with no tokens — the engine made no model call for it — and its run's
+ * spend is on its launches. A card that printed the record's own figure would
+ * read 0 over a run that spent forty thousand, beside the turn's total that
+ * counts them.
+ */
+export function roundTokens(record: PhaseRecord, launches: readonly PhaseRecord[] = []): number {
+  return launches.reduce((n, l) => n + l.totalTokens, record.totalTokens);
 }
 
 /**
@@ -1111,7 +1246,9 @@ export interface TurnGroup {
   workKey: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not
-      here — it hangs off the phase that made it, see `nested`. */
+      here — it hangs off the phase that made it, see `nested` — and nor is
+      a launch of the executor's run, which is inside its round, see
+      `launches`. */
   phases: PhaseRecord[];
   /** Nested calls keyed by the key of the phase that made them: the
       workers a `delegate` call ran, the round-cap judge, a learning
@@ -1120,6 +1257,12 @@ export interface TurnGroup {
       siblings of the turn's own two phases and the reader had to work out
       which round each belonged to. */
   nested: Map<string, PhaseRecord[]>;
+  /** The launches of each executor round's run, keyed by the key of that
+      round's `execute` record, oldest first — the round's work, drawn inside
+      its card. A launch whose round has no record in hand (a run that parked
+      on a question and ended before an answer resumed it leaves none) stands
+      in `phases` itself rather than vanishing. */
+  launches: Map<string, PhaseRecord[]>;
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
@@ -1192,6 +1335,21 @@ export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
   return out;
 }
 
+/**
+ * Where a launch with no round of its own in hand goes among a turn's own
+ * records: after every record of an earlier round, and after its round's
+ * onboarding and execute records — the place its round's card would have
+ * stood.
+ */
+function ownSlot(own: readonly PhaseRecord[], launch: PhaseRecord): number {
+  const at = own.findIndex(
+    (r) =>
+      r.iteration > launch.iteration ||
+      (r.iteration === launch.iteration && r.phase !== "onboarding" && r.phase !== "execute"),
+  );
+  return at < 0 ? own.length : at;
+}
+
 /** Group phases into the turns they belong to, newest turn first. */
 export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
   const byTurn = new Map<string, PhaseRecord[]>();
@@ -1199,36 +1357,54 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
   return [...byTurn.entries()]
     .map(([turnId, list]) => {
       // Within a turn, OLDEST first: a turn is read forwards — onboarding
-      // (first turn only), then execute, then the coding runs it launched,
-      // then review — which is the opposite of a feed. A `sandbox` phase is
-      // placed after its executor's record although it ran inside that
-      // phase's window: the executor publishes one record, when it resumes,
-      // and a run read before the executor that launched it reads as work
-      // nobody asked for. Two runs of one iteration keep their time order. A
-      // phase not on this list sorts after the ones that are and then by
-      // time, which is right for the nested calls (subagent, judge) that
-      // hang off a host phase.
+      // (first turn only), then execute, then review — which is the opposite
+      // of a feed. A phase not on this list sorts after the ones that are and
+      // then by time, which is right for the nested calls (subagent, judge)
+      // that hang off a host phase; a launch sorts as the `execute` it
+      // belongs to, after its round's own record, the launches in the order
+      // they were collected.
       const ordered = [...list].sort((a, b) => {
         if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-        const order = ["onboarding", "execute", "sandbox", "review"];
+        const order = ["onboarding", "execute", "review"];
         const ai = order.indexOf(a.phase);
         const bi = order.indexOf(b.phase);
         if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+        if (a.launch !== b.launch) return a.launch ? 1 : -1;
         return tsKey(a.at) - tsKey(b.at);
       });
-      // A NESTED call belongs UNDER the phase that made it. It is split
-      // out here rather than filtered at render time so every consumer —
-      // the card, the trace tree, the counts — agrees about what a turn's
-      // phases are.
+      // A NESTED call belongs UNDER the phase that made it, and a LAUNCH
+      // under the executor round whose work it was. Both are split out here
+      // rather than filtered at render time so every consumer — the card,
+      // the trace tree, the counts — agrees about what a turn's phases are.
       const own: PhaseRecord[] = [];
       const nested = new Map<string, PhaseRecord[]>();
+      const launched: PhaseRecord[] = [];
       for (const rec of ordered) {
+        if (rec.launch) {
+          launched.push(rec);
+          continue;
+        }
         if (!rec.hostPhase) {
           own.push(rec);
           continue;
         }
         const host = phaseKey(rec.turnId, rec.hostPhase, rec.hostIteration);
         nested.set(host, [...(nested.get(host) ?? []), rec]);
+      }
+      // ONE CARD PER EXECUTOR ROUND, its launches inside it — the round's
+      // `execute` record, live while the turn is parked on its run and
+      // durable once the resumed segment publishes it. A launch whose round
+      // has no record here keeps its place among the turn's own, in its
+      // round's order, rather than vanishing from the page.
+      const launches = new Map<string, PhaseRecord[]>();
+      const rounds = new Set(own.map((r) => r.key));
+      for (const rec of launched) {
+        const round = phaseKey(rec.turnId, "execute", rec.iteration);
+        if (rounds.has(round)) {
+          launches.set(round, [...(launches.get(round) ?? []), rec]);
+        } else {
+          own.splice(ownSlot(own, rec), 0, rec);
+        }
       }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // THE WINDOW THIS TURN RAN IN, by the one rule [turnSpan] states. It was
@@ -1246,6 +1422,7 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         role: ordered[0]?.role ?? "",
         phases: own,
         nested,
+        launches,
         at,
         startedAt,
         span: to > from ? to - from : null,

@@ -3,7 +3,7 @@
  * under Activity.
  *
  * Every screen here draws a name for its object — a turn's plan summary, a
- * trace's opening span, an event's own sentence, a coding run's task, who
+ * trace's opening span, an event's own sentence, an executor's task, who
  * asked whom on an A2A channel — and for as long as none of them published it,
  * the frame around them had nothing and fell back to the one thing the route
  * carries: the id. So a reader's recents was a stack of uuids, the trail ended
@@ -27,7 +27,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnScreen } from "./Turn.tsx";
 import { TraceScreen } from "./Trace.tsx";
 import { EventScreen } from "./Event.tsx";
-import { RunScreen } from "./Runs.tsx";
+import { ExecutorScreen } from "./Executors.tsx";
 import { ChannelScreen } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
@@ -297,8 +297,8 @@ test("an event with no summary is named by its type", async () => {
 
 const RUN = "85e7b505-6dc9-478f-8501-1f2e3d4c5b6a";
 
-test("a coding run is named by the task it was given", async () => {
-  mount(`#/live/runs/${RUN}`, <RunScreen turnId={RUN} />, {
+test("an executor is named by the task it was given", async () => {
+  mount(`#/live/executors/${RUN}`, <ExecutorScreen turnId={RUN} />, {
     executors: {
       runs: [
         {

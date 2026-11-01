@@ -38,6 +38,7 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { AgentRow, EventRecord } from "~/protocol/index.ts";
+import { PHASE_RECORD_TYPES } from "~/protocol/index.ts";
 
 /** What an id that resolves to nothing means, on the page and in the rail. */
 const NO_EVENT_HINT = "It may be too old, or from another node.";
@@ -171,9 +172,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const agents = useAgents();
   const handle = data ? seatHandleOf(data, agents) : "";
 
-  // A phase event has a first-class rendering; everything else gets its
-  // payload shown honestly rather than being squeezed into a shape it is not.
-  const phase = data?.type === "agent_phase_completed" ? fromPhaseEvent(data) : null;
+  // A phase event has a first-class rendering — and so does a collected launch
+  // of an executor's run, which is its round's work and drawn as the round's
+  // card draws it; everything else gets its payload shown honestly rather than
+  // being squeezed into a shape it is not.
+  const phase = data && PHASE_RECORD_TYPES.has(data.type) ? fromPhaseEvent(data) : null;
 
   // AND THAT NAME IS THE EVENT'S EVERYWHERE — the header below, the
   // breadcrumb, the browser tab and the palette's recents, which all read the
@@ -264,7 +267,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
               // same line as its title.
               <Card padding="sm">
                 <Card.Header icon={<BrainGlyph size="sm" />}>
-                  <Card.Title>The phase this event records</Card.Title>
+                  <Card.Title>
+                    {phase.launch
+                      ? "The executor's launch this event records"
+                      : "The phase this event records"}
+                  </Card.Title>
                 </Card.Header>
                 <PhaseCard record={phase} defaultOpen showRole />
               </Card>

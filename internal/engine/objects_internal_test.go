@@ -32,20 +32,69 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	n := &native{trackerReader: &worklet.Reader{}}
+	n := &native{trackerFiles: &worklet.Reader{}}
 	estates := objectEstatesFor(n, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
 	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
 }
 
-// A runtime without a tracker has no files, so no estate the collector reads —
-// and the engine starts no collector rather than one over nothing, which would
-// read every object as unreferenced.
-func TestARuntimeWithNoTrackerOffersTheObjectStoreNoEstate(t *testing.T) {
+// A NODE WHOSE TRACKER LOG IS NOT RUNNING GETS NO COLLECTOR, not one over the
+// estates that happen to be present: the tracker's file rows would be read as
+// naming nothing, and every project file's object deleted a day later.
+//
+// Mutation: offer an estate that names nothing in place of a tracker log that
+// is not running, in [native.objectEstates], and the references build.
+func TestANodeMissingADeclaredTablesEstateBuildsNoReferences(t *testing.T) {
 	t.Parallel()
-	if got := (&native{}).objectEstates(); len(got) != 0 {
-		t.Fatalf("a runtime with no tracker offered %d estates", len(got))
+	estates := objectEstatesFor(&native{}, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
+	if len(estates) == 0 {
+		t.Fatal("the premise: the artifacts' and Ask Crewlet's estates are " +
+			"offered, so the refusal below is about the tracker's alone")
+	}
+	if _, err := collect.Sources(references.All, estates...); err == nil {
+		t.Fatal("references were built with the tracker's estate missing: a " +
+			"collection would read every project file's object as nobody's")
+	}
+}
+
+// THE COLLECTOR RUNS ON A COMPANY THAT KEEPS ITS TRACKER ELSEWHERE.
+//
+// The tracker's log is the core's, applied on every data node whatever
+// `tracker.backend` says, so a company that moved off Worklet still holds the
+// rows naming its project files — and every company's artifacts and Ask
+// Crewlet files name objects besides. The collector starts only with every
+// declared table's estate, and the tracker's was built only where the company
+// ran Worklet: on a company on Jira, or with no tracker, nothing was ever
+// collected or audited, and `crewlet objects migrate` refused, saying the node
+// held no copy of the company's records.
+//
+// Mutation: build the tracker's file reader only where the company runs
+// Worklet again (inside `runTracker` in [Engine.startNative]), and the first
+// case starts no collector and builds no references.
+func TestTheCollectorRunsWhateverTheCompanysTracker(t *testing.T) {
+	t.Parallel()
+	for name, doc := range map[string]string{
+		"no tracker":           nativeCleanupCompany + "tracker:\n  backend: none\n",
+		"Worklet, the control": nativeCleanupCompany,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, _ := aNodeOf(t, doc, statelog.ModeNormal)
+			if e.native.Load() == nil || e.objects == nil {
+				t.Fatal("the premise: a data node that met its company at boot " +
+					"runs its native half and an object store")
+			}
+			if e.objects.duty.Load() == nil {
+				t.Error("no object collector runs on this company: its " +
+					"artifacts' and Ask Crewlet's objects, and the files its " +
+					"tracker once held, are never collected or audited")
+			}
+			if _, err := e.migrationReferences(); err != nil {
+				t.Errorf("an object migration cannot read this company's "+
+					"references: %v", err)
+			}
+		})
 	}
 }
 

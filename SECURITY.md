@@ -177,9 +177,9 @@ A few things worth knowing when deploying Crewlet:
   name, what every agent is doing (its status), spend, budgets, schedules and
   the tools list. That is deliberate: a company is a shared place, and a
   colleague handed no app still sees what it is doing. What it never carries is
-  a *body* — a prompt, a response, a tool's arguments, a coding run's task or
-  question — which goes only to an administrator, to the seat's lead, and for a
-  coding run's question to the person it is put to; nor a credential, a login
+  a *body* — a prompt, a response, a tool's arguments, an executor's task or
+  question — which goes only to an administrator, to the seat's lead, and for an
+  executor's question to the person it is put to; nor a credential, a login
   of anybody else's, an external contact id or the company-wide trail, which
   are `admin`'s. If the existence of a seat, an agent's current status or the
   company's spend must not reach somebody, do not give them a credential
@@ -334,13 +334,13 @@ A few things worth knowing when deploying Crewlet:
   the records, the event stream and the coordination store are readable by
   anything that reaches those ports, the coordination store's writes are
   guarded by compare-and-set rather than a signature — except a person's
-  answer to a parked coding run and a person's note to a running one, which
-  the run's record carries sealed under the keyring and which nothing hands to
+  answer to a parked executor and a person's note to a turn whose executor is
+  in its box, which the executor's record carries sealed under the keyring and which nothing hands to
   a model until it opens — and the scatters that
   only answer the question their asker put — history, search, a seat's
   memory, a sandbox's tail — are not signed. Keep both ports on a private network. The decision is
   [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
-  [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
+  [ADR-0067](adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md).
 - **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,

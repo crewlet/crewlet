@@ -623,7 +623,7 @@ function StarredSection({ path, stars }: { path: string[]; stars: ReturnType<typ
  * The turns running now, one row per seat the engine says is WORKING: the
  * seat's badge with its status, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
- * phase it is on open, or a parked turn's coding run live above its phases.
+ * phase it is on open, or a parked turn's executor live above its phases.
  *
  * THE SAME SET AS THE FIGURE ON LIVE, and THE SAME ROWS AS HOME'S LIVE NOW:
  * both are `runningShortList`, in the order every list of running turns draws

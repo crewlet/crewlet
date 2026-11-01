@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// CheckBudget is the longest the doctor over the API may take: three CLI runs
+// CheckBudget is the longest the doctor over the API may take: three harness runs
 // at most (the smoke run, the shell probe and the web probe), each measured at
 // 3 to 20 s, beside the version and executor checks, which are local.
 const CheckBudget = 180 * time.Second

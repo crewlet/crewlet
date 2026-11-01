@@ -3,9 +3,9 @@
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
 // reads — and maintains, per seat: the seat's live state, the TURN it is on and
-// the stage of it (context, a phase, or parked on a coding run), the last turn
+// the stage of it (context, a phase, or parked on its executor), the last turn
 // it ended, its current phase and iteration, its live token meter, and the
-// IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in flight,
+// IN-FLIGHT LLM call. Beside the seats it keeps the executors in flight,
 // reconciled against their durable record (sandbox.go). What a seat has SPENT
 // is not held per seat: it is the per-agent row of the spend rollup, folded
 // from the same records by internal/tokens, so the projection holds no second
@@ -139,11 +139,18 @@ const (
 // auxiliary_spend is deliberately ABSENT: what the reflection's workers — and
 // every other auxiliary call — spent is a record of spend, published after the
 // turn ended, and a seat state that read it would reopen the turn it names.
+//
+// executor_collected is PRESENT although it is a record of spend too, because
+// it is also the seat's own work: one launch of its executor's run, collected
+// while the turn that launched it is parked on it, before the turn resumes. It
+// says the seat worked and, for a launch that failed, why — and it moves no
+// stage of the turn ([LiveState.applyTurnEvent]).
 var stateEvents = map[string]struct{}{
 	"agent_spawned":         {},
 	"agent_terminated":      {},
 	"agent_phase_started":   {},
 	"agent_phase_completed": {},
+	launchType:              {},
 	"agent_turn_completed":  {},
 	"reflection_completed":  {},
 	"llm_unavailable":       {},
@@ -623,10 +630,12 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		return change
 	}
 
-	// BOTH SPEND TYPES. An auxiliary record goes on through the seat's
-	// guards below like any event and moves nothing there: it is in no state
-	// set, and it carries no `failed` key — which is what keeps it inert,
-	// rather than a branch here that would hide a record that one day did.
+	// EVERY SPEND TYPE. Each goes on through the seat's guards below like
+	// any event: a phase's record and a collected launch move the seat as
+	// the seat's own work, and an auxiliary record moves nothing there — it
+	// is in no state set, and it carries no `failed` key, which is what
+	// keeps it inert, rather than a branch here that would hide a record
+	// that one day did.
 	if spendTypes[env.Type] {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
@@ -713,18 +722,27 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 	turnID := str(payload, "turn_id")
 	switch env.Type {
 	case "agent_phase_started", "agent_phase_completed":
-		// ONE OF THE TURN'S OWN PHASES MOVES IT; a worker's record, a
-		// judge's or the run's own leaves its stage alone. See [phaseStage].
+		// ONE OF THE TURN'S OWN PHASES MOVES IT; a worker's record or a
+		// judge's leaves its stage alone. See [phaseStage].
 		if stage, moves := phaseStage(payload); moves {
 			s.touchTurn(agent, env, payload, stage)
 		} else {
 			s.noteTurn(agent, env, payload, stage)
 		}
+	case launchType:
+		// A COLLECTED LAUNCH LEAVES ITS TURN PARKED. The collection
+		// publishes it before it resumes the turn, and a resume can wait —
+		// on another node, behind the seat's budget, on a retry — so the
+		// turn is parked on its collected run until the resumed segment
+		// says otherwise. Read as a step of the turn, it showed a phase
+		// running that nothing was running. It still opens the turn,
+		// parked, on a seat that holds none.
+		s.noteTurn(agent, env, payload, StageParked)
 	case "agent_turn_completed":
 		if flag(payload, "suspended") {
 			// A SUSPENSION IS NOT AN END. The segment parked on a
-			// detached coding run and the same turn completes again
-			// when the run is collected.
+			// detached executor and the same turn completes again
+			// when the executor is collected.
 			s.touchTurn(agent, env, payload, StageParked)
 		} else {
 			s.endTurnRecord(agent, env, turnID, env.Failed, flag(payload, "stopped"))
@@ -824,6 +842,17 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			s.recordPhaseFailure(agent, env, payload)
 		}
 		s.finishLiveCall(agent, env, payload)
+
+	case env.Type == launchType:
+		// THE SEAT'S RUN DID WORK, so whatever failure was held on it is
+		// history — and a launch that failed is the seat's last error, as
+		// a failed phase is, in the executor's phase whose run it was. No
+		// live call is touched: a launch is no call this projection holds,
+		// and the parked executor's call is the resumed segment's to move.
+		agent.working()
+		if flag(payload, "failed") {
+			agent.lastError = failureOf(env, payload, string(types.PhaseExecute))
+		}
 
 	case env.Type == "agent_turn_completed" || env.Type == "reflection_completed":
 		s.endTurn(agent, str(payload, "turn_id"))

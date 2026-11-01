@@ -187,10 +187,10 @@ type LiveCall struct {
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
 	// and for the whole of an executor, whose rounds run inside its coding
-	// CLI's run.
+	// harness's run.
 	Rounds []any `json:"rounds"`
 
-	// Invocations is the phase's CLI runs that have ENDED — when each was
+	// Invocations is the phase's harness runs that have ENDED — when each was
 	// launched and how long it lived, who served it, how it ended, the
 	// rounds it made (`first_round`, `last_round`) and what it spent — as
 	// the progress frame carries them ([types.PhaseInvocation]). The run in
@@ -211,7 +211,7 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
-	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// RunStartedAt is when the harness run in flight was launched: the run whose
 	// rounds are past every entry in Invocations. Empty between runs, and on
 	// a frozen call.
 	RunStartedAt string `json:"run_started_at,omitempty"`
@@ -220,7 +220,7 @@ type LiveCall struct {
 	// order they arrived — `{id, round, name, arguments, started_at}`, each
 	// listed by the frame published before the call is handed to its tool
 	// and gone from the frame after it returns ([types.RunningCall]). A
-	// LIST because a coding CLI may run a response's calls at once. Absent
+	// LIST because a harness may run a response's calls at once. Absent
 	// between calls. Never merged into ToolExecutions, which lists calls
 	// that ANSWERED: a reader has to be able to tell a call in flight from
 	// one that returned nothing — and `id` is what the answered row's
@@ -265,7 +265,7 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 
 	// Versions numbers the copy of each heavy field — the prompt, the
-	// response, the narration, the tool calls, the rounds' timing, the CLI
+	// response, the narration, the tool calls, the rounds' timing, the harness
 	// runs — this call holds, so an `agents` push can leave out what a tab
 	// already has and a tab can tell when it missed a change (see
 	// detail.go). ALWAYS PRESENT, on every surface that carries a call.
@@ -357,7 +357,7 @@ type Overlay struct {
 	Budget *BudgetMeter `json:"budget"`
 
 	// Turn is the turn the seat is on — running, or parked on a detached
-	// coding run — and null when it is on none. ALWAYS PRESENT: the
+	// executor — and null when it is on none. ALWAYS PRESENT: the
 	// overlay is merged into a client's row rather than replacing it, so an
 	// omitted key reads as "unchanged" and would leave a finished turn on
 	// the client's row.
@@ -396,7 +396,7 @@ const (
 	// StagePhase — a phase is running: a model is being called or a tool
 	// is running on its behalf.
 	StagePhase Stage = "phase"
-	// StageParked — the turn launched a detached coding run and SUSPENDED:
+	// StageParked — the turn launched a detached executor and SUSPENDED:
 	// nothing runs on the seat's behalf until the run is collected, and
 	// the same turn resumes then — possibly on another node, possibly
 	// after a restart. Not idle, and not an end: the turn has not
@@ -449,11 +449,11 @@ const (
 	OutcomeCompleted TurnOutcome = "completed"
 	// OutcomeFailed — the turn ended and at least one of its events was a
 	// failure: a failed phase, an unavailable provider, a breached guard,
-	// a lost coding run. The same rule the turn list's `failed` applies, so
+	// a lost executor. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
 	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
-	// reached it at a round, or ended the coding run it was parked on. Not a
+	// reached it at a round, or ended the executor it was parked on. Not a
 	// failure, whatever else went wrong in it — the turn list's `stopped`.
 	OutcomeStopped TurnOutcome = "stopped"
 )
@@ -476,7 +476,7 @@ type LastTurn struct {
 	Outcome TurnOutcome `json:"outcome"`
 }
 
-// ExecutorEntry is one in-flight detached coding run.
+// ExecutorEntry is one in-flight detached executor.
 //
 // AgentID is what pairs a run with its seat's row. Role and AgentHandle are
 // what the seat was called when the run started, for a reader with no roster
@@ -559,7 +559,7 @@ const (
 	// ExecutorLaunching — the job has started and the turn that started it
 	// is still unwinding.
 	ExecutorLaunching ExecutorStatus = "launching"
-	// ExecutorRunning — the coding agent is working in its box.
+	// ExecutorRunning — the harness is working in its box.
 	ExecutorRunning ExecutorStatus = "running"
 	// ExecutorAwaiting — the agent asked a person and stopped; its box is
 	// held paused until the answer arrives.

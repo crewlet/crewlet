@@ -21,8 +21,8 @@ const modulePath = "github.com/crewlet/crewlet"
 
 // modelInputs are the types a model is handed its prompt in, by the import
 // path of the package that declares them: a provider's request
-// (internal/providers/llm), and every request a coding CLI's run is launched
-// or continued from, whose system and brief are what the CLI prompts its model
+// (internal/providers/llm), and every request a harness's run is launched
+// or continued from, whose system and brief are what the harness prompts its model
 // with. Every seat's executor is such a run (ADR-0066), and so is the
 // Dashboard Assistant's deep work, so a walk over provider requests alone saw
 // no executor at all.
@@ -44,7 +44,7 @@ type modelCall struct {
 }
 
 // modelCalls is EVERY function in the tree that builds a model's input, a
-// provider request or a coding run's launch, keyed `<file>:<function>` (or
+// provider request or an executor's launch, keyed `<file>:<function>` (or
 // `<file>:<variable>` for one a package-level variable holds). An input built
 // anywhere else fails the gate below until somebody decides what it reads
 // (ADR-0040): every model call that reads text somebody else wrote reads it
@@ -57,7 +57,7 @@ var modelCalls = map[string]modelCall{
 	"internal/agent/toolloop/toolloop.go:Run": {tests: []string{
 		// The engine's own model loop: a seat's reviewer, its onboarding
 		// pass and the workers it delegates to, never its executor, which
-		// is its coding CLI's run (runner.executeAsAgentRun, below). Every
+		// is its harness's run (runner.executeAsAgentRun, below). Every
 		// foreign word in the conversation arrived fenced under the turn's
 		// token, by a wake or by a read.
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
@@ -109,7 +109,7 @@ var modelCalls = map[string]modelCall{
 		// pass's, built in internal/learning.
 		"internal/learning.TestTheBackgroundPassesDefuseWhatTheyRead",
 	}},
-	// THE SEAT'S EXECUTOR, its coding CLI's run (ADR-0066): launched with the
+	// THE SEAT'S EXECUTOR, its harness's run (ADR-0066): launched with the
 	// seat's system prompt and the turn's brief, and carried on, after its
 	// question was answered or its job lost, with that brief again and what
 	// became of the run before it. Every foreign word in either arrived
@@ -122,7 +122,7 @@ var modelCalls = map[string]modelCall{
 	// note a person sends the turn. Each is a person's instruction to this
 	// turn, given by somebody the engine let direct it (an answer, by the
 	// run's requester, its seat's lead or an administrator,
-	// authz.ActionRunAnswer and ADR-0068; a note, by somebody whose authority
+	// authz.ActionExecutorAnswer and ADR-0068; a note, by somebody whose authority
 	// was decided on the seat's sealed anchor, ADR-0067), and sealed on the
 	// run's record under the fleet keyring with who gave it (ADR-0031's
 	// amendments), so the run is told whose it is; a fence would tell the run
@@ -160,7 +160,7 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
 	}},
-	// THE DASHBOARD ASSISTANT'S DEEP WORK, a coding CLI's run too: the brief
+	// THE DASHBOARD ASSISTANT'S DEEP WORK, a harness's run too: the brief
 	// the assistant composes carries the person's screen fenced as the page's
 	// own words, under the assistant turn's token, beside the standing
 	// sentence; the engine's Run is its transport.
@@ -173,7 +173,7 @@ var modelCalls = map[string]modelCall{
 	"internal/engine/providerpark.go:providerProbe": {
 		none: "the probe asks a fixed prompt the engine wrote, and reads nothing of " +
 			"its answer but whether one came"},
-	"internal/providers/llm/cliagent/doctor.go:probeRequest": {
+	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},
 	"internal/assistant/conversations.go:nameConversation": {
@@ -185,16 +185,16 @@ var modelCalls = map[string]modelCall{
 
 // EVERY MODEL CALL IS ACCOUNTED FOR (ADR-0040). The gate walks every non-test
 // Go file in the tree for a composite literal of a model's input
-// ([modelInputs]: a provider request, or the request a coding run is launched
+// ([modelInputs]: a provider request, or the request an executor is launched
 // or continued from) and requires the function that builds it, or the
 // package-level variable that holds it, to be in [modelCalls] — with the tests
 // that hold its fences, each of which must exist, or the reason it reads
 // nobody's words — and every entry there to still build one. It is the walk,
-// not the list, that finds a new call: a model call added anywhere, a coding
-// run's launch among them, is refused until somebody decides what it reads
-// and names what holds it.
+// not the list, that finds a new call: a model call added anywhere, an
+// executor's launch among them, is refused until somebody decides what it
+// reads and names what holds it.
 //
-// Mutation: launch a coding run from a function nothing lists, or hold a
+// Mutation: launch an executor from a function nothing lists, or hold a
 // provider request in a package-level variable nothing lists, and this is
 // red.
 func TestEveryModelCallIsAccountedFor(t *testing.T) {

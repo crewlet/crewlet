@@ -286,6 +286,15 @@ function domainOf(kind) {
 }
 /** This tab's floors. */
 var session = new SessionFloors();
+/**
+* The durable records a tab keeps WITH THEIR PAYLOAD, in `phases`: a phase's
+* own record, and one launch of an executor's run as its collection read it
+* (`executor_collected`) — no phase, but the work of the `execute` round that
+* launched it, which the screens draw inside that round's card
+* (`lib/phases.ts`). A launch lands while its turn is still parked, so a tab
+* watching the turn has the run's report the moment it is collected.
+*/
+var PHASE_RECORD_TYPES = /* @__PURE__ */ new Set(["agent_phase_completed", "executor_collected"]);
 /** What a heavy field reads as while nothing of it is held. */
 var NOTHING_HELD = {
 	prompt: "",
@@ -918,7 +927,7 @@ var Store = class {
 			this.state.events = [ev, ...this.state.events].slice(0, 400);
 			this.emit("events");
 		}
-		if (ev.type === "agent_phase_completed" && ev.payload) {
+		if (PHASE_RECORD_TYPES.has(ev.type) && ev.payload) {
 			if (!this.state.phases.some((p) => p.id === ev.id)) {
 				this.state.phases = [ev, ...this.state.phases].slice(0, 200);
 				this.emit("phases");
@@ -3839,8 +3848,8 @@ var SessionKeepAlive = class {
 *    authority row names them: its app for an app's change, the row's own set
 *    for one that draws on whichever of several the caller holds
 *    (`answer_knowledge`, the tracker and the knowledge base it answers
-*    from), and none for a change no app holds (pausing a seat, answering a
-*    coding run). What a control the engine does not offer is held with —
+*    from), and none for a change no app holds (pausing a seat, answering an
+*    executor). What a control the engine does not offer is held with —
 *    "needs Worklet access" — so a reader is told what to ask an admin for
 *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
 *    rather than guessed from the domain: a change can need an app and land
@@ -3963,7 +3972,7 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
-	answer_run: {
+	answer_executor: {
 		args: [
 			"turn_id",
 			"launch_id",
@@ -4239,7 +4248,7 @@ var ACTIONS = {
 * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
 * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
 * with a `detail`, which it writes only in a person's words (ADR-0060), is
-* shown in that `detail`, as a coding run's question somebody already
+* shown in that `detail`, as an executor's question somebody already
 * answered names who did and a spent token budget names whose it was; and a
 * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
 * gives way to the engine's own sentence for the code where the answer
@@ -4644,4 +4653,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, PHASE_RECORD_TYPES, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

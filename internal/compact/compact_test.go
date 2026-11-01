@@ -125,7 +125,7 @@ func TestOverBudgetTextIsRewrittenFromTheWhole(t *testing.T) {
 }
 
 // THE LIMIT REACHES THE MODEL, as a number: the prompt is the one channel a
-// coding CLI reads, so it is the only place a budget can be stated.
+// harness reads, so it is the only place a budget can be stated.
 func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	t.Parallel()
 	m := &model{answer: short}

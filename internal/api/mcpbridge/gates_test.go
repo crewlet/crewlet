@@ -143,8 +143,8 @@ func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callabl
 func (g *gated) closeFence(err error) { g.fenceErr.Store(&err) }
 
 // A BOX IS ANSWERED AT ONCE WHEN ITS RUN'S TOOLS CLOSE. The tool loop stops the
-// CLI of a run it ends and withholds every answer until it is gone; nothing
-// here can stop the CLI in a box. So the box is answered at once: the call its
+// harness of a run it ends and withholds every answer until it is gone; nothing
+// here can stop the harness in a box. So the box is answered at once: the call its
 // tools closed under with what it did, since it ran, and every call after it
 // refused, told to end its turn — never told why, which is the engine's log's
 // and names the seat's grant.
@@ -213,8 +213,8 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 }
 
 // A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A detached run's
-// loop is its CLI's own, which would wait for ever on a call parked unanswered,
-// so the box is told at once the tool cannot be used from a coding run — and
+// loop is its harness's own, which would wait for ever on a call parked unanswered,
+// so the box is told at once the tool cannot be used from an executor — and
 // the run goes on. But the tool ran, and started what it would have parked on,
 // so the run's record holds the call as it holds any call that ran: when, for
 // how long, who answered, and refused as forbidden.
@@ -226,7 +226,7 @@ func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 	g := newGatedParking(t, map[string]bool{"launch": true}, launch)
 	sess := dial(t, g.url)
 	res := callTool(t, sess, "launch", map[string]any{})
-	if !res.IsError || !strings.Contains(text(res), "cannot be used from a coding run") {
+	if !res.IsError || !strings.Contains(text(res), "cannot be used from inside a box") {
 		t.Fatalf("a suspend was answered %v %q, want the refusal", res.IsError, text(res))
 	}
 	rows := g.ledger.rows()

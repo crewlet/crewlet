@@ -56,9 +56,9 @@ const DOC = {
   name: "Acme",
   providers: {
     llm: {
-      default: { agent: "claude-code", model: "opus", auth: { mode: "api-key" } },
+      default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
       sonnet: {
-        agent: "claude-code",
+        harness: "claude-code",
         model: "sonnet",
         auth: { mode: "api-key", api_key: "${ANTHROPIC_API_KEY_SONNET}" },
       },
@@ -327,9 +327,9 @@ const SPLIT_DOC = {
   name: "GoPhrase",
   providers: {
     llm: {
-      default: { agent: "claude-code", model: "opus", auth: { mode: "api-key" } },
+      default: { harness: "claude-code", model: "opus", auth: { mode: "api-key" } },
       "default-host": {
-        agent: "claude-code",
+        harness: "claude-code",
         model: "opus",
         run_in: "direct",
         auth: { mode: "api-key" },
@@ -694,7 +694,7 @@ test("coding named in the address is not preselected on a CLI that runs no codin
   const d = data();
   d.models.push(
     ...modelsData({
-      entries: [modelEntry({ key: "codex-review", agent: "codex", model: "gpt-6.1" })],
+      entries: [modelEntry({ key: "codex-review", harness: "codex", model: "gpt-6.1" })],
     }).models,
   );
   const editing = d.models.find((m) => m.key === "codex-review")!;

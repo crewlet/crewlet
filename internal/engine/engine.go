@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -147,9 +147,9 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	return newCompany(c, env, nil)
 }
 
-// newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
-// plans, the node's registry ([cliagent.Plans]); nil for an epoch nothing runs.
-func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) (*Company, error) {
+// newCompany builds an epoch whose harness entries keep their sit-outs on
+// plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -255,8 +255,8 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// Refused HERE, naming the seat and the fix, rather than by the
 		// runner's own nil check, which reads as a wiring fault. The
 		// dispatcher never gets this far for a company with no models, so
-		// what reaches it is a path that bypasses the inbox: a coding run
-		// resuming after a revision removed every provider.
+		// what reaches it is a path that bypasses the inbox: a turn resuming
+		// from its executor after a revision removed every provider.
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
@@ -291,7 +291,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		Sessions: in.Sessions,
 		Metrics:  in.Metrics,
 		// The onboarding pass's extension policy: the executor's rounds
-		// are its CLI's own, capped by the run's max_turns, and the
+		// are its harness's own, capped by the run's max_turns, and the
 		// reviewer's budget is a structural one — so the pass is the only
 		// engine loop a cap is extended in.
 		Caps: runner.Caps{
@@ -428,10 +428,10 @@ type RunnerInput struct {
 	Publisher queue.Publisher
 	Turn      runner.Turn
 
-	// Sessions is where the turn's phases serve their tools to the CLI that
+	// Sessions is where the turn's phases serve their tools to the harness that
 	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
 	// Both RunnerFor call sites pass it, because a phase that offers tools
-	// reaches its CLI through nothing else — a runner built without it is
+	// reaches its harness through nothing else — a runner built without it is
 	// refused where it is built ([runner.New]).
 	Sessions *toolsession.Host
 
@@ -441,7 +441,7 @@ type RunnerInput struct {
 	// this is wired unconditionally rather than branched on.
 	OnPhase func(phase.Phase)
 
-	// Launcher runs this turn's executor as its coding CLI's own agentic
+	// Launcher runs this turn's executor as its harness's own agentic
 	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
 	// use; nil is a seat with nothing to launch on, which the runner
 	// refuses to be built for.

@@ -77,7 +77,7 @@ const (
 	// other people chose.
 	SourcePageContext Source = "page_context"
 	// SourceDeepWork is a Dashboard Assistant deep-work run's account of
-	// what it did: a coding CLI's own words, written after it read web pages
+	// what it did: a harness's own words, written after it read web pages
 	// and files nobody in the company wrote (ADR-0054).
 	SourceDeepWork Source = "deep_work"
 
@@ -111,13 +111,13 @@ const (
 	// question a colleague asked, or the answer one gave.
 	SourceA2AMessage Source = "a2a_message"
 
-	// SourceCodingRun is what a seat's coding run said to a person: the
+	// SourceExecutor is what a seat's executor said to a person: the
 	// question it stopped to ask, the context it gave with it and the
-	// options it offered. The coding agent writes it in the seat's name, and
+	// options it offered. The harness writes it in the seat's name, and
 	// it is neither a message in a room nor a colleague's ask — the run
 	// reached nobody through either, and a reader auditing a transcript has
-	// to tell it from both. Every door labels it by one rule ([CodingRun]).
-	SourceCodingRun Source = "coding_run"
+	// to tell it from both. Every door labels it by one rule ([Executor]).
+	SourceExecutor Source = "executor"
 )
 
 // Sources are every surface.
@@ -125,7 +125,7 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
-	SourceA2AMessage, SourceCodingRun, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
+	SourceA2AMessage, SourceExecutor, SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].
@@ -796,7 +796,7 @@ type Label struct {
 	Authors []Author `json:"authors,omitempty"`
 }
 
-// CodingRun is the label of what a seat's coding run puts to a person (its
+// Executor is the label of what a seat's executor puts to a person (its
 // question, the context it gives with it, the options it offers), naming the
 // seat whose run wrote it where the reader knows it: THE ONE RULE for those
 // words, which every door they reach a model through takes, so one ask is
@@ -804,16 +804,16 @@ type Label struct {
 // once answered.
 //
 // EXTERNAL, decided here and never inferred from its writer: the words are
-// a vendor's coding CLI's, composed in its box from a brief that may be an
+// a vendor's harness's, composed in its box from a brief that may be an
 // outside message or a webhook's payload and from whatever it read there (a
 // repository, the open web), and put to a person to decide on. Whoever reads
 // them, a person's assistant among them, takes them as data and acts on none
 // of it, as it reads a deep-work run's account of what it did. What the same
-// CLI writes through the seat's tools is another matter: each such write is
+// harness writes through the seat's tools is another matter: each such write is
 // a record on a surface the engine hosts, made as the seat and read by the one
 // rule for such a surface ([TrustForHosted]) with every other writer there.
-func CodingRun(seat string) Label {
-	l := Label{Source: SourceCodingRun, Trust: TrustExternal}
+func Executor(seat string) Label {
+	l := Label{Source: SourceExecutor, Trust: TrustExternal}
 	if seat != "" {
 		l.Authors = []Author{{Kind: iam.ActorAgent, Seat: seat}}
 	}

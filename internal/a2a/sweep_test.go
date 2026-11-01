@@ -122,7 +122,7 @@ func TestTheSweepNeedsNoDirectory(t *testing.T) {
 // TestASweeperIsRefusedWithoutAStoreAPublisherOrAJudge — the two refusals
 // [a2a.New] makes are the sweeper's own, because they are what it is built
 // from; and so is a judge of whether an idle channel's answer is still owed,
-// without which the sweep closes the ask a colleague's coding run is still
+// without which the sweep closes the ask a colleague's executor is still
 // working on.
 func TestASweeperIsRefusedWithoutAStoreAPublisherOrAJudge(t *testing.T) {
 	t.Parallel()
@@ -143,11 +143,11 @@ func TestASweeperIsRefusedWithoutAStoreAPublisherOrAJudge(t *testing.T) {
 }
 
 // AN IDLE CHANNEL WHOSE ANSWER IS STILL OWED IS SPARED, AND ONE NOTHING OWES IS
-// CLOSED. A coding run has no clock bound and can wait days on a person's
-// question, so an ask its turn took up is quiet for as long as the run works —
-// and closed under it, the answer the run brings back is refused as a reply on
-// a closed channel and the asker is never woken. A channel nothing owes is the
-// sweep's to close, as every idle channel was.
+// CLOSED. An executor has no clock bound and can wait days on a person's
+// question, so an ask its turn took up is quiet for as long as the executor
+// works — and closed under it, the answer it brings back is refused as a reply
+// on a closed channel and the asker is never woken. A channel nothing owes is
+// the sweep's to close, as every idle channel was.
 //
 // Mutation: close an idle channel without asking the judge, and the owed one
 // is closed; never close one, and the other stays open.

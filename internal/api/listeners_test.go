@@ -376,7 +376,7 @@ func TestBothListenersDrain(t *testing.T) {
 	}
 }
 
-// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a coding CLI inside a box
+// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a harness inside a box
 // polls it with the run's token alone, so it is served on the public listener
 // and never on api.port, asks for no operator token — an unminted token gets
 // the bridge's own 401 — and is served through a drain, which cannot wait for

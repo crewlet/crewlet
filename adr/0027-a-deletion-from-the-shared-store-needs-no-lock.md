@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
-- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`
+- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`, `internal/objstore/collect.TestAnythingThisNodeCannotSeeDeletesNothing`, `internal/engine.TestTheEnginesCollectorKeepsWhatANewerBuildMayName`, `internal/engine.TestARolledBackCopyOfTheEstateIsUnseen`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -98,3 +98,27 @@ A presigned transfer writes a key the engine minted, under `if-none-match: *`
 and a signed checksum, so a name is still put once when the client makes the
 put. The upload's reservation outlives its object until the collector could
 have deleted it.
+
+## Amendment: what a build cannot see
+
+"An estate read completely" is read by one build, through the tables that
+build declares, and a newer build can add a domain whose rows name objects. A
+collector on an older build does not run that log at all, so none of its
+records is one the collector met and failed to decode, and it would read every
+object the newer domain names as nobody's. So the collector also asks, before
+its first judgement, whether a row it cannot read may name an object, and
+judges nothing while one may (`collect.Options.Unseen`):
+
+- a data node the fleet counts runs a state log this build does not register,
+  counted as the log trim counts a log's readers, so an evicted node holds
+  nothing back and an offline one holds collection back as it holds the trim;
+- this node's own copy of the estate carries a migration this build does not
+  ship: a newer build migrated it before the node was rolled back, and the
+  node's own row names only the logs it runs now.
+
+An answer the node cannot get is a failed pass, never one that went ahead. An
+object migration's final pass asks the same question, since it copies only
+what this build's tables name and the store it leaves behind is deleted after
+it. This is the older-peer rule (`CLAUDE.md`) applied to the one duty whose
+mistake cannot be undone: the next build's objects are not this build's to
+delete.

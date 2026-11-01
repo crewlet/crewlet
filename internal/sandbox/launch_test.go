@@ -111,7 +111,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	}
 	// THE DELIVERY OBLIGATION, persisted because the resumed turn never
 	// sees its trigger: without it a turn somebody asked for comes back
-	// from its coding run free to end in silence.
+	// from its executor free to end in silence.
 	if run.Reply != "tool" {
 		t.Fatalf("who is waiting was not persisted: %+v", run)
 	}
@@ -133,7 +133,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 			run.WorkKey, run.WorkSince, "wk-1", launchWorkSince)
 	}
 	if !rig.runner.Installed(res.SandboxID) {
-		t.Fatal("the coding agent was never installed in the box")
+		t.Fatal("the harness was never installed in the box")
 	}
 }
 
@@ -180,8 +180,9 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 }
 
 // THE ANNOUNCEMENT NAMES ITS JOB: the launch id the store minted and when it
-// recorded the launch — what pairs the start with the job's own phase record,
-// and what a request for the running job's live output names. A turn can
+// recorded the launch — what pairs the start with the job's own record
+// (`executor_collected`), and what a request for the running job's live
+// output names. A turn can
 // launch more than one job, so without it a watcher could not say which of
 // them is still running.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
@@ -226,7 +227,7 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 
 // The agent is asked the task, and told as a standing instruction what its box
 // already provides — so it does not spend rounds rediscovering it — on the
-// channel its CLI adds to its own system prompt. Each text carries its own
+// channel its harness adds to its own system prompt. Each text carries its own
 // half and nothing of the other's.
 //
 // There is no success-criteria section: it came from the planner's declared
@@ -326,7 +327,7 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	}
 }
 
-// THE CODING AGENT IS TOLD IT MAY ASK, and whom — the addendum the engine
+// THE HARNESS IS TOLD IT MAY ASK, and whom — the addendum the engine
 // composes rides the standing instructions the box is started with. Without it
 // a run held the ask tool with no word of when to use it, so a run blocked on
 // a decision could not park on a question at all.
@@ -344,7 +345,7 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	}
 	started := rig.runner.Started()
 	if len(started) != 1 || !strings.Contains(started[0].System, "ask_and_wait with to: founder") {
-		t.Fatalf("the coding agent's standing instructions do not carry how to ask:\n%v", started)
+		t.Fatalf("the harness's standing instructions do not carry how to ask:\n%v", started)
 	}
 	if got := rig.get("t1").Requester; got != "ada" {
 		t.Errorf("the row records requester %q, want the seat whose wake started the turn", got)
@@ -381,15 +382,15 @@ func TestTheRowCarriesTheColleaguesAskTheTurnAnswers(t *testing.T) {
 }
 
 // A LAUNCH NAMES ITS RUNNER, and one that names none is refused before its row
-// exists: the runner is the CLI of the entry whose login and model the run
-// carries, and a box running some default CLI could read neither.
+// exists: the runner is the harness of the entry whose login and model the run
+// carries, and a box running some default harness could read neither.
 func TestALaunchThatNamesNoCodingAgentIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Spec.CodingAgent = ""
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err == nil {
-		t.Fatal("a launch naming no coding agent started a run")
+		t.Fatal("a launch naming no harness started a run")
 	}
 	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
 		t.Fatalf("a refused launch left a row (found %v, err %v)", found, err)
@@ -401,7 +402,7 @@ func TestALaunchThatNamesNoCodingAgentIsRefused(t *testing.T) {
 
 // THE ENTRY THE RUN WAS LAUNCHED ON IS THE JOB'S, on its record: the member of
 // the seat's executor chain that took it, which a fallback makes other than
-// the head. The phase record its collection publishes is filed under it, so
+// the head. The launch's record its collection publishes is filed under it, so
 // spend by provider names the entry that ran — and a relaunch on another entry
 // files the next job under that one rather than carrying the first.
 func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
@@ -415,9 +416,9 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	if got := rig.get("t1").Launch; got.ProviderKey != "fallback" || got.Model != "sonnet" {
 		t.Fatalf("the job's record = %+v, want the entry and model it was launched on", got)
 	}
-	rec := runPhase(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
+	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
 	if rec.ProviderKey != "fallback" || rec.Model != "sonnet" {
-		t.Errorf("the job's phase record is filed under %q/%q, want fallback/sonnet",
+		t.Errorf("the job's launch record is filed under %q/%q, want fallback/sonnet",
 			rec.ProviderKey, rec.Model)
 	}
 
@@ -478,7 +479,7 @@ func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
 func TestABoxIsReclaimedWhenTheJobCannotStart(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
-	rig.runner.StartErr = errors.New("the coding CLI is not installed")
+	rig.runner.StartErr = errors.New("the harness is not installed")
 
 	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1")); err == nil {
 		t.Fatal("a launch whose job never started reported success")
@@ -591,7 +592,7 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Errorf("the run's standing instructions do not list the servers it was given:\n%s",
 			started[0].System)
 	}
-	// AND WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the naming
+	// AND WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the naming
 	// answered it — never persisted, so only the job it was minted for.
 	if want := (SteerWiring{Server: "crewlet", Tool: "steer_take",
 		URL: "https://engine.example.com/mcp/" + run.LaunchID + "/steer"}); started[0].Steer != want {
@@ -607,7 +608,7 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 
 // A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED. The naming
 // is what mints the box's endpoint, and a run with no endpoint is a
-// coding agent with none of the seat's tools: the launch is abandoned before
+// harness with none of the seat's tools: the launch is abandoned before
 // any box exists, and its row ended, rather than started blind.
 //
 // Mutation: ignore the naming's error, and a box is created and its job run.
@@ -691,8 +692,8 @@ func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
 		{"the box cannot be provisioned", func(r *waiterRig) {
 			r.provider.CreateErr = errors.New("no capacity")
 		}},
-		{"the coding agent cannot be started", func(r *waiterRig) {
-			r.runner.StartErr = errors.New("the coding CLI is not installed")
+		{"the harness cannot be started", func(r *waiterRig) {
+			r.runner.StartErr = errors.New("the harness is not installed")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

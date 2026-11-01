@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
-// THE DASHBOARD NAMES EVERY WAY A CLI RUN ENDS, AND NO OTHER. A phase's
+// THE DASHBOARD NAMES EVERY WAY A harness RUN ENDS, AND NO OTHER. A phase's
 // `invocations[].outcome` is what the phase card and the waterfall head a run's
 // rounds with, in words keyed on this union: an outcome only the engine records
 // reaches the screen as its bare value, and one only the dashboard knows is a

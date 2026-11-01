@@ -52,9 +52,11 @@ import (
 //
 // A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
 // two subsystems gating one inbox cannot release each other's hold, which
-// means the pause and the release must spell it identically. It is the one
-// reason the engine takes today: a seat parked on a sandbox run holds nothing,
-// because the dispatcher requeues its deliveries instead. Deriving it from the
+// means the pause and the release must spell it identically. It is one of
+// several a seat's inbox can be held under, each a key of its own: a person's
+// pause ([inbox.HoldSeatPaused]), the sandbox coordinator's
+// ([inbox.HoldSandbox]), the budget park's ([pauseReasonBudget]) and the
+// provider park's ([pauseReasonProvider]). Deriving it from the
 // human-readable reason would make an edit to a log message silently strand
 // every seat that was parked under the old wording.
 const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)

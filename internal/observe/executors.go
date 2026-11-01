@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// RunLister is the durable record of the fleet's coding runs. Satisfied by
+// RunLister is the durable record of the fleet's executors. Satisfied by
 // *sandbox.CoordStore.
 type RunLister interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)

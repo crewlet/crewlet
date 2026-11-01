@@ -14,8 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// What the dispatcher holds that a CLI's own loop could otherwise break: calls
-// that arrive together, calls the model never made as such, a CLI that gives
+// What the dispatcher holds that a harness's own loop could otherwise break: calls
+// that arrive together, calls the model never made as such, a harness that gives
 // up or dies under a call, answers withheld from a run that is ending, and the
 // round budget's last round.
 
@@ -88,9 +88,9 @@ func TestTwoDetachedCallsInOneResponseParkOnOne(t *testing.T) {
 }
 
 // A CALL NAMING A TOOL THE SESSION NEVER OFFERED never runs, and the response it
-// is part of is not held for it: the CLI refuses it itself, so nothing waits for
+// is part of is not held for it: the harness refuses it itself, so nothing waits for
 // it to arrive. On the last round the budget allows, the response's other call
-// is the last to come, and the run ends after it — the CLI asks nothing more.
+// is the last to come, and the run ends after it — the harness asks nothing more.
 // The record answers the call as the model's, not run, saying why.
 func TestACallNamingAToolNeverOfferedIsNotWaitedFor(t *testing.T) {
 	t.Parallel()
@@ -107,7 +107,7 @@ func TestACallNamingAToolNeverOfferedIsNotWaitedFor(t *testing.T) {
 		t.Errorf("the surface ran %v, want only the offered call", got)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) past the last round", late)
+		t.Errorf("the harness asked its model %d time(s) past the last round", late)
 	}
 	if !res.ExhaustedRounds || res.RoundsUsed != 1 {
 		t.Errorf("rounds %d exhausted %v, want the one round the budget allows, exhausted",
@@ -140,19 +140,19 @@ func TestACallNamingAnInactiveToolIsRefused(t *testing.T) {
 	}
 	got := prov.Results()
 	if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "not one of") {
-		t.Errorf("the CLI was answered %+v, want the call refused as not offered", got)
+		t.Errorf("the harness was answered %+v, want the call refused as not offered", got)
 	}
 	if len(res.Executions) != 1 || !res.Executions[0].Failed || !res.Executions[0].StartedAt.IsZero() {
 		t.Errorf("executions %+v, want the refusal recorded, untimed", res.Executions)
 	}
 }
 
-// A CALL THE CLI REWROTE IS REFUSED: a CLI that maps a name the model wrote,
+// A CALL THE HARNESS REWROTE IS REFUSED: a harness that maps a name the model wrote,
 // and its list does not hold, to one it does, then runs it with the model's
 // arguments, makes a call the model never asked for. Joined to the model's own
-// call — by the CLI's id where it sends one, by the arguments where it does
+// call — by the harness's id where it sends one, by the arguments where it does
 // not — its name is not the one the model asked for, and it is not run.
-func TestACallTheCLIRewroteIsRefused(t *testing.T) {
+func TestACallTheHarnessRewroteIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, noIDs := range []bool{false, true} {
 		surf := newSurface("post")
@@ -170,7 +170,7 @@ func TestACallTheCLIRewroteIsRefused(t *testing.T) {
 		}
 		got := prov.Results()
 		if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "pots") {
-			t.Errorf("no ids %v: the CLI was answered %+v, want the rewrite refused naming what the model asked",
+			t.Errorf("no ids %v: the harness was answered %+v, want the rewrite refused naming what the model asked",
 				noIDs, got)
 		}
 		var asked []string
@@ -185,11 +185,11 @@ func TestACallTheCLIRewroteIsRefused(t *testing.T) {
 	}
 }
 
-// A CALL THE CLI GAVE UP ON STILL RUNS OUT UNDER THE PHASE, AND IS RECORDED. The
-// CLI's cancel abandons only the delivery: the tool is not cut short half-way
-// through a write — its context is the phase's, which the CLI cannot cancel —
+// A CALL THE HARNESS GAVE UP ON STILL RUNS OUT UNDER THE PHASE, AND IS RECORDED. The
+// harness's cancel abandons only the delivery: the tool is not cut short half-way
+// through a write — its context is the phase's, which the harness cannot cancel —
 // and its real result is on the record the next run reads.
-func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
+func TestACallTheHarnessGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
@@ -198,7 +198,7 @@ func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	surf.hook = func(ctx context.Context, call llm.ToolCall) {
 		go func() {
 			<-surf.entered
-			time.Sleep(150 * time.Millisecond) // well past the CLI's give-up
+			time.Sleep(150 * time.Millisecond) // well past the harness's give-up
 			mu.Lock()
 			ctxErr = ctx.Err()
 			mu.Unlock()
@@ -214,12 +214,12 @@ func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := prov.Results(); len(got) != 1 || got[0].Err == nil {
-		t.Fatalf("the CLI was answered %+v, want it to have given up", got)
+		t.Fatalf("the harness was answered %+v, want it to have given up", got)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if ctxErr != nil {
-		t.Errorf("the tool's context ended with the CLI's cancel: %v", ctxErr)
+		t.Errorf("the tool's context ended with the harness's cancel: %v", ctxErr)
 	}
 	if len(res.Executions) != 1 || res.Executions[0].Output != "slow ok" || res.Executions[0].Failed {
 		t.Errorf("executions %+v, want the call's real result recorded", res.Executions)
@@ -235,10 +235,10 @@ func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	}
 }
 
-// A CLI THAT DIES UNDER A CALL FAILS ITS RUN, AND THE CALL STILL RUNS OUT AND IS
+// A HARNESS THAT DIES UNDER A CALL FAILS ITS RUN, AND THE CALL STILL RUNS OUT AND IS
 // RECORDED: the EOF abandons the delivery and nothing else. The phase reports
 // the run's failure with the call's real result on its failure record.
-func TestACallTheCLIDiedUnderRunsOutAndIsRecorded(t *testing.T) {
+func TestACallTheHarnessDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
@@ -266,7 +266,7 @@ func TestACallTheCLIDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if ctxErr != nil {
-		t.Errorf("the tool's context ended with the CLI: %v", ctxErr)
+		t.Errorf("the tool's context ended with the harness: %v", ctxErr)
 	}
 	snap := prog.Snapshot()
 	if len(snap.Executions) != 1 || snap.Executions[0].Output != "slow ok" {
@@ -278,8 +278,8 @@ func TestACallTheCLIDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 }
 
 // AN ANSWER WITHHELD FROM AN ENDING RUN REACHES THE NEXT RUN. A run ended for a
-// reason the next one answers — a person's note, a tool its CLI could not see —
-// never handed its CLI the result of the call that ended it, so the model never
+// reason the next one answers — a person's note, a tool its harness could not see —
+// never handed its harness the result of the call that ended it, so the model never
 // read it there; the next run is handed it, as that call's answer.
 func TestAWithheldAnswerReachesTheNextRun(t *testing.T) {
 	t.Parallel()
@@ -295,7 +295,7 @@ func TestAWithheldAnswerReachesTheNextRun(t *testing.T) {
 		}
 		withheldAndHanded(t, prov, "the real result")
 	})
-	t.Run("an activation the CLI cannot see", func(t *testing.T) {
+	t.Run("an activation the harness cannot see", func(t *testing.T) {
 		t.Parallel()
 		surf := newSurface("activate_tool")
 		surf.activates = "activate_tool"
@@ -310,17 +310,17 @@ func TestAWithheldAnswerReachesTheNextRun(t *testing.T) {
 	})
 }
 
-// withheldAndHanded checks the first run's CLI never read result and the second
+// withheldAndHanded checks the first run's harness never read result and the second
 // run was handed it.
 func withheldAndHanded(t *testing.T, prov *llmtest.Script, result string) {
 	t.Helper()
 	for _, r := range prov.Results() {
 		if r.Output == result {
-			t.Errorf("the ending run's CLI read the result: %+v", r)
+			t.Errorf("the ending run's harness read the result: %+v", r)
 		}
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after its run was ended", late)
+		t.Errorf("the harness asked its model %d time(s) after its run was ended", late)
 	}
 	seen := prov.Seen()
 	if len(seen) != 2 {
@@ -339,7 +339,7 @@ func withheldAndHanded(t *testing.T, prov *llmtest.Script, result string) {
 
 // THE LAST ROUND THE BUDGET ALLOWS, WITH ITS CALLS RUN AT ONCE: every call of it
 // runs and is recorded on it, and the run ends once the last of them returns,
-// before the CLI can ask its model again — exhausted, for the caller's judge.
+// before the harness can ask its model again — exhausted, for the caller's judge.
 func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("a", "b", "c", "d")
@@ -358,7 +358,7 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 		t.Errorf("the surface ran %v, want the two rounds' calls and nothing of a third", ran)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) past the budget", late)
+		t.Errorf("the harness asked its model %d time(s) past the budget", late)
 	}
 	if !res.ExhaustedRounds || res.RoundsUsed != 2 {
 		t.Errorf("rounds %d exhausted %v, want 2 and exhausted", res.RoundsUsed, res.ExhaustedRounds)
@@ -378,10 +378,10 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 }
 
 // THE LAST ROUND'S OWN TOOLS END THE RUN TOO. A last round whose calls are all
-// the CLI's own — its web search — has nothing for the host to answer, and the
-// CLI runs them and asks its model again: the run is ended as soon as the round
+// the harness's own — its web search — has nothing for the host to answer, and the
+// harness runs them and asks its model again: the run is ended as soon as the round
 // is read, not after a request the budget did not allow.
-func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
+func TestALastRoundOfTheHarnessOwnToolsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("post")
 	prov := script(runOf(
@@ -390,7 +390,7 @@ func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
 	))
 	prov.Before = func(name string) {
 		if name == "web_search" {
-			// The CLI's own search takes its time, as a real one does.
+			// The harness's own search takes its time, as a real one does.
 			time.Sleep(3 * llmtest.KillLatency)
 		}
 	}
@@ -406,10 +406,10 @@ func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
 	}
 }
 
-// A CALL STILL RUNNING NEAR THE CLI'S OWN TOOL TIMEOUT ENDS THE RUN, and the
-// next run is handed its real result: a CLI that gave up on a call the engine is
+// A CALL STILL RUNNING NEAR THE HARNESS'S OWN TOOL TIMEOUT ENDS THE RUN, and the
+// next run is handed its real result: a harness that gave up on a call the engine is
 // still running would send its model to do it again.
-func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
+func TestACallNearTheHarnessToolTimeoutEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow", "submit_work")
 	surf.results["slow"] = toolloop.ToolResult{Output: "the real result"}
@@ -433,7 +433,7 @@ func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
 		t.Errorf("the surface ran %v", got)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after its run was ended", late)
+		t.Errorf("the harness asked its model %d time(s) after its run was ended", late)
 	}
 	withheldAndHanded(t, prov, "the real result")
 	if res.Executions[0].Output != "the real result" {
@@ -441,8 +441,8 @@ func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
 	}
 }
 
-// A CALL WHOSE RESPONSE THE CLI'S RECORD SHOWS LATE IS STILL ITS ROUND. A record
-// read off a file the CLI writes can lag the call by more than the join waits:
+// A CALL WHOSE RESPONSE THE HARNESS'S RECORD SHOWS LATE IS STILL ITS ROUND. A record
+// read off a file the harness writes can lag the call by more than the join waits:
 // the call is placed on a round of its own, and when the record does show the
 // response, that response IS that round — not one more.
 func TestAResponseRecordedAfterItsCallIsTheCallsRound(t *testing.T) {
@@ -455,7 +455,7 @@ func TestAResponseRecordedAfterItsCallIsTheCallsRound(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.RoundsUsed != 2 || len(res.Rounds) != 2 {
-		t.Errorf("rounds %d (%d recorded), want the two requests the CLI made", res.RoundsUsed, len(res.Rounds))
+		t.Errorf("rounds %d (%d recorded), want the two requests the harness made", res.RoundsUsed, len(res.Rounds))
 	}
 	if len(res.Executions) != 1 || res.Executions[0].Round != 1 {
 		t.Errorf("executions %+v, want the call on round 1", res.Executions)
@@ -476,7 +476,7 @@ func TestAResponseRecordedAfterItsCallIsTheCallsRound(t *testing.T) {
 }
 
 // lagging reports the run's records in order, but only once a lag has passed
-// from the first — a backend reading a session file the CLI flushes late — and
+// from the first — a backend reading a session file the harness flushes late — and
 // every one of them before the run is over.
 type lagging struct {
 	*llmtest.Script
@@ -510,7 +510,7 @@ func (l *lagging) Complete(ctx context.Context, req llm.Request) (*llm.Completio
 // A SUSPEND IS REFUSED WHERE IT CANNOT BE RESUMED. Honouring it in a phase that
 // never persists a partial conversation strands the turn with a call nothing
 // will ever answer, so the model is answered a refusal — and the record says
-// exactly what the CLI was told, failed, so the two never disagree about it.
+// exactly what the harness was told, failed, so the two never disagree about it.
 func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("propose_change")
@@ -529,20 +529,20 @@ func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
 	}
 	got := prov.Results()
 	if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "cannot suspend") {
-		t.Fatalf("the CLI was answered %+v, want the refusal", got)
+		t.Fatalf("the harness was answered %+v, want the refusal", got)
 	}
 	answer, ok := toolResults(res.Messages)["call-1"]
 	if !ok || answer.Content != got[0].Output || !answer.Failed {
-		t.Errorf("the conversation answers the call %+v, want what the CLI was told: %+v", answer, got[0])
+		t.Errorf("the conversation answers the call %+v, want what the harness was told: %+v", answer, got[0])
 	}
 	if len(res.Executions) != 1 || !res.Executions[0].Failed || res.Executions[0].Output != got[0].Output {
-		t.Errorf("executions = %+v, want the refusal the CLI was told, failed", res.Executions)
+		t.Errorf("executions = %+v, want the refusal the harness was told, failed", res.Executions)
 	}
 }
 
 // A LONG CALL BESIDE ANOTHER LETS THE OTHER RUN. A call still running near the
-// CLI's own tool timeout ends its run — but not before the rest of its
-// response: a CLI that waits on each answer is told "still running" so it makes
+// harness's own tool timeout ends its run — but not before the rest of its
+// response: a harness that waits on each answer is told "still running" so it makes
 // the next call, and the run ends after that one, whose answer is withheld. The
 // next run is handed both results.
 func TestALongCallBesideAnotherLetsTheOtherRun(t *testing.T) {
@@ -571,7 +571,7 @@ func TestALongCallBesideAnotherLetsTheOtherRun(t *testing.T) {
 		t.Errorf("the surface ran %v, want the long call, the one beside it, and the submission", ran)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after its run was ended", late)
+		t.Errorf("the harness asked its model %d time(s) after its run was ended", late)
 	}
 	seen := prov.Seen()
 	if len(seen) != 2 {
@@ -609,23 +609,23 @@ func (h *halting) Complete(ctx context.Context, req llm.Request) (*llm.Completio
 
 // A RUN THAT FAILED AFTER IT DECIDED THE PHASE'S END IS HALTED. A submission
 // that ran finished the phase even while the rest of its response was still to
-// come; a CLI that died before making it leaves that end standing, and no other
+// come; a harness that died before making it leaves that end standing, and no other
 // member of a chain may continue the run — it would submit again. A run that
 // failed with nothing decided is not halted: the next member continues it.
 func TestARunThatFailedAfterDecidingIsHalted(t *testing.T) {
 	t.Parallel()
-	died := errors.New("the CLI died")
+	died := errors.New("the harness died")
 	t.Run("decided", func(t *testing.T) {
 		t.Parallel()
 		surf := newSurface("post", "submit_work")
-		// The model asks for a delivery beside its submission, and the CLI
+		// The model asks for a delivery beside its submission, and the harness
 		// dies before the delivery reaches the engine.
 		prov := &halting{Script: script(llmtest.Run{Responses: []llmtest.Response{{Calls: []llmtest.Call{
 			{Name: "submit_work"}, {Name: "post", Sent: "unreachable"},
 		}}}, Err: died})}
 		res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, TerminateAfter: []string{"submit_work"}})
 		if err != nil {
-			t.Fatalf("Run: %v — the phase finished before its CLI died", err)
+			t.Fatalf("Run: %v — the phase finished before its harness died", err)
 		}
 		if !slices.Equal(prov.halted, []bool{true}) {
 			t.Errorf("halted %v, want the run halted once the submission ran", prov.halted)
@@ -668,7 +668,7 @@ func (p *pending) Complete(ctx context.Context, req llm.Request) (*llm.Completio
 // results — and nothing the loop already folded into the conversation.
 func TestPendingIsWhatTheRunDid(t *testing.T) {
 	t.Parallel()
-	died := errors.New("the CLI died")
+	died := errors.New("the harness died")
 	prov := &pending{Script: script(
 		runOf(says(writtenSubmission)),
 		llmtest.Run{Responses: []llmtest.Response{
@@ -692,7 +692,7 @@ func TestPendingIsWhatTheRunDid(t *testing.T) {
 }
 
 // A SUBMISSION THAT OUTLIVES ITS RUN STILL FINISHES THE PHASE. A call still
-// running near the CLI's tool timeout is answered "still running" and its run
+// running near the harness's tool timeout is answered "still running" and its run
 // ended; a submission that returns after that has finished the phase all the
 // same, and no further run is started — it would read the result and submit
 // again.
@@ -718,11 +718,11 @@ func TestASubmissionThatOutlivesItsRunStillFinishesThePhase(t *testing.T) {
 	}
 }
 
-// A NOTE WAITING AS THE CLI RUNS ITS OWN TOOLS ENDS THE RUN. A response whose
-// calls are all the CLI's own has nothing for the host to answer, so no call's
+// A NOTE WAITING AS THE HARNESS RUNS ITS OWN TOOLS ENDS THE RUN. A response whose
+// calls are all the harness's own has nothing for the host to answer, so no call's
 // end can pause the run: the note is seen as the response is read, and the next
 // run reads it before the model asks anything more.
-func TestANoteWaitingAsTheCLIRunsItsOwnToolsEndsTheRun(t *testing.T) {
+func TestANoteWaitingAsTheHarnessRunsItsOwnToolsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	box := &stepBox{log: &stepLog{}}
 	prov := script(

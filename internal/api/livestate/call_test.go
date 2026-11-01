@@ -685,7 +685,7 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 // listing it.
 //
 // The frame before a tool call lists it; the frame after it returns does not.
-// A coding CLI runs a response's calls at once, so a frame lists every call in
+// A harness runs a response's calls at once, so a frame lists every call in
 // flight, and one returning leaves the others running. Carrying the previous
 // frame's list forward, like the prompt is carried, would leave a call that
 // returned drawn as running.
@@ -756,7 +756,7 @@ func TestEveryCallInFlightAppearsAndEachClears(t *testing.T) {
 // recorded.
 //
 // The phase is over, and a failed card still reading "running" against a tool
-// call that will never return is the streaming caret again. Which CLI run
+// call that will never return is the streaming caret again. Which harness run
 // died, and on whose entry, is what the failure record's runs say — the run
 // that failed is on it and on no progress frame before it.
 //

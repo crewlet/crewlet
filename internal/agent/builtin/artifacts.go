@@ -57,7 +57,7 @@ import (
 // # Every write goes through the one publish pipeline
 //
 // Bytes reach a version only through internal/artifactupload: inline content
-// rides the call (at most [artifacts.MaxInlineBytes] decoded), a coding run's
+// rides the call (at most [artifacts.MaxInlineBytes] decoded), an executor's
 // box and a project's files are streamed into an upload the pipeline reserved
 // first (a sandbox is never handed a presigned URL), and the pipeline holds
 // every turn to its guardrails ([artifacts.TurnPublishes],
@@ -143,20 +143,20 @@ type ArtifactPublisher interface {
 	SourceText(ctx context.Context, e artifacts.Entry, limit int64) ([]byte, bool, error)
 }
 
-// ArtifactBoxes finds the box the turn's coding run works in, for a publish
+// ArtifactBoxes finds the box the turn's executor works in, for a publish
 // that takes its files from it.
 type ArtifactBoxes interface {
-	// Box is the box of the coding run working in this turn, attached for
-	// reading while it works: the run publishes its own build, by calling. It
-	// answers [ErrNoBox] when the turn has none it may read: no run, a run
-	// that is not working in its box (parked on a question, collected, its
-	// pause reaped), or a box already torn down.
+	// Box is the box of the executor working in this turn, attached for
+	// reading while it works: the executor publishes its own build, by
+	// calling. It answers [ErrNoBox] when the turn has none it may read: no
+	// launch, an executor that is not working in its box (parked on a
+	// question, collected, its pause reaped), or a box already torn down.
 	Box(ctx context.Context, turn *turnctx.Turn) (ArtifactBox, error)
 }
 
-// ArtifactBox is one coding run's box as a publish reads it. Every path is
-// relative to the run's workspace (the coding agent's working directory) and
-// slash-separated.
+// ArtifactBox is one executor's box as a publish reads it. Every path is
+// relative to the executor's workspace (the harness's working directory)
+// and slash-separated.
 type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The
 	// listing is the box's and is treated as untrusted: every path is held
@@ -172,23 +172,23 @@ type ArtifactBox interface {
 	Open(ctx context.Context, path string) (io.ReadCloser, error)
 }
 
-// ErrNoBox reports a turn with no coding run's box a publish may read.
-var ErrNoBox = errors.New("builtin: this turn holds no coding run's box to publish from")
+// ErrNoBox reports a turn with no executor's box a publish may read.
+var ErrNoBox = errors.New("builtin: this turn holds no executor's box to publish from")
 
-// ErrNotADirectory is a directory a publish named that the coding run's
-// workspace does not hold as one: it is missing, or it is a file or a link,
+// ErrNotADirectory is a directory a publish named that the box's workspace
+// does not hold as one: it is missing, or it is a file or a link,
 // which a listing never follows. The caller's argument, as a path naming no
 // file is ([sandbox.ErrNotRegularFile]), and never a fault of this node.
-var ErrNotADirectory = errors.New("builtin: the path is not a directory in the coding run's workspace")
+var ErrNotADirectory = errors.New("builtin: the path is not a directory in the box's workspace")
 
-// ErrNoWorkspace is a coding run's box whose workspace is gone: no dir a
+// ErrNoWorkspace is an executor's box whose workspace is gone: no dir a
 // publish names can list, so it is never the dir's fault ([ErrNotADirectory]).
-var ErrNoWorkspace = errors.New("builtin: the coding run's workspace is gone from its box")
+var ErrNoWorkspace = errors.New("builtin: the box's workspace is gone from it")
 
 // ErrListIncomplete is a listing that could not read all of the dir it walked:
 // a directory under it the box's user can't open, or a read error. What it did
 // read is not the build, so it is refused rather than published short.
-var ErrListIncomplete = errors.New("builtin: the coding run's box could not list all of the directory")
+var ErrListIncomplete = errors.New("builtin: the executor's box could not list all of the directory")
 
 // ArtifactRequesters composes the principal a seat's turn is acting for.
 type ArtifactRequesters interface {
@@ -220,7 +220,7 @@ type ArtifactDeps struct {
 	// Nil reads false, the closed end.
 	ManageOthers func() bool
 
-	// Boxes reads a coding run's box. Nil refuses every publish from a
+	// Boxes reads an executor's box. Nil refuses every publish from a
 	// sandbox, which is a node with no sandbox runtime.
 	Boxes ArtifactBoxes
 

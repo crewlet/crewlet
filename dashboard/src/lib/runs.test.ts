@@ -1,8 +1,8 @@
 /**
- * ONE POLL FOR THE DURABLE CODING-RUN RECORD.
+ * ONE POLL FOR THE EXECUTORS' DURABLE RECORD.
  *
- * The runs board polled `executors` every 20 s and the attention queue
- * every 30 s, so a run that parked on a question reached the board and then,
+ * The Executors board polled `executors` every 20 s and the attention queue
+ * every 30 s, so an executor that parked on a question reached the board and then,
  * up to ten seconds later, the Inbox — two screens disagreeing about whether
  * anybody was being waited on. Every reader now names `RUNS_POLL_MS`, and this
  * reads the tree to hold it: a call site with a literal of its own, or with no

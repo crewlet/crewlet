@@ -172,8 +172,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	// answers.
 	//
 	// NOR FOR THE RELAY, which sets up nothing at all. It is the process a
-	// coding CLI starts as a seat's MCP server, so its stdout IS the protocol
-	// stream and its environment is whatever the CLI chose to pass: the log
+	// harness starts as a seat's MCP server, so its stdout IS the protocol
+	// stream and its environment is whatever the harness chose to pass: the log
 	// level, format and file below would read variables it must not depend on.
 	// See internal/mcprelay.
 	if cmd != "run" && cmd != mcprelay.Command {
@@ -264,7 +264,7 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	case "assistant":
 		return runAssistant(environ, rest, stdout, stderr)
 	case "mcp-relay":
-		// The literal is mcprelay.Command, which the argv a CLI is handed is
+		// The literal is mcprelay.Command, which the argv a harness is handed is
 		// built from; a case of the switch is read as the binary's command
 		// list ([TestTheRelayIsDispatchedUnderItsOwnName] holds the two
 		// together).
@@ -313,13 +313,13 @@ Usage:
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
                               sessions and tokens
-  crewlet llm <cmd>           Log in, verify and export the coding CLIs every model
+  crewlet llm <cmd>           Log in, verify and export the harnesses every model
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
   crewlet assistant eval      Run evaluation cases through Ask Crewlet,
                               on their own scripts or against a candidate model
-  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
+  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's harness
                               starts, relaying its stdio to the engine's tools
   crewlet gitlab <cmd>        Register a GitLab group's webhook and its signing secret
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
@@ -1775,7 +1775,7 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	closeAssistant(ctx, s.assistant, log)
 	// AND EVERY HELD POLL FOR A RUN'S NOTES, for the same reason — one this
 	// node serves from its own opening and one it relays to the session's
-	// holder alike: released at once and turned away as a 503 the CLI pauses
+	// holder alike: released at once and turned away as a 503 the harness pauses
 	// on before it polls again, on this node's successor once it has the
 	// seat. A relayed tool call or read is left to finish within the grace.
 	s.bridge.Shutdown()
@@ -1853,7 +1853,7 @@ func shutdownListener(ctx context.Context, l *apiListener, listener string, log 
 // IT IS NOT AN UPPER BOUND ON EVERY REQUEST THIS LISTENER CAN BE HOLDING, and
 // the exception is deliberate on both sides. The drain keeps serving
 // [mcpbridge.PathPrefix], whose sessions carry NO idle timeout on purpose (see
-// [mcpbridge.Bridge.Handler]) because a coding agent legitimately goes quiet
+// [mcpbridge.Bridge.Handler]) because a harness legitimately goes quiet
 // for as long as a build takes. A node stopped while such a session is open
 // therefore spends the whole grace here and logs api_shutdown_failed, and that
 // is the honest outcome rather than a fault: the run is one this process will
@@ -2407,7 +2407,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// surface waiting for its first report from one that will
 			// never get one.
 			Converges: e.Converges,
-			// The DURABLE record of detached coding runs, whole: the
+			// The DURABLE record of every detached executor, whole: the
 			// board needs the row's own facts (the branch, the pause
 			// TTL, the bridge's call log) that the live panel, which
 			// is reconciled against this same record, does not carry.
@@ -2668,11 +2668,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "a seat paused before this process started shows as paused "+
 				"from its next pause or resume; the pause itself is in force")
 	}
-	// AND THE RUNNING CODING RUNS, from the durable record every node
-	// opens, before the handover for the seed's reason: a run parked on a
-	// question for days is exactly the one the events of this process's
-	// lifetime will never mention. Then every interval, which is what
-	// corrects a panel whose completion event never arrived.
+	// AND THE EXECUTORS OUT IN THEIR BOXES, from the durable record every
+	// node opens, before the handover for the seed's reason: an executor
+	// parked on a question for days is exactly the one the events of this
+	// process's lifetime will never mention. Then every interval, which is
+	// what corrects a panel whose completion event never arrived.
 	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
 	if err = runs.Reconcile(seedCtx); err != nil {
 		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,

@@ -9,21 +9,34 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A PAGED SPEND READ COVERS EVERY RECORD ONCE, ties on one instant included.
+// A PAGED SPEND READ COVERS EVERY RECORD ONCE, ties on one instant included,
+// and across the spend types.
 //
 // The live spend window's seed reads a busy day in pages, each resuming below
 // the last record the one before kept. Records share a microsecond in a burst,
 // so a cursor on the instant alone would skip the ones that collided with it or
-// read them twice — and a spend record read twice is a double count.
+// read them twice — and a spend record read twice is a double count. The read
+// takes each spend type by its own statement and merges them, so a page is cut
+// from the merge: a phase and a launch sharing an instant are each read once,
+// in the order a single statement would have read them.
+//
+// Mutation: cut each type's page before merging, or merge without the id
+// tiebreak, and a record is read twice or not at all.
 func TestAPagedSpendReadCoversEveryRecordOnce(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	var want []string
 	for i := range 7 {
-		// Three records on each instant but the last.
+		// Three records on each instant but the last, a phase's and a
+		// launch's alternating among them.
 		id := fmt.Sprintf("p-%d", i)
-		seedPhase(t, log, id, at.Add(time.Duration(i/3)*time.Second), "PM", 1, 0)
+		when := at.Add(time.Duration(i/3) * time.Second)
+		if i%2 == 0 {
+			seedPhase(t, log, id, when, "PM", 1)
+		} else {
+			seedLaunch(t, log, id, when, "PM", 1, 0)
+		}
 		want = append(want, id)
 	}
 	var got []string

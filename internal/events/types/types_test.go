@@ -52,9 +52,9 @@ func catalogue() []events.Payload {
 		SkillPromoted{}, SkillStaled{}, SkillArchived{}, SkillRevived{},
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
-		// sandbox.go
-		ExecutorLaunched{}, ExecutorFinished{}, ExecutorFailed{}, ExecutorStopped{},
-		ExecutorAsked{}, ExecutorAnswerGiven{}, ExecutorAnswered{},
+		// executor.go
+		ExecutorLaunched{}, ExecutorFinished{}, ExecutorCollected{}, ExecutorFailed{},
+		ExecutorStopped{}, ExecutorAsked{}, ExecutorAnswerGiven{}, ExecutorAnswered{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
 		// toolskill.go
@@ -154,6 +154,7 @@ var wireTypes = []string{
 	"executor_answer_given",
 	"executor_asked",
 	"executor_answered",
+	"executor_collected",
 	"executor_finished",
 	"executor_failed",
 	"executor_launched",
@@ -365,7 +366,7 @@ var wireTags = map[string][]string{
 	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                {"agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":           {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":         {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_phase_completed":         {"agent_id", "cache_read_tokens", "cache_write_tokens", "coding_agent", "conversation_key", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
 	"agent_turn_progress":           {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
 	"subagent_batched":              {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":               {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
@@ -386,6 +387,7 @@ var wireTags = map[string][]string{
 	"reflection_completed":          {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
 	"executor_launched":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
 	"executor_finished":             {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
+	"executor_collected":            {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "delivered_refs", "delivered_refs_elided", "duration_ms", "error", "error_kind", "failed", "input_tokens", "iteration", "launch_id", "model", "notes", "output_tokens", "provider_key", "response", "role", "sandbox_id", "started_at", "total_tokens", "turn_id", "work_item", "work_key"},
 	"executor_failed":               {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
 	"executor_stopped":              {"agent_handle", "agent_id", "coding_agent", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"executor_asked":                {"agent_handle", "agent_id", "audience", "conversation_key", "decision", "question", "question_context", "role", "sandbox_id", "turn_id", "work_item", "work_key"},

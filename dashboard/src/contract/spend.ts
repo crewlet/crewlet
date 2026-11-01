@@ -27,8 +27,9 @@ export const ADMIN_GROUPS: readonly string[] = ["provider"];
 /**
  * The four bands a phase breakdown is drawn in, and the data series each one
  * takes — the engine folds every phase into one of them ONCE
- * (`tokens.PhaseBand`: execute and a coding run are Execute, review is Review,
- * delegated workers are Workers, and everything that is not the turn's own
+ * (`tokens.PhaseBand`: execute is Execute — its run's launches with it, which
+ * the engine files there — review is Review, delegated workers are Workers,
+ * and everything that is not the turn's own
  * work is Auxiliary — every call to the seat's auxiliary model (the turn-start
  * context, every compaction rewrite, the reflection workers, the background
  * learning passes, a person's answered question), the round-cap judge and the
@@ -52,16 +53,15 @@ export const BANDS = [
  * A PHASE IS A CATEGORY, AND A CATEGORY HAS NO COLOUR OF ITS OWN: the design
  * system removed its phase family, and inside a figure a phase is a series.
  * Taking the series of the band the engine already folds it into is what keeps
- * one phase one colour on every chart — a coding run is Execute on the Spend
- * chart and in the live list alike. A phase this build has not met (a newer
- * peer's) is Auxiliary, which is exactly where the engine puts it.
+ * one phase one colour on every chart — the executor's run is Execute on the
+ * Spend chart and in the live list alike. A phase this build has not met (a
+ * newer peer's) is Auxiliary, which is exactly where the engine puts it.
  *
  * `internal/api/queries`' phase-band gate holds every entry against
  * `tokens.PhaseBand` and requires every phase in `phase.All`.
  */
 export const PHASE_BANDS = {
   execute: "execute",
-  sandbox: "execute",
   review: "review",
   subagent: "workers",
   auxiliary: "auxiliary",

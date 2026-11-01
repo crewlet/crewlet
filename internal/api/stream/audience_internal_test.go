@@ -417,7 +417,7 @@ func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
 	}
 }
 
-// A CODING RUN'S QUESTION NAMES ITS READER IN THE VARIANT, AND NOTHING ELSE
+// AN EXECUTOR'S QUESTION NAMES ITS READER IN THE VARIANT, AND NOTHING ELSE
 // DOES.
 //
 // A run parked on a question shows it to the seats it is put to whatever their
@@ -467,13 +467,13 @@ func runningName(rows ExecutorRows, audience Audience) string {
 	return name
 }
 
-// THE SANDBOXES PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
-// Which `providers.llm` entry a coding run spends, the chain's head or the
+// THE EXECUTORS PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
+// Which `providers.llm` entry an executor spends, the chain's head or the
 // fallback a launch took, is the company's configuration: everybody else, the
 // seat's lead included, is sent the run and the model it runs under without
 // it. The push and the snapshot both shape the rows through here.
 //
-// Mutation: drop the configuration rule from the coding run's mask, or reach
+// Mutation: drop the configuration rule from the executor's mask, or reach
 // it with no Config for an admin, and a reader is handed the entry or an
 // admin is not.
 func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
