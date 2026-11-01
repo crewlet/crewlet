@@ -92,6 +92,11 @@ type Fleet struct {
 	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
 
+	// listings are each node's listing of each MCP server, by its key, and
+	// schemas each definition's schemas by its digest.
+	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
+	schemas  map[string]coord.MCPToolSchema
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
@@ -148,6 +153,7 @@ func NewFleet() *Fleet {
 		uploads:      map[string]versioned{},
 		retries:      newRetryRecords(),
 		signIns:      newSignInRecords(),
+		listings:     newListingRecords(),
 	}
 }
 

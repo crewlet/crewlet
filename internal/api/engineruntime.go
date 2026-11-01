@@ -135,8 +135,20 @@ func (r engineRuntime) Tools() []queries.ToolRow {
 	for _, entry := range entries {
 		out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
 	}
+	// AND WHAT THE FLEET LISTS that no registry here holds: a per-agent
+	// server's tools, whose children run on the nodes holding its seats
+	// and on no other. From the engine's watched copy and the schemas it
+	// has read, never the store, since a push builds this; a copy not yet
+	// answered adds nothing, and the engine re-sends the catalogue when it
+	// is.
+	if live, ok := r.engine.LiveMCPListings(); ok {
+		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolSchemas())...)
+	}
 	return out
 }
+
+// Listings is the engine's watched copy of the fleet's MCP listings.
+func (r engineRuntime) Listings() queries.MCPListingReader { return r.engine }
 
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.

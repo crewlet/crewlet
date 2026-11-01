@@ -441,6 +441,17 @@ func (r *Registry) Deliveries() map[string]string {
 	return out
 }
 
+// MCPDelivery is where a call to one of server's tools delivers, by the
+// predicate the registry answers with ([deliverySurface]): the server, unless
+// the tool is proven read-only.
+//
+// FOR A TOOL NO REGISTRY HERE HOLDS: one only another node's instance of a
+// per-agent server lists, whose catalogue row must say what a registry
+// holding it would, rather than a second reading of its hints.
+func MCPDelivery(server string, ann Annotations) string {
+	return deliverySurface(Entry{Origin: mcp.Origin(server), Annotations: ann})
+}
+
 // deliverySurface is the one predicate both the registry and a snapshot answer
 // with, so a tool cannot deliver through one view and not the other. It
 // returns "" for a tool that reaches nobody.

@@ -98,6 +98,9 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		jobs = append(jobs, maintenance.LedgerJobs(
 			ledgerstore.NewConversations(db), e.ConversationRetention)...)
 	}
+	// THE FLEET'S MCP LISTINGS, which no age may forget: what a node that
+	// died or restarted left behind, and the schemas nothing names any more.
+	jobs = append(jobs, e.mcpListingJobs()...)
 	if fleet := e.backends.Fleet; fleet != nil {
 		// The one shared surface swept here, and the exception the
 		// coordination store's own retention rule makes room for: its

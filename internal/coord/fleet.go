@@ -1656,6 +1656,7 @@ type Fleet interface {
 	SeatPauses
 	ModelRetries
 	DeviceSignIns
+	MCPListings
 	PositionRegister
 	HoldRegister
 	FloorRegister
