@@ -417,15 +417,27 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # where the backend reported none) — and
                            # `invocations[]`, one per CLI run the phase
                            # started (its outcome, first and last round,
-                           # tokens). A coding run's own record (`phase:
-                           # sandbox`) carries `cli_turns`, the model turns
-                           # its CLI reported. A failed phase carries
+                           # tokens). A failed phase carries
                            # `error_kind` — a provider kind (rate_limit,
                            # auth, timeout, server, fatal, canceled),
                            # budget_exhausted, stopped for a phase a person
                            # ended, canceled, sandbox_<class>
                            # for an executor whose box could not
                            # be started, or error
+executor_collected         # one LAUNCH of an executor's run, as its
+                           # collection read it off the box — published once
+                           # per launch, a person's stop and a lost host's
+                           # cut-off included: its tokens and cache share,
+                           # `cli_turns` (the model turns its CLI reported),
+                           # what its CLI said it cost, its report
+                           # (`response`), delivered refs, activity
+                           # transcript, CLI, box, model and entry, and how
+                           # it ended (`notes`, or `failed` with `error` and
+                           # error_kind coding_run_failed). NO PHASE: the
+                           # work of the `execute` round that launched it
+                           # (`iteration`, `launch_id`), which every spend
+                           # reader files it under — the executor's own
+                           # phase record carries no tokens
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider

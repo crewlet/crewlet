@@ -395,9 +395,9 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // It is what lets the executor's record name the CLI that did the work, the
 // box it ran in and what it delivered — `coding_agent`, `sandbox_id` and
 // `delivered_refs`, which the coding agents report and nothing else on the
-// resuming side knows. What the run itself cost is NOT here: that is the
-// run's own fact, on the `sandbox` phase record its collection publishes,
-// which a run that parked on a question also gets.
+// resuming side knows. What the run itself cost is NOT here: that is each
+// launch's own fact, on the `executor_collected` record its collection
+// publishes, which a launch that parked on a question also gets.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a

@@ -75,6 +75,19 @@ import { comparePositions, type LogPosition } from "./session.ts";
 export const MAX_PHASES = 200;
 
 /**
+ * The durable records a tab keeps WITH THEIR PAYLOAD, in `phases`: a phase's
+ * own record, and one launch of an executor's run as its collection read it
+ * (`executor_collected`) — no phase, but the work of the `execute` round that
+ * launched it, which the screens draw inside that round's card
+ * (`lib/phases.ts`). A launch lands while its turn is still parked, so a tab
+ * watching the turn has the run's report the moment it is collected.
+ */
+export const PHASE_RECORD_TYPES: ReadonlySet<string> = new Set([
+  "agent_phase_completed",
+  "executor_collected",
+]);
+
+/**
  * How many live chat frames a tab keeps FOR ONE ROOM.
  *
  * TWO HUNDRED, from the company census rather than from a feeling: the design
@@ -346,7 +359,8 @@ export interface StoreState {
   agents: AgentRow[];
   events: FeedRow[];
   /**
-   * The `agent_phase_completed` envelopes seen on this socket, newest first.
+   * The phase records ([PHASE_RECORD_TYPES]) seen on this socket, newest
+   * first.
    *
    * NOT part of what a snapshot replaces: the snapshot carries payload-free
    * feed rows, so a reconnect adds to this rather than re-establishing it, and
@@ -1095,7 +1109,8 @@ export class Store {
       this.state.events = [ev as FeedRow, ...this.state.events].slice(0, MAX_EVENTS);
       this.emit("events");
     }
-    // A completed phase is kept WITH ITS PAYLOAD, in its own slice.
+    // A completed phase is kept WITH ITS PAYLOAD, in its own slice — and so
+    // is a collected launch of an executor's run ([PHASE_RECORD_TYPES]).
     //
     // It is the durable half of a phase the reader is watching live, and the
     // wire has always carried it — `Ingest` broadcasts the whole envelope, the
@@ -1108,7 +1123,7 @@ export class Store {
     // The payload guard is not defensive: a snapshot's rows and the `events`
     // query both answer with payload-free rows, and one of those without a
     // payload would evict a real record for a phase nothing can render.
-    if (ev.type === "agent_phase_completed" && ev.payload) {
+    if (PHASE_RECORD_TYPES.has(ev.type) && ev.payload) {
       if (!this.state.phases.some((p) => p.id === ev.id)) {
         this.state.phases = [ev, ...this.state.phases].slice(0, MAX_PHASES);
         this.emit("phases");

@@ -96,7 +96,7 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 			"execute phase", delivered, running.LaunchID)
 	}
 
-	// AND THE RUN'S OWN RECORD SAYS IT ARRIVED, in the CLI's own words.
+	// AND THE LAUNCH'S OWN RECORD SAYS IT ARRIVED, in the CLI's own words.
 	waitFor(t, "the run's transcript to show the note arrive", func() bool {
 		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
@@ -104,7 +104,7 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 		}
 		for _, row := range rows {
 			var rec map[string]any
-			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "sandbox" {
+			if row.Type == "executor_collected" && json.Unmarshal(row.Payload, &rec) == nil {
 				transcript, _ := rec["activity_transcript"].(string)
 				return strings.Contains(transcript, "[steer] a note from ")
 			}

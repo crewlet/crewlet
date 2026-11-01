@@ -178,22 +178,30 @@ var tagKeys = map[string]string{
 	"conversation_id": "conversation_id",
 }
 
-// The two events that carry an LLM call's cost: a phase's record, and an
-// auxiliary record's coalesced calls.
+// The three events that carry an LLM call's cost: a phase's record, one launch
+// of an executor's run, and an auxiliary record's coalesced calls.
 //
 // Gated on the type rather than on "does the payload happen to have these
 // fields", because several other events carry a `model` or a `turn_id` and a
 // rollup that counted them would be counting calls that never happened.
-// TWO, and taken from their payload types for the reason [phaseCompleted] is.
+// THREE, and taken from their payload types for the reason [phaseCompleted] is.
 var (
 	phaseSpendType     = types.AgentPhaseCompleted{}.EventType()
+	launchSpendType    = types.ExecutorCollected{}.EventType()
 	auxiliarySpendType = types.AuxiliarySpend{}.EventType()
 )
 
-// spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
-// spend lists the same two.
-func spendTypes() (string, []any) {
-	return "?, ?", []any{phaseSpendType, auxiliarySpendType}
+// spendTypes are all three, as a statement's arguments take them — every read
+// that folds spend reads the same three, one `event_type = ?` statement or
+// branch per type (see [phaseTokenSQL] for why never an `IN (…)`).
+func spendTypes() []any {
+	return []any{phaseSpendType, launchSpendType, auxiliarySpendType}
+}
+
+// isSpendType reports whether an event type is one of [spendTypes].
+func isSpendType(eventType string) bool {
+	return eventType == phaseSpendType || eventType == launchSpendType ||
+		eventType == auxiliarySpendType
 }
 
 // phaseAuxiliary is the phase an auxiliary record is filed under. Its event
@@ -202,8 +210,14 @@ func spendTypes() (string, []any) {
 // auxiliary model's spend on this value.
 const phaseAuxiliary = string(types.PhaseAuxiliary)
 
-// SpendFor pulls a spend record's cost out of a phase completion or an
-// auxiliary record.
+// phaseExecute is the phase a launch's record is filed under: its event
+// carries no phase either, and what it spent is the executor's, which every
+// reader — the rollup's Execute band, the usage cells, the turn's own sums —
+// already keys on this value.
+const phaseExecute = string(types.PhaseExecute)
+
+// SpendFor pulls a spend record's cost out of a phase completion, a collected
+// launch or an auxiliary record.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -224,7 +238,7 @@ const phaseAuxiliary = string(types.PhaseAuxiliary)
 // per-field accessors exist: it fails the whole call on one wrong-typed
 // field, where these zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
-	if eventType != phaseSpendType && eventType != auxiliarySpendType {
+	if !isSpendType(eventType) {
 		return nil
 	}
 	var body map[string]json.RawMessage
@@ -250,7 +264,15 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		ProviderKey:      jsonString(body["provider_key"]),
 		Calls:            phaseCalls(body),
 	}
-	if eventType == auxiliarySpendType {
+	switch eventType {
+	case launchSpendType:
+		// THE EXECUTOR'S SPEND, filed where every reader already looks for
+		// it: phase `execute`, under the round that launched it — the
+		// record's own `iteration` — and nested under nothing. Its calls are
+		// its CLI's own turns, by the rule the live projection counts it by.
+		spend.Phase, spend.HostPhase, spend.Worker = phaseExecute, "", ""
+		spend.Calls = tokens.LaunchCalls(jsonInt(body["cli_turns"]))
+	case auxiliarySpendType:
 		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
 		// looks for it: phase `auxiliary`, its purpose as the worker. The
 		// record names no phase, host phase or iteration of its own, and its
@@ -283,7 +305,6 @@ func phaseCalls(body map[string]json.RawMessage) int {
 		Phase:      jsonString(body["phase"]),
 		Rounds:     len(rounds),
 		RoundsUsed: jsonInt(body["rounds_used"]),
-		CLITurns:   jsonInt(body["cli_turns"]),
 	})
 }
 

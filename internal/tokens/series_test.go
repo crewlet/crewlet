@@ -108,13 +108,16 @@ func TestAWeekBucketIsTheCompanysISOWeek(t *testing.T) {
 	}
 }
 
-// SANDBOX IS EXECUTE. A detached coding run is the executor's own work done in
-// a box, and drawn as a band of its own it would read as a fifth kind of
-// spend the palette has no hue for.
+// FOUR BANDS FOLD EVERY PHASE, and nothing the engine records is a fifth: a
+// band of its own would read as a kind of spend the palette has no hue for.
+// What an executor's run spent is filed under the executor's own phase by
+// every producer — a launch's record names none ([tokens.PhaseExecute]) — so
+// the executor's launches and its own record are one band, the run's tokens
+// inside it.
 func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 	t.Parallel()
 	for phase, want := range map[string]tokens.Band{
-		"execute": tokens.BandExecute, "sandbox": tokens.BandExecute,
+		"execute":   tokens.BandExecute,
 		"review":    tokens.BandReview,
 		"subagent":  tokens.BandWorkers,
 		"auxiliary": tokens.BandAuxiliary, "judge": tokens.BandAuxiliary,
@@ -126,8 +129,10 @@ func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 		}
 	}
 	got := tokens.BucketDaily([]tokens.Cell{
+		// The executor's record and its launch's, as a day holds them: one
+		// on the executor's entry, the other on the CLI the run spent on.
 		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
-		cell("2026-06-14", "ceo", "sandbox", "cli", 30),
+		cell("2026-06-14", "ceo", tokens.PhaseExecute, "cli", 30),
 		cell("2026-06-14", "ceo", "subagent", "haiku", 5),
 		cell("2026-06-14", "ceo", "judge", "haiku", 1),
 	}, tokens.SeriesOptions{
@@ -138,10 +143,10 @@ func TestTheFourPhaseBandsFoldEveryPhase(t *testing.T) {
 		bands[row.Group] = row.TotalTokens
 	}
 	if bands["execute"] != 40 || bands["workers"] != 5 || bands["auxiliary"] != 1 {
-		t.Errorf("bands = %v, want the coding run inside execute", bands)
+		t.Errorf("bands = %v, want the run's spend inside execute", bands)
 	}
-	if _, ok := bands["sandbox"]; ok {
-		t.Error("sandbox is a band of its own")
+	if len(bands) != len(tokens.Bands) {
+		t.Errorf("bands = %v, want the four and no other", bands)
 	}
 }
 
@@ -157,7 +162,6 @@ func TestEveryPhaseThisBuildWritesHasABandChosenForIt(t *testing.T) {
 		types.PhaseSubagent:   tokens.BandWorkers,
 		types.PhaseAuxiliary:  tokens.BandAuxiliary,
 		types.PhaseJudge:      tokens.BandAuxiliary,
-		types.PhaseSandbox:    tokens.BandExecute,
 	}
 	for phase, band := range chosen {
 		if got := tokens.PhaseBand(string(phase)); got != band {

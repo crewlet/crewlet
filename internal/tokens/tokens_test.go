@@ -545,11 +545,9 @@ func TestANarrowedLiveRollupNamesItsSeatByIDAndItsHandleNow(t *testing.T) {
 // covers none. Every executor is its coding CLI's own run: the engine's record
 // of the phase states the run as one round, and counting that round put a
 // call nobody made on every turn beside the run's own — so the run's calls
-// are its CLI's turns, on the run's `sandbox` record, as the CLI reported them
-// (one where it reported none: the run the engine asked for).
+// are counted on each launch's own record ([tokens.LaunchCalls]), never here.
 //
-// Mutations: count the executor's round, or count a coding run as one
-// whatever its CLI reported, and this goes red.
+// Mutation: count the executor's round, and this goes red.
 func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -562,8 +560,6 @@ func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
 		{"a judge's single call", tokens.PhaseCounts{Phase: "judge"}, 1},
 		{"an executor's collected run", tokens.PhaseCounts{Phase: "execute", Rounds: 1, RoundsUsed: 1}, 0},
 		{"an executor whose launch was refused", tokens.PhaseCounts{Phase: "execute"}, 0},
-		{"a coding run's own turns", tokens.PhaseCounts{Phase: "sandbox", CLITurns: 17}, 17},
-		{"a coding run whose CLI reported none", tokens.PhaseCounts{Phase: "sandbox"}, 1},
 	} {
 		if got := tokens.PhaseCalls(tc.in); got != tc.want {
 			t.Errorf("%s: PhaseCalls(%+v) = %d, want %d", tc.name, tc.in, got, tc.want)
@@ -571,16 +567,34 @@ func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
 	}
 }
 
-// THE RULE NAMES PHASES BY THE EVENT CATALOGUE'S WORDS, spelled here so this
+// A LAUNCH'S CALLS ARE ITS CLI'S OWN TURNS, as the CLI reported them, and one
+// where it reported none — the run the engine asked for, the most it can say.
+// A negative count is none reported: the collection reads a run's printed
+// usage that way, and a launch must never count calls taken off.
+//
+// Mutation: count a launch as one whatever its CLI reported, or take a
+// negative count as given, and this goes red.
+func TestALaunchCountsItsCLIsOwnTurns(t *testing.T) {
+	t.Parallel()
+	for turns, want := range map[int]int{17: 17, 1: 1, 0: 1, -3: 1} {
+		if got := tokens.LaunchCalls(turns); got != want {
+			t.Errorf("LaunchCalls(%d) = %d, want %d", turns, got, want)
+		}
+	}
+}
+
+// THE RULES NAME PHASES BY THE EVENT CATALOGUE'S WORDS, spelled here so this
 // package stays a leaf — so a renamed phase would silently fall to the
-// default. Held: the executor's record and a coding run's record are the
-// catalogue's own `execute` and `sandbox`.
+// default, and a launch filed under a word the catalogue no longer has would
+// be drawn as a newer peer's phase. Held: the executor's record is the
+// catalogue's own `execute`, and the word a launch is filed under is that one.
 func TestPhaseCallsNamesTheCataloguesPhases(t *testing.T) {
 	t.Parallel()
 	if got := tokens.PhaseCalls(tokens.PhaseCounts{Phase: string(types.PhaseExecute), Rounds: 1}); got != 0 {
 		t.Errorf("the catalogue's executor phase counts %d calls, want none", got)
 	}
-	if got := tokens.PhaseCalls(tokens.PhaseCounts{Phase: string(types.PhaseSandbox), CLITurns: 9}); got != 9 {
-		t.Errorf("the catalogue's coding-run phase counts %d calls, want its CLI's 9 turns", got)
+	if tokens.PhaseExecute != string(types.PhaseExecute) {
+		t.Errorf("a launch is filed under %q, the catalogue's executor phase is %q",
+			tokens.PhaseExecute, types.PhaseExecute)
 	}
 }

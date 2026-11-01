@@ -36,9 +36,10 @@ type Phase string
 // The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
 // are the legs of the turn itself, in the order they run; PhaseSubagent and
 // PhaseJudge are nested calls made under one of those, and never appear
-// without a host phase around them. PhaseSandbox is a detached coding run the
-// executor launched, published once when the run is collected. PhaseAuxiliary
-// is the odd one out: no phase record carries it — see its own comment.
+// without a host phase around them. PhaseAuxiliary is the odd one out: no
+// phase record carries it — see its own comment. Nor is a launch of the
+// executor's run a phase: what one spent and reported is its own record,
+// [ExecutorCollected], the work of the `execute` round that launched it.
 const (
 	// PhaseOnboarding is the dedicated first-turn pass, at iteration 0,
 	// before the executor's first round.
@@ -56,16 +57,6 @@ const (
 	// round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
-	// PhaseSandbox is the coding run itself: what an executor's detached
-	// run did, spent and reported, on the record its collection publishes
-	// (see [AgentPhaseCompleted.ActivityTranscript]). NOT nested — it has no
-	// host phase, because the turn that launched it was parked for the
-	// whole of it and its execute phase publishes its completion only when
-	// the run is collected.
-	// Iteration is the executor iteration that launched it, and a turn can
-	// launch more than one run in one iteration, so its identity is
-	// (turn_id, phase, iteration, launch_id).
-	PhaseSandbox Phase = "sandbox"
 )
 
 // PromptMessage is one message of the conversation a phase sent to the model.
@@ -749,8 +740,9 @@ type AgentPhaseCompleted struct {
 	// Rounds is one entry per provider call the phase made, keyed on the
 	// round number the two lists above share — see [PhaseRound]. A
 	// collected executor states ONE: the run, from its launch to its
-	// collection, with no tokens (the run's are on its PhaseSandbox
-	// record). Absent on a phase that ran no loop in this process.
+	// collection, with no tokens (each launch's are on its own
+	// [ExecutorCollected] record). Absent on a phase that ran no loop in
+	// this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
 	// Invocations are the phase's CLI runs, in order — see
 	// [PhaseInvocation]. Every phase that offered tools has at least one.
@@ -770,15 +762,6 @@ type AgentPhaseCompleted struct {
 	CacheWriteTokens int  `json:"cache_write_tokens"`
 	RoundsUsed       int  `json:"rounds_used"`
 	ExhaustedRounds  bool `json:"exhausted_rounds"`
-	// CLITurns is how many model turns a coding run's CLI says its own loop
-	// took, on a PhaseSandbox record only: the run's provider calls, which
-	// the engine neither made nor timed. NOT rounds_used, which counts the
-	// rounds a phase drove and times on `rounds`; a run's turns have no
-	// timing the engine could state. Absent where the CLI reported none
-	// (OpenCode reports none) — the run then counts as one call, the one the
-	// engine asked for. What every spend figure counts a record's calls by
-	// is tokens.PhaseCalls.
-	CLITurns int `json:"cli_turns,omitempty"`
 	// MaxRounds is the round cap the phase ENDED under — its base budget
 	// plus every extension the judge granted — and RoundCeiling the most
 	// it could ever have been granted. RoundsUsed against MaxRounds is
@@ -793,8 +776,7 @@ type AgentPhaseCompleted struct {
 	// "published minus duration": that instant is when the first segment
 	// began, possibly days earlier and on another node, and the gap
 	// between the two segments was a coding run rather than this phase.
-	// Absent on a record that measured no start (a coding run whose launch
-	// instant its row does not hold).
+	// Absent on a record that measured no start.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// WorkItem is the item the turn is charged to, as the turn knew it
 	// when this record was published — see [AgentTurnStarted.WorkItem].
@@ -824,8 +806,8 @@ type AgentPhaseCompleted struct {
 	// launch and the collection — and not the run between them: the
 	// executor's turns happen inside its CLI's own loop, in its box, and
 	// the segment that collects the run replays what that run already did.
-	// The detached run's own wall clock is on its PhaseSandbox record and on
-	// executor_launched / executor_finished, which is where a reader
+	// Each launch's own wall clock is on its [ExecutorCollected] record and
+	// on executor_launched / executor_finished, which is where a reader
 	// asking how long the CODING took should look.
 	DurationMS int `json:"duration_ms"`
 	// EmptyAnswerRounds counts the rounds in which the model produced
@@ -870,43 +852,29 @@ type AgentPhaseCompleted struct {
 	// every phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
 	// CodingAgent is the CLI an executor ran as, and SandboxID the box it ran
-	// in: on the execute record that collected a run and on that run's own
-	// record, and empty on every other — a phase that ran on this host, and
-	// an executor whose launch never opened a box.
+	// in: on the execute record that collected a run, and empty on every
+	// other — a phase that ran on this host, and an executor whose launch
+	// never opened a box.
 	//
 	// NO FIELD SAYS WHERE A PHASE RAN, because the phase already does: every
 	// executor runs in a box and no other phase ever does. A `backend` field
 	// once restated it, and was one more value for a publisher to get wrong.
+	//
+	// NOR WHAT THE RUN COST, OR WHAT IT DID IN ITS BOX: each launch's tokens,
+	// its CLI's price, its turns and its activity transcript are on that
+	// launch's own [ExecutorCollected] record, which a launch that parked on
+	// a question also gets — the resumed executor's record never had one.
 	CodingAgent string `json:"coding_agent"`
 	SandboxID   string `json:"sandbox_id"`
-	// CostUSD is what the coding run's own CLI said it billed, on the
-	// PhaseSandbox record only: a subscription CLI's spend never passes
-	// through the engine's token meter, so this is the one number that sees
-	// it. It used to ride the RESUMED executor's record, which a run that
-	// parked on a question never had — its cost was reported nowhere.
-	CostUSD       float64  `json:"cost_usd"`
-	DeliveredRefs []string `json:"delivered_refs,omitempty"`
-	// DeliveredRefsElided is how many more refs the run reported than
+	// DeliveredRefs are the branches and pull requests the collected run
+	// reported, and DeliveredRefsElided how many more it reported than
 	// DeliveredRefs lists: refs are read from the whole report with no count
 	// to them — its `Delivered:` lines, or its pull-request URLs where it
 	// named none — and the record lists them up to a bound, deduplicated,
 	// counting the rest here rather than dropping them unsaid.
 	// Zero on a record that lists them all.
-	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
-	// ActivityTranscript is a coding run's own account of what it did —
-	// what it said, its tool calls and what they ran, or its stderr where
-	// the CLI streams nothing better — on the PhaseSandbox record only.
-	// Secret-redacted, and held to the record's bound: a long one keeps its
-	// first 64 KiB and its last 192 KiB in whole lines, with a note line
-	// where its middle was. It is the whole observability surface of an
-	// agent that emits no telemetry of its own.
-	ActivityTranscript string `json:"activity_transcript,omitempty"`
-	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count
-	// what that bound left out of the transcript's middle — whole lines, and
-	// every byte not kept — so a screen can say the record is not the whole
-	// log without parsing the note. Zero on a transcript kept whole.
-	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
-	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
+	DeliveredRefs       []string `json:"delivered_refs,omitempty"`
+	DeliveredRefsElided int      `json:"delivered_refs_elided,omitempty"`
 	// Failed is true when the phase died instead of finishing.
 	//
 	// A phase that raises used to publish NOTHING: the only durable record was

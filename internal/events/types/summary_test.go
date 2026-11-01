@@ -131,6 +131,16 @@ func TestSummaries(t *testing.T) {
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true, ErrorKind: "rate_limit"},
 		want:    "Dev execute ✗ failed (rate_limit)",
 	}, {
+		// The CLI and the tokens: which run it was, and what it cost.
+		name: "a collected launch names its CLI and what it spent",
+		payload: ExecutorCollected{RoleName: "Dev", CodingAgent: "claude-code",
+			InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700},
+		want: "Dev's executor launch was collected (claude-code, 9700 tokens)",
+	}, {
+		name:    "a failed launch names its error kind",
+		payload: ExecutorCollected{RoleName: "Dev", Failed: true, ErrorKind: "coding_run_failed"},
+		want:    "Dev's executor launch failed (?, coding_run_failed)",
+	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},
 		want:    "Dev guard stall: unchanged artifact",

@@ -6632,6 +6632,21 @@ list's tokens for the same turn. The reflection after the turn is never in
 it: that is the seat's learning rather than the work's cost, and it is drawn
 in the Timeline's Reflection lane instead.
 
+**And a launch of the executor's run sits inside its round.** Each
+`executor_collected` — one launch, as its collection read it off the box — is
+no phase but the work of the `execute` round that launched it, so
+`groupTurns` files it under that round's record and the round's `PhaseCard`
+draws it inside, under **Its run**: the CLI it ran as, how it ended, what it
+spent, the report it wrote and its **Activity** fold. One round is one card
+however many launches it took (an answer carries a parked run on; a launch
+lost with its host is relaunched), and its header's token figure is the
+round's — the executor's own record carries none — which is also what the
+Tokens fact counts as the turn's own. A launch whose round has no record in
+hand stands in the round's place on its own card, saying the same things.
+In **Recent phases** a launch is a row of its own, drawn as the executor's:
+the `execute` word with its CLI beside it, its CLI's own turns under Rounds,
+and `collected` as its outcome, the report's first line on it.
+
 ---
 
 ### Worklet is a workspace, not a table
@@ -7353,9 +7368,9 @@ it, so a link to one run landed on a board with the run below the fold.
     `replaced` reads the board again at once, so the page follows the job the
     row holds now rather than waiting out `RUNS_POLL_MS`.
   - A run is collected when its record is deleted, and its page still
-    answers: it reads the turn and draws every `sandbox` phase the turn
-    published — what the job reported, what it delivered, its tokens and its
-    transcript — named by the task its `executor_launched` carried.
+    answers: it reads the turn and draws every `executor_collected` its
+    launches published — what the job reported, what it delivered, its tokens
+    and its transcript — named by the task its `executor_launched` carried.
   - Beside a peek the board keeps the seat and the task and drops the coding
     agent, the placement and the box, in that order, saying so in its footer.
   - The page reads two sources, and "no run" needs BOTH: only when the run

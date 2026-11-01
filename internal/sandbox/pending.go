@@ -175,8 +175,9 @@ type Release struct {
 	// seat's is not, recorded the same way. See [PendingRun.CompanyCharged].
 	CompanyCharged bool
 
-	// Published is whether the run's own phase record went out, recorded
-	// the same way and for the same reason. See [LaunchRecord.Published].
+	// Published is whether the launch's own record (`executor_collected`)
+	// went out, recorded the same way and for the same reason. See
+	// [LaunchRecord.Published].
 	Published bool
 
 	// CollectFailedAt, when set, is the instant a collection of this job
@@ -463,7 +464,7 @@ type StopCollection struct {
 	Condensed        AuxTokens
 
 	// Charged and CompanyCharged are whether that spend is on the token
-	// counters, and Published whether the run's own phase record went out —
+	// counters, and Published whether the launch's own record went out —
 	// [PendingRun.Charged], [PendingRun.CompanyCharged] and
 	// [LaunchRecord.Published], recorded in the same write so an attempt
 	// after a crash neither charges nor publishes the run a second time.
@@ -747,9 +748,9 @@ type PendingRun struct {
 	// and again in every relaunch.
 	LaunchID string `json:"launch_id,omitempty"`
 
-	// Launch is what the run's own phase record needs about the job named
-	// by LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on
-	// every launch.
+	// Launch is what the launch's own record needs about the job named by
+	// LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on every
+	// launch.
 	Launch LaunchRecord `json:"launch_record,omitzero"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
@@ -822,9 +823,9 @@ type PendingRun struct {
 	// the answer outright.
 	//
 	// Spelled `conversation_key` on the row as it is on every event that
-	// carries the identity — the two sandbox events, both turn completions
-	// and the phase record — and empty on a run launched by a wake that
-	// named no conversation.
+	// carries the identity — the executor's own events, both turn
+	// completions and the phase records — and empty on a run launched by a
+	// wake that named no conversation.
 	ConversationKey string `json:"conversation_key,omitempty"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
@@ -1576,8 +1577,8 @@ type PendingStore interface {
 	// CollectStop records, as a STEP of the stop ending named
 	// ([StopCollection.Ending]), what that ending read of the run's box
 	// before reclaiming it ([RunStop.Collected]) and whether the run's spend
-	// is charged and its phase record published — in ONE WRITE, and returns
-	// the row as written IFF THIS CALL DID.
+	// is charged and its launch's record published — in ONE WRITE, and
+	// returns the row as written IFF THIS CALL DID.
 	//
 	// ONE WRITE because the three are one fact about one read: an attempt
 	// that finishes the ending after a crash reads the row to learn whether
@@ -2323,19 +2324,21 @@ func (f Fence) Fenced() bool { return f.Epoch > 0 }
 // out of it, because the conversation is opaque here by design — the
 // coordinator carries it back to the engine without ever decoding it, and a
 // field reached into it would be a second reader of a format this package
-// does not own. The run's phase record is keyed on it (see [LaunchRecord]).
+// does not own. Each launch's own record is keyed on it (see
+// [LaunchRecord]).
 type Suspension struct {
 	// State is the serialized loop, [PendingRun.ExecuteState].
 	State json.RawMessage
 
 	// Iteration is the turn iteration the executor suspended in, which is
-	// the iteration the run's own phase record is filed under.
+	// the iteration each launch's own record is filed under.
 	Iteration int
 }
 
-// LaunchRecord is what one job's own phase record needs that nothing else on
-// the row says: when it started, which executor iteration launched it, the
-// model it ran on, and whether that record has already been published.
+// LaunchRecord is what one job's own record (`executor_collected`) needs that
+// nothing else on the row says: when it started, which executor iteration
+// launched it, the model it ran on, and whether that record has already been
+// published.
 //
 // THE JOB'S, NOT THE TURN'S. The row is the turn's and outlives each job on
 // it, so [PendingStore.BeginLaunch] replaces this record WHOLE on every launch,
@@ -2371,8 +2374,8 @@ type LaunchRecord struct {
 
 	// ProviderKey is the providers.llm entry the job was launched on — the
 	// executor-chain member that took it ([LaunchRequest.ProviderKey]). The
-	// job's own phase record and the resumed executor's are filed under it,
-	// so spend by provider names the entry that ran rather than nobody.
+	// job's own record and the resumed executor's are filed under it, so
+	// spend by provider names the entry that ran rather than nobody.
 	ProviderKey string `json:"provider_key,omitempty"`
 
 	// SignInID is the sign-in identity the job's CLI was handed at its
@@ -2402,8 +2405,8 @@ type LaunchRecord struct {
 	// written by [PendingStore.MarkSuspended].
 	Iteration int `json:"iteration,omitempty"`
 
-	// Published is whether the job's `agent_phase_completed{phase: sandbox}`
-	// record went out.
+	// Published is whether the job's own `executor_collected` record went
+	// out.
 	//
 	// ONCE PER JOB, and on the row, for exactly the reason
 	// [PendingRun.Charged] is: the publish sits inside the part of the

@@ -18,9 +18,9 @@ import (
 // failure, and its activity transcript.
 //
 // BYTES, because what it bounds is an EVENT. Every one of these rides the
-// run's `agent_phase_completed{phase: sandbox}` record (and the report and the
-// failure detail ride the collected executor's record too, as the run's report
-// its reviewer judges, [runReport]), and an event over the queue's 8 MiB
+// launch's own `executor_collected` record (and the report and the failure
+// detail ride the collected executor's record too, as the run's report its
+// reviewer judges, [runReport]), and an event over the queue's 8 MiB
 // [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
 // an unbounded report does not arrive long, it does not arrive at all, and it
 // takes the run's only spend record with it. It was 100 000 RUNES, which is
@@ -334,14 +334,14 @@ type Condenser interface {
 // [MaxRunTextBytes], condensing whichever is past it.
 //
 // Applied ONCE, where every collected result enters the coordinator, and
-// before anything is published or resumed — so the run's phase record, the
+// before anything is published or resumed — so the launch's own record, the
 // run's report its resumed turn files for the reviewer ([runReport]) and the
 // record's retries all carry the same text.
 //
 // THE TRANSCRIPT TOO, and here rather than in the runner: this is the one
 // home of the rule that the run's record fits its event, and the coordinator
 // already trusts no runner to have redacted what it hands back (see
-// [runPhase]). Bounded in a runner, a runner that forgot the bound would
+// [collectedRecord]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole.
 //

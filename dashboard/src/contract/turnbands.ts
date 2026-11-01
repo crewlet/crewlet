@@ -57,6 +57,9 @@ export const ABSORBED: Readonly<Record<string, string>> = {
   agent_phase_started: "the phase card it opens",
   // The phase cards themselves.
   agent_phase_completed: "its own phase card",
+  // A launch of the executor's run: inside the card of the round that
+  // launched it, its report, its spend and its activity.
+  executor_collected: "its executor round's phase card",
   // Stream-only; never persisted, so it cannot be in a query answer anyway.
   agent_turn_progress: "the live phase card",
   // The stat strip, the header and the turn record.

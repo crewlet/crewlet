@@ -25,7 +25,7 @@
  * Two sources, one per half of a run's life. While the job runs, its output is
  * asked of the node that owns it (`executor_tail`, every few seconds, only while
  * the page is open); once the run is collected its record is deleted and what
- * it did is the `sandbox` phase its turn published, with the transcript on it.
+ * it did is each launch's own `executor_collected`, with the transcript on it.
  * So a run that has settled still has a page: it is the turn's collected runs,
  * read from the turn — the record a reader followed the link for.
  */
@@ -749,16 +749,18 @@ function useNameOf(): NameOf {
 const RUNNING: ExecutorStatus[] = ["launching", "running"];
 
 /**
- * The `sandbox` phases a turn published — one per collected job, oldest first.
+ * The launches a turn's executor collected — one `executor_collected` per job,
+ * oldest first.
  *
  * WHAT A SETTLED RUN LEAVES. The run's record is deleted once its box is
  * reclaimed, so after collection the only account of what the job did is the
- * phase record its turn published, with the transcript on it.
+ * record its collection published, with the transcript on it.
  */
 export function collectedRuns(events: readonly EventRecord[] | undefined): PhaseRecord[] {
   return (events ?? [])
+    .filter((e) => e.type === "executor_collected")
     .map(fromPhaseEvent)
-    .filter((r): r is PhaseRecord => r !== null && r.phase === "sandbox")
+    .filter((r): r is PhaseRecord => r !== null)
     .sort((a, b) => tsKey(a.at) - tsKey(b.at));
 }
 
@@ -769,13 +771,13 @@ export function collectedRuns(events: readonly EventRecord[] | undefined): Phase
  *
  * The durable row (`executors`, merged with the live projection exactly as
  * the board does) while the run is in flight — its status, its box, the
- * question it is parked on and the bridge's tool log — and the turn's own
- * `sandbox` phases once it is collected. The page reads both, because a run
- * page is reached from a link long after the run it names has settled, and
- * "no such run" is the wrong thing to tell somebody holding a link to a run
- * that finished.
+ * question it is parked on and the bridge's tool log — and each launch's own
+ * `executor_collected` once it is collected. The page reads both, because a
+ * run page is reached from a link long after the run it names has settled,
+ * and "no such run" is the wrong thing to tell somebody holding a link to a
+ * run that finished.
  *
- * THE TURN IS ASKED AGAIN when the run's status moves: a collected job's phase
+ * THE TURN IS ASKED AGAIN when the run's status moves: a collected job's own
  * record lands on the turn, and the row leaving the board is the moment it
  * does.
  */
@@ -1010,8 +1012,8 @@ export function launchedTask(events: readonly EventRecord[] | undefined): string
 }
 
 /**
- * One collected job: what it delivered and what it said, off the `sandbox`
- * phase its turn published.
+ * One collected job: what it delivered and what it said, off the
+ * `executor_collected` record its collection published.
  */
 function CollectedRun({
   record,

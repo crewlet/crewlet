@@ -378,10 +378,32 @@ func (c *capture) settledTurns(t *testing.T) int {
 // does not.
 func (c *capture) phaseRecords(t *testing.T) []map[string]any {
 	t.Helper()
+	return c.payloadsOf(t, "agent_phase_completed")
+}
+
+// launchRecords returns the payload of every `executor_collected` frame: each
+// launch of an executor's run as its collection read it, where the run's own
+// spend is.
+func (c *capture) launchRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	return c.payloadsOf(t, "executor_collected")
+}
+
+// recordName is what a failure message calls a phase or a launch record: the
+// phase it names, or "launch" for a launch's, which names none.
+func recordName(rec map[string]any) string {
+	if phase, _ := rec["phase"].(string); phase != "" {
+		return phase + " phase"
+	}
+	return "launch"
+}
+
+// payloadsOf returns the payload of every event frame of one type.
+func (c *capture) payloadsOf(t *testing.T, eventType string) []map[string]any {
+	t.Helper()
 	var out []map[string]any
 	for _, f := range c.snapshot() {
-		if f.kind == "event" && f.decoded && f.eventType == "agent_phase_completed" &&
-			f.payload != nil {
+		if f.kind == "event" && f.decoded && f.eventType == eventType && f.payload != nil {
 			out = append(out, f.payload)
 		}
 	}
@@ -813,39 +835,50 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	if len(records) == 0 {
 		t.Fatal("no phase record reached the socket with its payload")
 	}
-	// ONE CALL PER PROVIDER CALL: a phase's rounds, and a coding run's
-	// own turns as its CLI reported them, as every spend figure counts
-	// them (node/0040) — and none for the executor's own record, whose
-	// run's calls are the run's.
+	// AND EACH LAUNCH OF THE EXECUTOR'S RUN, whose own record is where the
+	// run's spend is: the rollup's phases hold them under the executor's,
+	// so every comparison with the records below is made over both.
+	launches := frames.launchRecords(t)
+	if len(launches) == 0 {
+		t.Fatal("no collected launch reached the socket with its payload; the executor's " +
+			"run spent nothing any record carries")
+	}
+	// ONE CALL PER PROVIDER CALL: a phase's rounds, and a launch's own turns
+	// as its CLI reported them, as every spend figure counts them
+	// (node/0040) — and none for the executor's own record, whose run's
+	// calls are its launches'.
 	var wantCalls int
 	for _, rec := range records {
 		rounds, _ := rec["rounds"].([]any)
 		used, _ := rec["rounds_used"].(float64)
-		turns, _ := rec["cli_turns"].(float64)
 		phase, _ := rec["phase"].(string)
 		wantCalls += tokens.PhaseCalls(tokens.PhaseCounts{
-			Phase: phase, Rounds: len(rounds), RoundsUsed: int(used), CLITurns: int(turns),
+			Phase: phase, Rounds: len(rounds), RoundsUsed: int(used),
 		})
-		if phase == "sandbox" && turns < 1 {
-			t.Errorf("the coding run's record carries no cli_turns; its CLI reported "+
+	}
+	for _, rec := range launches {
+		turns, _ := rec["cli_turns"].(float64)
+		wantCalls += tokens.LaunchCalls(int(turns))
+		if turns < 1 {
+			t.Errorf("the launch's record carries no cli_turns; its CLI reported "+
 				"the turns its loop took, which are the run's calls: %v", rec)
 		}
 	}
 	if got := phaseTotals["calls"]; got != float64(wantCalls) {
 		t.Errorf("the rollup counted %v calls over the turn's phases, want the %d "+
-			"provider calls their records state", got, wantCalls)
+			"provider calls their records and its launches' state", got, wantCalls)
 	}
-	for _, rec := range records {
+	for _, rec := range slices.Concat(records, launches) {
 		ms, ok := rec["duration_ms"].(float64)
 		if !ok {
-			t.Errorf("the %v phase record carries no duration_ms at all; the "+
-				"field is not on the wire", rec["phase"])
+			t.Errorf("the %v record carries no duration_ms at all; the "+
+				"field is not on the wire", recordName(rec))
 			continue
 		}
 		if ms <= 0 {
-			t.Errorf("the %v phase reports %v ms — a phase that ran three model "+
+			t.Errorf("the %v record reports %v ms — work that ran model "+
 				"rounds against a live provider took longer than nothing",
-				rec["phase"], ms)
+				recordName(rec), ms)
 		}
 	}
 
@@ -949,7 +982,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// cache that never hit.
 	var cacheRead, cacheWrite float64
 	keys := map[string]bool{}
-	for _, rec := range records {
+	for _, rec := range slices.Concat(records, launches) {
 		r, _ := rec["cache_read_tokens"].(float64)
 		w, _ := rec["cache_write_tokens"].(float64)
 		cacheRead += r
@@ -959,8 +992,8 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		}
 	}
 	if cacheRead <= 0 || cacheWrite <= 0 {
-		t.Fatalf("the phase records carry %v cached / %v written tokens; the "+
-			"provider reported both on every round", cacheRead, cacheWrite)
+		t.Fatalf("the phase and launch records carry %v cached / %v written tokens; "+
+			"the provider reported both on every round", cacheRead, cacheWrite)
 	}
 	if got := phaseTotals["cache_read_tokens"]; got != cacheRead {
 		t.Errorf("the live rollup counts %v cached tokens over the phases, want the "+

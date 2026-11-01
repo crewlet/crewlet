@@ -249,7 +249,8 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 // the instant and for the span the bridge measured, naming who answered. A
 // record that said "one round" and timed none was a timeline with a hole in
 // it, and a call with no start is one no timeline can place. The round
-// carries no tokens: the run's spend is on its own `sandbox` record.
+// carries no tokens: the run's spend is on each launch's own
+// `executor_collected` record.
 //
 // Mutations: leave the round untimed, state no cap, or drop the calls'
 // measurement on the way to the record, and this goes red.

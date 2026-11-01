@@ -288,6 +288,10 @@ var categories = map[string]placement{
 	"seat_provider_released":       {"system", RateEngine},
 	"skill_telemetry_write_failed": {"system", RateEngine},
 	"subagent_batched":             {"system", RateEngine},
+	// One launch of an executor's run, as its collection read it: the
+	// executor's spend and its run's own account, stored beside the phase
+	// records of the round that launched it.
+	"executor_collected": {"system", RateEngine},
 
 	// Auth: who signed in and how, what ended a session, what changed
 	// about what a person may do, and whether a record on a fleet log was
@@ -421,7 +425,9 @@ var excluded = map[string]Exclusion{
 		"two million a year per node to answer a question the live projection " +
 		"and the budgets query answer for free. What the audit log holds instead is " +
 		"the spend the counter is charged with, recorded per phase in the " +
-		"agent_phase_completed rows internal/tokens aggregates, so \"what did " +
+		"agent_phase_completed rows, per executor launch in the " +
+		"executor_collected rows and per auxiliary purpose in the " +
+		"auxiliary_spend rows internal/tokens aggregates, so \"what did " +
 		"we spend last month\" is answerable and \"what was the counter " +
 		"reading at 14:03:15\" is not a question anybody asks"},
 	"tool_skill_page_changed": {Cause: CauseAlreadyRecorded, Reason: "a NUDGE between nodes that one tool-skill " +

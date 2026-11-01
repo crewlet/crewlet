@@ -276,8 +276,8 @@ type Result struct {
 
 	// Turns is how many model turns the run's CLI says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
-	// where the CLI reported none. It is what the run's phase record counts
-	// as its calls (tokens.PhaseCalls): a run whose CLI said nothing counts
+	// where the CLI reported none. It is what the launch's own record counts
+	// as its calls (tokens.LaunchCalls): a run whose CLI said nothing counts
 	// as one, the one call the engine knows it asked for.
 	//
 	// AS REPORTED, never estimated: Claude Code states it on its result
@@ -289,7 +289,7 @@ type Result struct {
 	// DeliveredRefs are the branches and pull or merge requests the run
 	// reported delivering, in its report's order: the `Delivered:` lines it
 	// wrote, or the pull-request URLs its prose holds where it named none.
-	// They are DISPLAY and a reminder — the run's phase record and the run's
+	// They are DISPLAY and a reminder — the launch's own record and the run's
 	// report its reviewer reads carry them — and nothing judges a turn on
 	// them: whether a turn reached anybody is the engine's own record of the
 	// calls it made ([github.com/crewlet/crewlet/internal/agent/turn]).
@@ -341,8 +341,8 @@ type Result struct {
 // A RUN REPORTS ITS OWN USAGE, parsed out of the coding CLI's last line of
 // output — and that line is printed inside a box the run's own agent can run
 // any command in. A negative count there is a REFUND: the charge would
-// subtract it from the seat's budget counter, and the phase record from every
-// rollup that sums it, so a run could buy itself headroom by printing a
+// subtract it from the seat's budget counter, and the launch's record from
+// every rollup that sums it, so a run could buy itself headroom by printing a
 // number. Nothing a run spends is negative, so a negative count is read as
 // nothing spent, and the caller says so. Floored where every collected result
 // enters the coordinator, so every backend's parser is covered by one rule.

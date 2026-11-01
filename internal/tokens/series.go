@@ -80,7 +80,7 @@ func (g Group) AdminOnly() bool { return slices.Contains(AdminGroups, g) }
 
 // Band is one of the four bands a phase breakdown is drawn in.
 //
-// FOUR, folded ONCE, here: the engine has seven phase values, a chart has four
+// FOUR, folded ONCE, here: the engine has six phase values, a chart has four
 // data hues, and a phase band a screen folded itself would be the fold that
 // disagreed with the next screen's.
 type Band string
@@ -88,11 +88,12 @@ type Band string
 // The four bands, in the order a chart stacks them.
 const (
 	// BandExecute is the seat's own turn doing its work: the executor, which
-	// is its coding CLI's own run in a box. Both records of that run are this
-	// band — the engine's `execute` record of the phase, which states the run
-	// as one round and carries no tokens, and the run's own `sandbox` record
-	// of what it did and spent (see [PhaseCalls]) — so a figure is drawn in
-	// the same band whichever of the two it came from.
+	// is its coding CLI's own run in a box. Both records of that run are
+	// filed under `execute` — the engine's record of the phase, which states
+	// the run as one round and carries no tokens, and each launch's own
+	// `executor_collected` record of what it did and spent, which carries no
+	// phase and is filed there by every producer ([PhaseExecute]) — so the
+	// band holds what the executor cost however many launches its round took.
 	BandExecute Band = "execute"
 	// BandReview is the reviewer's pass over it.
 	BandReview Band = "review"
@@ -118,7 +119,7 @@ var Bands = []Band{BandExecute, BandReview, BandWorkers, BandAuxiliary}
 // work" is the one honest thing this build can say about it.
 func PhaseBand(phase string) Band {
 	switch phase {
-	case "execute", "sandbox":
+	case PhaseExecute:
 		return BandExecute
 	case "review":
 		return BandReview

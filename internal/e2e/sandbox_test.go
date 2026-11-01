@@ -325,16 +325,17 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// remainder, and the record's is the whole prompt, both cache figures
 	// folded in. End to end because the halves are the CLI's flags, the
 	// box's shell and the record's publisher, and each compiles without the
-	// others.
+	// others. Read through the phase list, which answers a launch's record
+	// beside the phase records of the round that launched it.
 	var record map[string]any
-	waitFor(t, "the run's own phase record", func() bool {
+	waitFor(t, "the launch's own record", func() bool {
 		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
 		for _, row := range rows {
 			var rec map[string]any
-			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "sandbox" {
+			if row.Type == "executor_collected" && json.Unmarshal(row.Payload, &rec) == nil {
 				record = rec
 				return true
 			}

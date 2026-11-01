@@ -30,10 +30,11 @@ import (
 // Finishing it is the ordinary ending's steps with two added for the stop
 // (see [Coordinator.finishEnding]): before the box goes, the run's tool-bridge
 // session is closed and what the run had spent is read off its box, charged to
-// the token counters and published as its phase ([Coordinator.collectStopped])
-// — a run stopped halfway still spent what it spent, and nothing can read its
-// box once it is reclaimed; and after the announcement, the turn parked on the
-// run is closed on the record as stopped ([CoordinatorOptions.CloseStopped]).
+// the token counters and published as its launch's record
+// ([Coordinator.collectStopped]) — a run stopped halfway still spent what it
+// spent, and nothing can read its box once it is reclaimed; and after the
+// announcement, the turn parked on the run is closed on the record as stopped
+// ([CoordinatorOptions.CloseStopped]).
 //
 // # A box on another node's host
 //
@@ -195,10 +196,10 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 }
 
 // collectStopped is the stop's own step of its ending: what the run had spent
-// read off its box, charged and published as its phase, and all of it recorded
-// on the row in one write ([PendingStore.CollectStop]). Returns the row as that
-// step left it, or why the box could not be read YET — which keeps the ending
-// for this node's retry.
+// read off its box, charged and published as its launch's record, and all of
+// it recorded on the row in one write ([PendingStore.CollectStop]). Returns the
+// row as that step left it, or why the box could not be read YET — which keeps
+// the ending for this node's retry.
 //
 // THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
 // The run's CLI is still working until its box is reclaimed, and every tool
@@ -222,7 +223,7 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 		collection.CacheReadTokens, collection.CacheWriteTokens = result.CacheReadTokens, result.CacheWriteTokens
 		collection.Condensed = result.Condensed
 		collection.Charged, collection.CompanyCharged = c.charge(ctx, run, result)
-		collection.Published = c.publishPhase(ctx, run, result).Published
+		collection.Published = c.publishCollected(ctx, run, result).Published
 	}
 	written, won, err := c.pending.CollectStop(ctx, run.TurnID, collection)
 	if err != nil {
@@ -362,9 +363,9 @@ func (c *Coordinator) LaunchStopped(turnID string) (RunStop, bool) {
 }
 
 // stoppedResult is what a run a person stopped reports: what it said up to
-// then, never a success, since it did not get to say it was done. Its phase
-// record says who stopped it ([runPhase]), and its ending parks it on no
-// question, which nothing would answer.
+// then, never a success, since it did not get to say it was done. Its
+// launch's record says who stopped it ([collectedRecord]), and its ending
+// parks it on no question, which nothing would answer.
 func stoppedResult(result Result) Result {
 	result.Success = false
 	return result

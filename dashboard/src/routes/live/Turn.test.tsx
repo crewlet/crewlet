@@ -227,6 +227,7 @@ describe("turnFacts", () => {
       phases: [],
       own: [phaseRecord()],
       nested: new Map(),
+      launches: new Map(),
       rec: {} as TurnView["rec"],
       role: "",
       trigger: null,
@@ -315,6 +316,37 @@ describe("turnFacts", () => {
       "+400 in 3 workers",
     );
     expect(fact(view({ own }), "Tokens")?.note).toBe(undefined);
+  });
+
+  // THE EXECUTOR'S RUN IS THE TURN'S OWN WORK. The executor's record states
+  // its round with no tokens — the engine made no model call for it — and the
+  // run's spend is on each launch's own record, filed inside the round. So the
+  // figure counts the launches, where the turn list counts them too.
+  //
+  // Mutation: sum the turn's own records alone, and the figure is the
+  // executor's zero.
+  test("tokens count the executor's launches as the turn's own", () => {
+    const own = [phaseRecord({ inputTokens: 0, outputTokens: 0 })];
+    const launches = new Map([
+      [
+        "turn-1|execute|1",
+        [
+          phaseRecord({
+            key: "turn-1|execute|1|job-1",
+            launch: true,
+            inputTokens: 9_000,
+            outputTokens: 700,
+          }),
+          phaseRecord({
+            key: "turn-1|execute|1|job-2",
+            launch: true,
+            inputTokens: 500,
+            outputTokens: 50,
+          }),
+        ],
+      ],
+    ]);
+    expect(fact(view({ own, launches }), "Tokens")?.value).toBe("9,500 in · 750 out");
   });
 
   // THE AUXILIARY SPEND INSIDE THE TURN IS ITS COST AND NO PHASE'S, so it is

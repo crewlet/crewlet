@@ -16,17 +16,23 @@ import (
 // re-implementation in the browser, and whatever a reconnect left behind —
 // and a refresh routinely disagreed with the page it replaced.
 
-// spendTypes are the two events whose payload is a spend record: a phase's own,
-// and an auxiliary record's coalesced calls (types.AuxiliarySpend). Neither
-// more nor fewer than the event store's writer folds, for the reason every
-// field below matches its columns.
+// spendTypes are the three events whose payload is a spend record: a phase's
+// own, one launch of an executor's run as its collection read it
+// (types.ExecutorCollected), and an auxiliary record's coalesced calls
+// (types.AuxiliarySpend). Neither more nor fewer than the event store's writer
+// folds, for the reason every field below matches its columns.
 var spendTypes = map[string]bool{
 	"agent_phase_completed": true,
+	launchType:              true,
 	auxiliarySpendType:      true,
 }
 
-// auxiliarySpendType is the auxiliary record's wire type.
-const auxiliarySpendType = "auxiliary_spend"
+// launchType is a collected launch's wire type, and auxiliarySpendType the
+// auxiliary record's.
+const (
+	launchType         = "executor_collected"
+	auxiliarySpendType = "auxiliary_spend"
+)
 
 // foldSpend records one spend record, reporting whether the rollup moved.
 //
@@ -106,10 +112,16 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 			Phase:      str(payload, "phase"),
 			Rounds:     length(payload, "rounds"),
 			RoundsUsed: num(payload, "rounds_used"),
-			CLITurns:   num(payload, "cli_turns"),
 		}),
 	}
-	if env.Type == auxiliarySpendType {
+	switch env.Type {
+	case launchType:
+		// THE EXECUTOR'S SPEND, filed as the store's writer files it: the
+		// executor's phase, under the round that launched it, nested under
+		// nothing, its calls its CLI's own turns.
+		rec.Phase, rec.HostPhase, rec.Worker = tokens.PhaseExecute, "", ""
+		rec.Calls = tokens.LaunchCalls(num(payload, "cli_turns"))
+	case auxiliarySpendType:
 		// THE AUXILIARY MODEL'S SPEND, filed as the store's writer files
 		// it: the auxiliary phase, its purpose as the worker, its stage,
 		// the calls it coalesced — and a PERSON's as the person, under

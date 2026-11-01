@@ -180,7 +180,7 @@ screen folds a phase differently from the next:
 
 | Band | What spent it |
 |---|---|
-| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box, recorded from the box as the run's `sandbox` phase |
+| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box. What the run spent is recorded from the box once per launch (`executor_collected`), which names no phase and is filed here: the executor's own record carries no tokens |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
 | **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
@@ -238,10 +238,10 @@ learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
-phase's model rounds, a coding run's own turns as its CLI reported them (one
-per run where the CLI reports none, as OpenCode does), an auxiliary record's
-coalesced calls — never records. The executor's own record counts none, since
-its run's calls are the run's.
+phase's model rounds, an executor launch's own turns as its CLI reported them
+(one per launch where the CLI reports none, as OpenCode does), an auxiliary
+record's coalesced calls — never records. The executor's own record counts
+none, since its run's calls are its launches'.
 
 **What is not counted: embeddings.** The calls that turn text into vectors are
 metered by neither the counter nor the rollup: they run on the embeddings

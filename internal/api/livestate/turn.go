@@ -47,15 +47,12 @@ func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]
 // MOVES the stage of a turn the seat already holds.
 //
 // ONLY THE TURN'S OWN PHASES MOVE IT — onboarding, execute and review, each
-// published by the segment that runs it. Two other kinds of record name the
-// turn and are not one of them:
-//
-//   - A NESTED record (`host_phase` set): a delegated worker, or the round-cap
-//     judge a phase consults, each run while the phase that called it waits.
-//     That phase's own events stage the turn.
-//   - The run's own record (`sandbox`), which the run's collection publishes
-//     before the turn resumes: the turn is parked on the run until the
-//     resumed segment announces itself.
+// published by the segment that runs it. A NESTED record (`host_phase` set)
+// names the turn and is not one of them: a delegated worker, or the round-cap
+// judge a phase consults, each run while the phase that called it waits. That
+// phase's own events stage the turn. (Nor does a collected launch of the
+// executor's run move it, which is no phase record at all — see
+// [LiveState.applyTurnEvent].)
 //
 // EVERY WORKER RUNS WHILE ITS TURN IS PARKED. `delegate` is the executor's
 // alone and every executor is its coding CLI's run in a box, which calls it
@@ -69,8 +66,7 @@ func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]
 func phaseStage(payload map[string]any) (stage Stage, moves bool) {
 	host := str(payload, "host_phase")
 	switch {
-	case str(payload, "phase") == string(types.PhaseSandbox),
-		host == string(types.PhaseExecute):
+	case host == string(types.PhaseExecute):
 		return StageParked, false
 	case host != "":
 		return StagePhase, false
