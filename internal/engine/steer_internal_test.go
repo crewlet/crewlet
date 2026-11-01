@@ -386,7 +386,7 @@ func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnI
 		t.Fatal(err)
 	}
 	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
 		Steer:      sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
 		BriefNotes: briefed, HandedNotes: sealed,
 	}, sandbox.Fence{})

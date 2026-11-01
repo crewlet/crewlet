@@ -63,7 +63,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     launchId: "",
     harnessTurns: 0,
@@ -523,7 +523,7 @@ describe("an executor round's launches", () => {
   const LAUNCH = phase({
     key: "turn-1|execute|1|job-1",
     launch: true,
-    codingAgent: "claude-code",
+    harness: "claude-code",
     launchId: "job-1",
     model: "claude-sonnet-5",
     response: "Fixed the flake and opened the pull request.",
@@ -537,7 +537,7 @@ describe("an executor round's launches", () => {
 
   test("the round's card holds its launch's report and activity", () => {
     render(
-      <PhaseCard record={phase({ codingAgent: "claude-code" })} launches={[LAUNCH]} defaultOpen />,
+      <PhaseCard record={phase({ harness: "claude-code" })} launches={[LAUNCH]} defaultOpen />,
     );
     expect(screen.getByText("Report")).toBeDefined();
     expect(screen.getByText(/Fixed the flake/)).toBeDefined();
@@ -600,7 +600,7 @@ describe("an executor round's launches", () => {
   // loses its badge; drop the box half, and a record naming only its box
   // does.
   test("badges the run a record names, and nothing that ran on the host", () => {
-    render(<PhaseCard record={phase({ codingAgent: "claude-code", sandboxId: "box-7" })} />);
+    render(<PhaseCard record={phase({ harness: "claude-code", sandboxId: "box-7" })} />);
     expect(screen.getByText("claude-code")).toBeDefined();
     cleanup();
     render(<PhaseCard record={phase({ sandboxId: "box-7" })} />);

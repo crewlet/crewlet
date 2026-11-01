@@ -572,7 +572,7 @@ func readTools() []Tool {
 					// (internal/workkey), which no person reads as a task.
 					col("status", "Status", "status", tLabel),
 					col("task", "Task", "work_item.key", tText),
-					col("coding_agent", "Agent", "coding_agent", tText),
+					col("harness", "Harness", "harness", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
 					prose("question", "Question", "question"), col("turn", "Turn", "turn_id", tText)},

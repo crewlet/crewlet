@@ -382,14 +382,14 @@ type SpecInput struct {
 	// provider default.
 	Placement Placement
 
-	// CodingAgent is the runner the box runs: the harness of the executor-chain
+	// Harness is the runner the box runs: the harness of the executor-chain
 	// member the launch picked. REQUIRED, and passed through as given — a
 	// runner chosen apart from the entry whose login and model the run
 	// carries is a run that cannot read either, so there is nothing to
 	// default it to. An empty one is refused at the launch.
-	CodingAgent string
-	Timeout     time.Duration
-	PauseTTL    *time.Duration
+	Harness  string
+	Timeout  time.Duration
+	PauseTTL *time.Duration
 
 	// MaxTurns is the seat's round cap. Nil inherits the provider default;
 	// an explicit 0 is uncapped, which is how a seat escapes a company-wide
@@ -422,7 +422,7 @@ func (m *Manager) CommitAttribution(run string) *CommitAttribution {
 func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
 		Placement:       in.Placement,
-		CodingAgent:     in.CodingAgent,
+		Harness:         in.Harness,
 		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
@@ -463,7 +463,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // the failure that got us here is often the caller's context expiring — and a
 // close that skips because the context is already dead leaks the box.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(spec.CodingAgent)
+	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -498,7 +498,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
 		"sandbox_id", box.ID(), "placement", string(spec.Placement),
-		"coding_agent", spec.CodingAgent, "setup_steps", names)
+		"harness", spec.Harness, "setup_steps", names)
 	return box, runner, nil
 }
 
@@ -539,7 +539,7 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		return nil, nil, err
 	}
 	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
-		"placement", string(placement), "coding_agent", codingAgent)
+		"placement", string(placement), "harness", codingAgent)
 	return box, runner, nil
 }
 

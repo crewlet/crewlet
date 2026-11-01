@@ -325,9 +325,9 @@ type LaunchResult struct {
 	// ([PendingRun.LaunchID]).
 	LaunchID string
 
-	SandboxID   string
-	CommandID   string
-	CodingAgent string
+	SandboxID string
+	CommandID string
+	Harness   string
 
 	// Reused is whether the job continues in the box the turn's previous
 	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
@@ -386,7 +386,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// entry whose login and model the run carries, and a box running any
 	// other harness could read neither. Refused before the row, so a request
 	// built without one costs nothing.
-	if req.Spec.CodingAgent == "" {
+	if req.Spec.Harness == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the harness it runs")
 	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
@@ -413,7 +413,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// process that collects this run may not be this one, nor reading
 		// the configuration that chose the cell.
 		Placement:       string(req.Spec.Placement),
-		CodingAgent:     req.Spec.CodingAgent,
+		Harness:         req.Spec.Harness,
 		TaskDescription: req.Task,
 		Label:           req.label(),
 		PartitionKey:    req.Turn.PartitionKey,
@@ -519,7 +519,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// before it, and the row is how every later reader reaches the box.
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), Placement: string(req.Spec.Placement), Node: c.node,
-		CodingAgent: req.Spec.CodingAgent, PauseTTLSec: req.Spec.PauseTTLSec,
+		Harness: req.Spec.Harness, PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
@@ -580,7 +580,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
-		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
+		Harness: req.Spec.Harness, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -596,7 +596,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		LaunchID: opened.LaunchID, StartedAt: opened.Launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
-		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
+		SandboxID: box.ID(), Harness: req.Spec.Harness,
 		// THE MEMBER THAT TOOK IT — see [types.ExecutorLaunched.ProviderKey].
 		ProviderKey: req.ProviderKey, Model: req.Model,
 		// THE IDENTITY on the announcement: this event is read for
@@ -633,12 +633,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	log.InfoContext(ctx, "executor_launched",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
-		"coding_agent", req.Spec.CodingAgent, "provider_key", req.ProviderKey,
+		"harness", req.Spec.Harness, "provider_key", req.ProviderKey,
 		"reused", reused, "continues_session", session != "")
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
-		CodingAgent: req.Spec.CodingAgent, Reused: reused,
+		Harness: req.Spec.Harness, Reused: reused,
 	}, nil
 }
 
@@ -681,7 +681,7 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 	}
 	if prior.SandboxID != "" {
 		if prior.ContinuesIn(req.Spec) {
-			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.CodingAgent)
+			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.Harness)
 			if err == nil {
 				return box, runner, true, nil
 			}
@@ -750,8 +750,8 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 	}
 	log.InfoContext(ctx, "sandbox_prior_reclaimed",
 		"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
-		"placement", prior.Placement, "coding_agent", prior.CodingAgent,
-		"next_placement", string(req.Spec.Placement), "next_coding_agent", req.Spec.CodingAgent)
+		"placement", prior.Placement, "harness", prior.Harness,
+		"next_placement", string(req.Spec.Placement), "next_harness", req.Spec.Harness)
 }
 
 // abandon closes out a launch that could not finish: the box is reclaimed, then

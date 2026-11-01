@@ -391,14 +391,14 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 
 	maxTurns := r.Steps
 	spec := t.manager.BuildSpec(sandbox.SpecInput{Placement: placement,
-		CodingAgent: executor.ClaudeCodeName, Timeout: r.Timeout + deepGrace,
+		Harness: executor.ClaudeCodeName, Timeout: r.Timeout + deepGrace,
 		MaxTurns: &maxTurns, Env: run.env, CredentialFiles: run.files})
 	box, runner, session, err := d.acquire(ctx, t, spec, r)
 	if err != nil {
 		return assistant.DeepOutcome{}, err
 	}
 	out := assistant.DeepOutcome{Box: assistant.DeepBox{Placement: string(placement),
-		Sandbox: box.ID(), Agent: executor.ClaudeCodeName, Session: session}}
+		Sandbox: box.ID(), Harness: executor.ClaudeCodeName, Session: session}}
 	if placeErr := placeInputs(ctx, box, r.Inputs); placeErr != nil {
 		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, placeErr

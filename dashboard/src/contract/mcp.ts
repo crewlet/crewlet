@@ -9,6 +9,8 @@
  * state union included.
  */
 
+import type { ToolRow } from "./tools.ts";
+
 /**
  * A server's condition across the fleet, decided by the engine. `running`:
  * every instance launched is serving — it started, listed its tools and was up
@@ -92,10 +94,29 @@ export interface McpServerStatus {
   nodes: McpServerNode[];
 }
 
+/**
+ * One shelf of the built-in catalogue: the engine's own tools as a seat is
+ * offered them, filed and worded by the engine.
+ */
+interface BuiltinGroup {
+  key: Exclude<ToolRow["group"], "">;
+  label: string;
+  /** One line about what the shelf's tools are for. */
+  description: string;
+  /** In the catalogue's order, each naming who may call it (`gate`). */
+  tools: ToolRow[];
+}
+
 /** The whole answer. */
 export interface McpServersStatusAnswer {
   /** In name order. */
   servers: McpServerStatus[];
   /** The live nodes in id order: the columns every server is drawn against. */
   nodes: McpStatusNode[];
+  /**
+   * The engine's built-ins, shelf by shelf in the catalogue's order. A shelf
+   * the company offers no tool of (Worklet's on a company running Jira) is
+   * left out.
+   */
+  builtin: BuiltinGroup[];
 }

@@ -81,7 +81,7 @@ function record() {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: "",
+    harness: "",
     sandboxId: "",
     launchId: "",
     harnessTurns: 0,

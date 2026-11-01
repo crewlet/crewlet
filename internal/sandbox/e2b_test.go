@@ -513,9 +513,9 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	provider, _ := newE2B(t, stub)
 
 	box, err := provider.Create(context.Background(), sandbox.Spec{
-		CodingAgent: "claude-code",
-		TimeoutSec:  900,
-		Env:         map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
+		Harness:    "claude-code",
+		TimeoutSec: 900,
+		Env:        map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +571,7 @@ func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
 	provider, _ := newE2B(t, stub)
 	ctx := context.Background()
 
-	created, err := provider.Create(ctx, sandbox.Spec{CodingAgent: "claude-code"})
+	created, err := provider.Create(ctx, sandbox.Spec{Harness: "claude-code"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,7 +649,7 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := provider.Create(context.Background(), sandbox.Spec{
-				CodingAgent: tc.agent,
+				Harness: tc.agent,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -681,7 +681,7 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	box, err := provider.Create(context.Background(), sandbox.Spec{CodingAgent: "opencode"})
+	box, err := provider.Create(context.Background(), sandbox.Spec{Harness: "opencode"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +699,7 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	// form unconditionally produces `49983-sbx1-.domain`, which resolves
 	// to nothing.
 	stub.clientID = ""
-	short, err := provider.Create(context.Background(), sandbox.Spec{CodingAgent: "opencode"})
+	short, err := provider.Create(context.Background(), sandbox.Spec{Harness: "opencode"})
 	if err != nil {
 		t.Fatal(err)
 	}

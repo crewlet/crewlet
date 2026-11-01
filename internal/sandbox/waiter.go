@@ -1011,12 +1011,12 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 		w.refresh(ctx, manager, run, box)
 	}
 
-	runner, err := manager.RunnerFor(run.CodingAgent)
+	runner, err := manager.RunnerFor(run.Harness)
 	if err != nil {
 		// A misconfigured runner cannot be polled, and retrying forever
 		// would hold the seat busy for the life of the deployment.
 		log.ErrorContext(ctx, "sandbox_poll_runner_missing",
-			"turn_id", run.TurnID, "coding_agent", run.CodingAgent, "error", err.Error())
+			"turn_id", run.TurnID, "harness", run.Harness, "error", err.Error())
 		return pollGone
 	}
 	state, err := runner.Poll(ctx, box, run.Handle())
@@ -1232,9 +1232,9 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 		WorkKey:     run.WorkKey,
 		// The job this tick saw finish, and the only one the completion
 		// may claim: see [Tail].
-		LaunchID:    run.LaunchID,
-		SandboxID:   run.SandboxID,
-		CodingAgent: run.CodingAgent,
+		LaunchID:  run.LaunchID,
+		SandboxID: run.SandboxID,
+		Harness:   run.Harness,
 	}
 	// Carry the original trace so the completion turn nests under the turn
 	// that started the job rather than opening a root of its own.

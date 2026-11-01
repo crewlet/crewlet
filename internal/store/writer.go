@@ -272,7 +272,7 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		// record's own `iteration` — and nested under nothing. Its calls are
 		// its harness's own turns, by the rule the live projection counts it by.
 		spend.Phase, spend.HostPhase, spend.Worker = phaseExecute, "", ""
-		spend.Calls = tokens.LaunchCalls(jsonInt(body["cli_turns"]))
+		spend.Calls = tokens.LaunchCalls(jsonInt(body["harness_turns"]))
 	case auxiliarySpendType:
 		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
 		// looks for it: phase `auxiliary`, its purpose as the worker. The

@@ -716,8 +716,8 @@ type PendingRun struct {
 	AgentID     string `json:"agent_id"`
 	Role        string `json:"role"`
 
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 
 	// Placement is which configured backend holds this run's box.
 	//
@@ -2263,7 +2263,7 @@ type BoxRef struct {
 	// keeps the node the row already names.
 	Node string
 
-	CodingAgent string
+	Harness     string
 	SessionID   string
 	PauseTTLSec float64
 }
@@ -2271,9 +2271,9 @@ type BoxRef struct {
 // PriorBox is the box a relaunch found on its run's row — see
 // [PendingRun.Prior].
 type PriorBox struct {
-	SandboxID   string
-	Placement   string
-	CodingAgent string
+	SandboxID string
+	Placement string
+	Harness   string
 	// Status is the status the row held before the reset: whether the job
 	// that used the box is over ([StatusResumed], the resumed turn that is
 	// relaunching) or may still be running in it.
@@ -2295,7 +2295,7 @@ type PriorBox struct {
 // shared: two jobs in one checkout would each overwrite the other's work.
 func (p PriorBox) ContinuesIn(spec Spec) bool {
 	return p.SandboxID != "" && p.Status == StatusResumed &&
-		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent
+		p.Placement == string(spec.Placement) && p.Harness == spec.Harness
 }
 
 // Fence is the ownership token a mutation carries.

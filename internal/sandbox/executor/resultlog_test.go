@@ -39,7 +39,7 @@ func TestTheStreamIsSaidToStandInForTheResultFileOnlyWhereItDid(t *testing.T) {
 	if _, err := runner.Collect(t.Context(), exited, sandbox.RunHandle{}); err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if got := logs.String(); strings.Contains(got, "coding_agent_result_from_stream") {
+	if got := logs.String(); strings.Contains(got, "harness_result_from_stream") {
 		t.Errorf("a run whose stream said nothing logged a stand-in:\n%s", got)
 	}
 
@@ -50,7 +50,7 @@ func TestTheStreamIsSaidToStandInForTheResultFileOnlyWhereItDid(t *testing.T) {
 	if _, err := runner.Collect(t.Context(), died, sandbox.RunHandle{}); err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if got := logs.String(); !strings.Contains(got, "coding_agent_result_from_stream") ||
+	if got := logs.String(); !strings.Contains(got, "harness_result_from_stream") ||
 		!strings.Contains(got, "the result file was empty") {
 		t.Errorf("a run read from its stream did not say so, or not why:\n%s", got)
 	}

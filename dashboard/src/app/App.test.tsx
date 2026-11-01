@@ -35,6 +35,7 @@ import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import type { ToolRow } from "~/contract/tools.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -420,9 +421,25 @@ describe("routing", () => {
       idempotent: "yes",
       open_world: "no",
     } as const;
-    const catalogue = [
-      { name: "servers", description: "", source: "mcp:acme", annotations, delivers: "" },
-      { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
+    const catalogue: ToolRow[] = [
+      {
+        name: "servers",
+        description: "",
+        source: "mcp:acme",
+        annotations,
+        delivers: "",
+        group: "",
+        gate: "",
+      },
+      {
+        name: "create_issue",
+        description: "",
+        source: "mcp:github",
+        annotations,
+        delivers: "",
+        group: "",
+        gate: "",
+      },
     ];
 
     location.hash = "#/settings/mcp-tools/servers";

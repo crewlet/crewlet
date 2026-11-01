@@ -239,7 +239,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	run := r.run(t, e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	err = e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 	var refused *sandbox.TurnRefused
@@ -404,7 +404,7 @@ func (lr *limitedResume) announce(t *testing.T) error {
 	run := lr.r.run(t, lr.e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	return lr.e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 }

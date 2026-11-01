@@ -153,7 +153,7 @@ func (d *DeepScript) Run(ctx context.Context, r assistant.DeepRun) (assistant.De
 	}
 	s := d.scripts[0]
 	d.scripts = d.scripts[1:]
-	box := assistant.DeepBox{Placement: "fake", Agent: "claude-code"}
+	box := assistant.DeepBox{Placement: "fake", Harness: "claude-code"}
 	if r.Continue != nil {
 		box = *r.Continue
 	} else {

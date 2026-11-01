@@ -57,7 +57,7 @@ func TestARecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	for _, key := range []string{`"started_at"`, `"work_item"`, `"activity_transcript"`, `"cli_turns"`} {
+	for _, key := range []string{`"started_at"`, `"work_item"`, `"activity_transcript"`, `"harness_turns"`} {
 		if strings.Contains(string(encoded), key) {
 			t.Errorf("re-encoding an untimed launch invented %s: %s", key, encoded)
 		}

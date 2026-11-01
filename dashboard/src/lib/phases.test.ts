@@ -90,10 +90,10 @@ function launchEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:
       turn_id: "t1",
       iteration: 1,
       launch_id: "job-1",
-      coding_agent: "claude-code",
+      harness: "claude-code",
       model: "claude-sonnet-5",
       response: "Fixed the flake.",
-      cli_turns: 31,
+      harness_turns: 31,
       input_tokens: 9_000,
       output_tokens: 700,
       total_tokens: 9_700,
@@ -734,7 +734,7 @@ describe("delegated workers", () => {
     expect([launch.phase, launch.iteration, launch.launch]).toEqual(["execute", 1, true]);
     expect(launch.response).toBe("Fixed the flake.");
     expect(launch.transcript).toBe("[tool] bash: go test");
-    expect([launch.harnessTurns, launch.totalTokens, launch.codingAgent]).toEqual([
+    expect([launch.harnessTurns, launch.totalTokens, launch.harness]).toEqual([
       31,
       9_700,
       "claude-code",

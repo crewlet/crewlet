@@ -430,7 +430,7 @@ function pricedPhase(at: string) {
       role: "CEO",
       model: "claude-sonnet-5",
       backend: "e2b",
-      coding_agent: "claude-code",
+      harness: "claude-code",
       sandbox_id: "sbx-1",
       input_tokens: TOKENS - 321,
       output_tokens: 321,

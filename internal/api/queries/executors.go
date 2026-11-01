@@ -358,7 +358,7 @@ var runKeys = map[string]runShown{
 	"launch_id":           runStatus,
 	"role":                runStatus,
 	"status":              runStatus,
-	"coding_agent":        runStatus,
+	"harness":             runStatus,
 	"provider_key":        runConfig, // which entry's plan the job spends: the company's configuration
 	"model":               runStatus, // the model it runs under: what it is doing
 	"placement":           runStatus,
@@ -455,10 +455,10 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// by: a turn can launch more than one, and the run's own page polls
 		// the live output of the job it is showing rather than of whichever
 		// replaced it.
-		"launch_id":    run.LaunchID,
-		"role":         run.Role,
-		"status":       run.Status,
-		"coding_agent": run.CodingAgent,
+		"launch_id": run.LaunchID,
+		"role":      run.Role,
+		"status":    run.Status,
+		"harness":   run.Harness,
 		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
 		// fallback at launch makes it other than the chain's head, and
 		// which entry's plan a job is spending is the first thing an admin

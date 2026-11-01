@@ -27,7 +27,7 @@ export interface EntryLimit {
   /** The kind's steady key: its CLI and how it signs in. */
   key: string;
   /** The CLI the limited entries drive, and whether they sign in on a plan. */
-  cli: string;
+  harness: string;
   subscription: boolean;
   /** The seats waiting for it. */
   parked: AgentRow[];
@@ -47,12 +47,12 @@ export function entryLimits(agents: readonly AgentRow[]): EntryLimit[] {
   for (const row of agents) {
     const limit = row.provider_limit;
     if (!limit) continue;
-    const key = `${limit.cli || "model"}-${limit.subscription ? "plan" : "usage"}`;
+    const key = `${limit.harness || "model"}-${limit.subscription ? "plan" : "usage"}`;
     let entry = byKey.get(key);
     if (!entry) {
       entry = {
         key,
-        cli: limit.cli,
+        harness: limit.harness,
         subscription: limit.subscription,
         parked: [],
         carried: [],
@@ -80,8 +80,8 @@ export function entryLimits(agents: readonly AgentRow[]): EntryLimit[] {
 
 /** What a limit is OF where a person reads it: its CLI's product name, or
  *  "Model" where the CLI is one of the company's own or was not said. */
-export function entryName(limit: Pick<EntryLimit, "cli">): string {
-  return HARNESS_PRODUCTS[limit.cli] ?? "Model";
+export function entryName(limit: Pick<EntryLimit, "harness">): string {
+  return HARNESS_PRODUCTS[limit.harness] ?? "Model";
 }
 
 /** "Claude Code subscription limit reached": the entry's name, and the

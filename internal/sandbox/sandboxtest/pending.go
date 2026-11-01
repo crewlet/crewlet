@@ -188,7 +188,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", TaskDescription: "fix the flake",
+		Harness: "claude-code", TaskDescription: "fix the flake",
 		// THE TWO CONVERSATION VALUES OF A DIRECT MESSAGE, which is the
 		// one shape where they differ — a reply in the thread this run's
 		// question was asked in partitions on the thread while the
@@ -357,7 +357,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	first.Placement, first.LaunchNode = "direct", "node-a"
 	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", CodingAgent: "claude-code"},
+		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", Harness: "claude-code"},
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -378,13 +378,13 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 			got.CommandID, got.SessionID)
 	}
 	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
-		CodingAgent: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
+		Harness: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
 	if opened.Prior != want {
 		t.Errorf("the relaunch was handed %+v as the box it found, want %+v", opened.Prior, want)
 	}
 	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", CodingAgent: "claude-code"},
+		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", Harness: "claude-code"},
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach the relaunch's box: %v", err)
 	}
@@ -404,23 +404,23 @@ func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore)
 	first.Placement = "direct"
 	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
-		SandboxID: "box-1", Placement: "direct", CodingAgent: "claude-code",
+		SandboxID: "box-1", Placement: "direct", Harness: "claude-code",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 	next := run("t-cells")
-	next.Placement, next.CodingAgent = "e2b", "opencode"
+	next.Placement, next.Harness = "e2b", "opencode"
 	mustBeginLaunch(t, s, next)
 	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
-		SandboxID: "box-2", Placement: "e2b", CodingAgent: "opencode",
+		SandboxID: "box-2", Placement: "e2b", Harness: "opencode",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
 	got := mustGet(t, s, "t-cells")
-	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.CodingAgent != "opencode" {
+	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.Harness != "opencode" {
 		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in e2b on opencode",
-			got.SandboxID, got.Placement, got.CodingAgent)
+			got.SandboxID, got.Placement, got.Harness)
 	}
 }
 
@@ -2636,7 +2636,7 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
 	if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: "box-" + turnID, CodingAgent: "claude-code", PauseTTLSec: 1800,
+		SandboxID: "box-" + turnID, Harness: "claude-code", PauseTTLSec: 1800,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

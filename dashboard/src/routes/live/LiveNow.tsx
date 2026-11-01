@@ -611,7 +611,7 @@ function InBoxRow({
         <span className="truncate t-cell">{runTitle(run)}</span>
         <span className="truncate t-caption">
           {who}
-          {run.coding_agent ? ` · ${run.coding_agent}` : ""}
+          {run.harness ? ` · ${run.harness}` : ""}
         </span>
       </span>
       <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>

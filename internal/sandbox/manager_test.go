@@ -62,7 +62,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 // The cap has to reach the runner, which is the only place it does anything.
 // It was carried on LaunchRequest and set by nobody, so every launch went
 // out uncapped while the field looked wired.
-func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
+func TestTheResolvedCapReachesTheHarness(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	rig.manager = specManager(t, ManagerOptions{DefaultMaxTurns: 40})
@@ -70,7 +70,7 @@ func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 	rig.manager.runners = map[string]Runner{"claude-code": rig.runner}
 
 	req := launchReq("t1")
-	req.Spec = rig.manager.BuildSpec(SpecInput{CodingAgent: "claude-code"})
+	req.Spec = rig.manager.BuildSpec(SpecInput{Harness: "claude-code"})
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
 		t.Errorf("a box on the dropped cell cannot be reconnected to: %v", err)
 	}
 	if _, _, err := current.Acquire(t.Context(), Spec{Placement: Container,
-		CodingAgent: "claude-code"}, nil); err == nil {
+		Harness: "claude-code"}, nil); err == nil {
 		t.Error("a new box was provisioned on a cell the catalogue no longer configures")
 	}
 	if got := current.Placements(); len(got) != 1 || got[0] != Direct {

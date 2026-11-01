@@ -319,7 +319,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 
 	// THE PARKED RUN: launched from the thread, its question asked now.
 	run := sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", Harness: "claude-code",
 		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
 	}
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {

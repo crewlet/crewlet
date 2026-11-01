@@ -1201,7 +1201,7 @@ function launched(at: string, launchId = "L1") {
       turn_id: TURN,
       launch_id: launchId,
       started_at: at,
-      coding_agent: "claude-code",
+      harness: "claude-code",
     },
   });
 }

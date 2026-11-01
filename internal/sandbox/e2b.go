@@ -132,7 +132,7 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 	if p.template != "" {
 		return p.template
 	}
-	if t, ok := e2bAgentTemplates[spec.CodingAgent]; ok {
+	if t, ok := e2bAgentTemplates[spec.Harness]; ok {
 		return t
 	}
 	return e2bFallbackTemplate

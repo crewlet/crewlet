@@ -21,7 +21,7 @@ function parked(over: Partial<ProviderLimit> = {}): ProviderLimit {
     parked: true,
     resets_at: "2026-10-27T23:30:00Z",
     since: "2026-10-27T23:16:00Z",
-    cli: "claude-code",
+    harness: "claude-code",
     subscription: true,
     ...over,
   };
@@ -40,7 +40,7 @@ describe("an entry at its limit", () => {
       seat("pm", parked()),
       seat("qa", parked({ since: "2026-10-27T23:15:00Z" })),
       seat("designer", null),
-      seat("dev", parked({ cli: "codex", subscription: false })),
+      seat("dev", parked({ harness: "codex", subscription: false })),
     ]);
     expect(limits.map((l) => l.key)).toEqual(["claude-code-plan", "codex-usage"]);
     expect(limits[0]!.parked.map((r) => r.id)).toEqual(["pm", "qa"]);
@@ -51,9 +51,9 @@ describe("an entry at its limit", () => {
     const title = (over: Partial<ProviderLimit>) =>
       limitTitle(entryLimits([seat("pm", parked(over))])[0]!);
     expect(title({})).toBe("Claude Code subscription limit reached");
-    expect(title({ cli: "codex", subscription: false })).toBe("Codex usage limit reached");
+    expect(title({ harness: "codex", subscription: false })).toBe("Codex usage limit reached");
     // A CLI of the company's own is called a model, never by its entry.
-    expect(title({ cli: "custom", subscription: false })).toBe("Model usage limit reached");
+    expect(title({ harness: "custom", subscription: false })).toBe("Model usage limit reached");
   });
 
   test("says when the agents resume, in the reader's zone", () => {

@@ -202,14 +202,14 @@ func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
+		Harness: "claude-code", CreatedAt: time.Now().UTC(),
 		Placement: string(sandbox.Direct), LaunchNode: e.id, Reply: "tool",
 		TaskDescription: "fix the flaky test",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: r.boxID, CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: r.boxID, CommandID: "cmd-1", Harness: "claude-code",
 		Placement: string(sandbox.Direct), Node: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)

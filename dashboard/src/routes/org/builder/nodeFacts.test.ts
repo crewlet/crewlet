@@ -293,7 +293,7 @@ describe("live state", () => {
     role: "Dev",
     agent_handle: "dev",
     agent_id: "a",
-    coding_agent: "claude",
+    harness: "claude",
     sandbox_id: "s",
     task: "Fix",
     status: "running",

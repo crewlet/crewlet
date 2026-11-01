@@ -393,7 +393,7 @@ func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Ev
 	payload := types.ExecutorFinished{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
+		SandboxID: run.SandboxID, Harness: run.Harness,
 	}
 	return payload, events.New(payload, events.TraceContext{TraceID: run.TraceID})
 }
@@ -1236,7 +1236,7 @@ func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 	var relaunch LaunchResult
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
-		req.Spec.CodingAgent = "opencode"
+		req.Spec.Harness = "opencode"
 		res, err := rig.launchVia(ctx, m, req)
 		if err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -1260,9 +1260,9 @@ func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("the opencode runner started %d jobs, want the relaunch", len(opencode.Started()))
 	}
 	got := rig.get("t1")
-	if got.SandboxID != relaunch.SandboxID || got.CodingAgent != "opencode" {
+	if got.SandboxID != relaunch.SandboxID || got.Harness != "opencode" {
 		t.Fatalf("row = box %q on %q, want the relaunch's box %q on opencode",
-			got.SandboxID, got.CodingAgent, relaunch.SandboxID)
+			got.SandboxID, got.Harness, relaunch.SandboxID)
 	}
 }
 
@@ -1972,7 +1972,7 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		}
 		completion := types.ExecutorFinished{
 			AgentHandle: next.AgentHandle, TurnID: next.TurnID, LaunchID: next.LaunchID,
-			SandboxID: next.SandboxID, CodingAgent: next.CodingAgent,
+			SandboxID: next.SandboxID, Harness: next.Harness,
 		}
 		if err := rig.coordinator.OnCompleted(ctx, completion, events.New(completion, events.TraceContext{})); err != nil {
 			t.Errorf("the next job's completion: %v", err)
@@ -2250,7 +2250,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 			rig.launch("t1")
 			if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
 				SandboxID: rig.get("t1").SandboxID, CommandID: "cmd-1",
-				CodingAgent: "claude-code", PauseTTLSec: ttl,
+				Harness: "claude-code", PauseTTLSec: ttl,
 			}, Fence{}); err != nil {
 				t.Fatalf("AttachSandbox: %v", err)
 			}
@@ -3792,7 +3792,7 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: run.SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
+		SandboxID: run.SandboxID, Harness: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

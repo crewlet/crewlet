@@ -306,7 +306,7 @@ test("an executor is named by the task it was given", async () => {
           agent_handle: "eng",
           role: "Engineer",
           status: "running",
-          coding_agent: "claude",
+          harness: "claude",
           placement: "direct",
           task_description: "Drop the Pulsar backend",
           question: "",

@@ -194,9 +194,9 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 	// POLLED FIRST, as the waiter's tick polls a running job before it
 	// announces the completion: the run does its work — its bridged calls
 	// landing on its row — before the completion's claim reads the row.
-	runner, ok := r.runners[row.CodingAgent]
+	runner, ok := r.runners[row.Harness]
 	if !ok {
-		t.Fatalf("run %s is on %q, which the rig has no runner for", turnID, row.CodingAgent)
+		t.Fatalf("run %s is on %q, which the rig has no runner for", turnID, row.Harness)
 	}
 	if state, err := runner.Poll(t.Context(), nil, sandbox.RunHandle{CommandID: row.CommandID}); err != nil ||
 		state != sandbox.JobEnded {
@@ -206,7 +206,7 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 	completion := types.ExecutorFinished{
 		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
 		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
-		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,
+		SandboxID: row.SandboxID, Harness: row.Harness,
 	}
 	ev := events.New(completion, events.TraceContext{TraceID: row.TraceID, ParentSpanID: row.SpanID})
 	ev.Source = row.Role

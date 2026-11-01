@@ -28,7 +28,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
+import type { ToolAnnotations, ToolRow } from "~/contract/tools.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -50,6 +50,8 @@ const tools: ToolRow[] = [
     source: "mcp:github",
     annotations: unadvertised,
     delivers: "github",
+    group: "",
+    gate: "",
   },
   {
     name: "search_docs",
@@ -57,6 +59,8 @@ const tools: ToolRow[] = [
     source: "mcp:docs",
     annotations: unadvertised,
     delivers: "",
+    group: "",
+    gate: "",
   },
   {
     name: "search_knowledge",
@@ -64,6 +68,8 @@ const tools: ToolRow[] = [
     source: "builtin",
     annotations: unadvertised,
     delivers: "",
+    group: "knowledge",
+    gate: "doclet",
   },
 ];
 
@@ -81,6 +87,7 @@ const org = {
 };
 
 const status: McpServersStatusAnswer = {
+  builtin: [],
   nodes: [
     { id: "node-a", reported: true },
     { id: "node-b", reported: true },
@@ -463,6 +470,7 @@ test("a server waiting for a provisioned credential names what it waits for, not
     "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
     "it starts once the seal reaches this node";
   const waiting: McpServersStatusAnswer = {
+    builtin: [],
     nodes: [{ id: "node-a", reported: true }],
     servers: [
       {

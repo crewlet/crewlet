@@ -37,9 +37,9 @@ type ExecutorLaunched struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 	// ProviderKey is the providers.llm entry the run was launched on, and
 	// Model the model it runs under: the member of the seat's executor
 	// chain the launch picked, which a fallback makes other than the chain's
@@ -80,7 +80,7 @@ func (e ExecutorLaunched) AgentID() string { return e.Agent }
 // SummaryFor names the harness, which is the one thing distinguishing two
 // otherwise identical launches on the same seat.
 func (e ExecutorLaunched) SummaryFor(actor string) string {
-	return lead(actor, "launched its executor ("+e.CodingAgent+")")
+	return lead(actor, "launched its executor ("+e.Harness+")")
 }
 
 // ExecutorFinished signals that an executor's run in its box finished.
@@ -107,9 +107,9 @@ type ExecutorFinished struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 }
 
 // EventType is the "executor_finished" wire type.
@@ -196,9 +196,9 @@ type ExecutorCollected struct {
 	// other than the chain's head, and which entry's plan the run spent.
 	Model       string `json:"model"`
 	ProviderKey string `json:"provider_key"`
-	// CodingAgent is the harness the run ran as, and SandboxID the box.
-	CodingAgent string `json:"coding_agent"`
-	SandboxID   string `json:"sandbox_id"`
+	// Harness is the harness the run ran as, and SandboxID the box.
+	Harness   string `json:"harness"`
+	SandboxID string `json:"sandbox_id"`
 	// Response is the report the launch wrote back: the words its harness ended
 	// on, secret-redacted.
 	Response string `json:"response"`
@@ -224,12 +224,12 @@ type ExecutorCollected struct {
 	TotalTokens      int `json:"total_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
-	// CLITurns is how many model turns the launch's harness says its own loop
+	// HarnessTurns is how many model turns the launch's harness says its own loop
 	// took: the launch's provider calls, which the engine neither made nor
 	// timed. Absent where the harness reported none (OpenCode reports none) —
 	// the launch then counts as one call, the one the engine asked for. What
 	// every spend figure counts a launch's calls by is tokens.LaunchCalls.
-	CLITurns int `json:"cli_turns,omitempty"`
+	HarnessTurns int `json:"harness_turns,omitempty"`
 	// CostUSD is what the launch's own harness said it billed: a subscription
 	// harness's spend never passes through the engine's token meter, so this is
 	// the one number that sees it.
@@ -279,7 +279,7 @@ func (e ExecutorCollected) SummaryFor(actor string) string {
 	if actor != "" {
 		who = actor + "'s executor"
 	}
-	agent := e.CodingAgent
+	agent := e.Harness
 	if agent == "" {
 		agent = "?"
 	}
@@ -377,10 +377,10 @@ type ExecutorFailed struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
-	Reason      string `json:"reason"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
+	Reason    string `json:"reason"`
 	// Detail is a human sentence naming what to do about it, never a stack
 	// or a raw provider error: it reaches an operator's board.
 	Detail string `json:"detail"`
@@ -494,9 +494,9 @@ type ExecutorStopped struct {
 	TurnID      string `json:"turn_id"`
 	// WorkKey is the unit of work the run this belongs to was dispatched
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 	// LaunchID is the job the stop ended — see [ExecutorLaunched.LaunchID]
 	// — so a reader pairs the stop with the start it ends rather than with
 	// whichever job the turn ran last.

@@ -30,7 +30,7 @@ func launchReq(turnID string) LaunchRequest {
 		},
 		Brief: "Clone example.com/acme/api and fix the failing test",
 		Task:  "get CI green",
-		Spec:  Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec:  Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}
 }
 
@@ -234,7 +234,7 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 // criteria, and with one loop there is no separate plan to declare them. What
 // "done" means is the executor's own brief, written by the frame that will
 // read the answer.
-func TestTheCodingAgentIsToldItsTaskAndItsEnvironment(t *testing.T) {
+func TestTheHarnessIsToldItsTaskAndItsEnvironment(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
@@ -334,7 +334,7 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 //
 // And the row records WHO ASKED, which is what the park resolves a question to
 // "the requester" against days later.
-func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
+func TestTheHarnessIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
@@ -384,11 +384,11 @@ func TestTheRowCarriesTheColleaguesAskTheTurnAnswers(t *testing.T) {
 // A LAUNCH NAMES ITS RUNNER, and one that names none is refused before its row
 // exists: the runner is the harness of the entry whose login and model the run
 // carries, and a box running some default harness could read neither.
-func TestALaunchThatNamesNoCodingAgentIsRefused(t *testing.T) {
+func TestALaunchThatNamesNoHarnessIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Spec.CodingAgent = ""
+	req.Spec.Harness = ""
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err == nil {
 		t.Fatal("a launch naming no harness started a run")
 	}

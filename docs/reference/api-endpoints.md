@@ -380,7 +380,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
-| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
@@ -4277,7 +4277,7 @@ reported one (`cost_usd`), which the dashboard never reads
 executor's run is a row of its own, an `executor_collected`, published when it
 is collected: **no phase** — it names none, and is the work of the `execute`
 round that launched it (`iteration`) — with its tokens, its CLI's own turns
-(`cli_turns`), its `launch_id` (a round can launch twice, so the launch is part
+(`harness_turns`), its `launch_id` (a round can launch twice, so the launch is part
 of that row's identity), its report as `response` and its
 `activity_transcript` — see
 [each launch is published as its own record](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record).
@@ -4565,7 +4565,7 @@ shaped the same way.
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "executors": [ { /* an executor run in flight: turn_id, role,
-                      agent_handle, agent_id, coding_agent, provider_key
+                      agent_handle, agent_id, harness, provider_key
                       (the executor-chain member it was launched on, to an
                       admin alone) and model, sandbox_id, task, status (the
                       run record's own word), started_at, question,
@@ -5429,7 +5429,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, and the built-in tools by group. **Takes `admin`**. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -9074,7 +9074,8 @@ shared knowledge backend, reachable by all members via query-time search.
 ### `GET /mcp-servers`
 
 Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
-what the configuration declares for it and what each live node did with it.
+what the configuration declares for it and what each live node did with it,
+and the engine's built-in tools beside them.
 **It takes `admin`**, as `GET /config` does — it names the nodes, the
 launch commands and the first line of each failure, which is what the
 configuration it reports on carries.
@@ -9162,9 +9163,32 @@ instance's own keys are on its `tools_discovered` log line
        {"node": "node-2", "reported": true, "started": 1, "failed": 1, "waiting": 0, "tools": 26,
         "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": ""}
      ]}
+  ],
+  "builtin": [
+    {"key": "work", "label": "Work items",
+     "description": "Worklet, the company's tracker: read, file, discuss and move work.",
+     "tools": [
+       {"name": "list_work_items", "description": "…", "source": "builtin",
+        "annotations": {"read_only": "yes", "destructive": "unknown",
+                        "idempotent": "yes", "open_world": "unknown"},
+        "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
+        "group": "work", "gate": "worklet"}
+     ]}
   ]
 }
 ```
+
+`builtin` is the engine's own tools as an agent is offered them, group by group
+in the order the catalogue lists them, each tool a
+[catalogue row](#the-tool-catalogue) whose `gate` says who may call it (the
+words are in
+[Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
+It is the built-ins of the registry this node applied, which every node
+applies alike, plus `list_mcp_server_tools` and `activate_tool`, which the
+engine hands every executor and onboarding pass and no registry holds. A group
+the company offers nothing of is left out: a company on Jira gets no `work`
+group, and one on Slack no `chat` group. A node with no active revision sends
+an empty list.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -9622,7 +9646,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
   "runs": [
     {
       "turn_id": "<uuid>", "launch_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
-      "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "status": "awaiting_clarification", "harness": "claude-code",
       "provider_key": "default", "model": "sonnet",
       "task_description": "Add retry to the webhook client",
       "question": "Which backoff ceiling should I use?",
@@ -10433,7 +10457,7 @@ Notes:
   `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
 - `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, a
-  launch's own CLI turns as its CLI reported them (`cli_turns`, one for a
+  launch's own CLI turns as its CLI reported them (`harness_turns`, one for a
   launch whose CLI reports none — OpenCode reports none), an auxiliary record's
   coalesced calls. The executor's own record counts none: its run's calls are
   its launches'. It counted records once, which made a forty-turn run one call.
@@ -10609,13 +10633,14 @@ is read again rather than recorded.
 ## The Tool Catalogue
 
 Carried by `GET /tools`, by the `tools` push, and inside the socket snapshot.
-One row per registered tool:
+One row per registered tool, in the same shape as each tool on
+[`GET /mcp-servers`](#get-mcp-servers)'s built-in groups:
 
 ```json
 {
   "name": "post_message",
   "description": "Post a message to a channel",
-  "source": "slack",
+  "source": "mcp:slack",
   "title": "Post message",
   "annotations": {
     "read_only": "no",
@@ -10624,7 +10649,9 @@ One row per registered tool:
     "open_world": "yes"
   },
   "delivers": "slack",
-  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] }
+  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] },
+  "group": "",
+  "gate": ""
 }
 ```
 
@@ -10646,6 +10673,13 @@ One row per registered tool:
 - `input_schema` is the JSON Schema the model is offered, verbatim. It is
   **absent** when the tool takes no arguments, which is not the same as `{}`:
   only the first means this build did not send one.
+- `group` and `gate` are, on one of the engine's own tools, the group it is
+  filed in and who may call it: what its row in the authority table asks of
+  the caller, since holding a tool is not being allowed to call it. The words
+  are listed in
+  [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one).
+  Both are present and empty on an MCP server's tool, whose calls no
+  authority row decides.
 
 ---
 

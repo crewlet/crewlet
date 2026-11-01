@@ -223,7 +223,7 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := rig.pending.AttachSandbox(ctx, "t1", BoxRef{
-		SandboxID: first.SandboxID, CommandID: "cmd-2", CodingAgent: "claude-code",
+		SandboxID: first.SandboxID, CommandID: "cmd-2", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)

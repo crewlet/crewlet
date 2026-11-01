@@ -78,7 +78,7 @@ var turnFields = map[string]class{
 // is what it is doing.
 var sandboxFields = map[string]class{
 	"turn_id": status, "role": status, "agent_handle": status, "agent_id": status,
-	"coding_agent": status, "provider_key": config, "model": status,
+	"harness": status, "provider_key": config, "model": status,
 	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
 	"body_withheld": status,
@@ -105,7 +105,7 @@ var nested = map[reflect.Type]map[string]class{
 	reflect.TypeFor[Paused](): {"by": status, "by_kind": status,
 		"operator_id": status, "at": status, "reason": status, "stop_running": status},
 	reflect.TypeFor[ProviderLimit](): {"parked": status, "resets_at": status,
-		"since": status, "cli": status, "subscription": status},
+		"since": status, "harness": status, "subscription": status},
 }
 
 // jsonField is one field a type puts on the wire.

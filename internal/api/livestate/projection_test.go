@@ -195,7 +195,7 @@ func sandboxState(t *testing.T) *livestate.LiveState {
 func sandboxPayload(turnID string) map[string]any {
 	return map[string]any{
 		"turn_id": turnID, "role": "Coder", "agent_handle": "coder",
-		"agent_id": "a-9", "coding_agent": "claude", "sandbox_id": "sb-1",
+		"agent_id": "a-9", "harness": "claude", "sandbox_id": "sb-1",
 		"task": "fix the build", "provider_key": "spare", "model": "claude-haiku",
 	}
 }

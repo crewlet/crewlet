@@ -132,7 +132,7 @@ func TestAStopEndsTheSeatsRunningRunAtOnce(t *testing.T) {
 	payload := types.ExecutorFinished{
 		Agent: running.AgentID, AgentHandle: running.AgentHandle, RoleName: running.Role,
 		TurnID: running.TurnID, LaunchID: running.LaunchID,
-		SandboxID: running.SandboxID, CodingAgent: running.CodingAgent,
+		SandboxID: running.SandboxID, Harness: running.Harness,
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: running.TraceID})
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -573,7 +573,7 @@ func TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost(t *testi
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	relaunch, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
-		TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", Harness: "claude-code",
 		TraceID: "tr-1", CreatedAt: rig.now, LaunchNode: "node-b",
 	}, rigLease)
 	if err != nil {

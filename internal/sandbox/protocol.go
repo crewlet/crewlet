@@ -194,8 +194,8 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// CodingAgent names the runner: "claude-code", "opencode", …
-	CodingAgent string
+	// Harness names the runner: "claude-code", "opencode", …
+	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
 	// engine's host records it in its own directory, which is how that
