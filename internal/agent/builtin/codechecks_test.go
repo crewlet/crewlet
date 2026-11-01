@@ -322,3 +322,57 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 			tools.RefusalOf(got))
 	}
 }
+
+// A CHECK WRITE IS THE OPERATION ITS OP_ID NAMES: on the operator's surface,
+// code_rerun_checks and code_report_check each answer the operation they were
+// made as, to bring back, and refuse — writing nothing — an `op_id` answered
+// for another call, as every write that offers one does.
+//
+// Mutation: leave a check write's operation unbound → red.
+func TestACheckWriteIsTheOperationItsOpIDNames(t *testing.T) {
+	t.Parallel()
+	rerun := func(attempt int) map[string]any {
+		return map[string]any{"repo": "site", "sha": mainOID,
+			"checks": []any{map[string]any{"name": "unit", "attempt": attempt}}}
+	}
+	report := func(status string) map[string]any {
+		return map[string]any{"repo": "site", "sha": mainOID, "name": "lint", "status": status}
+	}
+	for _, c := range []struct {
+		tool       string
+		one, other map[string]any
+	}{
+		{builtin.CodeRerunChecksTool, rerun(1), rerun(2)},
+		{builtin.CodeReportCheckTool, report("running"), report("passed")},
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			t.Parallel()
+			host, writer := newCodeHost(), &codeWrites{}
+			deps := writeDeps(host, writer)
+			deps.Actor = builtin.PrincipalActor
+			tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+				c.tool)
+			got, err := tool.CallForTurn(asBoundPerson(), nil, c.one)
+			if err != nil || got.Failed {
+				t.Fatalf("%s answered %v %q", c.tool, err, got.Output)
+			}
+			var answer struct {
+				OpID string `json:"op_id"`
+			}
+			if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer.OpID == "" {
+				t.Errorf("%s answered no op_id to bring back: %s", c.tool, got.Output)
+			}
+			sent := len(writer.checksAsked())
+
+			c.other["op_id"] = answer.OpID
+			got, err = tool.CallForTurn(asBoundPerson(), nil, c.other)
+			if err != nil || !got.Failed || len(writer.checksAsked()) != sent {
+				t.Errorf("%s brought an op_id answered for another call answered %v %q, writing %d more", c.tool,
+					err, got.Output, len(writer.checksAsked())-sent)
+			}
+		})
+	}
+}

@@ -58,6 +58,28 @@ func checkWriteTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{&codeRerunChecks{deps: deps}, &codeReportCheck{deps: deps}}
 }
 
+// bindChecksOperation settles which operation a check write is, as every code
+// write does ([CodeDeps.bindOperation]), before anything is read: on the
+// operator's surface the one minted for the call — which its answer hands back
+// as `op_id` — or the `op_id` it brought back for exactly this call, and a
+// refusal of one answered for another call, nothing written.
+//
+// UNBOUND, a check write took its schema's `op_id` and read nothing of it: an
+// operator's call minted a fresh operation each time it was made, answered no
+// `op_id` to bring back, and took one answered for another call as if it named
+// nothing.
+func (d CodeDeps) bindChecksOperation(c codeCaller, tool string, args map[string]any) (codeCaller,
+	*tools.Result) {
+
+	actor, bound := d.bindOperation(c.actor, tool, args)
+	if bound != "" {
+		r := failed(bound)
+		return codeCaller{}, &r
+	}
+	c.actor = actor
+	return c, nil
+}
+
 // CheckLogReader is the fleet's object store as a check's kept log is read
 // from: a page of one object ([objstore.Store.ReadAt]).
 type CheckLogReader interface {
@@ -614,6 +636,10 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	c, refusal = t.deps.bindChecksOperation(c, tool, args)
+	if refusal != nil {
+		return *refusal, nil
+	}
 	name, change, oid, target, refusal := checkScopeArgs(tool, args)
 	if refusal != nil {
 		return *refusal, nil
@@ -796,6 +822,10 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
 		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, tool+": a check is reported by a person's "+
 			"own CI, through a credential bound to their human seat."), nil
+	}
+	c, refusal = t.deps.bindChecksOperation(c, tool, args)
+	if refusal != nil {
+		return *refusal, nil
 	}
 	name, change, oid, target, refusal := checkScopeArgs(tool, args)
 	if refusal != nil {
