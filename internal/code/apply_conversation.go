@@ -320,7 +320,7 @@ func applyReview(ctx context.Context, tx queryer, at applyContext, r Review) (in
 // or moves (concerns.go) — each a person or a seat as the routing says, and
 // answers the rows it wrote. A participant already there stays as it was: a
 // mention moves nobody's standing verdict.
-func addMentioned(ctx context.Context, tx *sql.Tx, at applyContext, changeID string, r *ChangeRouting) (int,
+func addMentioned(ctx context.Context, tx store.Execer, at applyContext, changeID string, r *ChangeRouting) (int,
 	error) {
 
 	if r == nil {

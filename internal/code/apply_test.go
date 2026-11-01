@@ -1088,7 +1088,7 @@ func TestAChangeRecordIsGatedByTheRepositoryItsScopeNames(t *testing.T) {
 	r := statelog.Record{Envelope: env, Payload: []byte("no record a build decodes"),
 		Position: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}, StoredAt: applyClock}
 	err = e.db.Tx(t.Context(), func(tx *sql.Tx) error {
-		reason, gated, err := NewApplier().Gated(t.Context(), tx, r)
+		reason, gated, err := NewApplier(nil).Gated(t.Context(), tx, r)
 		if err == nil && (!gated || reason != statelog.ReasonDeleted) {
 			return fmt.Errorf("gated %v, %q; want dropped by the deletion marker", gated, reason)
 		}
