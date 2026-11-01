@@ -1516,11 +1516,11 @@ const PAUSE_REASON_MAX = 500;
  * is a separate, explicit choice ("Also stop the current turn"), because a
  * turn stopped at its next round — and a coding run it has out, which the stop
  * ends at once with its box — loses what it had not done and is not run again;
- * `stop_running` is sent only when it is ticked. The pause itself is the
- * emergency stop of the seat's coding runs' writes — the code host refuses
- * their boxes' pushes, and the tool bridge their calls of the seat's tools that
- * write, until the seat is resumed — which its description says whether or not
- * a turn is running, since a run the pause does not stop keeps working.
+ * `stop_running` is sent only when it is ticked. That stop is the emergency
+ * stop of the seat's coding runs: the run it has out ends at once, and the code
+ * host refuses every push from the seat's boxes until the seat is resumed. A
+ * pause without it stops new work only, so a coding run already out keeps
+ * working and its pushes land.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
  * that waited is delivered first, in order.
