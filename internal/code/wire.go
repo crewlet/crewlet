@@ -1425,8 +1425,12 @@ type ReadAnswer struct {
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
 	// change, in the query's order, a branch heading none left out.
 	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
-	// Queue is a page of a `queue` or a `queue_due` read's live entries, in
-	// queue order; Trains a `queue` read's candidates of the trains testing
+	// DueQueue is a `queue_due` read's page of one repository: one target's
+	// queue work ([QueueDue]), the target the next page's cursor; nil past
+	// the last.
+	DueQueue *QueueDue `json:"due_queue,omitempty"`
+	// Queue is a page of a `queue` read's live entries, in queue order;
+	// Trains a `queue` read's candidates of the trains testing
 	// the targets its page reaches; Landings a page of a `landings` read; and
 	// Green the target's green row a `landings` read starts above, or a
 	// `green` read's rows.

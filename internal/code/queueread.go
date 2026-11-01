@@ -26,8 +26,9 @@ import (
 //     held to the asker's grant as a listing of changes is.
 //   - `queue_due` ([ReadQueueDue]) is the home's: the ACTIVE repositories
 //     holding a live entry, by id — an archived or deleted one's queue is
-//     nobody's work until it is active again — or one repository's live
-//     entries in queue order: the engine's own read, which no principal makes.
+//     nobody's work until it is active again — or one repository's queue
+//     work, a target a page ([QueueDue], queuework.go): the engine's own
+//     read, which no principal makes.
 //   - `landings` ([ReadLandings]) is one target's landings ABOVE ITS GREEN, in
 //     the order they landed, beside the green itself: what its tip checks have
 //     not yet judged.
@@ -125,8 +126,8 @@ type GreenRow struct {
 }
 
 // QueueDueQuery is a `queue_due` read's repository, by id: "" lists the
-// repositories holding a live entry, and one names the repository whose live
-// entries its home reads.
+// repositories holding a live entry, and one names the repository whose queue
+// work its home reads, a target a page.
 type QueueDueQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
 }
@@ -197,7 +198,7 @@ func (q ReadQuery) validateQueueDue() error {
 	} {
 		if f.set {
 			return refused(f.field, "a queue_due read lists the repositories holding a live entry, or one "+
-				"repository's live entries by its id, a page of MaxSnapshotItems at a time, and names nothing else")
+				"repository's queue work by its id, a target a page, and names nothing else")
 		}
 	}
 	return nil
@@ -341,64 +342,30 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 }
 
 // queueDue serves one page of a `queue_due` read: with no repository, the
-// repositories holding a live entry, by id, after the cursor; with one, its
-// live entries in queue order, after the cursor — each page MaxSnapshotItems
-// rows at most.
+// repositories holding a live entry, by id, after the cursor, MaxSnapshotItems
+// a page; with one, its next target's queue work after the cursor, one target
+// a page (queuework.go).
 func (r *Reader) queueDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
-	if q.QueueDue.RepoID == "" {
-		rows, err := tx.QueryContext(ctx, queueDueReposSQL, q.Cursor, r.pageRows)
-		if err != nil {
+	if q.QueueDue.RepoID != "" {
+		return dueQueue(ctx, tx, q.QueueDue.RepoID, q.Cursor, out)
+	}
+	rows, err := tx.QueryContext(ctx, queueDueReposSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories holding a queue: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return fmt.Errorf("code: list the repositories holding a queue: %w", err)
 		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return fmt.Errorf("code: list the repositories holding a queue: %w", err)
-			}
-			out.DueRepos = append(out.DueRepos, id)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if len(out.DueRepos) == r.pageRows {
-			out.Next = out.DueRepos[len(out.DueRepos)-1]
-		}
-		return nil
+		out.DueRepos = append(out.DueRepos, id)
 	}
-	stmt, args := queueOfRepoSQL, []any{q.QueueDue.RepoID, r.pageRows}
-	if q.Cursor != "" {
-		_, target, seq, ok := cutQueueCursor(q.Cursor)
-		if !ok {
-			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-		}
-		stmt, args = queueOfRepoAfterSQL, []any{q.QueueDue.RepoID, target, target, target, seq, r.pageRows}
-	}
-	scanned, err := entriesBy(ctx, tx, stmt, args...)
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return err
 	}
-	numbers, err := numbersOf(ctx, tx, scanned)
-	if err != nil {
-		return err
-	}
-	var (
-		group string
-		place int
-	)
-	for _, e := range scanned {
-		if e.TargetRef != group {
-			group = e.TargetRef
-			if place, err = placeIn(ctx, tx, e); err != nil {
-				return err
-			}
-		} else {
-			place++
-		}
-		out.Queue = append(out.Queue, e.row("", numbers[e.ChangeID], place))
-	}
-	if len(scanned) == r.pageRows {
-		out.Next = queueCursor(scanned[len(scanned)-1])
+	if len(out.DueRepos) == r.pageRows {
+		out.Next = out.DueRepos[len(out.DueRepos)-1]
 	}
 	return nil
 }

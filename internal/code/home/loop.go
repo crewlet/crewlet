@@ -94,6 +94,10 @@ type Options struct {
 	// node's git pool the merge runs in, in its maintenance lane.
 	Cache Cache
 	Git   Pool
+	// Chains builds the merge queue's trains on this node, and Tasks closes
+	// a landed change's work item as its enqueuer (queue.go).
+	Chains Chains
+	Tasks  Tasks
 	// NodeID is this node: the home every placement answer is compared
 	// with, and the node every record the home asks names.
 	NodeID string
@@ -151,10 +155,11 @@ type Loop struct {
 	// backstop is the passes' interval and a turn's bound: [Backstop], a
 	// suite's own (export_test.go).
 	backstop time.Duration
-	// changes and checks are the change work and the check work, the two
-	// workers every loop is built with.
+	// changes, checks and merges are the change work, the check work and the
+	// merge queue, the three workers every loop is built with.
 	changes *changes
 	checks  *checks
+	merges  *queue
 
 	mu      sync.Mutex
 	workers []Worker
@@ -192,9 +197,9 @@ type turnKey struct {
 	repo   string
 }
 
-// New builds a Loop with the change work and the check work registered,
-// refusing every required field missing, by name, in one error. It starts
-// nothing: [Loop.Start] does.
+// New builds a Loop with the change work, the check work and the merge queue
+// registered, refusing every required field missing, by name, in one error.
+// It starts nothing: [Loop.Start] does.
 func New(o Options) (*Loop, error) {
 	var missing []string
 	need := func(absent bool, name string) {
@@ -207,6 +212,8 @@ func New(o Options) (*Loop, error) {
 	need(o.Nudges == nil, "Nudges")
 	need(o.Cache == nil, "Cache")
 	need(o.Git == nil, "Git")
+	need(o.Chains == nil, "Chains")
+	need(o.Tasks == nil, "Tasks")
 	need(!config.ValidNodeID(o.NodeID), "NodeID")
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
@@ -224,7 +231,9 @@ func New(o Options) (*Loop, error) {
 	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, metrics: o.Metrics,
 		log: l.log, now: l.now, rechecks: newRecheckBudget(Backstop)}
 	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}
-	l.workers = []Worker{l.changes, l.checks}
+	l.merges = &queue{estate: o.Estate, chains: o.Chains, tasks: o.Tasks, checks: l.checks, node: o.NodeID,
+		log: l.log, now: l.now}
+	l.workers = []Worker{l.changes, l.checks, l.merges}
 	return l, nil
 }
 

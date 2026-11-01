@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -119,7 +120,8 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	n.chart = testChart()
 	const main = "refs/heads/main"
 	want := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsNone, Checks: []string{"unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	for i, order := range [][2]code.GateChange{
 		{{Checks: ptr([]string{"unit"})}, {MergeBy: ptr(code.MergeByPersons)}},
 		{{MergeBy: ptr(code.MergeByPersons)}, {Checks: ptr([]string{"unit"})}},
@@ -243,7 +245,8 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 	got := n.lands(lcGate(cto, id, release, persons, code.GateChange{Checks: ptr([]string{"unit"})}))
 	sameGate(t, "a gate the lead added", gateOf(t, got, release), &code.MergeGate{
 		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, Checks: []string{"unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats})
+		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats})
 
 	for _, change := range []code.GateChange{
 		{MergeBy: ptr(code.MergeByPersons)},

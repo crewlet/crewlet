@@ -150,14 +150,28 @@ const (
 	// changes — the most one candidate's record names.
 	CodeMaxQueueBatch = 8
 
-	// CodeDefaultQueueBatch is an unset landing.batch: FOUR changes a
-	// candidate, PROVISIONAL. A batch of four is green 81 % of the time at
-	// the 5 % failure rate the depth is sized by, a red one's culprit is
-	// found in log₂ 4 = 2 more rounds, and it spends about 0.4 check runs a
-	// landed change against 1.05 unbatched; the queue's throughput
-	// benchmark, which lands with the queue that reads this, decides it on
-	// measurement.
-	CodeDefaultQueueBatch = 4
+	// CodeDefaultQueueBatch is an unset landing.batch: TWO changes a
+	// candidate at most, measured by internal/code/home's
+	// BenchmarkQueueThroughput and held there by a test: the batch whose
+	// changes land soonest from their arrival, at p99, at the 5 % failure
+	// rate and the default depth under saturating arrivals (2 000 rounds,
+	// seed 0):
+	//
+	//	batch  p99 rounds from arrival  check runs a landed change
+	//	1      364, growing unbounded   1.29
+	//	2      17                       0.89
+	//	4      23                       0.78
+	//	8      44                       0.63
+	//
+	// One never catches up: every red candidate costs a round a saturated
+	// queue has no slack for. Past two, a bigger batch is red more often and
+	// a red FIRST candidate stalls the whole train while it is bisected
+	// (every candidate behind it holds the culprit), so the p99 a change
+	// waits grows faster than the checks it saves shrink. Four, the figure
+	// the design estimated, waits a third longer than two for 12 % fewer
+	// check runs; eight, the bound, stays for a company that prices checks
+	// above latency.
+	CodeDefaultQueueBatch = 2
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
 	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
@@ -899,7 +913,7 @@ type CodeHumanPath struct {
 type CodeLanding struct {
 	Policy CodeLandingPolicy `yaml:"policy,omitempty" json:"policy,omitempty" js:"enum=pre_land|post_land" desc:"pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip."`
 	Depth  int               `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
-	Batch  int               `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 4."`
+	Batch  int               `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 2."`
 }
 
 // Resolved is the landing with its defaults applied — THE ONE PLACE they are
@@ -946,7 +960,7 @@ func (g CodeGate) EncodedBytes() int {
 
 // Gate is the rule's merge gate RESOLVED: nil where the rule sets none of its
 // fields, and otherwise every field its value or its default — writers, none,
-// pre_land at depth 4 and batch 4, seats. THE ONE PLACE those defaults are
+// pre_land at depth 4 and batch 2, seats. THE ONE PLACE those defaults are
 // applied, read by the engine's reconcile, which records it, and by the
 // gate's bound here, so the gate validated is the gate recorded.
 func (rule CodeProtection) Gate() *CodeGate {

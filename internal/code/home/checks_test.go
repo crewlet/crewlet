@@ -44,7 +44,7 @@ func (e *checkEstate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
-	case q.Kind == code.ReadChangesDue:
+	case q.Kind == code.ReadChangesDue || q.Kind == code.ReadQueueDue:
 		return code.ReadAnswer{}, nil
 	case q.Kind != code.ReadChecksDue:
 		return code.ReadAnswer{}, errors.New("the check work asked a read that is not its listing")
@@ -131,7 +131,8 @@ func blobOf(raw string) string {
 func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 	t.Helper()
 	l, err := home.New(home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "git-a"},
-		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, NodeID: "git-a"})
+		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+		Tasks: unqueued{t: t}, NodeID: "git-a"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

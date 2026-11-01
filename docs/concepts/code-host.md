@@ -88,7 +88,7 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing lands a change from its merge queue yet.** A repository defines
+- **Nothing lands a `post_land` branch's merge queue yet.** A repository defines
   its checks in `.crewlet/checks.yaml`, which `crewlet validate` reads as the
   code host does ([Checks](#checks)); its home git node queues the checks its
   target's file defines at every live change's head ([How a head's checks are
@@ -101,9 +101,12 @@ This is the product's current shape, not a configuration choice:
   end](#a-merge-end-to-end), [Merging a
   change](../guides/code.md#merging-a-change)), and a change into a branch
   whose gate requires a check is put in that branch's [merge
-  queue](#the-merge-queue) instead. But no git node lands a queue's entries in
-  this release, so such a change waits there until a person merges it past
-  the gate (`override_reason`) or it is taken out (`code_dequeue_change`).
+  queue](#the-merge-queue) instead, which the repository's home git node
+  lands on a `pre_land` branch ([What the home does with a
+  queue](#what-the-home-does-with-a-queue)). But no git node lands a
+  `post_land` branch's queue in this release, so a change queued there waits
+  until a person merges it past the gate (`override_reason`) or it is taken
+  out (`code_dequeue_change`).
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -307,7 +310,7 @@ protect:
       - glob: "deploy/**"
         unless: [comment_only, whitespace_only]
     checks: [lint, unit]             # the checks a merge waits for, by name
-    landing: {policy: pre_land, depth: 4, batch: 4}
+    landing: {policy: pre_land, depth: 4, batch: 2}
     owners_approve: true             # one approval eligible for every owned glob touched
     delete_source: seats             # seats (unset) or none
 ```
@@ -319,7 +322,7 @@ protect:
 | `approvals_unless` | none | The [path classes](#change-classes) — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
 | `human_paths` | none | At most 32 globs, in the [path owners'](#path-owners) grammar: a change touching a path one matches waits for a **person's** approval, whatever else approved it — unless every path that glob matched is of a class its `unless` lists |
 | `checks` | none | At most 32 checks a merge waits for, each by the name a repository's [checks file](#the-checks-file) gives it: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` — one rule for both, so a rule never requires a check no repository can define |
-| `landing` | `pre_land`, `depth: 4`, `batch: 4` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
+| `landing` | `pre_land`, `depth: 4`, `batch: 2` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
 | `owners_approve` | off | A change waits for one counted approval from somebody eligible for every [path owner](#path-owners)'s glob it touches |
 | `delete_source` | `seats`: a merge deletes a source branch in a seat's own namespace, in the record that merges it | `none`: it keeps every source branch |
 | `auto_revert` | off | Whoever queues a change may consent, when they queue it, to the revert of a landing that breaks the branch |
@@ -5454,8 +5457,75 @@ queue order with their places, beside the trains testing a named
 repository's branches; `landings`, one protected branch's landings above its
 green row; and `green`, each protected branch's newest commit whose required
 checks passed. The repository's home reads a fourth, `queue_due` — the active
-repositories holding a live entry, and one repository's entries — which no
-person or seat may read.
+repositories holding a live entry, and one repository's queue work a branch a
+page — which no person or seat may read.
+
+#### What the home does with a queue
+
+The repository's [home git node](#the-home-git-node) runs its queues: a
+worker of [the home's loop](#the-homes-change-work), nudged by every record
+of the repository's queue and passing every repository holding a live entry
+on the loop's backstop. Each turn reads one branch's **queue work** in ONE
+snapshot — the branch's tip, the gate its queue lands under, its live entries
+in queue order (as many as a train can take, each with who enqueued it and
+the change its merge is written from) and its live train, each candidate's
+commits with the latest attempt of each required check on each — and takes
+the train's next step from it, as a record the committer decides from its
+own snapshot. A step decided from rows the log has moved past is refused
+there and read again on the next turn, so a home that crashes, or hands the
+repository to another git node, leaves nothing behind but rows: **the next
+home resumes the train from them**, building nothing a standing train already
+holds. Only `pre_land` branches have a train; a `post_land` branch's queue
+lands no candidate.
+
+- **Build.** With no train, a train its branch moved under (a person's
+  override merge, a person's push) or one testing an entry no longer live,
+  the home builds a new one onto the branch's tip: up to `depth` candidates
+  of **min(`batch`, ⌈W/`depth`⌉)** of the W waiting entries each, so a queue
+  that keeps up tests each change alone and lands it at once, and a queue
+  falling behind takes up to `batch` changes a candidate. The whole train is
+  ONE chain of merges built in one scratch, its objects one pack, recorded by
+  one `candidate` record that abandons the branch's earlier train. An entry
+  whose merge conflicts — or one past its build's budget — is **ejected**
+  `conflict`, naming the paths; a fast-forward that is none,
+  `not_fast_forward`.
+- **Test.** Each candidate's tip is queued the branch's required checks it
+  holds no attempt of — **defined by the checks file at the train's base**,
+  the branch's tip, never by a candidate's own, so a change cannot narrow
+  the check it is measured by — and an attempt its runner's infrastructure
+  ended is queued again. Where the base's file defines a required check in no
+  form that runs, no candidate can ever pass it, and every entry the train
+  tests is ejected `check_failed` naming it.
+- **Land.** The **longest green prefix** lands in ONE `land` record: every
+  candidate up to the last whose tip passed every required check, with no
+  candidate before it failed — a candidate's tip holds every change before
+  it, so its pass is the whole prefix's, and a candidate still running in
+  front of a passed one lands with it. Each change lands as its enqueuer. An
+  entry the landing's decide refuses — its gate no longer met, its head moved
+  — is ejected `gate_unmet` or `head_moved`, and the next turn builds the
+  train again without it.
+- **Bisect.** A first candidate red is **bisected over its entries' own
+  commits**, each the candidate's merge up to that entry: the commit midway
+  between the last known good (the train's base where no commit passed) and
+  the first known red is queued the failed checks (`purpose: bisect`), until
+  the first red commit follows a good one. Its entry is the culprit, ejected
+  `check_failed` naming the checks; the eject abandons the train, and the
+  next turn builds it again without that change. A batch of `batch` changes
+  finds its culprit in log₂ `batch` more rounds, and while it does nothing
+  behind it lands, since every later candidate holds the culprit too. That
+  is why `batch` defaults to two: under arrivals as fast as the queue lands
+  at a 5 % failure rate and the default depth, a change waits at most 17
+  rounds at p99 from the moment it was queued, against 23 at a batch of
+  four and 44 at eight, while a queue that never batches falls further
+  behind with every red candidate. A larger batch spends fewer check runs a
+  landed change (0.89 at two, 0.78 at four, 0.63 at eight) for that wait.
+- **Close the work item.** Once a landing has applied, every landed entry
+  that asked it has its change's work item closed — set `done` on the
+  engine's own tracker — **as its enqueuer**, decided by the authority table
+  as theirs and attributed to them, under an operation id derived from the
+  landing's, so a close asked again is the same write. An item already
+  finished is left as it is; one on a vendor's tracker is closed there, by
+  whoever closes it, and the home logs that it closed nothing.
 
 ### Tip checks and code_green
 

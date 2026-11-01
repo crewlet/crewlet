@@ -616,7 +616,8 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 		},
 		"a batch past its bound": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {batch: 9}}")),
-			path: "code.repos[0].protect[0].landing.batch", kind: "out_of_range", says: []string{"1..8", "4"},
+			path: "code.repos[0].protect[0].landing.batch", kind: "out_of_range",
+			says: []string{"1..8", "default " + strconv.Itoa(config.CodeDefaultQueueBatch)},
 		},
 		"a source branch's fate nobody knows": {
 			doc:  codeRepos(rule("{branch: main, delete_source: always}")),
@@ -820,7 +821,7 @@ func TestAGateOnATagRuleIsRefused(t *testing.T) {
 }
 
 // A GATE IS FORMED BY ANY OF ITS FIELDS, THE REST RESOLVED — writers, none,
-// pre_land at depth 4 and batch 4, seats — in one place (CodeProtection.Gate),
+// pre_land at depth 4 and batch 2, seats — in one place (CodeProtection.Gate),
 // which the reconcile records and the gate's bound weighs; and a rule that
 // sets none of them has no gate.
 func TestAGateResolvesItsDefaults(t *testing.T) {

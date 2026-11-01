@@ -814,8 +814,9 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	wantGate := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
 		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"}, {Glob: "deploy/**", Unless: []code.ChangeClass{
 			code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}}},
-		Checks:  []string{"lint", "unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+		Checks: []string{"lint", "unit"},
+		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	switch rules := recorded.Settings.Protections; {
 	case len(rules) != 2 || rules[0].Pattern != "refs/heads/main" || rules[1].Gate != nil:
 		t.Errorf("web's rules are declared as %+v, want main's gated and release/*'s with none", rules)
@@ -922,8 +923,9 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 		return &code.MergeGate{MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne,
 			HumanPaths: []code.HumanPath{{Glob: ".crewlet/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
 				{Glob: "deploy/**"}},
-			Checks:  checks,
-			Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+			Checks: checks,
+			Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+				Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	}
 	node := newSandboxNode(t, parseCompany(t, doc(gated("unit, lint"))))
 	servesCodeReads(t, node)

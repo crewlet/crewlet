@@ -606,6 +606,23 @@ into that branch puts the change in its merge queue, which nothing lands yet
 ([What it does not do
 yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
+**A branch whose gate requires a check lands through its merge queue.** On a
+`pre_land` branch (the `landing` default) the home git node tests the waiting
+changes merged on the branch before any of them lands: up to `depth`
+candidates at once, each one change while the queue keeps up and up to
+`batch` changes as it falls behind, every candidate's tip checked under the
+`checks.yaml` the branch itself holds. The longest run of candidates whose
+newest tip is green lands in one go, each change merged as whoever queued it,
+and a work item they asked closed is closed as them. A red candidate is
+bisected: its changes' own commits are checked until the change that broke it
+is found, and only that change leaves the queue (its `code_queue_ejected`
+event names the checks); the rest are tested again without it. A change that
+conflicts with the ones ahead of it leaves the queue naming the paths, and a
+push to the branch while candidates are testing starts them again on the new
+tip. [What the home does with a
+queue](../concepts/code-host.md#what-the-home-does-with-a-queue) has the
+detail.
+
 ## Reading a failed check
 
 A check that fails says why in four places, each on its attempt — read whole

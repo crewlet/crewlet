@@ -99,8 +99,9 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
-	case q.Kind == code.ReadChecksDue:
-		// THE CHECK WORK'S LISTING: these cases hold no change owing any.
+	case q.Kind == code.ReadChecksDue || q.Kind == code.ReadQueueDue:
+		// THE CHECK WORK'S AND THE QUEUE'S LISTINGS: these cases hold no
+		// change owing either.
 		return code.ReadAnswer{Position: e.at}, nil
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
@@ -389,7 +390,8 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 
 	t.Helper()
 	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, NodeID: node}, backstop)
+		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node},
+		backstop)
 }
 
 // loopOver is a loop over o, with a recorder of its own, its backstop
@@ -439,6 +441,20 @@ func (u unmerged) Run(context.Context, gitproc.Cmd) (gitproc.Result, error) {
 // changeID is change n of repo's id: a bare UUIDv7 naming both.
 func changeID(repo string, n int64) string {
 	return repo[:len(repo)-2] + repo[len(repo)-1:] + string(rune('0'+n))
+}
+
+// unqueued is a home's merge queue seams where its cases queue nothing: a
+// chain built or a work item closed is a failure of the case.
+type unqueued struct{ t testing.TB }
+
+func (u unqueued) BuildChain(context.Context, code.ChainBuild) (code.ChainResult, error) {
+	u.t.Error("a loop whose targets queue nothing built a chain")
+	return code.ChainResult{}, errors.New("nothing is queued")
+}
+
+func (u unqueued) CloseWorkItem(context.Context, home.TaskClose) error {
+	u.t.Error("a loop whose targets queue nothing closed a work item")
+	return errors.New("nothing is queued")
 }
 
 // oid is a whole object id made of c.

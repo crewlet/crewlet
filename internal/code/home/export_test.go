@@ -29,6 +29,13 @@ func CheckWork(ctx context.Context, l *Loop, repoID string, floor statelog.Posit
 	return l.checks.Work(ctx, repoID, floor)
 }
 
+// QueueWork is l's merge queue's turn of repoID, its rows read at floor: what
+// a nudge or a pass schedules for the queue worker, run on the case's own
+// goroutine.
+func QueueWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
+	return l.merges.Work(ctx, repoID, floor)
+}
+
 // MergeChange is l's merge step for one due change of repoID, read at the
 // listing's position at — its ancestry, then its merge recorded through the
 // loop's estate — answering whether it landed the change: what

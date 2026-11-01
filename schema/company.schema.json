@@ -286,7 +286,7 @@
       "additionalProperties": false,
       "properties": {
         "batch": {
-          "description": "How many waiting changes one candidate takes: 1..8; unset is 4.",
+          "description": "How many waiting changes one candidate takes: 1..8; unset is 2.",
           "maximum": 8,
           "minimum": 1,
           "type": [

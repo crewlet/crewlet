@@ -508,7 +508,7 @@ func listed[T ~string](values []T) string {
 
 // defaultGate is the gate a rule with none takes where a protect request's
 // change names some of a gate's fields ([GateChange]): every other field its
-// default — writers, none, pre_land at depth 4 and batch 4, seats — each read
+// default — writers, none, pre_land at depth 4 and batch 2, seats — each read
 // from the ONE PLACE config applies it ([config.CodeProtection.Gate]), so a
 // gate a tool forms and a gate a declaration forms default alike.
 func defaultGate() MergeGate {

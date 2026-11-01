@@ -427,9 +427,12 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// 10. THE HOME'S CHANGE WORK (internal/code/home): every live change's
 	// facts read and recorded, its merge into its target recorded, or the
 	// change landed, and its head's checks queued from its target's checks
-	// file, by the repository's HOME git node — listing and asking
-	// through the router's code seam, whose writes raise this node's floors
-	// past what they landed, asking the router who is home, nudged by a watch
+	// file, and its merge queue's trains built (on the host itself, h),
+	// tested and landed — each landed change's work item closed as its
+	// enqueuer (codequeue.go) — by the repository's HOME git node — listing
+	// and asking through the router's code seam, whose writes raise this
+	// node's floors past what they landed, asking the router who is home,
+	// nudged by a watch
 	// on this node's own code log, each record's position read as this node's
 	// applier numbers the log, and merging over this node's cache in a scratch
 	// beside it, in the pool's maintenance lane. BUILT here beside the
@@ -442,7 +445,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// reads, and its merges read the cache, which that stop ends after it.
 	homeLoop, err := codehome.New(codehome.Options{
 		Estate: seam, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
-		Cache: c, Git: pool, NodeID: nodeID, Metrics: e.metrics,
+		Cache: c, Git: pool, Chains: h, Tasks: e.queueTasks(), NodeID: nodeID, Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))

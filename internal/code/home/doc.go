@@ -20,11 +20,11 @@
 // A [Loop] runs on every git node and schedules REPOSITORIES — a (worker,
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
 // for every [Worker] registered with it: the changes worker
-// ([WorkerChanges]) and the checks worker ([WorkerChecks]), and M5's merge
-// queue and M6's mirrors after them, each a listing of the repositories it
-// has work in (Worker.Due) and the work of one (Worker.Work), each read from
-// the rows. A repository is worked
-// by ONE turn of a worker at a time; asked again while it is being worked, it
+// ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
+// ([WorkerQueue]), and M6's mirrors after them, each a listing of the
+// repositories it has work in (Worker.Due) and the work of one
+// (Worker.Work), each read from the rows. A repository is worked by ONE turn
+// of a worker at a time; asked again while it is being worked, it
 // is worked once more after, at the furthest floor it was asked at, so a
 // burst of records costs a repository a turn or two, never one a record.
 //
@@ -121,6 +121,21 @@
 // facts, read as the change work reads them. Its refusals are the change
 // work's: the rows moving is the next pass's, a write deciding nothing the
 // turn's failure.
+//
+// # What a turn of the merge queue does
+//
+// One repository's queue work, a target a page (`queue_due`), each target's
+// next step decided from ONE snapshot of its tip, its gate, its live entries
+// and its live train: a train BUILT where none stands on the target's tip —
+// candidates of [BatchOf] entries, up to the gate's depth, as one chain this
+// node builds ([Chains]) and one candidate record; a standing train's tips
+// queued the required checks the train's BASE defines; its longest green
+// prefix LANDED in one land record; a red first candidate BISECTED over its
+// entries' commits and its culprit ejected. Nothing of a train lives in the
+// worker: a home that takes a repository over resumes its queue from the
+// rows. Each landed entry that asked it has its work item closed as its
+// enqueuer, through [Tasks] — the engine's tracker, which this package does
+// not import. queue.go has the rules of each step.
 //
 // # Merge previews, beside the loop
 //

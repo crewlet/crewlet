@@ -117,6 +117,13 @@ type GateRules struct {
 	// a gate that tests a change before it lands holds the target whatever a
 	// looser one beside it allows.
 	Landing LandingPolicy
+	// QueueDepth and QueueBatch are how many candidates a pre_land queue
+	// tests at once and how many changes one candidate takes: the SMALLEST
+	// of each over the pre_land gates requiring checks — throughput, never
+	// what is tested (M5-D3), so the smallest is the one that keeps every
+	// matching rule's bound — and zero where no such gate matches.
+	QueueDepth int
+	QueueBatch int
 	// OwnersApprove is whether any gate makes path owners gating;
 	// AutoRevert whether every gate requiring checks lets an enqueuer
 	// consent to a reverting of a landing that breaks the target.
@@ -207,6 +214,9 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 			gatedCheck++
 			if g.Landing.Policy == LandingPostLand {
 				postLand++
+			} else {
+				out.QueueDepth = smallest(out.QueueDepth, g.Landing.Depth)
+				out.QueueBatch = smallest(out.QueueBatch, g.Landing.Batch)
 			}
 			if g.AutoRevert {
 				reverting++
@@ -226,6 +236,14 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 	}
 	out.AutoRevert = gatedCheck > 0 && reverting == gatedCheck
 	return out, nil
+}
+
+// smallest is the smaller of held and next, held zero reading as none yet.
+func smallest(held, next int) int {
+	if held == 0 {
+		return next
+	}
+	return min(held, next)
 }
 
 // Protected reports a target some rule matches: a merge into it is held to

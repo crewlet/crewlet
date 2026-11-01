@@ -2069,7 +2069,7 @@ code:
             - glob: "deploy/**"
               unless: [whitespace_only] # unless every path it matched is of these classes
           checks: [unit, lint]          # at most 32; the checks a merge waits for, by name
-          landing: {policy: pre_land, depth: 4, batch: 4}   # pre_land (default) or post_land; 1..8 each (default 4)
+          landing: {policy: pre_land, depth: 4, batch: 2}   # pre_land (default) or post_land; 1..8 each (default depth 4, batch 2)
           owners_approve: true          # one approval eligible for every owned glob a change touches
           delete_source: seats          # seats (default): a merge deletes a seat's source branch; none
           auto_revert: false            # let a change's enqueuer consent to reverting a landing that breaks main

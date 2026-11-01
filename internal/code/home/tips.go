@@ -205,10 +205,15 @@ func (s landingStates) passed() bool {
 }
 
 // tipStates is where each of names stands on l.
-func tipStates(l code.TipLanding, names []string) landingStates {
+func tipStates(l code.TipLanding, names []string) landingStates { return statesOf(l.Check, names) }
+
+// statesOf is where each of names stands on one commit, check its latest
+// attempt of a name — a landing's (tipStates) or a candidate's commit's
+// (commitStates).
+func statesOf(check func(name string) (code.TipCheck, bool), names []string) landingStates {
 	s := landingStates{latest: map[string]int{}}
 	for _, name := range names {
-		c, ok := l.Check(name)
+		c, ok := check(name)
 		if !ok {
 			s.missing = append(s.missing, name)
 			continue
