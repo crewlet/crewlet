@@ -2003,6 +2003,10 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// a vendor (D10), from the vendors' own offers, so every authored
 		// write asks a person's fresh step-up for one.
 		Raises: e.SeatAccessRaises,
+		// AND THE COMPANY'S CREDENTIAL STORE, the one /secrets writes: a
+		// removal of an MCP server offers the values only it read and
+		// deletes the ones the caller names.
+		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 	})
 }
 

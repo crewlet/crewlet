@@ -411,6 +411,11 @@ type prepared struct {
 	// company is the proposed document, decoded: what [Service.CheckEntity]
 	// hands a caller testing a draft entry.
 	company *config.Company
+	// prior is the document it replaces, decoded and held to no rule
+	// ([base.prior]): what a removal compares company with to say what it
+	// takes away (mcpremoval.go). Nil where nothing was active, and over a
+	// base stored without a seal.
+	prior *config.Company
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -559,7 +564,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		warnings = append(warnings, d.warnings(company, b.prior)...)
 	}
 	p := &prepared{
-		company:  company,
+		company: company, prior: b.prior,
 		document: document, warnings: warnings, derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
 		held: heldWarnings(b.prior), stated: d.stated,

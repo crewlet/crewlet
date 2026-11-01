@@ -93,6 +93,58 @@ units:
 	}
 }
 
+// A BOX ENTRY NAMING NO SERVER IS REFUSED, a vendor's name included.
+//
+// An executor box is given each listed server the company declares, and an
+// entry naming none gives it nothing but a log line on every launch. A vendor's
+// name is no exception: the engine reads a seat's `mcp_env.github` without a
+// server, but a box is only ever given a declared one. A server turned off is
+// declared, so listing it stays legal.
+//
+// Mutation: skip the sandbox field in the rule, and the first two cases pass
+// validation.
+func TestABoxEntryNamingNoServerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, entry, path string }{
+		{"a misspelt server", "trakcer", "roles[0].sandbox.mcp.servers[1]"},
+		{"a vendor block's name", org.MCPEnvGitHub, "roles[0].sandbox.mcp.servers[1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp}
+roles:
+  - name: Dev
+    handle: dev
+    sandbox: {mcp: {servers: [tracker, `+tc.entry+`]}}
+`, tc.path)
+			if !errors.Is(err, ErrUnknownValue) {
+				t.Fatalf("want ErrUnknownValue, got %v", err)
+			}
+			if !strings.Contains(err.Error(), "mcp_servers has tracker") ||
+				!strings.Contains(err.Error(), "gives the seat's executor nothing") {
+				t.Errorf("the message must list the declared servers and say what the "+
+					"entry does; got:\n%v", err)
+			}
+		})
+	}
+	mustCompany(t, `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, enabled: false}
+units:
+  - name: Eng
+    id: eng
+    roles:
+      - name: Dev
+        handle: dev
+        sandbox: {mcp: {servers: [tracker]}}
+`)
+}
+
 // AN optional_keys ENTRY THAT LEAVES NOTHING OUT IS REFUSED, and says which
 // mistake it is.
 //

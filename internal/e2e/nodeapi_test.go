@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -202,6 +203,7 @@ func wireAPI(
 	}
 	configSurface, err := configapi.New(configapi.Options{
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
+		Secrets:        fleetsecrets.New(backends.Fleet, cipher),
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
 		Node:           nodeID,

@@ -36,6 +36,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -401,7 +402,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	}
 	plane := coordmemory.NewFleet()
 	configs, err := configapi.New(configapi.Options{Store: db, Plane: plane,
-		Cipher: cipher, Node: "core-1", Holders: func(context.Context, func(string) bool, time.Time) (
+		Cipher: cipher, Node: "core-1", Secrets: fleetsecrets.New(plane, cipher), Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 			return nil, nil
 		}})

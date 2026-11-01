@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -141,6 +142,7 @@ func TestAnImportToARunningNodeWarnsAboutTheCharter(t *testing.T) {
 	fleet := coordmemory.NewFleet()
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
+		Secrets: fleetsecrets.New(fleet, fixtureCipher),
 		Holders: func(context.Context, func(string) bool, time.Time) (map[string]configapi.SeatHolder, error) {
 			return map[string]configapi.SeatHolder{}, nil
 		},

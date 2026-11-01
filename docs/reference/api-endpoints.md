@@ -2282,7 +2282,7 @@ MCP and act surfaces serve no `/config` write at all.
 
 #### Per-entity read and write
 
-Four collections, `GET` and `PUT`:
+Four collections, `GET` and `PUT`, and `DELETE` for a model or an MCP server:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -2292,8 +2292,9 @@ Four collections, `GET` and `PUT`:
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
 | `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything that names it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
+| `DELETE` | `/config/mcp-servers/{name}` | Remove one MCP server and clear everything that names it, in one revision, deleting the stored values only it read where asked. See [below](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it) |
 
-Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no other `DELETE`: removing a seat, a unit or a server is a full-document edit, for the reasons below.
+Any other method is `405` with an `Allow` header naming the methods the path takes. There is no other `DELETE`: removing a seat or a unit is a full-document edit, for the reasons below.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
 a company-wide one. A founder changing one seat's goal sends back a document
@@ -2435,6 +2436,103 @@ Answers: a dry run `200 {valid, base_revision_id, warnings, derived}`, a write
 `409 revision_advanced`, `403 config_managed` (a managed document),
 `412 version_moved` (the entry changed since its `ETag`), `422 validation_error`
 and `400 summary_required`.
+
+#### `DELETE /config/mcp-servers/{id}`: remove an MCP server and clear what names it
+
+An MCP server is named by its name from two other places: each seat's and
+unit's `mcp_env` block keyed on it, and each seat's `sandbox.mcp.servers` entry
+listing it. Removing the entry alone leaves those naming nothing, which
+validation refuses. This route takes the removal **and the clearing of every
+field that names the server** as one write, and can delete the stored values
+only that server read. `config.write` (admin, a recent proof), and
+`secrets.write` as well when the body names a value to delete, asked before
+anything is read or written; `?dry_run=true` checks it and stores nothing,
+`If-Match` takes the server's own `ETag` from its `GET` (optional, as on the
+entity `PUT`), and a summary is required unless it is a dry run: the
+`X-Summary` header or a `_summary` key in the body, the header winning when
+both are sent.
+
+```json
+{
+  "clear": true,
+  "delete_secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"]
+}
+```
+
+- **`clear: true`** clears every field that names the server: each `mcp_env`
+  block keyed on it, a seat's or a unit's, and each `sandbox.mcp.servers`
+  entry listing it. A mapping left empty is dropped, and so is a seat's
+  `sandbox` that held nothing else. An `mcp_env` block the engine reads by its
+  own name (`github`, `gitlab`, `datadog`, `atlassian`, `jira`, `confluence`)
+  is the integration's as well as the server's, so it stays.
+- **`delete_secrets`** names values in the
+  [credential store](#secrets--the-companys-credentials-auth-gated) to delete
+  once the removal is written, each once. Each must be one nothing reads once
+  the server and the fields it clears are gone, judged as `/secrets` judges
+  what reads a value: every `${VAR}` the document names, and every variable it
+  reads without naming one.
+- An empty body clears nothing and deletes nothing. Any other field is
+  `400 invalid_body`.
+
+**Every field that names the server has to be cleared.** Without `clear`, a
+server anything names is `422 validation_error`, with one problem per field
+(`kind: "conflict"`, its `segments` the written field, its `seat` or `unit`,
+and a message such as `pm's mcp_env block for "linear" still holds
+credentials: send clear to clear it in the same write`) and `dependants`. A
+value in `delete_secrets` that something else still reads is a problem at
+`segments: ["delete_secrets", i]` (`kind: "conflict"`, naming the paths that
+read it, as the document stands now), and a name the server never read is
+`kind: "unknown_value"`. A dry run with an empty body is how a page draws the
+list. The **whole document** the removal produces is validated, as on every
+write.
+
+`dependants`, on the refusal and on a dry run that passes:
+
+```json
+{
+  "mcp_env": [
+    {"kind": "seat", "key": "pm", "name": "PM", "segments": ["roles", 0, "mcp_env", "linear"]},
+    {"kind": "unit", "key": "eng", "name": "Eng", "segments": ["units", 0, "mcp_env", "linear"]}
+  ],
+  "sandbox": [
+    {"seat": "pm", "name": "PM", "segments": ["roles", 0, "sandbox", "mcp", "servers", 0]}
+  ],
+  "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"]
+}
+```
+
+`kind` is `seat` (its `key` the handle) or `unit` (its `key` the unit's key),
+and `name` is the display name. `secrets` lists the values the store holds
+that nothing reads once the server is gone, which is what `delete_secrets` may
+name: a variable a node takes from its environment is never listed, since the
+store holds nothing to delete. Every list is names, never a value.
+
+**The values go after the revision is written,** never before, so a removal
+that loses its write deletes nothing. Each is asked again of the fleet's
+revision just before it goes, so one that a write landing meanwhile reads is
+kept. The answer's `secrets` says what became of each, as
+`{name, outcome, read_by?}`:
+
+- `deleted`: the store held it and no longer does;
+- `absent`: the store held nothing under that name;
+- `kept`: a revision activated after the removal reads it, and `read_by` names
+  the paths, so it stays;
+- `failed`: the store, or the fleet's revision, did not answer, so the value
+  may still be there, and `DELETE /secrets/{name}` deletes it.
+
+The status stays `201` whatever became of a value, since the server is removed
+either way. Each value deleted logs `secret_removed` with its name, the server
+and who removed it, as `DELETE /secrets/{name}` does.
+
+Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
+dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
+cleared, secrets}`, where `removed` is the server's name and `cleared` is
+`{mcp_env, sandbox}` as above. Refusals: `404 no_such_entity`,
+`409 revision_advanced`, `403 config_managed` (a managed document),
+`403 unauthorized` for a caller without `secrets.write` (the Dashboard
+Assistant never takes it, so it may remove a server and never its values),
+`412 version_moved` (the server changed since its `ETag`),
+`422 validation_error` and `400 summary_required`.
 
 ### `/secrets/*` — the company's credentials (auth-gated)
 

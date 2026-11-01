@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -83,6 +84,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: cipher, Node: "core-1",
+		Secrets: fleetsecrets.New(plane, cipher),
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -338,6 +340,7 @@ func TestAConfigQuestionOnARevisionThisNodeCannotOpenSaysWhatFixesIt(t *testing.
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: keyring(), Node: "core-1",
+		Secrets: fleetsecrets.New(plane, keyring()),
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 

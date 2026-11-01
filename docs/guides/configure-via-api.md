@@ -283,18 +283,23 @@ consequences worth knowing before you script against it:
   splice. A body that leaves `handle` (or a unit's `id`) out keeps the one the
   path names, so editing a display name is never a rename. Keep the identity
   and change whatever else you like.
-- **`PUT` is the only verb, but for a model's removal.** There is no `DELETE
-  /config/mcp-servers/tracker`; the path answers `405`. Removal is a
-  whole-document edit, unlike a create: adding a server changes nothing that
-  already names one, while deleting a server leaves every `mcp_env` block keyed
-  on it read by nothing. If that is going to happen, it should happen in a
-  document you looked at, and land as one reviewable revision: export, edit,
-  `PUT /config`. A model is the one exception, because what names it has a
-  shape the route can ask for: `DELETE /config/llm-providers/{key}` takes the
-  repoint of every seat job and Ask Crewlet target that names the entry, by seat
-  and job, and refuses with the list of them while one is unanswered, so the
-  removal and every repoint land as one revision
+- **`PUT` is the only verb, but for removing a model or an MCP server.** A
+  seat or a unit is removed by a whole-document edit, unlike a create: adding
+  one changes nothing that already names it, while deleting one leaves every
+  `manages:`, `lead:` and `unit:` that names it pointing at nothing. If that
+  is going to happen, it should happen in a document you looked at, and land
+  as one reviewable revision: export, edit, `PUT /config`. A model and a
+  server are the two exceptions, because what names each has a shape the
+  route can ask for. `DELETE /config/llm-providers/{key}` takes the repoint of
+  every seat job and Ask Crewlet target that names the entry, by seat and job,
+  and refuses with the list of them while one is unanswered, so the removal
+  and every repoint land as one revision
   ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
+  `DELETE /config/mcp-servers/{name}` with `"clear": true` takes every
+  `mcp_env` block and box entry that names the server with it, refuses with
+  the list of them otherwise, and can delete the stored values only the
+  server read
+  ([the route](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)).
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
