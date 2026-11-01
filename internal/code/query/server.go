@@ -154,6 +154,12 @@ type Server struct {
 	flightsMu sync.Mutex
 	flights   map[flightKey]*flight
 	waiting   atomic.Int64
+	// patchSpools holds one token for each revision's facts whose patch is
+	// spooled on the cache's volume now, MaxPatchSpools at most
+	// (read.takePatchSpool), and patchSpoolWait how long a read waits for one
+	// to come free (code.GitShareWait), a field so a case can scale it.
+	patchSpools    chan struct{}
+	patchSpoolWait time.Duration
 }
 
 // flightKey names one page a read's run is cutting: its repository and its
@@ -219,7 +225,8 @@ func New(o Options) (*Server, error) {
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: code.MaxTouchedPaths,
 		touchedBytes: code.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes, classedBlob: code.MaxClassedBlobBytes,
-		classedBytes: code.MaxClassedBytes, searchBudget: code.SearchBudget}, nil
+		classedBytes: code.MaxClassedBytes, searchBudget: code.SearchBudget,
+		patchSpools: make(chan struct{}, MaxPatchSpools), patchSpoolWait: code.GitShareWait}, nil
 }
 
 // Read answers q: a page of the tree, file, diff, comparison or interdiff it

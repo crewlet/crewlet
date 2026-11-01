@@ -317,17 +317,20 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	// A PUSH'S PACK DATES ITS CONTENT FROM ITS OWN POSITION ([PackRow.Content]):
 	// what a push brings reaches the repository here — a base a thin pack was
 	// completed with among it, which a ref reached when the push was checked —
-	// so a purge requested before it asks nothing about it.
+	// so a purge requested before it asks nothing about it. And it ARRIVED
+	// at the record's broker instant ([PackRow.Arrived]): an expunge on its
+	// maintainer's schedule keeps it whole for code.PruneGrace after that.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position,
+			arrived_at) VALUES `,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(packRows), func(i int) []any {
 			k := packRows[i]
 			return []any{p.RepoID, k.PackID, k.Object.String(), string(k.Hash), k.Size,
 				k.IndexBytes, k.ReverseBytes, k.GitChecksum, k.Objects, string(packKinds[i]), at.packed,
-				at.packed}
+				at.packed, at.at()}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the packs at %s: %w", at.position, err)
 	}

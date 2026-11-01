@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -42,8 +43,11 @@ func TestAnotherFilesystemIsAnotherVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codeCacheBudget: %v", err)
 	}
+	// THE ROOM: the free space less the request spools' gibibyte and the
+	// revision facts' patch spools, plus what the cache holds.
+	room := 99*gib - query.PatchSpoolAllowance + layout.Held
 	if !size.dedicated || size.budget != config.DerivedCacheMaxBytes(size.room, true) ||
-		size.budget != (99*gib+layout.Held)/8*7+(99*gib+layout.Held)%8*7/8 {
+		size.budget != room/8*7+room%8*7/8 {
 		t.Fatalf("a cache whose store, snapshots and estate are on another filesystem sized %+v, "+
 			"want a volume of its own and seven eighths of its room", size)
 	}

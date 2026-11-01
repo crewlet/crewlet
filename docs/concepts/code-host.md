@@ -357,12 +357,13 @@ A gate is **recorded, answered and judged, and a merge is held to it**:
 every change into a gated branch is judged under it, its readiness listing
 each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 `code_merge_change` merges one only as it allows, a change into a branch
-whose gate requires a check queued rather than merged ([What it does not do
-yet](#what-it-does-not-do-yet)); a read of
+whose gate requires a check queued rather than merged ([The merge
+queue](#the-merge-queue)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 (`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
-to the rule's `allow_force`, `allow_delete` and `direct_push` alone, as before
-([What it does not do yet](#what-it-does-not-do-yet)). No other read carries
+to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
+rules](#protection-rules)): a gate judges a change's merge, never a push. No
+other read carries
 a gate: a listing of repositories answers each rule as a push is held to it,
 and so does the row every git request, every git node's sync and every push's
 decision reads — at its bounds a repository's gates are half a mebibyte,
@@ -1714,6 +1715,69 @@ node's change writer was asked to decide, by its write and what became of it
 
 ---
 
+## From a push to a green branch
+
+The sections below each take one step of a change's way into a protected
+branch. Here is the whole of it once, end to end, for a branch whose rule
+requires checks — say `main`, gated on `unit` and `lint` and an approval:
+
+```mermaid
+flowchart TD
+    PUSH["A push moves seats/dev/retry<br/>and opens or revises web!42"] --> FACTS["Its home records the revision's facts:<br/>base, patch-id, touched paths, classes"]
+    FACTS --> HEAD["Head checks: each check main's<br/>.crewlet/checks.yaml defines, queued by the home<br/>and run in a box on a git node"]
+    HEAD --> GATE{"The merge gate, judged on one snapshot:<br/>approvals, human paths, owners,<br/>blockers, required checks, mergeable,<br/>the merger's authority"}
+    GATE -->|"unmet: readiness names each condition<br/>and whom it waits on"| WAIT["ready_to_merge wakes its authors who may merge it<br/>once the last is met"]
+    WAIT --> GATE
+    GATE -->|"met, and a person or seat asks to merge"| QUEUE["main's queue: candidates built in one scratch,<br/>each tested merged on the branch"]
+    QUEUE -->|"a candidate's checks pass"| LAND["land: main moves, the change merged,<br/>a landing row recorded"]
+    QUEUE -->|"red, or the gate no longer holds"| EJECT["ejected: dequeued wakes its authors<br/>and its enqueuer"]
+    LAND --> TIP["Tip checks on main's new tip"]
+    TIP -->|"green"| GREEN["code_green advances"]
+    TIP -->|"red"| BROKEN["target_broken wakes the landed change's authors<br/>and the owning lead; the landings are bisected"]
+```
+
+1. **A push** moves a branch, and the push's own record opens a change of it
+   or adds a revision to the change already open on it
+   ([A change a push opens](#a-change-a-push-opens), [Revisions](#revisions)).
+2. **The repository's home git node** measures the revision — its base, its
+   patch-id, the paths it touches and their [change classes](#change-classes)
+   — and whether it merges cleanly ([A revision's
+   facts](#a-revisions-facts), [Mergeability](#mergeability)).
+3. **The head's checks** are the ones `.crewlet/checks.yaml` defines **as the
+   target holds it**, never as the change edits it: the home queues them, a
+   git node claims each and runs it in a box, and each attempt's result is a
+   row ([How a head's checks are
+   dispatched](#how-a-heads-checks-are-dispatched), [Who runs a
+   check](#who-runs-a-check)). A failed head check wakes its authors
+   (`checks_failed`).
+4. **The gate** is judged on one snapshot, the same function for a reader's
+   readiness and for the record that merges ([Merge
+   readiness](#merge-readiness), [The merge gate](#the-merge-gate)). Unmet,
+   readiness names every condition and whom it waits on, and when the last
+   one is met its authors who may merge it hear `ready_to_merge` — where none
+   may, the effective lead of the repository's owner.
+5. **A merge** of a branch whose gate requires no check is one record that
+   moves the target and marks the change merged ([How a merge is
+   built](#how-a-merge-is-built)). Where the gate requires one, the merge
+   **joins the target's queue** instead: the home builds candidates — each
+   change merged onto what lands before it — tests them, and lands a green
+   prefix in one record, ejecting a change whose candidate went red or whose
+   gate no longer holds ([The merge queue](#the-merge-queue), [How a candidate
+   is built](#how-a-candidate-is-built)). A person's override merges directly
+   either way, its reason kept with the merge.
+6. **The new tip** is checked again, by the checks file at the last green
+   landing, and **`code_green`** — the newest landing every required check
+   passed on — advances only on green; a red tip wakes the authors of the
+   change that broke it and the effective lead of the repository's owner
+   (`target_broken`), and is bisected over its landings ([Tip checks and
+   code_green](#tip-checks-and-code_green)).
+
+Every step is a row the [state log](#one-subject-per-repository) applies on
+every data node, and every wake is derived from those rows ([Who a change
+wakes](#who-a-change-wakes)). A person drives the same steps from a change's
+page in the dashboard — Merge or Add to queue, Override, Re-run checks — or
+with the tools ([Merging a change](../guides/code.md#merging-a-change)).
+
 ## Checks
 
 A repository defines its **checks** — the builds, tests and linters a change
@@ -2302,6 +2366,11 @@ node finds room claims it. Queued checks are taken oldest first, as always.
 whose node died holding it lapses within 60 seconds, so a dead runner never
 holds the company's cap for longer than a minute. A cap lowered while the boxes
 of the old one run holds every new box back until enough of them have ended.
+A git node lists the slots once a walk of its queue, however many boxes the
+walk starts, and a node that found them all held lists them again only once a
+box of its own has given its slot back, the cap is raised, or 15 seconds have
+passed: a full cap costs the coordination store one listing per git node every
+15 seconds, never one every walk.
 
 **A day is counted a minute at a time.** Each `e2b` box is charged one minute
 to the fleet's shared counter when its slot is taken, and one more each minute
@@ -2317,8 +2386,22 @@ walk, with no restart.
 **A store that cannot say starts nothing.** Where the coordination store
 cannot list the slots, take one or count a minute, no `e2b` box starts — a cap
 nobody can ask about cannot hold — and the check waits queued for the next
-walk, which asks again. A box already running keeps running through it: its
-renewals and its minutes are asked again at its next renewal.
+walk, which asks again. A box already running keeps running through it: a
+renewal or a minute the store left unanswered is asked again at its next
+renewal.
+
+**A box whose slot lapsed is counted again.** A node whose renewals do not
+reach the store for 60 seconds — an outage that long, its host asleep, a
+stall — has its running boxes' slots lapse, and from that moment the company's
+cap stops counting those boxes, so other git nodes may start boxes in their
+room. A lapsed lease cannot be renewed, so each such box takes a slot again,
+at every renewal until it holds one: a slot the store lists as free, or else
+one past `check-remote:<n-1>`, which no new box is offered and every count
+includes. The cap then holds every new box back at once, and the overrun lasts
+only until the boxes started in the gap have ended, never for the lapsed
+boxes' whole lives. The node logs the lapse once, as
+`code_check_remote_slot_lost`, and the slot taken again as
+`code_check_remote_slot_retaken`, whose `over_cap` says it is one past the cap.
 
 `crewlet.code.checks.remote.capped` counts the walks a cap held a check back
 on, by `reason` — `max_running`, `box_hours_per_day`, or `unknown` for a store
@@ -5064,7 +5147,8 @@ alike:
 | `touched` | Every file the change touches: each path the diff from the base to the head changes, in git's order, a moved file as its two paths. Past 1 000 paths, past 48 KiB of the list as JSON, or at a path that is not UTF-8 (which JSON cannot carry exactly), the facts say `touches_all` and give no list — read as every path by everything that reads one, where a list cut at its bound would leave the files past the cut out. |
 | `classes` | What each touched Go file's change is — `whitespace_only` or `comment_only` — named by its place in `touched`, and whether every touched path was judged (`complete`): [Change classes](#change-classes). |
 | `patch_id` | `git patch-id --verbatim` of the change's cumulative diff from its base, three lines of context around every change: the same for two revisions whose changes are the same lines among the same neighbours, wherever the base put them — a rebase onto a target that moved nothing near them keeps it — and another for any changed byte. Empty for a revision that changes nothing. |
-| `patch_id_omitted` | No id was taken: the diff is past 256 MiB, or it and its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
+| `patch_id_omission` | Why no id was taken of a diff that is not empty: `past_bound`, the diff is past 256 MiB; or `out_of_time`, it or its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
+| `classes_omission` | Why the classes are not `complete`: `past_bound`, past the Go a classification lexes or a revision that touches all; or `out_of_time`, past what the read's budget of git left. |
 
 **Whitespace is a change.** The id is `--verbatim`, never `--stable`, which
 strips every space and tab before it hashes: Python's and YAML's indentation,
@@ -5081,16 +5165,29 @@ node's read lane — the merge base, the walk of the touched paths (git's raw
 records, whose modes and blob ids say which paths a lexer classes), one
 lookup of the two trees and of each such path's two blobs' sizes, the diff
 written into a spool (a file with no name on the cache's volume, gone when
-the read ends), `git patch-id` reading it back, and one `git cat-file
+the read ends; two at once on a node at most, the 512 MiB the cache is sized
+beside, a third read waiting for one up to two seconds before another node
+answers it), `git patch-id` reading it back, and one `git cat-file
 --batch` writing the Go files' versions for the lexer — never two at once,
 which would hold two of the lane's slots for one read. A merge base, a walk
 or a lookup that runs out the read's budget of git makes the read too large
-to answer, as any read's git does. A diff past 256 MiB, or a diff or an id
-that ran out what the budget left, is answered with the id omitted instead:
-the safe side, since an omitted id equals nothing, and the base, the paths
-and the trees that everything else reads — an interdiff among them — are
-there. Classes cut short by their bound or by the budget are answered
-incomplete, the same side: a class only relaxes.
+to answer, as any read's git does. A diff past 256 MiB is answered with the
+id omitted instead: the safe side, since an omitted id equals nothing, and the
+base, the paths and the trees that everything else reads — an interdiff among
+them — are there. Classes cut short by their bound are answered incomplete,
+the same side: a class only relaxes. Both are **final**: what the bound
+measures is the two commits, so every node omits alike.
+
+**Out of time is not final.** A diff or an id that ran out what the budget
+left, or classes that did, are answered too — the base, the paths and the
+trees in them are whole — but saying `out_of_time`, never as the bound's
+omission: the budget measures the node at that moment, and a node beside it,
+or the same one less loaded, would have finished. Facts recorded from such an
+answer would hold for good, every approval its id would have carried lost to
+a re-review exactly when the fleet is busiest, so nobody records them: the
+home asks again on its next pass ([Recorded on the change](#recorded-on-the-change)).
+A copy that lacks a blob its own trees name is that node's failure, and the
+read is refused for another git node to answer.
 
 **Measured**, over changes rewriting every fourth line of files of 256 KiB,
 three reads each on two cores: a revision's facts took 18 ms for a 1 MiB
@@ -5110,7 +5207,11 @@ a **revise**, a write of the change's [conversation](#reviews-and-findings):
 the home asks it of the repository's committing data node, whose change writer
 decides it in one snapshot and publishes it on the change's own subject, as it
 does a review — a git node never publishes one — and it names no asker, being
-the engine's own.
+the engine's own. Only **final** facts are recorded: an answer saying
+`out_of_time` is the home's turn failing for that change, which stays due its
+facts and is read again by the next pass, a minute at most, of whichever git
+node answers then — so a recorded `patch_id_omitted` always means the diff
+was past its bound.
 
 | Table | A row for | What it holds |
 |---|---|---|
@@ -5888,7 +5989,9 @@ the one unit each of its merges would have held alone, and is logged
 
 ### Where lines are in another revision
 
-A finding or a comment is written against lines of one blob. Placed in
+A finding or a comment is written against lines of one blob — lines 1 to at
+most 1 073 741 824, the most a file under `max_blob_bytes`' ceiling holds, a
+range past it refused as no file's lines. Placed in
 another revision, up to 64 such ranges at a time, each is found by the diff
 between the blob it was read in and the file at its path now — on the new
 side of the change's diff, the revision's head; on the old side, its base —
@@ -5906,7 +6009,9 @@ which repeats in any file of size:
 
 One `git diff-pairs` diffs every distinct pair of blobs the read names, each
 handed as a numbered pair rather than by its path, so no path reaches git and
-every hunk names the pair it is of.
+every hunk names the pair it is of. Each hunk is placed as git writes it and
+kept nowhere, and a pair whose ranges are all placed is read no further, so
+what the engine holds is the ranges, however many hunks the diff has.
 
 ### What changed between two revisions
 
@@ -5916,10 +6021,15 @@ between the two brought in what the target changed meanwhile, and the files
 neither revision touches differ between the heads without being anything the
 change did. It is read as a diff is — its stat a page at a time, or one file's
 patch — and a file is kept by its whole name, so the touched path `a*` keeps
-the file `a*` and never `ab`. The paths are judged by the node over git's own
-records, never handed to git as a pathspec ([A path is data](#server-side-reads)).
-Where either revision touches all, or the two share their base — whose heads
-then differ only in files one of them touches — it is the heads' whole diff.
+the file `a*` and never `ab`. The paths are never handed to git as a pathspec
+([A path is data](#server-side-reads)): each touched path is looked up at both
+heads, one lookup on git's standard input for them all, and only the files
+whose two entries differ are diffed — so an interdiff costs git two lookups a
+touched path and the change's own diffs, however much the target moved
+between the two bases, and a change rebased over a busy target reads none of
+the target's files. Where either revision touches all, or the two share their
+base — whose heads then differ only in files one of them touches — it is the
+heads' whole diff.
 
 ---
 
@@ -7284,7 +7394,7 @@ revised is one click from the terminal that pushed it.
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a single member's stalled write, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
 | `code_object_store_unavailable` | `WARN` | A fetch's sync could not read a pack from the object store for a reason that is no answer about the pack — a timeout, a throttle past its retries, the store unreachable — answered 503. A pack the store does not hold, or holds damaged, is `code_pack_missing` instead. |
-| `code_cache_sized` | `INFO` | The node built its code host and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit and the request `spools`' allowance (64 MiB for each of the pool's `transfers`), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build its code host, and the error names the same figures and what to change. |
+| `code_cache_sized` | `INFO` | The node built its code host and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit the request `spools`' allowance (64 MiB for each of the pool's `transfers`) and the revision facts' `patches` (two patches spooled at once of up to 256 MiB each, 512 MiB), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build its code host, and the error names the same figures and what to change. |
 | `code_git_ready` | `INFO` | The node's git is 2.55 or newer (the node floor, `gitproc.NodeMinVersion`) and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the empty `home` every git process runs with, the node's `memory` the lanes were sized by and where it was read (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), and the format of the trace2 event stream its git writes (`trace_evt`), from which a failure's damage is read. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
 | `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after five seconds. |

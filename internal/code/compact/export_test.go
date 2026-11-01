@@ -135,6 +135,16 @@ func FinishExpunge(ctx context.Context, c *Compactor, cand code.ExpungeCandidate
 	return c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace, floor: cand.Version})
 }
 
+// ExpungeFrom has c's expunges on its own schedule due from n unreachable bytes
+// rather than code.ExpungeMinBytes: what a case's repository of kilobytes is
+// expunged at.
+func ExpungeFrom(c *Compactor, n int64) { c.bounds.expungeMin = n }
+
+// ClockAt has c read now as its clock from here on: what a benchmark's
+// compactor, built by its fleet's own helper, is set past a grace by. Before
+// c starts only.
+func ClockAt(c *Compactor, now func() time.Time) { c.now = now }
+
 // RememberNotDue has c remember cand as a plan found not due at the version the
 // listing names and at its repository's cap now — what a pass over a
 // repository that is not due leaves behind — so BenchmarkCompact's poll arms

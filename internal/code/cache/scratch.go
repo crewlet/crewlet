@@ -809,8 +809,9 @@ func (s *Scratch) discard() {
 // find; and the janitor, which measures scratch/ by walking its names, never
 // counts one against the cache's budget. That is deliberate: a spool draws on
 // its caller's own bound — a fetch's on the host's allowance
-// (internal/code/host), a patch on the bound its patch-id is taken under
-// (query.MaxPatchIDDiffBytes), a push's commit ids on the pack they are read
+// (internal/code/host), a patch on the node's patch spools
+// (query.PatchSpoolAllowance: query.MaxPatchSpools at once, each within
+// query.MaxPatchIDDiffBytes), a push's commit ids on the pack they are read
 // from (code.MaxPackBytes) — and counted here, one reader's large request
 // would make the budget evict warm repositories that every other reader then
 // downloads again. The caller closes it.

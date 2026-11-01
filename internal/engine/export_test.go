@@ -194,7 +194,9 @@ const TestGitTransfers = 4
 // free space, a sixteen-core machine's 4 GiB of spools left a node no room
 // under 16 GiB free, and its node refused to host code: a property of the
 // machine running the suite, never of the case. Pinned, the room is a quarter
-// of the free space less 256 MiB, which every volume a node boots on has.
+// of the free space less 768 MiB — the request spools' 256 MiB and the revision
+// facts' patch spools' 512 MiB (query.PatchSpoolAllowance) — which every volume a
+// node boots on has.
 func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor

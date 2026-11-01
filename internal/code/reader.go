@@ -907,9 +907,11 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 			p              PackRow
 			object, hash   string
 			added, content int64
+			arrived        int64
 		)
 		if err := rows.Scan(&p.PackID, &p.Part, &object, &hash, &p.Size, &p.IndexBytes,
-			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content); err != nil {
+			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content,
+			&arrived); err != nil {
 			return false, fmt.Errorf("code: read a pack: %w", err)
 		}
 		k, err := objstore.ParseKey(object)
@@ -917,6 +919,11 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 			return false, fmt.Errorf("code: pack %s names %q: %w", p.PackID, object, err)
 		}
 		p.Object, p.Hash, p.Added, p.Content = k, objstore.Hash(hash), unpacked(added), unpacked(content)
+		// ZERO IS NEVER: the column's default, and no record's broker
+		// instant.
+		if arrived != 0 {
+			p.Arrived = store.DecodeTime(arrived)
+		}
 		out.Packs = append(out.Packs, p)
 		served++
 		cur.After = key(p)
@@ -1690,6 +1697,9 @@ func (q ReadQuery) validate() error {
 			ErrInvalid)
 	case q.ExpungeTips != nil:
 		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
+	case !q.ExpungedBefore.IsZero():
+		return fmt.Errorf("%w: expunged_before: only an expunge_due read lists the repositories last expunged "+
+			"before an instant", ErrInvalid)
 	case q.BranchChanges != nil:
 		return fmt.Errorf("%w: branch_changes: only a branch_changes read names the branches whose live "+
 			"changes it answers", ErrInvalid)
@@ -1858,6 +1868,9 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
+	case !q.ExpungedBefore.IsZero():
+		return refused("expunged_before", "only an expunge_due read lists the repositories last expunged "+
+			"before an instant")
 	case q.Target != "":
 		return refused("target", "only a queue, a landings or a green read names a branch's queue")
 	case q.QueueDue != nil:
@@ -1934,6 +1947,7 @@ func (q ReadQuery) validateRunPushes() error {
 	}{
 		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
 		{"introduced", q.Introduced != nil}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -1983,6 +1997,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -2023,6 +2038,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -2044,12 +2060,15 @@ func (q ReadQuery) validatePublicationDue() error {
 // validateExpungeDue is [ReadQuery.validate] for an `expunge_due` read: the
 // engine's own — a repository's maintainer polling for the expunges it owes —
 // so it names NO asker, for the `compaction_due` read's reason, and nothing
-// else at all: no repository, no filter, no range, no floor and no limit,
-// since its partial index holds exactly the repositories it lists and a page
-// is MaxSnapshotItems of them.
+// but its cursor and the instant its weekly arm lists from
+// ([ReadQuery.ExpungedBefore]): no repository, no filter, no range, no floor
+// and no limit, since its two partial indexes hold exactly the repositories
+// it lists and a page is MaxSnapshotItems of them.
 func (q ReadQuery) validateExpungeDue() error {
-	return q.validateBareListing("an expunge_due read lists every repository with an expunge open or a " +
-		"purge requested")
+	bare := q
+	bare.ExpungedBefore = time.Time{}
+	return bare.validateBareListing("an expunge_due read lists every repository with an expunge open or a " +
+		"purge requested, then every one last expunged before its expunged_before")
 }
 
 // validateBareListing is [ReadQuery.validate] for a duty listing that names
@@ -2070,6 +2089,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
@@ -2185,6 +2205,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"cursor", q.Cursor != ""}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -3076,32 +3097,72 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 	return rows.Err()
 }
 
-// expungeDue serves one page of an `expunge_due` read: the active and archived
-// repositories with an expunge open or a purge requested and not served, BY
-// ID, each with the expunge, the request and its position, when the
-// repository was last expunged, its live packs, bytes and objects, and the
-// version its row was read at.
+// expungeDue serves one page of an `expunge_due` read, in two ARMS, the
+// first served whole before the second:
 //
-// ONE WALK of code_repos_expunging_idx (replicated 0064), its partial
-// predicate repeated verbatim, which holds exactly the repositories with an
-// expunge open or a request waiting — a handful in a fleet of any size, every
-// one of which its maintainer finishes or serves before it plans anything
-// else — keyset on the id after a cursor. A deleted or purging repository's
-// stays out: its open expunge waits for its restore, or goes with its purge.
-// A FULL LISTING, never a delta from the last poll's, for the compaction's
-// listing's reason.
+//  1. OPEN: the active and archived repositories with an expunge open or a
+//     purge requested and not served, BY ID — ONE WALK of
+//     code_repos_expunging_idx (replicated 0064), its partial predicate
+//     repeated verbatim, which holds exactly those repositories, a handful in
+//     a fleet of any size, every one of which its maintainer finishes or
+//     serves before it plans anything else — keyset on the id after a cursor;
+//  2. WEEKLY, asked by [ReadQuery.ExpungedBefore]: every OTHER active or
+//     archived repository — every kind, a scratch one as much as a project,
+//     since a push is refused repo_size on live bytes whoever's they are —
+//     last expunged at or before the instant, or never, LEAST RECENTLY
+//     EXPUNGED FIRST — ONE SEEK of code_repos_expunge_due_idx (replicated
+//     0064), its partial predicate repeated verbatim, bounded above by the
+//     instant, keyset on (expunged_at, id) after a cursor. A repository the
+//     first arm listed is left out of the second, so each is listed once.
+//
+// Each with the expunge, the request and its position, when the repository
+// was last expunged, its live packs, bytes and objects, and the version its
+// row was read at. A deleted or purging repository's stays out of both: its
+// open expunge waits for its restore, or goes with its purge. A FULL LISTING,
+// never a delta from the last poll's, for the compaction's listing's reason.
 func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
-	// THE CURSOR IS THE LAST ID SERVED, and "" before the first: every id
-	// is a UUID, past "" in byte order, so one statement serves every page.
-	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
+	weekly, after, ok := cutExpungeCursor(q.Cursor)
+	if !ok || (weekly && q.ExpungedBefore.IsZero()) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 	}
-	rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
-	if err != nil {
-		return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	if !weekly {
+		rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
+		if err != nil {
+			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+		}
+		full, err := scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, _ int64) string { return c.ID })
+		if err != nil || full || q.ExpungedBefore.IsZero() {
+			return err
+		}
+	}
+	before := store.EncodeTime(q.ExpungedBefore)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if after == nil {
+		rows, err = tx.QueryContext(ctx, expungeWeeklySQL, before, r.pageRows-pg.rows)
+	} else {
+		rows, err = tx.QueryContext(ctx, expungeWeeklyAfterSQL, before, after.at, after.at, after.id,
+			r.pageRows-pg.rows)
+	}
+	if err != nil {
+		return fmt.Errorf("code: list the repositories an expunge may be due in: %w", err)
+	}
+	_, err = scanExpungeDue(rows, &pg, out, func(c ExpungeCandidate, expunged int64) string {
+		return weeklyCursor(expunged, c.ID)
+	})
+	return err
+}
+
+// scanExpungeDue reads one arm's rows of an `expunge_due` page into out,
+// counting each against pg; full reports a page that took its last row, its
+// cursor named by next.
+func scanExpungeDue(rows *sql.Rows, pg *page, out *ReadAnswer,
+	next func(c ExpungeCandidate, expunged int64) string) (full bool, err error) {
+
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			c                            ExpungeCandidate
@@ -3109,7 +3170,7 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		)
 		if err := rows.Scan(&c.ID, &c.Name, &c.Open, &c.Request, &requested, &expunged, &c.LivePacks,
 			&c.LiveBytes, &c.LiveObjects, &version); err != nil {
-			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+			return false, fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
 		}
 		if c.Request != "" {
 			c.Requested = unpacked(requested)
@@ -3122,11 +3183,44 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		c.Version = unpacked(version)
 		out.Expunge = append(out.Expunge, c)
 		if pg.add(c.encodedBytes()) {
-			out.Next = c.ID
-			break
+			out.Next = next(c, expunged)
+			return true, rows.Err()
 		}
 	}
-	return rows.Err()
+	return false, rows.Err()
+}
+
+// weeklyPrefix opens an `expunge_due` cursor in its WEEKLY arm: the last
+// row's expunged_at, encoded, and its id — "weekly:<at>:<id>". A cursor in
+// the open arm is the last id served, a UUID, which never opens so.
+const weeklyPrefix = "weekly:"
+
+// weeklyCursor is the cursor after a weekly-arm row last expunged at expunged
+// (encoded) of id.
+func weeklyCursor(expunged int64, id string) string {
+	return weeklyPrefix + strconv.FormatInt(expunged, 10) + ":" + id
+}
+
+// expungeAfter is a weekly-arm cursor read back: the row it names.
+type expungeAfter struct {
+	at int64
+	id string
+}
+
+// cutExpungeCursor reads an `expunge_due` cursor: "" or a repository id in the
+// open arm (weekly false), or a weekly-arm cursor and the row it names; ok is
+// false for a cursor no page answered.
+func cutExpungeCursor(cursor string) (weekly bool, after *expungeAfter, ok bool) {
+	rest, isWeekly := strings.CutPrefix(cursor, weeklyPrefix)
+	if !isWeekly {
+		return false, nil, cursor == "" || validRepoID("cursor", cursor) == nil
+	}
+	at, id, found := strings.Cut(rest, ":")
+	n, err := strconv.ParseInt(at, 10, 64)
+	if !found || err != nil || n < 0 || validRepoID("cursor", id) != nil {
+		return true, nil, false
+	}
+	return true, &expungeAfter{at: n, id: id}, true
 }
 
 // indexed serves one page of an `indexed` read ([ReadIndexed]): the active
@@ -4091,7 +4185,7 @@ const (
 		tombstones, live_packs,
 		live_bytes, live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes,
 		last_push_at, created_at FROM code_repos WHERE id = ?`
-	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position`
+	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position, arrived_at`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
 	packsFullAfterSQL = `SELECT ` + packColumns + ` FROM code_packs INDEXED BY ` + packsKey + `
@@ -4254,10 +4348,23 @@ const (
 		ORDER BY published_at, id LIMIT ?`
 	// THE EXPUNGES OWED, by id over code_repos_expunging_idx — its partial
 	// predicate repeated verbatim — after the cursor, "" from its start.
-	expungeDueSQL = `SELECT id, name, expunge_id, expunge_request, expunge_request_position, expunged_at,
-		live_packs, live_bytes, live_objects, version FROM code_repos INDEXED BY code_repos_expunging_idx
+	expungeDueSQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunging_idx
 		WHERE (expunge_id != '' OR expunge_request != '') AND status IN ('active', 'archived') AND id > ?
 		ORDER BY id LIMIT ?`
+	// THE EXPUNGES THE WEEKLY ARM ASKS ABOUT, least recently expunged first
+	// over code_repos_expunge_due_idx — its partial predicate repeated
+	// verbatim — up to the instant, from its start or after the cursor's
+	// (expunged_at, id); the repositories the open arm lists are left out.
+	expungeWeeklySQL = `SELECT ` + expungeDueColumns + ` FROM code_repos INDEXED BY code_repos_expunge_due_idx
+		WHERE status IN ('active', 'archived') AND expunged_at <= ? AND expunge_id = '' AND expunge_request = ''
+		ORDER BY expunged_at, id LIMIT ?`
+	expungeWeeklyAfterSQL = `SELECT ` + expungeDueColumns + ` FROM code_repos
+		INDEXED BY code_repos_expunge_due_idx
+		WHERE status IN ('active', 'archived') AND expunged_at <= ? AND expunged_at >= ?
+			AND (expunged_at > ? OR id > ?) AND expunge_id = '' AND expunge_request = ''
+		ORDER BY expunged_at, id LIMIT ?`
+	expungeDueColumns = `id, name, expunge_id, expunge_request, expunge_request_position, expunged_at,
+		live_packs, live_bytes, live_objects, version`
 	// THE REPOSITORIES SEARCHED BY INDEX, by name over code_repos_search_idx
 	// — its partial predicate repeated verbatim — after the cursor, "" from
 	// its start.

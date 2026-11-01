@@ -117,28 +117,34 @@ const (
 // alone in its record, by the log's growth. A publication is a compaction,
 // measured there beside them because the committer's compact path forms it.
 const (
-	codeChangeOpenBytes      = 3_430
-	codeChangeEditBytes      = 3_100
-	codeReviewersBytes       = 1_190
-	codeReviseBytes          = 1_640
-	codeMergeabilityBytes    = 1_340
-	codeReviewFindingsBytes  = 5_030
-	codeReviewBytes          = 2_340
-	codeAnswerBytes          = 1_290
-	codeCommentBytes         = 2_280
-	codeThreadResolveBytes   = 1_160
-	codeMergeBytes           = 1_990
-	codeEnqueueBytes         = 980
-	codeCheckQueuedBytes     = 970
-	codeCheckDispatchedBytes = 970
-	codeCheckStartedBytes    = 780
-	codeCheckNamedBytes      = 840
-	codeCheckFinishedBytes   = 840
-	codeTipCheckQueuedBytes  = 960
-	codeGreenBytes           = 800
-	codeBrokenBytes          = 1_040
-	codePublicationTailBytes = 3_830
-	codePublicationOneBytes  = 1_110
+	codeChangeOpenBytes     = 3_430
+	codeChangeEditBytes     = 3_100
+	codeReviewersBytes      = 1_190
+	codeReviseBytes         = 1_640
+	codeMergeabilityBytes   = 1_340
+	codeReviewFindingsBytes = 5_030
+	codeReviewBytes         = 2_340
+	codeAnswerBytes         = 1_290
+	codeCommentBytes        = 2_280
+	codeThreadResolveBytes  = 1_160
+	codeMergeBytes          = 1_990
+	codeEnqueueBytes        = 980
+	// A queued change as its home's queue worker takes it on: its train of one
+	// candidate, a check of the candidate's tip queued (its claim, its box and
+	// its ending carry a head's keys, priced at theirs) and its landing.
+	codeCandidateBytes            = 1_300
+	codeCandidateCheckQueuedBytes = 1_020
+	codeLandBytes                 = 1_530
+	codeCheckQueuedBytes          = 970
+	codeCheckDispatchedBytes      = 970
+	codeCheckStartedBytes         = 780
+	codeCheckNamedBytes           = 840
+	codeCheckFinishedBytes        = 840
+	codeTipCheckQueuedBytes       = 960
+	codeGreenBytes                = 800
+	codeBrokenBytes               = 1_040
+	codePublicationTailBytes      = 3_830
+	codePublicationOneBytes       = 1_110
 )
 
 // THE REFERENCE COMPANY'S CHANGES, a STATED JUDGEMENT rather than a
@@ -156,18 +162,26 @@ const (
 // target moves (internal/code/home's MergeabilityRefresh, ten minutes, over a
 // working day of eight hours), and its target's checks file defines three
 // checks, each of every revision queued, claimed, its box named and ended,
-// beside the head's dispatch. A queued change's landing is priced as its
-// merge: this build appends no land record (codeLogUnwritten). And at the
-// most every change's landing lies above its target's green row — landed
-// ahead of its checks, as a person's override merge or push into a branch
-// whose gate requires them lands — so its home's tip work checks it: the three
-// checks queued on the landed commit (purpose tip, no dispatch record),
-// each claimed, its box named and ended, and a green moving the target's
-// green row onto it. One a change is the most, since each landing is the
-// newest when its tip is judged; a burst landing faster than its checks
-// coalesces onto its newest and costs less. A broken is a red tip's, at the
-// rate a merged result fails a check both heads passed, which the reference
-// company's day has none of (codeLogNegligible).
+// beside the head's dispatch. Every queued change is then taken on by its
+// home's queue worker: recorded in a train of its own — one candidate, the
+// change merged onto its target's tip, as a change reaching its target a few
+// an hour is — its three checks, required, queued on the candidate's tip
+// (purpose candidate, no dispatch record), each claimed, its box named and
+// ended, and the train landed in a land record. One train a change is the
+// most: a burst queued faster than its checks shares a train, and a landing,
+// and costs less. And at the most every change's landing lies above its
+// target's green row — landed ahead of its checks, as a person's override
+// merge or push into a branch whose gate requires them lands — so its home's
+// tip work checks it: the three checks queued on the landed commit (purpose
+// tip, no dispatch record), each claimed, its box named and ended, and a
+// green moving the target's green row onto it. One a change is the most,
+// since each landing is the newest when its tip is judged; a burst landing
+// faster than its checks coalesces onto its newest and costs less. The most
+// is each shape's own, never one change's path through them: it prices a
+// change's merge, its queue's landing and its landing's tip checks alike. A
+// broken is a red tip's, at the rate a merged result fails a check both heads
+// passed, and an ejection a red or conflicting candidate's, neither of which
+// the reference company's day has (codeLogNegligible).
 //
 // A PUBLICATION names every pack its layer covers. At the least the
 // reference company's packs are each named once, in a busy repository's tail
@@ -182,6 +196,7 @@ const (
 	referenceRefreshesAChange = 4
 	referenceRechecksAChange  = 8 * 60 / 10
 	referenceChecksAHead      = 3
+	referenceChecksACandidate = referenceChecksAHead
 	referenceChecksATip       = referenceChecksAHead
 	referencePublishPacks     = 64
 )
@@ -211,13 +226,14 @@ type codeLogTerm struct {
 // the merges retired, its git clients' barriers at code.BarrierRecordBytes,
 // and every record of the reference company's changes: their lifecycle,
 // their conversation, their home's facts, merges and readiness, their merges,
-// and at the most their queue, their checks, and their landings' tip checks
-// and green. What the day is summed from,
-// so a term priced here is a term of every figure
-// TestTheDocsPrintTheMeasuredDay holds.
+// and at the most their queue — its entry, its train, its candidate's checks
+// and its landing — their checks, and their landings' tip checks and green.
+// What the day is summed from, so a term priced here is a term of every
+// figure TestTheDocsPrintTheMeasuredDay holds.
 func codeLogDay() []codeLogTerm {
 	changes, revisions := float64(referenceChangesADay), float64(referenceRevisionsADay)
 	checks := revisions * referenceChecksAHead
+	candidates := changes * referenceChecksACandidate
 	tips := changes * referenceChecksATip
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
 	day := []codeLogTerm{{op: code.OpBarrier, shape: "a git client's linearizable read",
@@ -254,8 +270,8 @@ func codeLogDay() []codeLogTerm {
 			codeAnswerBytes, false},
 		{code.OpComment, "a seat's 1 KiB comment, two a change", 2 * changes, codeCommentBytes, false},
 		{code.OpThreadResolve, "a thread resolved, one a change", changes, codeThreadResolveBytes, false},
-		{code.OpMerge, "a merge of the change deleting its source, one a change — a queued change's " +
-			"landing priced as its merge", changes, codeMergeBytes, false},
+		{code.OpMerge, "a merge of the change deleting its source, one a change", changes, codeMergeBytes,
+			false},
 		{code.OpRevise, "a revision's facts, one a push", revisions, codeReviseBytes, false},
 		{code.OpMergeability, "a revision's merge into its target, one a push", revisions,
 			codeMergeabilityBytes, false},
@@ -264,6 +280,19 @@ func codeLogDay() []codeLogTerm {
 		{code.OpMergeability, "a recheck of a moved target at every pass of its home over a working day",
 			referenceRechecksAChange * changes, codeMergeabilityBytes, true},
 		{code.OpEnqueue, "a change queued into its target, one a change", changes, codeEnqueueBytes, true},
+		{code.OpCandidate, "a train of one candidate recorded by its home's queue worker, the change merged " +
+			"onto its target's tip with the pack its merge wrote, one a change", changes, codeCandidateBytes, true},
+		{code.OpCheckQueued, "a check of a queue's candidate queued by its home's queue worker, naming the " +
+			"candidate and the base it was built onto, three a change", candidates,
+			codeCandidateCheckQueuedBytes, true},
+		{code.OpCheckStarted, "a candidate check claimed by its runner, three a change — a head's claim's " +
+			"keys", candidates, codeCheckStartedBytes, true},
+		{code.OpCheckStarted, "a candidate check's box named by its runner, three a change — a head's box's " +
+			"keys", candidates, codeCheckNamedBytes, true},
+		{code.OpCheckFinished, "a candidate check ended, three a change — a head's ending's keys", candidates,
+			codeCheckFinishedBytes, true},
+		{code.OpLand, "a train of one queued change landed by its home's queue worker, its source deleted, " +
+			"one a change", changes, codeLandBytes, true},
 		{code.OpCheckQueued, "a check of a revision queued, three a push", checks, codeCheckQueuedBytes, true},
 		{code.OpCheckDispatched, "a head's dispatch, one a push", revisions, codeCheckDispatchedBytes, true},
 		{code.OpCheckStarted, "a check claimed by its runner, three a push", checks, codeCheckStartedBytes,
@@ -444,6 +473,38 @@ var codeLogNegligible = map[code.OpKind]string{
 		"and its landings below their green rows past code.QueueHistory once they have outlived it by " +
 		"code.QueueSweepGrace: a record an idle repository holding them, a day at most, as a pack " +
 		"sweep's",
+	// A QUEUE ENTRY'S END OTHER THAN ITS LANDING: an entry ends once, so
+	// each comes at most once an enqueue, and the reference company's queued
+	// changes each land (codeLogDay at the most).
+	code.OpDequeue: "an entry taken out of its queue before it lands by code_dequeue_change, a person's or " +
+		"a seat's gesture: at most once an enqueue, a record naming the entry, who asked and its change's " +
+		"routing, smaller than an edit; the reference company's queued changes each land",
+	code.OpEject: "entries put out of their queue by their repository's home git node — a required check " +
+		"failed on what they were tested in, their merge conflicted, their gate no longer held, their head " +
+		"moved or a fast-forward was none: at most once an enqueue, since an ejected entry has ended and " +
+		"only another enqueue queues its change again, each a record naming the entries, why — the failed " +
+		"checks or the conflicted paths — and each change's routing; the bisect that finds a red " +
+		"candidate's culprit probes its batch at that rate too. The reference company's queued changes " +
+		"merge cleanly onto their targets and pass their checks, so its day ejects none",
+	// AN IMPORT AND A PULL MIRROR'S SYNCS fill a repository from another
+	// host, which the reference company's day never does: its repositories
+	// are its own, and its pushes go to those it already has
+	// (codeLogManagers).
+	code.OpImportChunk: "an import's chunk, landed by its repository's home polling imports_due: an import " +
+		"is named by a person's or the company's document's create of the repository " +
+		"(code.CreateRepo.Import), or is a pull mirror's first fill, once a repository, in chunks of at " +
+		"most code.MaxImportPacks packs or code.MaxImportRefs refs — at the rate the company makes " +
+		"repositories, of which the reference company's day makes none",
+	code.OpImportDone: "an import's end, landed by its repository's home: one record an import, once a " +
+		"repository",
+	code.OpMirrorSync: "a pull mirror's sync, landed by its repository's home polling mirrors_due: one a " +
+		"mirror every code.MirrorInterval (fifteen minutes) in which its source moved — ninety-six a day " +
+		"for a source that never rests — each the source's new packs and moved refs as push rows on the " +
+		"engine's own account, a record for every code.MaxImportPacks packs or code.MaxImportRefs refs. " +
+		"Only a person or the company's document makes a repository a mirror " +
+		"(code.RepoSettings.MirrorFrom), and the reference company mirrors none, so its day syncs nothing; " +
+		"a company mirroring busy sources reads their syncs in its code log's " +
+		"crewlet.statelog.log.bytes_per_day",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
@@ -472,54 +533,18 @@ var codeLogNegligible = map[code.OpKind]string{
 // compactor's poll names code.ReadCompactionDue, and the gate holds that it
 // finds it there, so a walk that would find no writer at all fails rather
 // than passes.
+//
+// EMPTY while every op the code domain declares has its writer in this build:
+// the home's import and mirror loop polls imports_due and mirrors_due,
+// code_dequeue_change asks for a dequeue, and the home's queue worker builds
+// trains, ejects and lands — each priced into the day or argued out of it
+// above. An op the domain declares before its writer exists goes here, with
+// the name that writer will spell.
 var codeLogUnwritten = map[code.OpKind]struct {
 	listing code.ReadKind
 	payload reflect.Type
 	how     string
-}{
-	// AN IMPORT'S AND A PULL MIRROR'S RECORDS, decided by the repository's
-	// committer since the committer's import path landed, are appended by
-	// no node while nothing polls the listings their home works from: the
-	// home's import and mirror loop is their first writer, and their rate —
-	// once a repository imported, a chunk a thousand refs, and a pull
-	// mirror's sync every interval its source moved in — is what the day
-	// must price once they exist.
-	code.OpImportChunk: {listing: code.ReadImportsDue,
-		how: "an import's chunk is landed by its repository's home, polling imports_due, through the " +
-			"estate's code.import"},
-	code.OpImportDone: {listing: code.ReadImportsDue,
-		how: "an import is ended by its repository's home, polling imports_due, through the estate's " +
-			"code.import"},
-	code.OpMirrorSync: {listing: code.ReadMirrorsDue,
-		how: "a pull mirror's sync is landed by its repository's home, polling mirrors_due, through the " +
-			"estate's code.mirror_sync"},
-	// AN ENTRY'S LEAVING by a gesture, decided by its repository's committer
-	// since the committer's queue path landed, is appended by no node while
-	// nothing asks for it: code_dequeue_change is its first writer, through
-	// the estate's code.queue — a record for each entry a person or a seat
-	// takes out of a queue before it lands, which that writer is the one to
-	// price.
-	code.OpDequeue: {payload: reflect.TypeFor[code.Dequeue](), how: "an entry leaves its queue by " +
-		"code_dequeue_change, through the estate's code.queue"},
-	// A QUEUE'S OWN RECORDS, decided by its repository's committer since the
-	// committer's queue records landed, are appended by no node while nothing
-	// asks for them: the home git node's queue worker, which builds a train
-	// and lands what it tested, is their first writer, through the estate's
-	// code.queue — a few records a change landed through a queue, which that
-	// writer is the one to price. (Its tip checks' green and broken have their
-	// writer, the home's checks worker: the day prices the green at its most
-	// and argues the broken out, codeLogNegligible.) Until the queue worker
-	// runs, a change queued by code_merge_change
-	// (an enqueue, which the day prices at its most) waits in its queue and
-	// lands by no record of this build; the day prices its landing as its
-	// merge.
-	code.OpCandidate: {payload: reflect.TypeFor[code.Candidate](), how: "a train of a queue's waiting " +
-		"changes is recorded by its repository's home git node, through the estate's code.queue"},
-	code.OpEject: {payload: reflect.TypeFor[code.Eject](), how: "entries a check, a conflict or a gate " +
-		"put out are ejected by their repository's home git node, through the estate's code.queue"},
-	code.OpLand: {payload: reflect.TypeFor[code.Land](), how: "a train's tested prefix is landed by its " +
-		"repository's home git node, through the estate's code.queue"},
-}
+}{}
 
 // codeLogPushVias is every way a push's pack is built (code.PushVias), and
 // how the day counts the pushes built that way. A WAY IS A SHAPE OF PUSH the
@@ -550,14 +575,14 @@ var codeLogPushVias = map[code.PushVia]string{
 		"record: its bytes are the merge record's (code.OpMerge), which the day prices one a change " +
 		"(codeLogDay)",
 	code.ViaImport: "the push an import chunk lands, written by the chunk's own apply and never a push " +
-		"record: its bytes are the chunk's (code.OpImportChunk), which no node appends while nothing " +
-		"asks for one (codeLogUnwritten)",
+		"record: its bytes are the chunk's (code.OpImportChunk), once a repository imported, which the " +
+		"reference company's day imports none of (codeLogNegligible)",
 	code.ViaMirror: "the push a pull mirror's sync lands, written by the sync's own apply and never a push " +
-		"record: its bytes are the sync's (code.OpMirrorSync), which no node appends while nothing asks " +
-		"for one (codeLogUnwritten)",
+		"record: its bytes are the sync's (code.OpMirrorSync), which the reference company, mirroring " +
+		"nothing, never appends (codeLogNegligible)",
 	code.ViaQueue: "the pushes a land record lands, one a change, written by the landing's own apply and " +
-		"never a push record: their bytes are the land record's (code.OpLand), which no node appends " +
-		"while nothing asks for one (codeLogUnwritten)",
+		"never a push record: their bytes are the land record's (code.OpLand), which the day prices one " +
+		"a change at the most (codeLogDay)",
 }
 
 // codeLogManagers is everything that may manage a repository
@@ -903,17 +928,38 @@ var codeLogFields = map[code.OpKind]struct {
 				"close_task": "a queued change closing its work item as it lands, a flag",
 			}),
 	},
+	code.OpCandidate: {
+		payload: reflect.TypeFor[code.Candidate](),
+		carried: []string{"repo_id", "target_ref", "train", "base_oid", "candidates.candidate_id",
+			"candidates.ordinal", "candidates.entries.entry_id", "candidates.entries.commit",
+			"candidates.tip_oid", "pack.pack_id", "pack.object", "pack.hash", "pack.size", "pack.index_bytes",
+			"pack.reverse_bytes", "pack.git_checksum", "pack.objects"},
+	},
+	code.OpLand: {
+		payload: reflect.TypeFor[code.Land](),
+		carried: []string{"repo_id", "land_id", "target_ref", "base_oid", "tip_oid", "train",
+			"entries.entry_id", "entries.change_id", "entries.commit", "entries.delete_source", "node",
+			"received_at", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
+			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item", "routing.authors",
+			"routing.merged"},
+		absent: absent(routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor",
+			"owner", "owner_kind", "work_item", "authors", "merged"),
+			map[string]string{
+				"routing.enqueuer": "the change's enqueuer, whom a landing never tells: the queue lands the " +
+					"change as them",
+			}),
+	},
 	code.OpCheckQueued: {
 		payload: reflect.TypeFor[code.CheckQueued](),
 		carried: []string{"repo_id", "oid", "target", "name", "attempt", "purpose", "change_id", "revision",
-			"base", "defs_oid", "def.name", "def.run", "def.timeout_seconds", "required", "reason", "queued_at"},
+			"candidate_id", "base", "defs_oid", "def.name", "def.run", "def.timeout_seconds", "required",
+			"reason", "queued_at"},
 		absent: absent(
 			map[string]string{
 				"by": "who queued an attempt again by hand, and the reference checks are queued by " +
 					"their home",
-				"candidate_id": "a train's check, which only the queue worker's candidates queue, and no " +
-					"node of this build builds a train (codeLogUnwritten)",
-				"entry_id": "likewise",
+				"entry_id": "the entry a queue's bisect probe names, which only the bisect of a red " +
+					"candidate queues, at the rate of the ejection it ends in (codeLogNegligible)",
 				"def.paths": "the paths a check runs for, where its definition names some: a few dozen " +
 					"bytes a pattern",
 				"def.report":   "the reports a check writes, where its definition names some",
@@ -970,9 +1016,11 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it, a " +
 		"person's purge of its unreachable objects and the expunge's begin and commit that serve " +
 		"it (codeLogNegligible), a change's open and its merge (codeLogDay), its other gestures and " +
-		"its landing outside a merge (codeLogNegligible), its queue entry (codeLogDay at the most), the " +
-		"green its landing's tip checks move (codeLogDay at the most) and a red tip's broken " +
-		"(codeLogNegligible), and what the queue worker records (codeLogUnwritten)",
+		"its landing outside a merge (codeLogNegligible), its queue entry and the train and the landing " +
+		"its queue worker records (codeLogDay at the most), its entry's dequeue or ejection " +
+		"(codeLogNegligible), the green its landing's tip checks move (codeLogDay at the most) and a red " +
+		"tip's broken (codeLogNegligible), and an import's chunks and end and a pull mirror's syncs " +
+		"(codeLogNegligible)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
 		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
@@ -985,9 +1033,10 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"resolutions, its reviews and the answers to their findings — and its revisions' facts and its " +
 		"mergeability, on the change (codeLogDay)",
 	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim and " +
-		"its box named, and its ending, of a head's checks and of a landing's tip checks (codeLogDay at " +
-		"the most), a bisect's probes (codeLogNegligible, with the broken they name), and the sweep of an idle repository's " +
-		"past the history (codeLogNegligible)",
+		"its box named, and its ending, of a head's checks, of a queue's candidate's checks and of a " +
+		"landing's tip checks (codeLogDay at the most), a bisect's probes (codeLogNegligible, with the " +
+		"broken or the ejection they name), and the sweep of an idle repository's past the history " +
+		"(codeLogNegligible)",
 	code.KindPerson: "a person's marks over their own code notices (codeLogNegligible)",
 }
 
@@ -1499,11 +1548,11 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
 		{"the code log takes about twice this log's day at its least", codeLeast, 1.9, 2.2},
-		{"and about seven times it at its most", codeMost, 6.75, 7.25},
+		{"and about seven and a half times it at its most", codeMost, 7.25, 7.75},
 		{"two thirds is below that range", share / codeLeast, 0, 1},
 		{"so a code log at two thirds of this log's ceiling fills in about a third of this log's " +
 			"time at its least", share / codeLeast, 0.29, 0.36},
-		{"and in about a tenth of it at its most", share / codeMost, 0.09, 0.11},
+		{"and in under a tenth of it at its most", share / codeMost, 0, 0.1},
 		{"two thirds is at the least of what a company whose seats only push takes", share / pushOnlyLeast,
 			0.95, 1.1},
 		{"and under the most of it, where a CI polls and every push is published", share / pushOnlyMost,
@@ -1644,7 +1693,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"internal/config/bootstrap.go": {
 			"two thirds is the least of what a company whose seats only push writes here, and BELOW " +
 				"what a company whose seats work through changes writes",
-			"take about twice to about seven times what its tracker writes and its seats' " +
+			"take about twice to about seven and a half times what its tracker writes and its seats' " +
 				"reads take a day",
 		},
 		"internal/code/limits.go": {
@@ -1670,7 +1719,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				"a push, measured) and publish their layers, the barriers its git clients' reads append "+
 				"(%d bytes a read)", spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes,
 				code.BarrierRecordBytes),
-			"take about twice to about seven times what its tracker writes and its seats' " +
+			"take about twice to about seven and a half times what its tracker writes and its seats' " +
 				"reads take a day",
 			fmt.Sprintf("priced as its coding box's, %s bytes alone in its record, and %s", spaced(
 				codePushRecordBytes), spaced(referenceChangesADay)),
@@ -1683,7 +1732,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				mb(merges+publications.most, 1), mb(gitLeast, 1), mb(gitMost, 1), mb(changeLeast, 1),
 				mb(changeMost, 1)),
 			fmt.Sprintf("at their measured sizes (%s)", changeFigures),
-			"in about a third of the mutation log's time where its seats open changes, and in about a " +
+			fmt.Sprintf("(a train %s bytes, a candidate's check queued %s, a landing %s)",
+				spaced(codeCandidateBytes), spaced(codeCandidateCheckQueuedBytes), spaced(codeLandBytes)),
+			"in about a third of the mutation log's time where its seats open changes, and in under a " +
 				"tenth where its checks run and its targets move",
 			fmt.Sprintf("the changes' records alone, %s MB a day at their least, are more than the "+
 				"mutation log's whole day", mb(changeLeast, 1)),
@@ -1751,9 +1802,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // figure, a change's edits, is held to it here.
 //
 // Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, or build a code.Candidate in a non-test file
-// of internal/code/home, and this fails naming it; take the compactor's poll
-// off code.ReadCompactionDue and it fails saying the walk found no writer.
+// a key to a priced op's payload, or drop the land's term from codeLogDay, and
+// this fails naming it; take the compactor's poll off code.ReadCompactionDue
+// and it fails saying the walk found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share on the " +
@@ -1802,6 +1853,8 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		"check_named": codeCheckNamedBytes, "check_finished": codeCheckFinishedBytes,
 		"publication_tail": codePublicationTailBytes, "publication_one": codePublicationOneBytes,
 		"tip_check_queued": codeTipCheckQueuedBytes, "green": codeGreenBytes, "broken": codeBrokenBytes,
+		"candidate": codeCandidateBytes, "candidate_check_queued": codeCandidateCheckQueuedBytes,
+		"land": codeLandBytes,
 	} {
 		line := fmt.Sprintf("%q: %s,", name, strings.ReplaceAll(spaced(bytes), " ", "_"))
 		if !strings.Contains(measured, line) {

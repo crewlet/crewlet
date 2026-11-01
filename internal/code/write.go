@@ -820,9 +820,10 @@ func (w EngineWrite) validSuggestions() error {
 		switch {
 		case !gitref.ValidOID(s.BlobOID) || s.BlobOID == ZeroOID:
 			return fmt.Errorf("%w: %s.blob_oid: %q is not a whole object id", ErrInvalid, at, s.BlobOID)
-		case s.LineStart < 1 || s.LineEnd < s.LineStart:
+		case s.LineStart < 1 || s.LineEnd < s.LineStart || s.LineEnd > MaxAnchorLine:
 			return fmt.Errorf("%w: %s: lines %d to %d: a finding's lines count from 1, the last at or past the "+
-				"first", ErrInvalid, at, s.LineStart, s.LineEnd)
+				"first and at most %d, the most lines a file holds", ErrInvalid, at, s.LineStart, s.LineEnd,
+				MaxAnchorLine)
 		}
 		if why := textProblem(s.Text, MaxSuggestionBytes, "suggestion"); why != "" {
 			return fmt.Errorf("%w: %s.text: %s", ErrInvalid, at, why)

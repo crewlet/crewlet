@@ -93,7 +93,9 @@ type Timing struct {
 	Stagger time.Duration
 	// Walk is the least time between two walks of the queue: [WalkGap].
 	Walk time.Duration
-	// Backstop is the longest time between two walks: [WalkBackstop].
+	// Backstop is the longest time between two walks, and the longest a
+	// node remembers the company's remote cap full without listing its
+	// slots again: [WalkBackstop].
 	Backstop time.Duration
 	// Renew is how often a remote check's slot is renewed and its box's
 	// minutes charged: [RemoteSlotRenew].
@@ -285,7 +287,7 @@ func New(o Options) (*Runner, error) {
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }
 	}
-	r.remote = newRemoteSlots(o.NodeID, o.Leases, o.Minutes, r.timing.Renew, r.now, r.log)
+	r.remote = newRemoteSlots(o.NodeID, o.Leases, o.Minutes, r.timing.Renew, r.timing.Backstop, r.now, r.log)
 	r.life, r.cancel = context.WithCancel(context.Background())
 	return r, nil
 }
@@ -449,7 +451,8 @@ func (r *Runner) walk(ctx context.Context) time.Time {
 }
 
 // walking is what one walk has learned that the rest of it reads: each
-// repository's rank, and whether a remote cap has held a check back.
+// repository's rank, the remote slots it listed, and whether a remote cap has
+// held a check back.
 type walking struct {
 	// ranks is this node's place in each repository's git order, read once
 	// a walk a repository, so a walk ranks every attempt of one against one
@@ -459,6 +462,9 @@ type walking struct {
 	// that could not say: the walk tries no further remote check, since the
 	// next would ask the store the same question and hear the same answer.
 	remoteHeld bool
+	// slots is the company's remote slots as the walk listed them, once,
+	// at its first remote check, and has taken them since.
+	slots SlotView
 }
 
 // rank is this node's place in repoID's git order, -1 where it holds none.
@@ -540,7 +546,7 @@ func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, w *
 // after it in the walk.
 func (r *Runner) takeRemote(ctx context.Context, company Company, w *walking) *RemoteSlot {
 	maxRunning, minutes := company.Config.Code.Checks.Remote.Resolved()
-	slot, hold, err := r.remote.Take(ctx, maxRunning, minutes)
+	slot, hold, err := r.remote.Take(ctx, &w.slots, maxRunning, minutes)
 	if slot != nil {
 		return slot
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -271,6 +272,16 @@ type PackRow struct {
 	// moves past the request without judging anything. A read's answer,
 	// never a record's field: no versionedFields row.
 	Content statelog.Position `json:"content"`
+	// Arrived is the broker instant the pack's NEWEST content arrived at:
+	// nothing in it reached the repository after it. A push's pack and a
+	// merge's arrived at their own record; every rewrite's output — a
+	// compaction's, an expunge's, a rescue — at the latest of the packs it
+	// replaced, since moving content brings none (replicated 0100). An
+	// expunge on its maintainer's schedule keeps a pack that arrived within
+	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
+	// a pack a cache adopted before a round served its row. A read's
+	// answer, never a record's field: no versionedFields row.
+	Arrived time.Time `json:"arrived,omitzero"`
 }
 
 // Ref is the PackRef a cache installs and [CheckBundle] reads.
@@ -939,8 +950,12 @@ const (
 	ReadPublicationDue ReadKind = "publication_due"
 	// ReadExpungeDue is the active and archived repositories with an
 	// expunge open or a purge requested, by id, each with what its
-	// maintainer finishes or serves it by: the listing a repository's
-	// maintainer polls for the expunges it owes. The engine's own read, as
+	// maintainer finishes or serves it by — and, asked with
+	// [ReadQuery.ExpungedBefore], then every other active or archived
+	// repository last expunged at or before that instant or never, least
+	// recently expunged first, whose maintainer judges whether an expunge
+	// is due on its own schedule: the listing a repository's maintainer
+	// polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
 	// ReadExpungeTips is the objects one repository's expunge keeps beside
@@ -1327,6 +1342,19 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// ExpungedBefore asks an `expunge_due` read for its WEEKLY ARM beside
+	// its open one: after every repository with an expunge open or a purge
+	// requested, every other active or archived repository — a scratch one
+	// as much as a project — last expunged at or before it, or never,
+	// least recently expunged first; the maintainer asks from its clock
+	// less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
+	// other kind. An estate request's field and no record's, so it takes
+	// no versionedFields row: under the code domain's stated condition (no
+	// build of main carries internal/code while it is unmerged) every node
+	// that serves the read reads it; were the domain to reach main first, a
+	// node of a build that predates it would answer the open arm alone,
+	// which delays an expunge on the schedule and drops no object.
+	ExpungedBefore time.Time `json:"expunged_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repository and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1488,7 +1516,8 @@ type IndexedRepo struct {
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
 // open on it and the purge requested of it, whichever it holds — what its
-// maintainer finishes or serves first — when it was last expunged, its live
+// maintainer finishes or serves first — or neither, a repository of the
+// listing's weekly arm, when it was last expunged, its live
 // packs, bytes and objects — which a cycle's inputs are cut from, and the last
 // of which places the repository's maintenance on the node that compacts and
 // publishes it too, by its maintenance's charge (internal/code/compact) — and
@@ -2658,6 +2687,15 @@ const MaxTouchedBytes = 48 << 10
 // at most, placed by one read.
 const MaxReanchors = 64
 
+// MaxAnchorLine is the last line an anchor's range may name: the most lines a
+// blob holds — a line a byte — at the largest blob code.limits.max_blob_bytes
+// lets any push carry, its ceiling (config.CodeMaxPushBytesCeiling, 1 GiB).
+// A range past it is no file's lines, and a placing moves a range by at most
+// the lines its new file holds, so a range within it is moved within what an
+// int holds rather than wrapped into a line no file has and reported where it
+// was.
+const MaxAnchorLine = int(config.CodeMaxPushBytesCeiling)
+
 // maxAnchorIDBytes bounds an anchor's id: an opaque name the caller gives
 // each anchor and reads its answer back by — a finding's, a UUID's 36
 // characters. 64 bytes leave room for another naming and keep a
@@ -3093,7 +3131,7 @@ type LineAnchor struct {
 	PathB64 string `json:"path_b64,omitempty"`
 	Side    Side   `json:"side"`
 	// BlobOID is the blob the lines were read in, whole, and Start and End
-	// the range, 1-based and inclusive.
+	// the range, 1-based and inclusive, ending at MaxAnchorLine at most.
 	BlobOID string `json:"blob_oid"`
 	Start   int    `json:"start"`
 	End     int    `json:"end"`
@@ -3577,9 +3615,9 @@ func (q ReanchorQuery) validate() error {
 		case a.Side == SideOld && q.Base == "":
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)
-		case a.Start < 1 || a.End < a.Start:
-			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, and end is at or after "+
-				"start", ErrInvalid, field, a.Start, a.End)
+		case a.Start < 1 || a.End < a.Start || a.End > MaxAnchorLine:
+			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
+				"start, and no file holds a line past %d", ErrInvalid, field, a.Start, a.End, MaxAnchorLine)
 		}
 		ids[a.ID] = true
 		if _, err := GitPath(field+".path", a.Path, a.PathB64, false); err != nil {
@@ -3907,12 +3945,21 @@ type RevisionFactsAnswer struct {
 	// lines with the same lines around them, wherever the base put them — a
 	// rebase that moved nothing near them keeps it — and another for any
 	// changed byte, whitespace included. Empty for a revision that changes
-	// nothing, and where PatchIDOmitted: an empty id equals nothing.
+	// nothing, and where PatchIDOmission says why none was taken: an empty id
+	// equals nothing.
 	PatchID string `json:"patch_id,omitempty"`
-	// PatchIDOmitted is a change whose diff the git node did not identify:
-	// one past the bound on a diff it identifies, or one whose diff ran out
-	// what was left of the read's budget of git.
-	PatchIDOmitted bool `json:"patch_id_omitted,omitempty"`
+	// PatchIDOmission is why the git node took no id of a diff that is not
+	// empty, "" where it took one or there was none to take: the diff is past
+	// the bound on one it identifies (OmittedPastBound, final), or it or its
+	// id ran out what was left of the read's budget of git
+	// (OmittedOutOfTime, not final — [RevisionFactsAnswer.Final]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
+	// row (the record carries [Revise.PatchIDOmitted], the final omission
+	// alone). AS A STATED CONDITION, as [ReadQuery.Push]'s: no build that
+	// carries the code domain has run with the bool this replaced — none of
+	// the domain is on main — so no home reads an answer it cannot.
+	PatchIDOmission FactsOmission `json:"patch_id_omission,omitempty"`
 	// Touched is every file the change touches — every path the diff from
 	// the base to Head changes, in git's order — unless TouchesAll: the
 	// change touches more than a list holds ([MaxTouchedPaths],
@@ -3927,11 +3974,52 @@ type RevisionFactsAnswer struct {
 	// what the read's budget of git left — incomplete past either, and where
 	// the revision touches all.
 	Classes RevisionClasses `json:"classes,omitzero"`
+	// ClassesOmission is why Classes are not complete, "" where they are:
+	// past a bound — MaxClassedBytes, or a revision that touches all, whose
+	// paths no list names (OmittedPastBound, final) — or out of what the
+	// read's budget of git left (OmittedOutOfTime, not final). An estate
+	// answer's field under PatchIDOmission's stated condition.
+	ClassesOmission FactsOmission `json:"classes_omission,omitempty"`
 	// HeadInTarget is Head reachable from Target: the change is in its
 	// target already, merged by whatever moved the target there. Its change
 	// is then nothing: no id, no path, no tree.
 	HeadInTarget bool `json:"head_in_target,omitempty"`
 }
+
+// Final reports facts that are a function of their two commits alone, as
+// every git node answers them: nothing in them left out for want of time. A
+// fact left out past a bound is final, the same on every node at every load;
+// one the read's budget of git ran out before is a measure of the node that
+// read it at that moment, so facts holding one are RECORDED BY NOBODY and
+// asked again — never kept as though the commits were unidentifiable, which
+// would cost every approval carried by the id a re-review exactly when the
+// fleet is busiest.
+func (f *RevisionFactsAnswer) Final() bool {
+	return f.PatchIDOmission != OmittedOutOfTime && f.ClassesOmission != OmittedOutOfTime
+}
+
+// FactsOmission is why a revision's facts left out a part they may leave out
+// — its patch id, or classes of its paths — "" for none. A closed set
+// ([FactsOmissions]).
+type FactsOmission string
+
+const (
+	// OmittedPastBound is a part past a bound of its own: a diff past the
+	// bound on one whose id is taken, Go past the bound a classification
+	// lexes, a revision that touches all. What the bound measures is the two
+	// commits', so every git node omits the part alike: FINAL.
+	OmittedPastBound FactsOmission = "past_bound"
+	// OmittedOutOfTime is a part the read's budget of git ran out before:
+	// what the node could do in its budget at that moment — slower under
+	// load, quicker on a node beside it — so NOT FINAL ([RevisionFactsAnswer.Final]).
+	OmittedOutOfTime FactsOmission = "out_of_time"
+)
+
+// FactsOmissions is the closed set.
+func FactsOmissions() []FactsOmission { return []FactsOmission{OmittedPastBound, OmittedOutOfTime} }
+
+// Valid reports an omission this build knows.
+func (o FactsOmission) Valid() bool { return slices.Contains(FactsOmissions(), o) }
 
 // ReanchorAnswer places every anchor of the query, in its order.
 type ReanchorAnswer struct {

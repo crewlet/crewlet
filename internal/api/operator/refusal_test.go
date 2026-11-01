@@ -256,3 +256,32 @@ func actAnswer(t *testing.T, h http.Handler, tool, body string) (int, map[string
 	h.ServeHTTP(rec, r)
 	return rec.Code, decode(t, rec), rec.Header()
 }
+
+// A CODE HOST'S REFUSAL NAMES ITS OWN WORD beside its class. Several of the
+// host's refusals share a class — a head that moved and a train whose base
+// moved are both stale_version, a target still moving and a full queue both
+// conflict — and the change page's merge controls answer each in its own
+// words, which they can only do from the word itself (`refusal`), never by
+// parsing a sentence written for a model. A refusal that is not the host's
+// carries no such field, so a surface never reads a word that was not said.
+//
+// Mutation: drop the `refusal` field from operator.Fail, or set it from a
+// cause that is not the host's, and this fails.
+func TestACodeHostRefusalNamesItsOwnWord(t *testing.T) {
+	t.Parallel()
+	answer := func(cause error) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		operator.Fail(rec, cause, "the sentence", "op-key", operator.About("code_merge_change", nil))
+		return decode(t, rec)
+	}
+	got := answer(crewletmcp.Classify(crewletmcp.RefusalStaleVersion,
+		&builtin.HostRefusal{Refusal: "head_moved", Detail: "web!42 is at another head"}))
+	if got["error"] != string(crewletmcp.RefusalStaleVersion) || got["refusal"] != "head_moved" {
+		t.Errorf("a host's head_moved answered %v, want error stale_version and refusal head_moved", got)
+	}
+	got = answer(crewletmcp.Classify(crewletmcp.RefusalStaleVersion, errors.New("version 4 is not 5")))
+	if _, said := got["refusal"]; said {
+		t.Errorf("a refusal that is not the code host's named a host word: %v", got)
+	}
+}

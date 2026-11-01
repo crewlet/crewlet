@@ -35,7 +35,9 @@ const Backstop = time.Minute
 // BenchmarkHomeLoop for it): nothing yet measures a home's turns, so two
 // stays until that benchmark's burst — every repository of a node due at
 // once — shows a nudged repository waiting longer than one Backstop for its
-// turn at two, and then becomes the fewest that keep that wait.
+// turn at two, and then becomes the fewest that keep that wait — and
+// query.MaxPatchSpools with it, the patches a git node spools at once
+// (engine.TestEveryFactsReadOfAHomeHasASpool).
 const Concurrency = 2
 
 // Placement answers who is a repository's home — the router satisfies it

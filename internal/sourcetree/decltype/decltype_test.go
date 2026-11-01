@@ -28,7 +28,9 @@ import (
 // package and an unread one declares, calls of function-typed fields,
 // conversions, composite literals, elements, basic
 // literals, comparisons, generics bound by instantiation, explicit
-// arguments, inference and a generic receiver; a package outside the module
+// arguments, inference and a generic receiver, and the type parameters
+// nothing binds — a function's, and a generic method's receiver's, which the
+// parser gives no object and which shadows a package type of its name; a package outside the module
 // read from a directory it was given; values only a package the walk does not
 // read can type, its import named by every form of the rule; and what it
 // cannot type at all. A file this platform does not build is read against
@@ -213,6 +215,9 @@ func renderAt(w *decltype.World, t decltype.Type, depth int) string {
 	lit, how := w.Underlying(t)
 	switch how {
 	case decltype.Unresolved:
+		if w.Param(t) {
+			return "param"
+		}
 		return "unresolved"
 	case decltype.Outside:
 		return "outside"

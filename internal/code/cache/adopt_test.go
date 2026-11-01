@@ -121,6 +121,53 @@ func TestAdoptedPacksAreNotDownloaded(t *testing.T) {
 	}
 }
 
+// AN ADOPTED PACK LEARNS WHEN IT ARRIVED FROM ITS ROW: a pack is adopted under
+// its ref alone, which says nothing of when its content arrived, and the next
+// sync that serves its row hands the plans that weigh it (Packs) the row's
+// instant — the one an expunge on its maintainer's schedule keeps a young pack
+// whole by, and passes over a pack it does not know. Without it every pack a
+// node's own pushes brought would be unknown on that node for the
+// incarnation's life, and its scheduled expunge would never take one.
+//
+// Mutation: leave a row already live as it is in setLive, the arrival
+// included, and the adopted pack's arrival stays zero.
+func TestAnAdoptedPackLearnsWhenItArrivedFromItsRow(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	pushID := uuid.Must(uuid.NewV7()).String()
+	sc, err := c.NewScratch(t.Context(), s, pushID)
+	if err != nil {
+		t.Fatalf("NewScratch: %v", err)
+	}
+	t.Cleanup(sc.Remove)
+	tip, cs := w.packInto(t, repo, sc.Dir, nil)
+	row := w.storeBundle(t, w.bundle(cs), pushID)
+	arrived := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	row.Arrived = arrived
+	row.Added = w.log.write(repo, []code.PackRow{row}, map[string]string{"refs/heads/main": tip})
+	if err := c.Adopt(t.Context(), repo, sc, row.Ref()); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	s.Release()
+
+	s = w.sync(t, c, repo)
+	for _, p := range c.Packs(s) {
+		if p.PackID != row.PackID {
+			continue
+		}
+		if !p.Arrived.Equal(arrived) {
+			t.Errorf("the adopted pack's row, once a sync served it, arrived at %v, want its row's %v",
+				p.Arrived, arrived)
+		}
+		return
+	}
+	t.Fatalf("the sync after the adoption does not list the adopted pack %s", row.PackID)
+}
+
 // ONE ADOPTION, EVERY PACK IT NAMES: a compaction's scratch holds a pack an
 // output, and the git node that built them adopts them all in one call once
 // their rows have applied — each linked by the scratch's own files, each

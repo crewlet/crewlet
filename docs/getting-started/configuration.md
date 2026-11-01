@@ -1032,7 +1032,7 @@ stream:
                                     #   opens, reviews, comments, merges, each
                                     #   revision's facts and mergeability, and
                                     #   its queue's and checks' — take about
-                                    #   twice to seven times the
+                                    #   twice to seven and a half times the
                                     #   bytes a day its tracker writes and its
                                     #   seats' reads do: set this to the ratio
                                     #   the two logs' bytes_per_day show in
@@ -1276,8 +1276,9 @@ store:
                                     #   holds (so a warm restart derives what
                                     #   its first boot did), LESS what a broker
                                     #   storing its streams on that volume may
-                                    #   still write under its limit and the
-                                    #   request spools' allowance. Half of that
+                                    #   still write under its limit, the
+                                    #   request spools' allowance and the
+                                    #   facts' patch spools. Half of that
                                     #   where the volume also holds the store,
                                     #   its snapshots or the broker's streams,
                                     #   seven eighths of a volume of its own;

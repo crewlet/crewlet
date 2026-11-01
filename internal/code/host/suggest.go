@@ -163,7 +163,7 @@ func (b *building) place(ctx context.Context, paths map[string]object) (map[stri
 			case bytes.HasPrefix(line, []byte("Binary files ")) && cur >= 0:
 				binary[cur] = true
 			case bytes.HasPrefix(line, []byte("@@ ")) && cur >= 0:
-				h, ok := code.ParseHunk(string(line))
+				h, ok := code.ParseHunk(line)
 				if !ok {
 					return fmt.Errorf("host: diff-pairs answered %q, which is no hunk header", line)
 				}

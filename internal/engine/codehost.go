@@ -776,9 +776,9 @@ type codeCacheSize struct {
 	budget  int64
 	derived bool
 
-	// room is the space the cache can use: free plus held, less broker and
-	// spools. What a derived budget is a share of, and what an explicit one
-	// is compared with.
+	// room is the space the cache can use: free plus held, less broker,
+	// spools and patches. What a derived budget is a share of, and what an
+	// explicit one is compared with.
 	room int64
 
 	free int64
@@ -798,6 +798,11 @@ type codeCacheSize struct {
 	spools    int64
 	transfers int
 
+	// patches is what the revision facts' patch spools may hold on the
+	// cache's volume, outside its budget too: [query.PatchSpoolAllowance],
+	// a fixed count of patches at their bound, which no setting moves.
+	patches int64
+
 	dedicated bool
 }
 
@@ -816,7 +821,7 @@ func (s codeCacheSize) cacheBudget() config.CacheBudget {
 func (s codeCacheSize) log(ctx context.Context, dir string) {
 	attrs := []any{"dir", dir, "bytes", s.budget, "derived", s.derived, "room", s.room,
 		"free", s.free, "held", s.held, "broker", s.broker, "spools", s.spools,
-		"transfers", s.transfers, "dedicated", s.dedicated}
+		"transfers", s.transfers, "patches", s.patches, "dedicated", s.dedicated}
 	switch {
 	case s.derived && s.budget < config.GitCacheMaxBytesFloor:
 		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
@@ -826,8 +831,9 @@ func (s codeCacheSize) log(ctx context.Context, dir string) {
 	case !s.derived && s.budget > s.room:
 		log.WarnContext(ctx, "code_cache_sized", append(attrs, "detail",
 			"git.cache_max_bytes is more than the cache's volume has room for beside what "+
-				"is already there, the broker's limit and the request spools, so the cache "+
-				"fills the volume before it evicts anything: lower git.cache_max_bytes, or "+
+				"is already there, the broker's limit, the request spools and the revision "+
+				"facts' patch spools, so the cache fills the volume before it evicts "+
+				"anything: lower git.cache_max_bytes, or "+
 				"give git.cache_dir a volume of its own")...)
 	default:
 		log.InfoContext(ctx, "code_cache_sized", attrs...)
@@ -852,7 +858,13 @@ func (s codeCacheSize) log(ctx context.Context, dir string) {
 //     claimed, and the two together could fill the volume the store lives on.
 //     Bytes the broker STORES are not free and so not counted twice; LESS
 //   - the request SPOOLS' allowance ([host.SpoolAllowance]), which lives on
-//     this volume and never in the budget.
+//     this volume and never in the budget; LESS
+//   - the revision facts' PATCH SPOOLS ([query.PatchSpoolAllowance]): the
+//     query server spools at most query.MaxPatchSpools patches of at most
+//     query.MaxPatchIDDiffBytes each on this volume, outside the budget as
+//     every spool is — bounded per node rather than per read, since per read
+//     they grew with the seat share, half the read lane, and took the store's
+//     headroom on the shared layout.
 //
 // DEDICATED where the cache's volume holds none of this node's other disk — the
 // store, the replicated estate, the snapshots, the broker's streams — which
@@ -882,7 +894,7 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 		return codeCacheSize{}, fmt.Errorf("engine: size the code cache at %s: %w", layout.Dir, err)
 	}
 	size := codeCacheSize{free: f, held: layout.Held, spools: host.SpoolAllowance(transfers),
-		transfers: transfers, dedicated: true}
+		transfers: transfers, patches: query.PatchSpoolAllowance, dedicated: true}
 	for _, tenant := range cacheVolumeTenants(boot) {
 		if v.same(layout.Dir, tenant) {
 			size.dedicated = false
@@ -902,7 +914,7 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 			size.broker = f
 		}
 	}
-	size.room = f + layout.Held - size.broker - size.spools
+	size.room = f + layout.Held - size.broker - size.spools - size.patches
 	size.budget, size.derived = boot.Git.CacheBudget(size.room, size.dedicated)
 	if size.derived && size.budget <= 0 {
 		return codeCacheSize{}, size.noRoom(layout.Dir, boot.Stream.StoreMaxBytes)
@@ -917,7 +929,8 @@ func codeCacheBudget(boot *config.Bootstrap, layout cache.Layout, transfers int,
 // sizes the spools. declared is stream.store_max_bytes as written, 0 where the
 // broker derived its own limit.
 func (s codeCacheSize) noRoom(dir string, declared int64) error {
-	tenants := fmt.Sprintf("its %d transfers' request spools may hold %d bytes", s.transfers, s.spools)
+	tenants := fmt.Sprintf("its %d transfers' request spools may hold %d bytes and its revision facts' "+
+		"patch spools %d", s.transfers, s.spools, s.patches)
 	if s.broker > 0 {
 		var limit string
 		switch {

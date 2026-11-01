@@ -1325,6 +1325,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		// THE WEEKLY ARM'S INSTANT: dropped on the wire, the maintainer would
+		// be answered the open arm alone, and no expunge on its schedule
+		// would ever begin.
+		{Kind: code.ReadExpungeDue, ExpungedBefore: created, Cursor: "weekly:0:" + ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		// THE HOME'S DUE CHANGE WORK, of every repository and of one, each
 		// with the instant its refresh is paced by, and the rechecks one
 		// repository's asks.

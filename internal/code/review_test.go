@@ -769,7 +769,8 @@ func TestAReplyToAFindingIsInTheFindingsThread(t *testing.T) {
 // ids that are no finding's or are named twice, an answer no write gives, a
 // reply to a root and a finding both.
 //
-// Mutation: let a finding's line run backwards, and it is decided.
+// Mutations: let a finding's line run backwards, and it is decided; let one
+// run past code.MaxAnchorLine, and it is decided.
 func TestAReviewAndAnAnswerAreRefusedBeforeAnythingIsRead(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -811,6 +812,8 @@ func TestAReviewAndAnAnswerAreRefusedBeforeAnythingIsRead(t *testing.T) {
 		}), "review.summary"},
 		"findings past the bound": {withReview(func(r *code.Review) { r.Findings = many }), "review.findings"},
 		"a finding's id sent":     {withFinding(func(f *code.Finding) { f.ID = finding }), "review.findings[0]"},
+		"a finding's line past any file's": {withFinding(func(f *code.Finding) { f.LineEnd = code.MaxAnchorLine + 1 }),
+			"review.findings[0]"},
 		"a finding's lines backwards": {withFinding(func(f *code.Finding) { f.LineStart, f.LineEnd = 5, 4 }),
 			"review.findings[0]"},
 		"a finding of no severity this build knows": {withFinding(func(f *code.Finding) { f.Severity = "fatal" }),

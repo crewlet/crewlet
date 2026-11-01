@@ -752,7 +752,10 @@ func TestACodingRunClonesPushesAndIsToldWhatItPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.SetBasicAuth("run", string(token))
-	resp, err := http.DefaultClient.Do(req)
+	// Through the client of the server this listener is, never
+	// http.DefaultClient: its pool is swept by every httptest.Server.Close in
+	// the binary (internal/httpx/httpxtest).
+	resp, err := n.server.Client().Do(req)
 	if err != nil {
 		t.Fatalf("ask with the ended run's token: %v", err)
 	}

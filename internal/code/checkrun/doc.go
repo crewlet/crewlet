@@ -52,8 +52,10 @@
 // most box_hours_per_day of box time started in a UTC day, charged a minute at
 // a time to the fleet's shared counter. A runner takes its slot and its first
 // minute BEFORE it claims, so a check the caps hold back is claimed by nobody
-// and waits queued; a walk held back once tries no further remote check, and a
-// store that cannot say starts none. remote.go argues each choice.
+// and waits queued; a walk held back once tries no further remote check, a
+// store that cannot say starts none, and a running box whose slot lapsed
+// takes one again, past the cap where it must, so it is counted again.
+// remote.go argues each choice.
 //
 // # What a check's box holds
 //

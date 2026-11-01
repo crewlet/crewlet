@@ -44,6 +44,15 @@ import (
 //     principal naming the run behind it as a seat's push does;
 //   - enqueue: the same change queued into a target whose gate lands
 //     through a queue, deleting its source as the merge does;
+//   - candidate, candidate_check_queued and land: that entry as its home's
+//     queue worker takes it on — a train of one candidate, the change merged
+//     onto its target's tip, with the pack its merge wrote; one required
+//     check of the candidate's tip, queued as the worker queues it (purpose
+//     candidate, naming the candidate and the base it was built onto, its
+//     definition carried), whose claim, box and ending carry a head's keys
+//     and so are priced at theirs; and, the check passed, the train landed
+//     in one land record, its routing and its source's deletion stamped by
+//     the decide;
 //   - check_queued, check_dispatched, check_started, check_named and
 //     check_finished: one check of a head, as its home queues it (its
 //     definition carried) and records the head's dispatch, its runner claims
@@ -70,28 +79,31 @@ import (
 // authored one, and a record the writers grow past its figure, or shrink
 // well below it, is a code log's day the docs no longer state.
 var changeRecordBytes = map[string]int64{
-	"open":             3_430,
-	"edit":             3_100,
-	"reviewers":        1_190,
-	"revise":           1_640,
-	"mergeability":     1_340,
-	"review_findings":  5_030,
-	"review":           2_340,
-	"answer":           1_290,
-	"comment":          2_280,
-	"thread_resolve":   1_160,
-	"merge":            1_990,
-	"enqueue":          980,
-	"check_queued":     970,
-	"check_dispatched": 970,
-	"check_started":    780,
-	"check_named":      840,
-	"check_finished":   840,
-	"tip_check_queued": 960,
-	"broken":           1_040,
-	"green":            800,
-	"publication_tail": 3_830,
-	"publication_one":  1_110,
+	"open":                   3_430,
+	"edit":                   3_100,
+	"reviewers":              1_190,
+	"revise":                 1_640,
+	"mergeability":           1_340,
+	"review_findings":        5_030,
+	"review":                 2_340,
+	"answer":                 1_290,
+	"comment":                2_280,
+	"thread_resolve":         1_160,
+	"merge":                  1_990,
+	"enqueue":                980,
+	"candidate":              1_300,
+	"candidate_check_queued": 1_020,
+	"land":                   1_530,
+	"check_queued":           970,
+	"check_dispatched":       970,
+	"check_started":          780,
+	"check_named":            840,
+	"check_finished":         840,
+	"tip_check_queued":       960,
+	"broken":                 1_040,
+	"green":                  800,
+	"publication_tail":       3_830,
+	"publication_one":        1_110,
 }
 
 // changeRecordTolerance is how far above a record's measured bytes its
@@ -218,13 +230,25 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		requireMerged(t, res, err, oidOf("M"))
 	})
 
-	// THE SAME CHANGE INTO A TARGET WITH A QUEUE: queued.
-	queue, queued := queueRepo(t, n, c, "queue")
+	// THE SAME CHANGE INTO A TARGET WITH A QUEUE ([queueGate]): the seat's,
+	// from its own branch, under the same title and work item, so its landing
+	// deletes its source and routes as the merge did. Queued.
+	qs := suiteSettings()
+	qs.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	qs.Protections[0].Gate = queueGate()
+	queue := n.ensure("queue", qs, t1).RepoID
+	n.push(queue, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(seatRef, code.ZeroOID, oidOf("B"))))
+	reopened := opening(queue, seatRef, mainRef, dev)
+	reopened.Open.Title, reopened.Open.WorkItem = open.Open.Title, open.Open.WorkItem
+	opened, err := c.ProposeChange(t.Context(), reopened)
+	requireChanged(t, opened, err)
+	queued := opened.ChangeID
 	ready(t, n, w, queue, queued)
+	enqueued := enqueueing(queue, queued, dev, oidOf("B"))
+	enqueued.Enqueue.DeleteSource = true
 	took("enqueue", func() {
-		p := enqueueing(queue, queued, dev, oidOf("B"))
-		p.Enqueue.DeleteSource = true
-		res, err := c.ProposeQueue(t.Context(), p)
+		res, err := c.ProposeQueue(t.Context(), enqueued)
 		requireQueued(t, res, err, code.QueueWaiting, 1)
 	})
 
@@ -263,6 +287,45 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		OID: oidOf("M"), Target: mainRef, Name: "unit", Attempt: 1}, Purpose: code.PurposeTip,
 		Base: oidOf("A"), DefsOID: defs, Def: &code.CheckDef{Name: "unit", Run: "go test ./...",
 			TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch})
+
+	// THE QUEUED CHANGE TAKEN ON BY ITS HOME'S QUEUE WORKER: a train of one
+	// candidate, the change merged onto main's tip as M; the required check
+	// queued on the candidate's tip as the worker queues it, under the checks
+	// file at the train's base, then claimed and passed by its runner; and
+	// the train's tested prefix landed.
+	train := training(queue, oidOf("A"), enqueued.Enqueue.EntryID, oidOf("M"))
+	took("candidate", func() {
+		res, err := c.ProposeQueue(t.Context(), train)
+		requireRecorded(t, res, err)
+	})
+	candidateKey := code.CheckKey{RepoID: queue, OID: oidOf("M"), Target: mainRef, Name: "unit", Attempt: 1}
+	took("candidate_check_queued", func() {
+		if _, err := n.publishCheck(queue, code.OpCheckQueued, code.CheckQueued{CheckKey: candidateKey,
+			Purpose: code.PurposeCandidate, CandidateID: train.Candidate.Candidates[0].CandidateID,
+			Base: oidOf("A"), DefsOID: defs, Def: &code.CheckDef{Name: "unit", Run: "go test ./...",
+				TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch}); err != nil {
+			t.Fatalf("publish the candidate_check_queued: %v", err)
+		}
+	})
+	for _, step := range []struct {
+		op      code.OpKind
+		payload any
+	}{
+		{code.OpCheckStarted, code.CheckStarted{CheckKey: candidateKey, Runner: "git-a",
+			Placement: code.PlacementContainer, StartedAt: harnessAt}},
+		{code.OpCheckFinished, code.CheckFinished{CheckKey: candidateKey, State: code.CheckStatePassed,
+			Reason: code.CheckReasonExit, ExitCode: &exit, DurationMs: 41_200, Summary: "exit 0 after 41s",
+			FinishedAt: harnessAt.Add(41 * time.Second)}},
+	} {
+		if _, err := n.publishCheck(queue, step.op, step.payload); err != nil {
+			t.Fatalf("publish the candidate check's %s: %v", step.op, err)
+		}
+	}
+	took("land", func() {
+		res, err := c.ProposeQueue(t.Context(), landingOf(queue, train.Candidate.Train, oidOf("A"),
+			code.LandEntry{EntryID: enqueued.Enqueue.EntryID, ChangeID: queued, Commit: oidOf("M")}))
+		requireRecorded(t, res, err)
+	})
 
 	// THE SAME CHANGE LANDED AHEAD OF ITS CHECKS, by a person's override
 	// past its target's queue: its tip judged broken where its required

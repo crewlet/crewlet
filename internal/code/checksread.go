@@ -276,6 +276,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil},
@@ -319,6 +320,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil},
@@ -361,6 +363,7 @@ func (q ReadQuery) validateChecksQueued() error {
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
@@ -407,6 +410,7 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {

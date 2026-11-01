@@ -301,6 +301,7 @@ func (q ReadQuery) validateQueueDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil},
 	} {
 		if f.set {

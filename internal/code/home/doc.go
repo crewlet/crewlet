@@ -76,7 +76,13 @@
 // (code.MatchOwners) and asks the change writer to record the facts — the
 // trees of the base and the head and the touched paths' classes among them,
 // as the git node read them — the owners matched and the digest of the owners
-// matched against. And for each
+// matched against. Only FINAL facts are recorded
+// (code.RevisionFactsAnswer.Final): a git node that ran its read's budget out
+// before the patch id or the classes says so apart from a bound's omission,
+// and such facts measure the node's moment, not the commits — recorded, they
+// would hold for good, since a revise takes a revision's facts against a tip
+// once — so they are the turn's failure for that change, which stays due its
+// facts for the next pass. And for each
 // change owing its MERGE — a new head revision, or one its moved target asks
 // again within the repository's budget, the oldest merge first (merge.go) — it
 // merges the change over this node's own copy, in a scratch beside it, and

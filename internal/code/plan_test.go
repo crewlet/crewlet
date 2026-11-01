@@ -1131,6 +1131,12 @@ func registeredStatements() map[string]statement {
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
+		// THE WEEKLY ARM of the same listing, least recently expunged first
+		// up to an instant, from its start and after a cursor's row.
+		"expunge weekly": {expungeWeeklySQL, []any{2, MaxSnapshotItems},
+			[]string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
+		"expunge weekly after": {expungeWeeklyAfterSQL, []any{2, 1, 1, "repo-1", MaxSnapshotItems},
+			[]string{"code_repos_expunge_due_idx (expunged_at>=? AND expunged_at<=?)"}},
 		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
@@ -1432,12 +1438,6 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		// THE WEEKLY EXPUNGE'S LISTING, least recently expunged first over
-		// the repositories an expunge may be due in, its partial predicate
-		// repeated verbatim.
-		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
-			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
-			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0079):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across

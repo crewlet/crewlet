@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // SyncKind is what handing out a cache's directory cost: a closed set
@@ -740,6 +741,13 @@ type livePack struct {
 	// content older than every request, so a pack whose date is not known is
 	// one a purge's cycle rewrites rather than one it passes over.
 	content int64
+	// arrived is the row's code.PackRow.Arrived, encoded (store.EncodeTime) —
+	// what an expunge on its maintainer's schedule keeps a young pack whole
+	// by — and 0 where the set does not know it yet, as content is. Zero
+	// reads as content that arrived NOW, the side the grace keeps whole: a
+	// pack whose arrival is not known is never one a scheduled expunge
+	// rewrites before a round has served its row.
+	arrived int64
 	// dropping: the row is one an expunge's begin left dropping
 	// (code.PackDropping), whose files the incarnation keeps in its dropping
 	// view while no live row names the same checksum (placeOf).
@@ -756,10 +764,13 @@ func liveOf(p code.PackRef, state code.PackState) livePack {
 }
 
 // liveRow is a snapshot's row p as the live set keeps it: [liveOf], with the
-// date its content is from.
+// date its content is from and the instant its newest content arrived.
 func liveRow(p code.PackRow) livePack {
 	lp := liveOf(p.Ref(), p.State)
 	lp.content = p.Content.Packed()
+	if !p.Arrived.IsZero() {
+		lp.arrived = store.EncodeTime(p.Arrived)
+	}
 	return lp
 }
 
@@ -772,6 +783,9 @@ func (p livePack) row(id string) code.PackRow {
 		GitChecksum: p.checksum, Objects: p.objects}
 	if p.content != 0 {
 		r.Content = pos(p.content)
+	}
+	if p.arrived != 0 {
+		r.Arrived = store.DecodeTime(p.arrived)
 	}
 	return r
 }
@@ -837,14 +851,24 @@ type leaveKey struct {
 // setLive records the row id names, whose files are p's, as a row of inc's
 // live set; e.mu is held. A row already there is left as it is — a pack
 // adopted and then served by the next delta is one row — but for the date its
-// content is from, which the row it was adopted under did not say and the
-// snapshot's does ([livePack.content]): a row is never rewritten, so a date
-// once known is the row's for good, and one the set learns is never wrong.
+// content is from and the instant its newest content arrived, which the row
+// it was adopted under did not say and the snapshot's does
+// ([livePack.content], [livePack.arrived]): a row is never rewritten, so a
+// date once known is the row's for good, and one the set learns is never
+// wrong. Left unlearned, an adopted pack's arrival would stay unknown for
+// the incarnation's life, and an expunge on its maintainer's schedule passes
+// such a pack over — every pack a node's own pushes brought, never rewritten.
 // A pack a row names again where it lies is no longer leaving from there.
 func setLive(inc *incarnation, id string, p livePack) {
 	if held, ok := inc.live[id]; ok {
+		learned := false
 		if held.content == 0 && p.content != 0 {
-			held.content = p.content
+			held.content, learned = p.content, true
+		}
+		if held.arrived == 0 && p.arrived != 0 {
+			held.arrived, learned = p.arrived, true
+		}
+		if learned {
 			inc.live[id] = held
 		}
 		return

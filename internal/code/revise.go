@@ -179,7 +179,10 @@ type Revise struct {
 	BaseTree string `json:"base_tree"`
 	HeadTree string `json:"head_tree"`
 	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
-	// base, "" for a revision that changes nothing and where PatchIDOmitted.
+	// base, "" for a revision that changes nothing and where PatchIDOmitted:
+	// the diff past the bound on one whose id is taken, the one omission a
+	// home records (an omission for time is no final fact, and recorded by
+	// nobody: [RevisionFactsAnswer.Final]).
 	PatchID        string `json:"patch_id,omitempty"`
 	PatchIDOmitted bool   `json:"patch_id_omitted,omitempty"`
 	// Touched is every file the change touches, unless TouchesAll — read as

@@ -232,7 +232,16 @@ func (r PackRow) encodedBytes() int {
 		field("kind", stringBytes(string(r.Kind)), false) +
 		field("state", stringBytes(string(r.State)), false) +
 		field("added", positionBytes(r.Added), false) +
-		field("content", positionBytes(r.Content), false)
+		field("content", positionBytes(r.Content), false) + arrivedBytes(r.Arrived)
+}
+
+// arrivedBytes is the length of a pack's `arrived` field: none where it is
+// zero, which omitzero leaves out.
+func arrivedBytes(t time.Time) int {
+	if t.IsZero() {
+		return 0
+	}
+	return field("arrived", timeBytes(t), false)
 }
 
 // encodedBytes is the length of the candidate's JSON encoding.

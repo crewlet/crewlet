@@ -204,7 +204,7 @@ const (
 	// bytes a push (internal/code/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 16.8–73.5 MB (each MEASURED as its writer forms it,
+	// records, 16.8–77.5 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -445,6 +445,42 @@ const (
 	// at the edge of fourteen days — a policy's edge, where RetireGrace's
 	// margin guards a read in flight.
 	PruneGrace = 14 * 24 * time.Hour
+
+	// ExpungeInterval is how often a repository's maintainer ASKS whether an
+	// expunge is due on its own schedule — every active or archived
+	// repository, scratch ones included, last expunged this long ago or never
+	// ([ReadQuery.ExpungedBefore]) — and how long a repository found not due
+	// is left unscanned after (internal/code/compact).
+	//
+	// SEVEN DAYS: "at most weekly", half of [PruneGrace], so an object a drop
+	// left is taken within a week of its grace ending, and a repository's
+	// whole history is walked for its share at most once a week however hot
+	// it is — the scan reads every object a ref reaches.
+	ExpungeInterval = 7 * 24 * time.Hour
+
+	// ExpungeShare is the share of a repository's live pack bytes past which
+	// its unreachable bytes make an expunge due on the maintainer's schedule:
+	// due once what no ref, no drop within the grace and no row in flight
+	// reaches is MORE than 1/ExpungeShare of them — a quarter.
+	//
+	// FOUR, A JUDGMENT: an expunge rewrites the packs it takes, and every git
+	// node holding the repository downloads the kept packs again, so below a
+	// quarter each git node downloads more than three kept bytes for every
+	// byte freed — a fleet-wide re-download to win back less than the
+	// repository grows by in a busy week. Unreachable bytes count against
+	// code.limits.repo_max_bytes (a push is refused repo_size on live bytes),
+	// so a quarter is also the most of a repository's quota garbage holds
+	// before it is taken back.
+	ExpungeShare = 4
+
+	// ExpungeMinBytes is the least a repository's unreachable bytes must be
+	// for an expunge to be due on the maintainer's schedule, whatever their
+	// share: 64 MiB, below which the fleet's re-download of the kept packs and
+	// the rewrite's own walk of the whole history cost more than the bytes
+	// they free. PROVISIONAL: BenchmarkExpunge (internal/code/compact,
+	// repo={100MB,1GB} × share={0.1,0.25,0.5}) prices a cycle's walk, build
+	// and re-download against the bytes it frees, and decides it.
+	ExpungeMinBytes = 64 << 20
 
 	// RefExpiry is a SEAT BRANCH'S IDLE WINDOW: how long a branch a seat set
 	// in its own namespace (code_refs.seat, [SeatNamespace]) goes unset

@@ -1175,10 +1175,32 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 
 // ---- refusals, in the classes every surface renders ------------------------ //
 
+// HostRefusal is a refusal the code host answered, as the cause beneath a
+// tool's class: the host's own word for it and its sentence.
+//
+// THE WORD TRAVELS AS A VALUE, never only inside the sentence. A class says
+// what a caller does next — read again, wait, ask somebody else — and several
+// of the host's refusals share one: a change whose head moved and a train
+// whose base moved are both stale_version, a target still moving and a full
+// queue both conflict. A person's surface that answers each in its own words
+// (the change page's merge controls: "somebody pushed to it since you loaded
+// it", "its target is still moving") reads the word through the act route's
+// `refusal` field (operator.Fail), rather than parsing a sentence written for
+// a model.
+type HostRefusal struct {
+	// Refusal is the host's word: a code.MergeRefusal, a code.WriteRefusal,
+	// a code.ChangeRefusal and their like.
+	Refusal string
+	// Detail is the host's sentence about it.
+	Detail string
+}
+
+func (r *HostRefusal) Error() string { return fmt.Sprintf("code: %s: %s", r.Refusal, r.Detail) }
+
 // writeRefusalError is a refusal the code host answered, as the cause beneath
-// a tool's class: its code and its sentence.
+// a tool's class ([HostRefusal]).
 func writeRefusalError(refusal, detail string) error {
-	return fmt.Errorf("code: %s: %s", refusal, detail)
+	return &HostRefusal{Refusal: refusal, Detail: detail}
 }
 
 // pushClass is the class a refused push's code is answered in — chosen by

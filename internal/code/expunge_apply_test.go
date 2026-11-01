@@ -641,6 +641,66 @@ func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
 	}
 }
 
+// EVERY PACK DATES WHEN ITS NEWEST CONTENT ARRIVED ([PackRow.Arrived]): a
+// push's pack at the push's own broker instant; a compaction's output at the
+// latest pack it merged, never at its own record — a rewrite moves content
+// and brings none; an expunge's kept and dropping packs, and its rescue, at
+// the latest pack each replaced. A retired row keeps the instant its row
+// held. This is what an expunge on its maintainer's schedule keeps a young
+// pack whole by (internal/code/compact's weekly cases read it as a snapshot
+// serves it, through a git node's cache).
+//
+// Mutation: date a compaction's output at its own record, and the merge of a
+// month-old pack reads young for another fortnight; date it at the OLDEST
+// pack it merged, and yesterday's objects read old; leave the instant out of
+// the retired insert, and the retired row reads 0.
+func TestEveryPackDatesWhenItsNewestContentArrived(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	arrived := func(table, pack string) int64 {
+		return e.num(`SELECT arrived_at FROM `+table+` WHERE repo_id = 'repo-a' AND pack_id = ?`, pack)
+	}
+	live := func(pack string) int64 { return arrived("code_packs", pack) }
+	retired := func(pack string) int64 { return arrived("code_packs_retired", pack) }
+	at := func(h int) time.Time { return applyClock.Add(time.Duration(h) * time.Hour) }
+	enc := func(h int) int64 { return store.EncodeTime(at(h)) }
+
+	e.apply(pushOf(t, "repo-a", pushEntry("push-1", move("refs/heads/main", ZeroOID, oid("one")))).at(at(0)))
+	e.apply(pushOf(t, "repo-a", pushEntry("push-2", move("refs/heads/main", oid("one"), oid("two")))).at(at(1)))
+	if live("push-1") != enc(0) || live("push-2") != enc(1) {
+		t.Fatalf("the pushes' packs arrived at %d and %d, want their own instants %d and %d", live("push-1"),
+			live("push-2"), enc(0), enc(1))
+	}
+
+	cid := statelog.NewOpID(applyClock, "")
+	merged := outputOf(cid, 0, 2, applyClock)
+	e.apply(recordOf(t, Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
+		Retire: sorted("push-1", "push-2"), Add: []PackRef{merged}}).at(at(2)))
+	if live(merged.PackID) != enc(1) || retired("push-1") != enc(0) || retired("push-2") != enc(1) {
+		t.Fatalf("the compaction's output arrived at %d and its retired inputs at %d and %d, want the latest "+
+			"input's %d, and %d and %d as they were", live(merged.PackID), retired("push-1"), retired("push-2"),
+			enc(1), enc(0), enc(1))
+	}
+
+	e.apply(pushOf(t, "repo-a", pushEntry("push-3", move("refs/heads/main", oid("two"), oid("three")))).at(at(3)))
+	graced := beginOver("repo-a", 1, sorted(merged.PackID, "push-3"), []int64{2}, []int64{1})
+	graced.Seen = codeAt(e.next - 1)
+	e.apply(expungeRec(t, ExpungeProposal{Begin: &graced}).at(at(4)))
+	for _, out := range append(slices.Clone(graced.Add), graced.Dropping...) {
+		if got := live(out.PackID); got != enc(3) {
+			t.Errorf("pack %s of an expunge arrived at %d, want its latest input's %d", out.PackID, got, enc(3))
+		}
+	}
+	rescued := commitOver(graced, 1)
+	rescued.Seen = codeAt(e.next - 1)
+	e.apply(expungeRec(t, ExpungeProposal{Commit: &rescued}).at(at(5)))
+	if got := live(rescued.Add[0].PackID); got != enc(3) || retired(graced.Dropping[0].PackID) != enc(3) {
+		t.Fatalf("its rescue arrived at %d and its retired dropping pack at %d, want both %d", got,
+			retired(graced.Dropping[0].PackID), enc(3))
+	}
+}
+
 // pushed lands one push on repository id moving refs/heads/<ref> from old to
 // new, carrying a pack of its own named for the push, and answers the pack's
 // id.

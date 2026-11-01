@@ -9,7 +9,7 @@
 
 import { expect, test } from "vitest";
 import type { CompanyDocument, FleetAnswer, FleetNode } from "~/protocol/index.ts";
-import { codeAlarmsOf, codePolicyOf } from "./Code.tsx";
+import { codeAlarmsOf, codePolicyOf, protectionLines } from "./Code.tsx";
 
 const node = (id: string, alarms?: FleetNode["alarms"]): FleetNode =>
   ({ id, roles: ["data", "git"], broker: "embedded", ...(alarms ? { alarms } : {}) }) as FleetNode;
@@ -69,4 +69,37 @@ test("an unset scratch policy and identity domain read as the engine's defaults,
   expect(set.identityDomain).toEqual({ value: "acme.example", set: true });
 
   expect(codePolicyOf(null).idleDays).toEqual({ value: 7, set: false });
+});
+
+// THE GATE PER PATTERN: each rule says what a merge into it must meet, read
+// from the repository's detail by its own pattern; a rule the detail gives
+// no gate SAYS it has none; and before the detail answers nothing is claimed
+// either way. Mutation: match a gate to another rule's pattern, drop the "no
+// merge gate" line, or claim none before the detail answered, and this fails.
+test("each protected rule says its own gate, or that it has none once the detail answered", () => {
+  const rules = [
+    { pattern: "refs/heads/main", direct_push: "none" },
+    { pattern: "refs/heads/release/*", direct_push: "persons", allow_force: true },
+  ];
+  const gate = {
+    merge_by: "maintainers",
+    approvals: "one",
+    checks: ["unit"],
+    landing: { depth: 4, batch: 4 },
+    delete_source: "seats",
+  };
+  expect(protectionLines(rules, undefined)).toEqual([
+    { pattern: "refs/heads/main", says: "nobody pushes to it directly" },
+    {
+      pattern: "refs/heads/release/*",
+      says: "only a person pushes to it directly, forced pushes allowed",
+    },
+  ]);
+  const read = protectionLines(rules, [{ pattern: "refs/heads/main", gate }]);
+  expect(read[0]?.says).toBe(
+    "nobody pushes to it directly; a merge into it is merged by its maintainers, one approval, 1 check pass, landed by its queue, each change tested merged on the branch before it lands",
+  );
+  expect(read[1]?.says).toBe(
+    "only a person pushes to it directly, forced pushes allowed; no merge gate",
+  );
 });

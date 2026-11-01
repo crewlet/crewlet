@@ -14,7 +14,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -53,11 +55,13 @@ func TestTheGitRoleIsNeededOnlyWhereCodeIsHosted(t *testing.T) {
 // restart of a warm node, and its first janitor pass evicted the difference:
 // warm repositories downloaded again for no change in the disk. A cache
 // holding a gibibyte on a volume with F free derives from F plus that
-// gibibyte, less the request spools' allowance, a second boot over the same
-// files derives the same budget, and a cache on the store's own filesystem is
-// held to the shared half.
+// gibibyte, less the request spools' allowance and the revision facts' patch
+// spools (query.PatchSpoolAllowance), a second boot over the same files
+// derives the same budget, and a cache on the store's own filesystem is held
+// to the shared half.
 //
-// Mutation: derive from the free space alone, and the budgets go red.
+// Mutations: derive from the free space alone, and the budgets go red; leave
+// the patch spools out of the room, and they go red too.
 func TestTheCacheBudgetCountsWhatTheCacheHolds(t *testing.T) {
 	t.Parallel()
 	const (
@@ -99,13 +103,14 @@ func TestTheCacheBudgetCountsWhatTheCacheHolds(t *testing.T) {
 		}
 		sizes = append(sizes, size)
 	}
-	room := free + gib - spools
+	room := free + gib - spools - query.PatchSpoolAllowance
 	want := codeCacheSize{budget: config.DerivedCacheMaxBytes(room, false), derived: true,
-		room: room, free: free, held: gib, spools: spools, transfers: transfers, dedicated: false}
+		room: room, free: free, held: gib, spools: spools, transfers: transfers,
+		patches: query.PatchSpoolAllowance, dedicated: false}
 	for i, got := range sizes {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("boot %d sized the cache %+v, want %+v — the room it can use is the free "+
-				"space and what it holds, less the spools' allowance", i+1, got, want)
+				"space and what it holds, less the spools' allowance and the patch spools'", i+1, got, want)
 		}
 	}
 
@@ -179,19 +184,24 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 			if err != nil {
 				t.Fatalf("codeCacheBudget: %v", err)
 			}
-			if size.room != tc.room+held || size.broker != tc.broker || size.dedicated {
+			// THE ROWS' ROOMS are before the revision facts' patch spools,
+			// which every node's room is less.
+			room := tc.room + held - query.PatchSpoolAllowance
+			if size.room != room || size.broker != tc.broker || size.dedicated {
 				t.Fatalf("sized %+v, want a shared room of %d with the broker claiming %d",
-					size, tc.room+held, tc.broker)
+					size, room, tc.broker)
 			}
 			if size.budget != config.DerivedCacheMaxBytes(size.room, false) {
 				t.Errorf("budget %d, want the shared share of the room %d", size.budget, size.room)
 			}
 			// NEVER AN OVERCOMMIT: what the cache may hold, what the broker
-			// may still write and what the spools may hold fit in what the
-			// volume has room for beside everything already there.
-			if size.budget+size.broker+size.spools > tc.free+held {
-				t.Errorf("the cache's %d, the broker's %d and the spools' %d claim more than "+
-					"the %d free and %d held", size.budget, size.broker, size.spools, tc.free, held)
+			// may still write and what the spools and the patches may hold
+			// fit in what the volume has room for beside everything already
+			// there.
+			if size.budget+size.broker+size.spools+size.patches > tc.free+held {
+				t.Errorf("the cache's %d, the broker's %d, the spools' %d and the patches' %d claim "+
+					"more than the %d free and %d held", size.budget, size.broker, size.spools,
+					size.patches, tc.free, held)
 			}
 		})
 	}
@@ -210,19 +220,20 @@ func TestTheCacheBudgetLeavesTheBrokerItsClaim(t *testing.T) {
 
 // A VOLUME WITH NO ROOM FOR A CACHE REFUSES THE CODE HOST BY NAME. Where what
 // the cache's volume has — its free space and what the cache holds — is all
-// claimed by the bounded tenants beside it, the broker's limit and the request
-// spools, there is no share to derive: any budget would be bytes the volume
-// does not have. So the build is refused here, naming every figure it was
-// decided from and each setting that changes one, rather than by the cache's
-// own refusal of a budget of nothing, which names none of them. A sixteen-core
-// node's spools reach that with sixteen gibibytes free on the single-volume
-// layout; a declared broker limit past the volume, a broker holding to no
-// limit and a small volume of the cache's own reach it too. An explicit
+// claimed by the bounded tenants beside it, the broker's limit, the request
+// spools and the revision facts' patch spools, there is no share to derive:
+// any budget would be bytes the volume does not have. So the build is refused
+// here, naming every figure it was decided from and each setting that changes
+// one, rather than by the cache's own refusal of a budget of nothing, which
+// names none of them. A sixteen-core node's spools reach that with eighteen
+// gibibytes free on the single-volume layout; a declared broker limit past
+// the volume, a broker holding to no limit, a small volume of the cache's own
+// and one the patch spools alone overfill reach it too. An explicit
 // git.cache_max_bytes is the operator's decision on the same volume, and is
 // sized as written (code_cache_sized warns that the room cannot hold it).
 //
-// Mutation: derive a budget of nothing without refusing it, and every refused
-// row goes red.
+// Mutations: derive a budget of nothing without refusing it, and every refused
+// row goes red; leave the patch spools out of the room, and their row is sized.
 func TestARoomOfNothingRefusesTheCodeHostByName(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -259,6 +270,10 @@ func TestARoomOfNothingRefusesTheCodeHostByName(t *testing.T) {
 			broker: 10 * gib, limit: "no limit at all", transfers: 4},
 		{name: "spools past a small volume of the cache's own", free: gib / 2, dedicated: true,
 			transfers: 16},
+		// ROOM FOR THE REQUEST SPOOLS AND A QUARTER GIBIBYTE MORE, which the
+		// revision facts' patch spools take, and more.
+		{name: "the patch spools past a small volume of the cache's own",
+			free: host.SpoolAllowance(4) + gib/4, dedicated: true, transfers: 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -279,7 +294,8 @@ func TestARoomOfNothingRefusesTheCodeHostByName(t *testing.T) {
 			msg := err.Error()
 			want := []string{cold.Dir, "git.cache_dir", "git.cache_max_bytes", "git.max_transfers",
 				fmt.Sprintf("%d bytes free", tc.free), fmt.Sprintf("%d transfers", tc.transfers),
-				fmt.Sprintf("%d bytes", host.SpoolAllowance(tc.transfers))}
+				fmt.Sprintf("%d bytes", host.SpoolAllowance(tc.transfers)),
+				fmt.Sprintf("patch spools %d", query.PatchSpoolAllowance)}
 			if tc.stores {
 				want = append(want, "stream.store_max_bytes",
 					fmt.Sprintf("may still write %d bytes under %s", tc.broker, tc.limit))
@@ -549,5 +565,23 @@ func TestTheCodeHostIsStoppedOnceWithinOneBudget(t *testing.T) {
 	})
 	if waited < budget/2 {
 		t.Fatalf("a stop asked for on an ended context waited %v of its %v bound", waited, budget)
+	}
+}
+
+// EVERY FACTS READ OF A HOME HAS A SPOOL. A node's facts reads are its own
+// home's in the steady state — the router's walk asks a repository's home
+// first — and a home asks at most as many at once as its loop works
+// repositories, so the query server spools exactly that many patches at once:
+// fewer, and a home's own reads would wait on each other and turn unready; more,
+// and the cache's room would be sized beside spools nothing asks for. The two
+// packages may not import each other, so the engine, which builds both, holds
+// them equal here.
+//
+// Mutation: set query.MaxPatchSpools to one — red.
+func TestEveryFactsReadOfAHomeHasASpool(t *testing.T) {
+	t.Parallel()
+	if query.MaxPatchSpools != codehome.Concurrency {
+		t.Errorf("a git node spools %d patches at once and its home asks %d facts at once, want them equal",
+			query.MaxPatchSpools, codehome.Concurrency)
 	}
 }
